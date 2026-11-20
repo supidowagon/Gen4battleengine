@@ -1844,7 +1844,12 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   a save standing on one of the fight's fog headers gives the start from its overworld weather (`SaveFile.map_header`
   = the player Location's mapHeaderID, `overworld_weather` = FieldOverworldState.weather, `saves.layout.MAP_HEADER`
   0x1280 / `OVERWORLD_WEATHER` 0x12E6, field_overworld_state.h:13-20, location.h:18-24; Continue keeps it,
-  field_map_change.c:521-525): 0 clear, 14 fog, any other value refused. Otherwise fog unless `--field-defog`,
+  field_map_change.c:521-525): 0 clear, 14 fog, any other value refused; a `--field-defog` the save's fog (14)
+  contradicts is refused, one rule with `--script-weather` (G-24: the save decides when it shows the state on
+  the fight's map; review G 1). In prep (no team yet) a save's clear on the header keeps a Defog holder
+  (`field_move` = Defog): any PC visit is a warp, which clears FLAG_DEFOG_ACTIVE (field_map_change_flags.c:80-85)
+  and rewrites the weather from the header, fog again (field_map_change.c:273-280), so Defog is used again
+  before the fight (review G 2). Otherwise fog unless `--field-defog`,
   which needs the save's Relic Badge (bit 4, generated/badges.txt:5, trainer_info.c:107-112) and a team member that
   knows Defog (a fixed team: checked; prep: `PrepProblem.field_move` = Defog). FLAG_DEFOG_ACTIVE itself is not read:
   on the header the weather already carries it (fmc:275-280), and off it the way in may warp (fmcf:80-85). Prep: the
@@ -1965,7 +1970,11 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   none, the map change cleared it and nothing sets it again; on it: its overworld weather, 4 rain, 0
   clear; any other refused), and an input it contradicts is refused; before that the route decides, so the
   default is the start condition (the user's rain, overrides area.103-111/491, 2026-11-07; none for 104
-  and 696). `SaveFile.vars` / `var` read VarsFlags.vars (vars_flags.c:65-69, NUM_VARS 288).
+  and 696). In prep (no team yet) a save on header 373 in the rain does not bind (`warp`): a PC visit is a
+  warp that rewrites the weather from the header, clear (field_map_change.c:273-280), and VAR 0x40FA = 8 keeps
+  scr_seq 459 entry 12 from running again, so the input decides (default rain, the save's party kept;
+  `--no-script-weather` after a team change); a save's False binds there too (review G 2). `SaveFile.vars` /
+  `var` read VarsFlags.vars (vars_flags.c:65-69, NUM_VARS 288).
   `coverage.start_weather(script_weather=)` turns the state into the weather.
 - G-25 Status 0x3F (manager ruling 2): a real battle of a split can start under Newmoon's 0x7B. scr_seq 363
   entry 4 (header 321, an init-script entry) writes party[0] := 0x7B (sleep 3 | poison | burn | freeze |

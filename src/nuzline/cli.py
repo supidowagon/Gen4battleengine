@@ -94,15 +94,18 @@ cannot compute (``missing_set_data``) is refused (exit 2) before its party is bu
 a fight on a fog map (weather 14) starts clear because the run uses field Defog there first
 (``fight_start``: the Relic Badge, and a team member with Defog, which ``prep`` keeps in the
 team and lists as a prep step); without it the fog stays, unless the save stands on the
-fight's map, whose overworld weather is then the start (ledger G-15).
+fight's map, whose overworld weather is then the start and refuses a ``--field-defog`` it
+contradicts (``prep`` keeps a Defog holder for a cleared fog: a PC visit warps the fog
+back; ledger G-16).
 The same commands take ``--terrain NAME``: the battle terrain of a fight whose start tiles
 give several (``fight_terrain``: the tile under the player when the battle starts, one of
 ``Trainer.terrains``); a mixed fight without it is refused when a move reads the terrain,
 and a single-terrain fight needs none (ledger G-18).
 They also take ``--script-weather`` / ``--no-script-weather``: a fight a Kaizo map script's
 weather can reach (``AreaCondition.script_weather``, the Route 213 rain) starts in it or not;
-without either the save decides when it can (``script_weather_state``), else the start
-condition stands (ledger G-24).
+without either the save decides when it can (``script_weather_state``; in ``prep`` a save
+in the rain does not bind, since a PC visit's warp ends it), else the start condition
+stands (ledger G-24).
 All output is plain ASCII (controller ruling: a default Windows console is cp1252).
 """
 
@@ -643,7 +646,9 @@ def _check_buildable(tables, names, trainer: Trainer, inter) -> None:
 RELIC_BADGE = 4
 
 
-def script_weather_state(trainer: Trainer, save=None, script_weather: bool | None = None):
+def script_weather_state(
+    trainer: Trainer, save=None, script_weather: bool | None = None, warp: bool = False
+):
     """Whether ``trainer``'s fight starts in its map script's weather (ledger G-24): True,
     False, or None (the start condition stands). ``AreaCondition.script_window`` = (header,
     overworld weather, var, value): the script sets that overworld weather and then the
@@ -652,8 +657,12 @@ def script_weather_state(trainer: Trainer, save=None, script_weather: bool | Non
     not (:521-525). A save whose var has reached the value settles it: on the header, its
     overworld weather is the start (that id: True; clear: False); elsewhere the weather was
     left behind and no script sets it again: False. Before that the route decides, so
-    ``script_weather`` (the run input) or None. ``ValueError`` for an input on a fight no
-    script weather reaches, an input the save contradicts, or another overworld weather."""
+    ``script_weather`` (the run input) or None. ``warp``: the team may still change (prep),
+    and a PC visit is a warp that rewrites the weather from the header (field_map_change.c:
+    273-280) while the var keeps the script from running again, so the save's True does not
+    bind: the input decides (rain until the win or a map change; none after a team change).
+    ``ValueError`` for an input on a fight no script weather reaches, an input the save
+    contradicts, or another overworld weather."""
     from nuzline.data.trainer import OVERWORLD_WEATHER_CLEAR
 
     area = trainer.area_condition
@@ -670,7 +679,8 @@ def script_weather_state(trainer: Trainer, save=None, script_weather: bool | Non
         if save.map_header != header:
             state = False
         elif save.overworld_weather in (weather, OVERWORLD_WEATHER_CLEAR):
-            state = save.overworld_weather == weather
+            on = save.overworld_weather == weather
+            state = None if on and warp else on
         else:
             raise ValueError(
                 f"the save stands on map header {header} in overworld weather "
@@ -695,30 +705,42 @@ def fight_start(
     script_weather: bool | None = None,
 ):
     """(the start weather, the field move the team must know: 0 or Defog's id) of a fight,
-    ledger G-15. A save standing on one of the fight's fog headers
+    ledger G-16. A save standing on one of the fight's fog headers
     (``AreaCondition.fog_headers``) gives the weather itself: the battle starts in the
     overworld weather (field_battle_data_transfer.c:267), which Continue keeps
     (field_map_change.c:521-525) and which reads fog (14) or, after field Defog on this
-    visit, clear (0; field_map_change.c:275-280, scrcmd.c:3667-3674). Otherwise the fog
-    stays unless ``field_defog``: the run uses field Defog on that map before the fight,
-    which needs the Relic Badge (field_move_tasks.c:504; ``save.badges``) and a party
-    member that knows Defog, so the team must hold one (``team``: the specs brought; None
-    when prep picks the team, which then keeps a Defog holder, ``PrepProblem.field_move``).
-    A fight a map script's weather reaches starts as ``script_weather_state`` says (the run
-    input ``script_weather``, else the save, else the start condition; ledger G-24).
-    ``ValueError`` names what is missing."""
+    visit, clear (0; field_map_change.c:275-280, scrcmd.c:3667-3674); a ``field_defog`` the
+    save's fog contradicts is refused, as ``script_weather_state`` refuses its input. While
+    prep picks the team (``team`` None) a cleared fog keeps a Defog holder: a PC visit is a
+    warp, which clears FLAG_DEFOG_ACTIVE (field_map_change_flags.c:80-85) and brings the fog
+    back from the header (field_map_change.c:273-280), so the field move is used again.
+    Otherwise the fog stays unless ``field_defog``: the run uses field Defog on that map
+    before the fight, which needs the Relic Badge (field_move_tasks.c:504; ``save.badges``)
+    and a party member that knows Defog, so the team must hold one (``team``: the specs
+    brought; None when prep picks the team, which then keeps a Defog holder,
+    ``PrepProblem.field_move``). A fight a map script's weather reaches starts as
+    ``script_weather_state`` says (the run input ``script_weather``, else the save, else the
+    start condition; ledger G-24; prep's warp as above). ``ValueError`` names what is
+    missing."""
     from nuzline.data.trainer import OVERWORLD_WEATHER_CLEAR, OVERWORLD_WEATHER_FOG
     from nuzline.engine.coverage import start_weather
 
-    scripted = script_weather_state(trainer, save, script_weather)
+    scripted = script_weather_state(trainer, save, script_weather, warp=team is None)
     if scripted is not None:
         if field_defog:
             raise ValueError("--field-defog: this fight's map has no fog to clear")
         return start_weather(trainer, script_weather=scripted), 0
     if save is not None and save.map_header in trainer.area_condition.fog_headers:
+        if save.overworld_weather == OVERWORLD_WEATHER_FOG and field_defog:
+            raise ValueError(
+                f"--field-defog: the save says otherwise (map header {save.map_header}, "
+                "overworld weather 14: the fight starts in fog)"
+            )
         if save.overworld_weather == OVERWORLD_WEATHER_CLEAR:
-            return start_weather(trainer, field_defog=True), 0
-        if save.overworld_weather != OVERWORLD_WEATHER_FOG:
+            if team is not None:
+                return start_weather(trainer, field_defog=True), 0
+            field_defog = True
+        elif save.overworld_weather != OVERWORLD_WEATHER_FOG:
             raise ValueError(
                 f"the save stands on map header {save.map_header} in overworld weather "
                 f"{save.overworld_weather}: this fight's map gives fog (14) or, after field "

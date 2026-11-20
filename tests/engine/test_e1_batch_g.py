@@ -248,11 +248,20 @@ def test_field_defog_start_is_a_run_input(kaizo_trainers, kaizo_names):
         fight_start(luna, names, save(), True, [other])
     with pytest.raises(ValueError, match="Relic Badge"):
         fight_start(luna, names, save(badges=0xEF), True, [holder])
-    assert fight_start(luna, names, save(363, 0)) == (Weather.NONE, 0)
+    assert fight_start(luna, names, save(363, 0), False, [other]) == (Weather.NONE, 0)
     assert fight_start(luna, names, save(363, 14)) == (Weather.FOG, 0)
+    # The save decides on the fight's map: a --field-defog its fog contradicts is refused.
+    with pytest.raises(ValueError, match="the save says otherwise"):
+        fight_start(luna, names, save(363, 14), True, [holder])
+    # Prep may visit a PC: the warp clears FLAG_DEFOG_ACTIVE (field_map_change_flags.c:80-85)
+    # and the header's fog returns (field_map_change.c:273-280), so a Defog holder is kept.
+    assert fight_start(luna, names, save(363, 0)) == (Weather.NONE, defog)
     with pytest.raises(ValueError, match="overworld weather 2"):
         fight_start(luna, names, save(363, 2))
-    assert fight_start(kaizo_trainers[913], names, save(449, 0)) == (Weather.NONE, 0)
+    assert fight_start(kaizo_trainers[913], names, save(449, 0), False, [other]) == (
+        Weather.NONE,
+        0,
+    )
     hearthome = kaizo_trainers[34]
     assert hearthome.start_condition == "fog" and not hearthome.area_condition.fog_clearable
     with pytest.raises(ValueError, match="OVERWORLD_WEATHER_FOG"):
@@ -345,8 +354,8 @@ def test_route_213_script_rain_is_a_run_input(kaizo_trainers, kaizo_names):
             map_header=header, overworld_weather=weather, badges=0, var=lambda v: vars_[v - 0x4000]
         )
 
-    def start(t, s=None, flag=None):
-        return fight_start(t, names, s, script_weather=flag)[0]
+    def start(t, s=None, flag=None, team=None):
+        return fight_start(t, names, s, team=team, script_weather=flag)[0]
 
     assert start(sheltin) == Weather.RAIN  # the user's answer (2026-11-07) is the default
     assert start(sheltin, flag=False) == Weather.NONE
@@ -354,6 +363,12 @@ def test_route_213_script_rain_is_a_run_input(kaizo_trainers, kaizo_names):
     assert start(sheltin, save(7)) == Weather.RAIN
     assert start(sheltin, save(8)) == Weather.NONE  # left Route 213 after the rain
     assert start(chelle, save(8, 373, 4)) == Weather.RAIN
+    brought = [SimpleNamespace(moves=(33, 0, 0, 0))]
+    with pytest.raises(ValueError, match="the save says otherwise"):
+        start(chelle, save(8, 373, 4), False, brought)
+    # Prep (no team yet): a PC visit's warp rewrites the weather from header 373 (clear,
+    # field_map_change.c:273-280) and VAR 0x40FA = 8 keeps the script from running again.
+    assert start(chelle, save(8, 373, 4), False) == Weather.NONE
     assert start(chelle, save(9, 373, 0)) == Weather.NONE
     with pytest.raises(ValueError, match="the save says otherwise"):
         start(sheltin, save(8), True)
@@ -566,7 +581,9 @@ def test_wake_up_slap_keeps_the_bit_for_a_rest_after_it(tables, names):
     """subscript_heal_target_sleep.s:6 clears only the sleep: the bit stays, the foe's Rest puts
     it back to sleep, and the turn end costs a quarter of the full HP Rest gave (G-32)."""
     s = _nm(tables, names, ["Wake-Up Slap"], opp="Rest", bit=1)
-    s = s._replace(hp=s.hp.at[1, 0].set(300), max_hp=s.max_hp.at[1, 0].set(300))  # survives the slap
+    s = s._replace(
+        hp=s.hp.at[1, 0].set(300), max_hp=s.max_hp.at[1, 0].set(300)
+    )  # survives the slap
     out = _step(tables, names, s, "Wake-Up Slap", "Rest")
     assert int(out.status[1, 0]) == Status.SLEEP and int(out.nightmare[1]) == 1
     assert int(out.hp[1, 0]) == int(out.max_hp[1, 0]) - _quarter(s)
