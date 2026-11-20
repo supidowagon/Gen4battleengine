@@ -212,8 +212,14 @@ def test_u_turn_ko_replacement_comes_after_the_resumed_turn(tables, names):
     and the Life Orb loss set both battlers' assuranceDamageMask (subscript_update_hp.s:18-19)
     and the turn pauses at the foe's party list (subscript_attack_then_switch_out.s:71) with
     the flags in the scratch. The player's replacement is TurnEnd's (ReplaceFainted,
-    bcp.c:1844-1848): the turn resumes first, and SetupNextTurn's clear (battle_lib.c:2231) is
-    already in the state the replacement starts from, in both engines."""
+    bcp.c:1844-1848), after the resumed segment and BEFORE SetupNextTurn (bcp.c:1856). In the
+    resumed segment the KO'd battler's flag is cleared by CleanupFaintedMon
+    (subscript_show_party_list.s:23-24 -> subscript_faint_mon.s:7 -> battle_script.c:1803 ->
+    battle_lib.c:2190-2193); the foe slot keeps its flag through ReplaceFainted (a switch-in
+    does not clear turnFlags) until SetupNextTurn's clear (battle_lib.c:2231). No reader runs
+    in between (the flag's only reader is effect_script_0231.s:7, Assurance), so the engines'
+    turn-end 0 is equivalent: the [0, 0] below checks that engine convention, not the game's
+    value at that moment."""
     n = names
     s = make_state(
         tables,
