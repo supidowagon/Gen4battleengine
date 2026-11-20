@@ -128,18 +128,13 @@ Meaning:
 - `time`: day and night evolutions are offered only with `time` set. Not read for the E4 + Champion group (answer 17).
 - CLI: `nuzline prep|coverage --rule heal=bag --rule swap=bench:1,budget:1 --gap-rule 2:heal=full --rules FILE`; `--trainer-id` of any member selects the group and fight; `--beaten <ids>` with a chosen order; `--deaths` per `deaths_scope`; `--swaps-left N` and `--bench <box ids>` for a re-run mid-gauntlet (user input; the save does not hold them); `--horizon N`; `--growth-cap N`; `--time`; `--next <trainer-id>`.
 
-## 4. Run-level scope: per boot
+## 4. Run-level scope
 
-`BootState` sits outside every per-gauntlet field and holds values fixed for one boot of the console.
-
-- `boot_weather_ball_byte`: the AI's untyped Weather Ball byte, the low byte of a heap pointer set by the per-boot heap shift; a multiple of 4 in 0..252 (64 values). E1 owns its rule and its decomp cite; this design states no rule for it.
-- Scope: one value per boot. It stays fixed across every battle, gauntlet fight, overworld step, save and load until a soft reset or power cycle, and it is never restored from a save. Only a reset or boot event in the run plan replaces it. No battle, heal, PC, warp or team change touches it.
-- Planning holds it hidden: a `uint64` mask of the possible values (bit v/4 set = value v possible), so an "observed AI behaviour narrows it" update can clear bits. A played or sampled battle takes one concrete `int8` value, written into the battle state at fight start as a read-only batch input in both engines, like the other run inputs.
-- Scoring: a line is scored over every value that changes the AI's choice; the uniform prior only breaks ties. The search details are E1's.
+None. The AI's untyped Weather Ball byte is per-battle state: E1 adds it to `BattleState` as a hidden, read-only battle input with its rule, and every gauntlet fight draws its own unknown value. Nothing in this design carries it between fights.
 
 ## 5. Prep search
 
-**Carry** (end of fight k = start of the next): section 7 per party-0 slot; party order; bag counts; dead members (out of the pool); deaths used; per Counted option the amount left; the bench; the swap plan; the growth plan (section 6); sit-out members; the fights beaten. The boot scope (section 4) rides beside it, unchanged by every gap.
+**Carry** (end of fight k = start of the next): section 7 per party-0 slot; party order; bag counts; dead members (out of the pool); deaths used; per Counted option the amount left; the bench; the swap plan; the growth plan (section 6); sit-out members; the fights beaten.
 
 **Start of the next fight** (`prep/states.make_states` from a Carry): the carry is written into party 0 of the fight's layout; the opponent and any partner party are built from trainer data (section 7). When the opponent is a Gym Leader, Elite Four or Champion class, every member then gains the battle-start friendship (+3/+2/+1 by band, Luxury Ball and met-location +1: `src/battle/battle_main.c:1360-1372`; `src/pokemon.c:2626`, `:2662-2668`). It runs before the battlers are built, so it changes Return and Frustration in that fight; it applies to single Gym fights too. Not in the engine today.
 
@@ -271,7 +266,7 @@ The battle reaches the party only through `BtlIOCmd_UpdatePartyMon` (`src/battle
 | personality, ivs, nature, gender | constant, from the save | | |
 | pokerus | from the save | the end-of-fight spread is random and only adds EVs; not modelled (under-estimates) | `bcp.c:4041-4048` |
 
-Not carried (reset at every fight start): volatiles, stat stages, types, battle forms above, abilities changed in battle, the Toxic counter. The boot scope (section 4) is not party data and is not in `Carry`.
+Not carried (reset at every fight start): volatiles, stat stages, types, battle forms above, abilities changed in battle, the Toxic counter.
 
 ## 8. Coverage and backlog
 
@@ -283,7 +278,7 @@ Not carried (reset at every fight start): volatiles, stat stages, types, battle 
 
 ## 9. State and doubles-readiness
 
-- `BattleState` does not change except the boot input `boot_weather_ball_byte` (section 4), which E1 adds with its rule. The Carry and the transition are prep-side.
+- `BattleState` does not change in this batch. The Carry and the transition are prep-side.
 - `docs/doubles-state-design.md` section 5:
   1. No mechanic computes `1 - side`: the transition acts on party 0 by name; opponents come from trainer data.
   2. Battler and party data stay apart: the Carry is party data `[6]`; battler fields (shadows, `transformed`, `mimic_slots`) are read through the battlers on each slot (section 7).
@@ -315,14 +310,14 @@ Not carried (reset at every fight start): volatiles, stat stages, types, battle 
 | GT-17 | Single battle post-fight evolution: `--next`, recommend cancel without it, "cannot be undone" | 6 | singles |
 | GT-18 | Coverage and backlog: note line, `chain:` lines, forced refusal, evolution line, regenerate (33 -> 0) | 8 | all |
 
-Owners named by the 18 Nov rulings: playout learn answer GT-16 = E3; evolution GT-12..14 = E3 (tell E1 about Everstone and evolution held items, read only by `src/pokemon.c:3543-3547`); species and ability in the carry GT-4 = E3, field list signed off by E2 (section 7). `boot_weather_ball_byte` in the battle state: E1.
+Owners named by the 18 Nov rulings: playout learn answer GT-16 = E3; evolution GT-12..14 = E3 (tell E1 about Everstone and evolution held items, read only by `src/pokemon.c:3543-3547`); species and ability in the carry GT-4 = E3, field list signed off by E2 (section 7).
 
 ## 11. Files touched
 
 | File | Change |
 |---|---|
 | `docs/gauntlet-design.md` | this design |
-| `src/nuzline/data/gauntlet.py` | new: GT-1, GT-3 loader, `BootState` |
+| `src/nuzline/data/gauntlet.py` | new: GT-1, GT-3 loader |
 | `src/nuzline/data/trainer.py:254-255`, `:347-348` | `gauntlet` = (group, n, fight id); `gauntlet_rules` -> `gauntlet_facts` |
 | `tools/kaizo/overrides.py` | `RULE_KEYS` :71 removed; `Gauntlet` :137-141 gains the fact keys; `_gauntlets` :224-; drafting |
 | `tools/kaizo/resolve.py:522-527`, `:592-596` | fight numbering; copy facts only |
@@ -346,7 +341,7 @@ Owners named by the 18 Nov rulings: playout learn answer GT-16 = E3; evolution G
 | tests, new | `tests/data/test_gauntlet_settings.py`, `tests/prep/test_gauntlet*.py`, `tests/prep/test_growth.py`, `tests/kaizo/test_gauntlet_map.py`; synthetic groups and settings only, no test pins a user choice |
 | tests changed by the schema | `tests/data/test_trainer.py:207-209`, `:302-303`, `:319`; `tests/engine/test_coverage.py:373-392`; `tests/kaizo/test_overrides.py:51`, `:124`, `:131-136`; `tests/kaizo/test_resolve.py:583-585` |
 
-No change to the JAX step or the reference engine beyond E1's boot input. `levelup.py` is read, not edited.
+No change to the JAX step or the reference engine. `levelup.py` is read, not edited.
 
 Tests per run: the four guards, `tests/test_differential.py`, the prep, growth and map tests, and the coverage, overrides, resolve and trainer tests above. The tables change, so the rebuild runs first and the `fullset` tests run on the pod.
 
@@ -358,7 +353,6 @@ Tests per run: the four guards, `tests/test_differential.py`, the prep, growth a
 | E2 D3-8 (`pay_exp_leveled(battler=None)`, `step._pay_all`) | EXP, level and levelled slots read by the carry | read only; no edit |
 | E2 coverage (`FOUR_TURN_CLAUSES`) | `coverage.py` | different functions; text merge |
 | E2 D11 (search, prep and CLI with two actives) | prep and search files of this batch | D11 starts after E3 batch 3 merges and extends it |
-| E1 (`boot_weather_ball_byte`) | the boot scope (section 4) | E1 owns the rule and the state field; this batch carries the mask and passes the value |
 | E1 batch H (Exp. Share, Lucky Egg, Soothe Bell) | holders gain EXP and friendship; benched Exp. Share holders level and become evolution-eligible | no shared file; any order; E3 tests of item holders evolving go after H, or use plain participants |
 | E1 (Everstone, evolution held items) | read only by evolution | built in `prep/growth.py`; tell E1 |
 | E1 (party friendship wrap) | carry keeps the party value | `carry_out` reads `party_friendship` |
