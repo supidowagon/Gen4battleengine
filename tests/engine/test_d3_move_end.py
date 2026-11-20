@@ -13,12 +13,24 @@ switch case (battler 0 switches, battler 3 cured at the switch's MoveEnd) is D3-
 
 from __future__ import annotations
 
-from nuzline.engine.format import DOUBLES, MULTI, TWO_TRAINERS
+import jax.numpy as jnp
+
+from nuzline.engine.damage import confusion_damage, damage_for_roll
+from nuzline.engine.format import DOUBLES, MULTI, SINGLES, TWO_TRAINERS
 from nuzline.engine.ids import AbilityId, Stat, Status
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
+from nuzline.engine.state import make_state
 from nuzline.engine.step import WINNER_PLAYER
 from tests.engine.d2_states import four, party_of, with_ability, with_hp, with_moves
-from tests.engine.test_d3_action_loop import _all_moves, _set_item, _set_status, hp, play
+from tests.engine.test_d3_action_loop import (
+    _all_moves,
+    _set_item,
+    _set_status,
+    hp,
+    play,
+    speed_ordered,
+)
+from tests.engine.test_pivot import _mon
 
 TACKLE, SWORDS, BODY_SLAM = "Tackle", "Swords Dance", "Body Slam"
 
@@ -134,3 +146,75 @@ def test_ko_of_a_non_foe_battler_keeps_its_move_hit(tables, names):
         assert hp(out, target) == 0, (fmt, attacker, target)
         assert int(out.move_hit[target]) == names.move(TACKLE), (fmt, attacker, target)
         assert int(out.move_hit[attacker]) == 0, (fmt, attacker, target)
+
+
+# ------------------------------------------------ B = 2: the item pass at MoveEnd (bcp.c:3973)
+# BattleSystem_TriggerEffectOnSwitch has no format test and loops to GetMaxBattlers
+# (lib.c:3656), so SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (lib.c:4151-4165) checks both
+# battlers at every MoveEnd. A confusion self-hit (bcp.c:2629-2639) and a Jump Kick crash
+# (bcp.c:3325-3328, subscript_crash_on_miss.s:22) reach MoveEnd without AfterMoveEffects, so a
+# berry the damage brought into range is eaten there, before the later actor acts.
+
+
+def _singles(tables, names, lead0, lead1, item0):
+    """SINGLES: battler 0 (Machop L40, ``item0``, max HP 100) is faster than battler 1."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Machop", [lead0], 40, item0)],
+        [_mon(n, "Gyarados", [lead1], 40)],
+    )
+    s = s._replace(max_hp=s.max_hp.at[0, 0].set(100))
+    return speed_ordered(s, (0, 1))
+
+
+def _eaten_at_move_end(tables, names, s, hp_before, outcome):
+    """Run battler 0's action then battler 1's; battler 0 is a Sitrus holder at ``hp_before``."""
+    s = s._replace(hp=s.hp.at[0, 0].set(hp_before))
+    return play(tables, s, [0, 0], (0, 1), outcome=outcome)[0]
+
+
+def test_confusion_self_hit_eats_sitrus_at_its_move_end(tables, names):
+    """Battler 0 hurts itself (30 + D -> 30 HP). Its Sitrus Berry (HP_PCT_RESTORE, heals
+    Divide(100 * power, 100), lib.c:4983-4986) is eaten at that MoveEnd, so battler 1's Dragon
+    Rage (fixed 40) leaves 30 + power - 40; eaten late, the 30 HP would faint."""
+    s = _singles(tables, names, TACKLE, "Dragon Rage", "Sitrus Berry")
+    s = s._replace(confusion=s.confusion.at[0].set(3))
+    o = empty_outcome(SINGLES)._replace(confusion_hit=jnp.array([1, 0], jnp.int8))
+    d = int(confusion_damage(tables, s, 0, int(o.roll[0, 0])))
+    power = int(tables.item_param[names.item("Sitrus Berry"), 0])
+    out = _eaten_at_move_end(tables, names, s, 30 + d, o)
+    assert int(out.hp[0, 0]) == 30 + power - 40  # 15 with the table's power 25
+    assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == names.item("Sitrus Berry")
+
+
+def test_jump_kick_crash_eats_sitrus_at_its_move_end(tables, names):
+    """The same, after a Jump Kick that missed: the crash loss C (step.py, B10-2:
+    min(Divide(damage, 2), Divide(defender maxHP, 2))) leaves 30 HP; the Sitrus Berry is eaten at
+    that MoveEnd and the Dragon Rage leaves 30 + power - 40."""
+    s = _singles(tables, names, "Jump Kick", "Dragon Rage", "Sitrus Berry")
+    miss = empty_outcome(SINGLES)._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    would = int(damage_for_roll(tables, s, 0, names.move("Jump Kick"), False, int(miss.roll[0, 0])))
+    assert would > 0
+    crash = min(max(would // 2, 1), max(int(s.max_hp[1, 0]) // 2, 1))
+    power = int(tables.item_param[names.item("Sitrus Berry"), 0])
+    out = _eaten_at_move_end(tables, names, s, 30 + crash, miss)
+    assert int(out.hp[0, 0]) == 30 + power - 40
+    assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == names.item("Sitrus Berry")
+
+
+def test_confusion_self_hit_eats_liechi_at_its_move_end(tables, names):
+    """A pinch berry: Liechi (HOLD_EFFECT_PINCH_ATK_UP) triggers at curHP <= maxHP / param
+    (lib.c:5196-5206; max HP 100, so 100 // param). Battler 0's self-hit leaves exactly that HP;
+    the berry is eaten at its MoveEnd (Attack +1), so battler 1's Trick, which would move an
+    uneaten berry, finds no item and swaps nothing."""
+    s = _singles(tables, names, TACKLE, "Trick", "Liechi Berry")
+    s = s._replace(confusion=s.confusion.at[0].set(3))
+    o = empty_outcome(SINGLES)._replace(confusion_hit=jnp.array([1, 0], jnp.int8))
+    d = int(confusion_damage(tables, s, 0, int(o.roll[0, 0])))
+    limit = 100 // int(tables.item_param[names.item("Liechi Berry"), 0])
+    out = _eaten_at_move_end(tables, names, s, limit + d, o)
+    assert int(out.hp[0, 0]) == limit
+    assert int(out.stages[0, Stat.ATK]) == 1
+    assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == names.item("Liechi Berry")
+    assert int(out.item[1, 0]) == 0  # Trick moved nothing

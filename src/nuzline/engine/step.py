@@ -3238,7 +3238,8 @@ def _move_end(
     battle_lib.c:4135-4148, after ``bcp.c:3973``) and ``TriggerHeldItemOnStatus`` for every battler
     in ``monSpeedOrder`` (``..._HELD_ITEM_STATUS``, :4151-4165): ``side`` was cured under ``ran``,
     then the defender, then the others in battler order; the item pass (``speed_order``) follows
-    the switch-in states and the form change (:4115). At B = 2 the foe call stands."""
+    the switch-in states and the form change (:4115). The item pass runs at every B (lib.c:3656,
+    :4151-4165); the forbidden-status foe call at B = 2 stands."""
     fmt = format_of(state)
     if fmt.B == 2:
         foe = _foe(side)
@@ -3289,12 +3290,14 @@ def _move_end(
     # its Castform form change runs after every move, so a weather move or a type change takes
     # effect before the next battler acts (F-6).
     state = forecast(tables, state, clear)
-    if fmt.B == 4:
-        # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (:4151-4165): every battler in the action's
-        # monSpeedOrder, after the forbidden-status cures (a battler fires, its subscript runs,
-        # the pass restarts: the order is the sort's, the items the battler's own).
-        for i in range(fmt.B):
-            state = after_damage_items(tables, state, speed_order[i], clear)
+    # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (:4151-4165), at every B: TriggerEffectOnSwitch has no
+    # format test (bcp.c:3973) and loops to GetMaxBattlers (lib.c:3656). Every battler in the
+    # action's monSpeedOrder (B = 2: the sort reads only each battler's own item, lib.c:4967-5296,
+    # so battler order is exact), after the forbidden-status cures (a battler fires, its subscript
+    # runs, the pass restarts: the order is the sort's, the items the battler's own).
+    order = jnp.arange(fmt.B, dtype=_I32) if speed_order is None else speed_order
+    for i in range(fmt.B):
+        state = after_damage_items(tables, state, order[i], clear)
     return state
 
 

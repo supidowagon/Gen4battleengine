@@ -7768,11 +7768,11 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
         # The same TriggerEffectOnSwitch's SWITCH_IN_CHECK_STATE_FORM_CHANGE (lib.c:4115), after
         # its Trace / weather / Intimidate / Download states: Castform's Forecast, F-6.
         _forecast(turn.tables, s)
-        if _fmt(s).B == 4:
-            # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (lib.c:4151-4165): every battler in the
-            # action's monSpeedOrder, after the form change (D3-15).
-            for b in turn.speed_order:
-                _held_item(turn, s, b)
+        # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (lib.c:4151-4165), at every B (no format test,
+        # bcp.c:3973; loop bound GetMaxBattlers, lib.c:3656): every battler in the action's
+        # monSpeedOrder, after the form change (D3-15).
+        for b in turn.speed_order if turn.speed_order is not None else range(_fmt(s).B):
+            _held_item(turn, s, b)
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
     # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
     # run when the opponent acted first and the player chose a move (learn_pin).
