@@ -103,8 +103,12 @@ per day is the rate used for estimates.
   agent deletes `ci-day-big` if no other run is active on it. Otherwise it rents `ci-nightly`:
   at most $6 per run; the nightly agent itself deletes it within 4.5 hours of creation.
   A tip that equals the last nightly's tip does not run again.
-- **Test pod (`ci-day-big`):** 32 vCPU / 128 GB CPU, no daily limit, for every stream test
-  run. Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
+- **Test pod (`ci-day-big`):** 32 vCPU CPU, no daily limit, for every stream test run, in one
+  of two shapes, each with its limits passed in the exec-pod body's `env`:
+  - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
+  - 256 GB (the memory-optimized 32 vCPU type, approved 19 Nov): `GATE_GB` 176, `MAXP` 20,
+    `KILL_GB` 236, and `SNAP_GATE_GB` 176 for `snap.sh`.
+  Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
 - **Pod runs.** Streams have no pod tool: a stream sends the managing session its commit
@@ -118,7 +122,7 @@ per day is the rate used for estimates.
 - **Snapshot capture of `main`.** After every push of `main` the managing session starts
   one capture of the new tip on a test pod, in `/work/snapmain-<short sha>` (seeds 0-199,
   about 90 minutes; commands: `tools/ops/day/snap.sh`, DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
-  delete an older one only when no compare reads it. A capture is never copied off the pod:
+  delete an older one only when no compare reads it. A capture is never sent back to a pod:
   one lost with a pod is re-made on the next pod.
 - **Snapshot compare of a merge candidate.** Compare only (about 85 minutes), against the
   capture of the `main` tip its branch contains, with `--allow-new <the stream's list>`
@@ -138,8 +142,9 @@ per day is the rate used for estimates.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Start a chunk only while container memory
-  (`/sys/fs/cgroup/memory.current`) is under 88 GB, and run at most 10 chunks at once
-  across all runs on the pod: a chunk grows to 8-12 GB after it starts. Near 118 GB kill
+  (`/sys/fs/cgroup/memory.current`) is under `GATE_GB`, and run at most `MAXP` chunks at
+  once across all runs on the pod (Test pod above: 88 GB and 10, or 176 GB and 20): a chunk
+  grows to 8-12 GB after it starts. Near `KILL_GB` (118 or 236 GB) kill
   this run's newest chunk and queue it again, at most twice per chunk; a third kill counts
   as a failure. Never signal PID 1.
 - **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed

@@ -17,8 +17,10 @@
 #   leading '/' or './', outside TABLE_ALLOW or in TABLE_DENY), start a detached send whose
 #   send.log ends with SEND_RC=<n>, and print the exec-pod body. --dry-run runs every check and
 #   writes run.sh and body.json (receive code "<code>") but sends nothing.
-#   The pod writes /work/<name>/times.txt: START, CAPTURE_START or COMPARE_START,
-#   CAPTURE_RC=<n> <epoch> or COMPARE_RC=<n> <epoch>, ALL_DONE.
+#   run.sh first writes /work/<name>/reads (the capture dir a compare reads; empty for a
+#   capture), then /work/<name>/times.txt: START, SYNC_RC=<n> (a failed uv sync stops here,
+#   without ALL_DONE), CAPTURE_START or COMPARE_START, CAPTURE_RC=<n> <epoch> or
+#   COMPARE_RC=<n> <epoch>, ALL_DONE.
 #   Env: SNAP_GATE_GB (default 88): run.sh starts the capture or compare only while container
 #   memory is under it; pass the pod's GATE_GB (176 on a 256 GB pod).
 # fetch: receives what the pod sends (DAYBOX.md "Snapshot compare", Fetch) into
@@ -35,7 +37,10 @@ if [ "$MODE" = fetch ]; then
   NAME="$1"; CODE="$2"; check_run_name "$NAME"
   O="$RENT/out/$NAME/fetch-$(date +%s)"; mkdir -p "$O"; cd "$O"
   HOME="$RENT/home" USERPROFILE="$RENT/home" "$RPC" receive "$CODE"
-  for f in *.tgz; do [ -f "$f" ] && tar -xzf "$f"; done
+  for f in *.tgz; do [ -f "$f" ] || continue
+    L=$(tar -tzf "$f") || refuse "cannot list $f"; echo "== $f"; printf '%s\n' "$L"
+    printf '%s\n' "$L" | grep -qE '(^|/)\.\.(/|$)|^/' && refuse "$f holds a '..' or absolute path"
+    tar -xzf "$f"; done
   echo "FETCHED into $O:"; ls -R "$O" | head -40
   [ -f times.txt ] && tail -3 times.txt
   exit 0
@@ -63,7 +68,7 @@ else CAP="${POS[2]}"; NAME="${POS[3]}"
   echo "$CAP" | grep -qE '^/work/[a-z0-9][a-z0-9_-]*/[A-Za-z0-9_-]+$' || refuse "capture dir must be /work/<folder>/<dir>" "$CAP"
 fi
 check_run_name "$NAME"
-[ -z "$ALLOW" ] || echo "$ALLOW" | grep -qE '^[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*$' || refuse "--allow-new must be name,name,..." "$ALLOW"
+[ -z "$ALLOW" ] || echo "$ALLOW" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9_.-]*(,[A-Za-z0-9_][A-Za-z0-9_.-]*)*$' || refuse "--allow-new must be name,name,..." "$ALLOW"
 TSHA=""; [ -z "$TOOL" ] || TSHA=$(git -C "$REPO" rev-parse --verify "$TOOL^{commit}") || refuse "unknown --tool commit $TOOL"
 DECOMP=$(git -C "$REPO/external/pokeplatinum" rev-parse HEAD) || refuse "no decomp checkout at $REPO/external/pokeplatinum"
 GATE="${SNAP_GATE_GB:-88}"; echo "$GATE" | grep -qE '^[1-9][0-9]*$' || refuse "SNAP_GATE_GB must be a whole number" "$GATE"
@@ -108,10 +113,10 @@ cat > "$O/run.sh" <<EOS
 #!/bin/bash
 # $MODE of $SHA; written by tools/ops/day/snap.sh
 export PATH=/root/.local/bin:/work/_bin:\$PATH UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
-W="$W"; cd "\$W/repo"
+W="$W"; printf '%s\n' "$CAP" > "\$W/reads"; cd "\$W/repo"
 gate() { while [ \$(( \$(cat /sys/fs/cgroup/memory.current) / 1000000000 )) -ge $GATE ]; do echo "gate wait \$(date +%T)"; sleep 30; done; }
 echo "START \$(date +%s)" > "\$W/times.txt"
-(uv sync --frozen -q) > "\$W/sync.log" 2>&1
+(uv sync --frozen -q) > "\$W/sync.log" 2>&1; rc=\$?; echo "SYNC_RC=\$rc \$(date +%s)" >> "\$W/times.txt"; [ "\$rc" = 0 ] || exit 1
 gate; echo "${JOB}_START \$(date +%s)" >> "\$W/times.txt"
 $CMD; echo "${JOB}_RC=\$? \$(date +%s)" >> "\$W/times.txt"
 echo ALL_DONE >> "\$W/times.txt"
