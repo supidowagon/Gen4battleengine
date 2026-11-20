@@ -106,8 +106,11 @@ per day is the rate used for estimates.
 - **Test pod (`ci-day-big`):** 32 vCPU CPU, no daily limit, for every stream test run, in one
   of two shapes, each with its limits passed in the exec-pod body's `env`:
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
-  - 256 GB (the memory-optimized 32 vCPU type, approved 19 Nov): `GATE_GB` 176, `MAXP` 20,
+  - 256 GB (the memory-optimized 32 vCPU type): `GATE_GB` 176, `MAXP` 20,
     `KILL_GB` 236, and `SNAP_GATE_GB` 176 for `snap.sh`.
+  Read the shape before sending a body: exec `cat /sys/fs/cgroup/memory.max` on the pod
+  (bytes; `max` or a value under 200 GB means the 128 GB limits). Never pass the 256 GB
+  limits to a 128 GB pod.
   Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
