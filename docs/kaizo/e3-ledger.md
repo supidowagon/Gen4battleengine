@@ -1562,3 +1562,7 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Revive brings it back with that PP, bag.py:236-238). Superseded: E3-B2-9 ruling (6) builds the decomp order. SF2's resumed-pass defender re-resolution moves from `_turn_from_scratch` into the
   reference's `_resume` (pivot pauses only). E2's interim Acid Rain guard is gone on both sides (batch 2 never read it).
   MANIFEST_VERSION 43.
+- E3-B2-24 Damage oracle (fullset): Feint and Last Resort join `_COMPARED_EFFECTS` (their scripts gate the move, then a
+  plain CalcCrit / CalcDamage at table power: effect_script_0223.s:5-8, effect_script_0246.s:5-7); Fling joins
+  `_DEPARTED_EFFECTS` (power is the held item's, 0 without one and the move fails: battle_lib.c:5859, :5863-5865;
+  effect_script_0233.s:7, :21-23; the oracle's mons hold no item). docs/discrepancies.md 13.

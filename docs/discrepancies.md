@@ -205,6 +205,20 @@ each; the test is fixed.
   from being sure). Not generated: `_smogon_departs` rule 6
   (the defender's ability through `damage.ignorable`, so Mold Breaker still compares).
 
+### 13. Fling, Feint and Last Resort in the M1 pools (E3 batch 2)
+
+- **Feint, Last Resort:** compared. Their scripts only gate the move (`TryFeint`,
+  `effect_script_0223.s:5`; `TryLastResort`, `effect_script_0246.s:5`), then run a plain
+  `CalcCrit` / `CalcDamage` at the table power (`:7-8`, `:6-7`); `damage_table` has no case for
+  either, and @smogon/calc 0.12.0 none in `gen4.js`. The oracle compares the damage of a hit,
+  not whether the move succeeds (as Fake Out).
+- **Fling:** not generated (`_DEPARTED_EFFECTS`). Its power is the held item's
+  (`BattleSystem_FlingItem`, `src/battle/battle_lib.c:5859`); with no item it is 0 and
+  `TryFling` fails the move (`:5863-5865`; `effect_script_0233.s:7`, `:21-23`). The oracle's
+  mons hold no item: the table carries a placeholder 1 (`res/moves/fling/data.json:12`, the
+  engine passes the item's power, `step.py`'s `fling_power`), @smogon/calc 0
+  (`getFlingPower`, `gen4.js:315-316`).
+
 ## JAX engine's trainer AI path vs the decomp (K3b1)
 
 The trainer AI's damage (`damage.ai_damage_for_roll`, used by `nuzline.ai.commands`) is

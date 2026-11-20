@@ -114,6 +114,10 @@ _DEPARTED_EFFECTS = (
     EffectId.HALVE_HP,
     EffectId.ENDEAVOR,
     EffectId.COUNTER,
+    # Fling's power is the held item's (BattleSystem_FlingItem, battle_lib.c:5859); with no item
+    # it is 0 and the move fails (:5863-5865; TryFling, effect_script_0233.s:7, :21-23). The
+    # oracle's mons hold no item; the table carries a placeholder 1, @smogon/calc 0.
+    EffectId.FLING,
 )
 # sWeightToPower (include/data/battle/weight_to_power.h): the first row whose weight
 # (hectograms) is at least the defender's (BtlCmd_CalcWeightBasedPower,
@@ -131,7 +135,7 @@ _COMPARED_EFFECTS = (
     EffectId.SELF_DESTRUCT, EffectId.FLAIL, EffectId.FANG_PARALYZE_FLINCH,
     EffectId.DOUBLE_POWER, EffectId.HP_POWER, EffectId.WEIGHT_POWER, EffectId.UPROAR,
     EffectId.RECOIL_STATUS, EffectId.CRASH, EffectId.ASSURANCE, EffectId.TRUMP_CARD,
-    EffectId.CHATTER,
+    EffectId.CHATTER, EffectId.FEINT, EffectId.LAST_RESORT,
 )  # fmt: skip
 
 jit_damage_table = jax.jit(damage_table)
