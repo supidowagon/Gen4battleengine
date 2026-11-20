@@ -534,3 +534,41 @@ def test_future_sight_law_covers_a_corrupted_mask_that_loses_a_group(tables, nam
         assert (int(out.field_mask), int(out.weather_turns)) == (0x8040, -1)
         left.append(int(out.hp[1, 0]))
     assert left[0] == left[1] - 5  # the stored 5 HP hit lands at the live threshold only
+
+
+@pytest.mark.parametrize(
+    "foe_action, start, loose",
+    [
+        (0, Weather.HAIL, False),  # Growl: no chase, so no Acid Rain write
+        (
+            MOVE_ACTIONS + 1,
+            Weather.HAIL,
+            True,
+        ),  # the switch's chase (subscript_switch_pokemon.s:11)
+        (1, Weather.HAIL, True),  # U-turn's chase (subscript_attack_then_switch_out.s:54)
+        (MOVE_ACTIONS + 1, Weather.NONE, False),  # a mask of 0 stays 0 at :115 in singles
+    ],
+)
+def test_future_sight_roll_is_kept_whole_only_where_acid_rain_can_write(
+    tables, names, foe_action, start, loose
+):
+    """A Future Sight pending on the foe (battler 1) while the player uses Pursuit: the roll is
+    kept whole (``outcome.future_thresholds``' ``loose``) only where the Acid Rain write
+    (subscript_pursuit.s:115) can happen, i.e. BtlCmd_TryPursuit runs (a switch or a U-turn of the
+    other side, battle_script.c:6899-6916) on a mask that is not 0. An ordinary turn keeps the
+    roll's accuracy classes (the snap regression of a0a09a9)."""
+    from nuzline.engine.outcome import future_thresholds
+
+    s = _pursuit_fight(
+        tables, names, ("Pursuit",), ("Growl", "U-turn"), foe="Scyther", start_condition=start
+    )
+    s = s._replace(
+        future_timer=s.future_timer.at[1].set(2),
+        future_damage=s.future_damage.at[1].set(5),
+        future_move=s.future_move.at[1].set(names.move("Future Sight")),
+        future_attacker=s.future_attacker.at[1].set(1),
+        future_sight=s.future_sight.at[1].set(1),
+    )
+    assert (int(s.field_mask) != 0) is (start != Weather.NONE)
+    acts = jnp.asarray([0, foe_action], jnp.int32)
+    assert bool(future_thresholds(tables, s, acts)[2][1]) is loose

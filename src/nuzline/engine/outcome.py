@@ -523,6 +523,35 @@ def future_threshold(tables: Tables, state: BattleState, defender) -> jnp.ndarra
     )
 
 
+def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarray:
+    """``bool``: an Acid Rain write (subscript_pursuit.s:100, :115; ledger G-12) can happen this
+    turn. ``BtlCmd_TryPursuit`` runs only from a switch (subscript_switch_pokemon.s:11) and from
+    U-turn (subscript_attack_then_switch_out.s:54), and takes only a battler of the other side
+    whose selected (or encored) move has Pursuit's effect (battle_script.c:6899-6916). So some
+    battler switches or uses U-turn while a battler of the other side uses Pursuit (``uses``,
+    ``effect``: per battler, the move it runs; a called Pursuit over-approximates), and the mask
+    at :115 can be nonzero: nonzero now, or a third battler's action can come before the chase
+    and write it. In singles there is none (a switch's chase comes before every move; a U-turn's
+    pursuer has not acted, and U-turn writes no field condition), and :115 and the switcher's
+    FAINT_MON only clear bits, so a mask that is 0 now stays 0 at :115."""
+    fmt = format_of(state)
+    live = state.over == 0
+    # A switch action's chase runs at its switch, before every move (switches go first): a turn
+    # resumed after a party list (``pivot_battler``) has run them all, and its pivot's switch is
+    # the list's pick, which reaches no TryPursuit.
+    switch = is_switch(actions) & (state.pivot_battler == 0)
+    chased = live & (switch | (uses & (effect == EffectId.U_TURN)))
+    pursues = uses & (effect == EffectId.PURSUIT)
+    reach = jnp.asarray(False)
+    for b in range(fmt.B):
+        for x in range(fmt.B):
+            if side_of(x) == side_of(b):
+                continue
+            earlier = any(y not in (b, x) for y in range(fmt.B))
+            reach = reach | (chased[b] & pursues[x] & ((state.field_mask != 0) | earlier))
+    return reach
+
+
 # future_thresholds' grid per defender: attacker slot (SLOTS) x defender slot (SLOTS) x stage
 # total (13) x weather (6: none, sandstorm, hail, each with the start's deep fog bit or not) x
 # the target confused or not.
@@ -687,9 +716,10 @@ def future_thresholds(
     # (subscript_exchange_abilities.s:21-24); a Gastro Acid suppresses its target's
     # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
     ends = (fcm.gravity_count(state) == 1) & (tables.gravity_rearm == 0)
-    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO this turn subtracts a battler from
-    # a nonzero mask, which can turn Gravity or deep fog on or off (FCM 3.1): kept whole too.
-    acid = jnp.any(uses & (effect == EffectId.PURSUIT)) & (state.field_mask != 0)
+    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO of a switcher or a U-turn user
+    # subtracts a battler from a nonzero mask, which can turn Gravity or deep fog on or off
+    # (FCM 3.1): kept whole too, only where that write can happen (``acid_rain_reachable``).
+    acid = acid_rain_reachable(state, actions, uses, effect)
     field_change = (
         jnp.any(
             uses

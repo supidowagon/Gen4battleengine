@@ -310,6 +310,7 @@ from nuzline.engine.outcome import (
     PROTECT_RATES,
     ROAR_LEVEL_VALUES,
     Outcome,
+    acid_rain_reachable,
     armored,
     crit_class,
     crit_variants,
@@ -2224,9 +2225,10 @@ def outcome_laws(
     alive_setter = jnp.any(
         _any_of(state.ability, setters) & (state.species != 0) & (state.hp > 0), axis=1
     )[party(fmt, jnp.arange(fmt.B))]
-    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO subtracts a battler from a nonzero
-    # mask before the turn end's sort, which can set the rain and sun bits (FCM 3.1).
-    acid = jnp.any(uses_move & (effect == _E.PURSUIT)) & (state.field_mask != 0)
+    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO of a switcher or a U-turn user
+    # subtracts a battler from a nonzero mask before the turn end's sort, which can set the rain
+    # and sun bits (FCM 3.1); only where that write can happen (``acid_rain_reachable``).
+    acid = acid_rain_reachable(state, actions, uses_move, effect)
     weather_free = live & (
         jnp.any((uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter))
         | acid

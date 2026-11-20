@@ -1785,9 +1785,15 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   sandstorm, hail, each with and without the start's deep fog bit (`_rate` reads sand for Sand Veil, hail for
   Snow Cloak and fog; a defender holds one ability): every mask at the hit, a corrupted start that loses a TEMP
   group included (0x8044 -> 0x8040), since weather moves and abilities clear fog (effect_script_0115.s etc. :8,
-  subscript_drizzle.s etc. :11). A Pursuit used this turn on a nonzero mask keeps the Future Sight roll whole
-  (`loose`: Acid Rain can turn Gravity or fog on or off) and frees the end-speed weather points
-  (`enumerate`'s `weather_free`: it can set rain and sun bits). `outcome._threshold_grid` needs no change: its
+  subscript_drizzle.s etc. :11). Where an Acid Rain write can happen this turn (`outcome.acid_rain_reachable`:
+  BtlCmd_TryPursuit runs only from a switch, subscript_switch_pokemon.s:11, and U-turn,
+  subscript_attack_then_switch_out.s:54, so a battler switches (not in a turn resumed after a party list, whose
+  switches have all run and whose pick reaches no TryPursuit) or uses U-turn while one of the other
+  side uses Pursuit, battle_script.c:6899-6916; and the mask at :115 can be nonzero: nonzero now, or a
+  third battler acts before the chase, never in singles) the Future Sight roll is kept whole (`loose`:
+  Acid Rain can turn Gravity or fog on or off) and the end-speed weather points are freed
+  (`enumerate`'s `weather_free`: it can set rain and sun bits). (Fix of a0a09a9, which took any
+  Pursuit on a nonzero mask, a chase or not: the snap compare's 12 diverged parts.) `outcome._threshold_grid` needs no change: its
   weathers are the start mask through `field.ability_bits` / `move_bits`, exact on any mask, and in singles an
   Acid Rain write ends both actions (the pursuer's and the switcher's), so no accuracy check follows it.
   Coverage had no Acid Rain refusal on this branch (none in src); its docstring describes the mask (FCM 4.5).
