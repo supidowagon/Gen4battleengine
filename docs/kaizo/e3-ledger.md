@@ -1566,3 +1566,7 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   plain CalcCrit / CalcDamage at table power: effect_script_0223.s:5-8, effect_script_0246.s:5-7); Fling joins
   `_DEPARTED_EFFECTS` (power is the held item's, 0 without one and the move fails: battle_lib.c:5859, :5863-5865;
   effect_script_0233.s:7, :21-23; the oracle's mons hold no item). docs/discrepancies.md 13.
+- E3-B2-25 Effect-map check (fullset): Charge's row (STAT_SELF, Sp. Def +1, CHARGE_PARAM; E3-B2-8) is right and stays;
+  its stage lands through the indirect ON_HIT subscript_charge.s (effect_script_0174.s:5; subscript_charge.s:5-6 the
+  volatile, :11-13 Sp. Def +1 on the attacker), not a direct TO_ATTACKER stat subscript, so
+  `test_stat_effects_match_decomp_scripts` checks it as its own case (as Minimize). No table input changed.

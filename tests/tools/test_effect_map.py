@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from nuzline.engine.ids import EffectId, MoveFlag, Stat
+from nuzline.engine.ids import CHARGE_PARAM, EffectId, MoveFlag, Stat
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
     CHARGE_FLAG_EFFECTS,
@@ -76,6 +76,17 @@ def test_stat_effects_match_decomp_scripts():
             sub = DECOMP / "res/battle/scripts/subscripts/subscript_minimize.s"
             assert "MOVE_SUBSCRIPT_PTR_EVASION_UP_1_STAGE" in sub.read_text(encoding="utf-8")
             assert (stat, stages, p2) == (Stat.EVA, 1, 2)
+            continue
+        if name == "BATTLE_EFFECT_SP_DEF_UP_DOUBLE_ELECTRIC_POWER":
+            # E3-B2-8: Charge's indirect ON_HIT subscript_charge.s (effect_script_0174.s:5) sets
+            # MOVE_EFFECT_CHARGE and chargedTurns 2 (:5-6), then Sp. Def +1 on the attacker
+            # (:11-13): STAT_SELF with CHARGE_PARAM.
+            assert "ON_HIT|MOVE_SUBSCRIPT_PTR_CHARGE" in _script(effect)
+            sub = DECOMP / "res/battle/scripts/subscripts/subscript_charge.s"
+            text = sub.read_text(encoding="utf-8")
+            assert "BTLVAR_SIDE_EFFECT_MON, BTLVAR_ATTACKER" in text
+            assert "MOVE_SUBSCRIPT_PTR_SP_DEFENSE_UP_1_STAGE" in text
+            assert (stat, stages, p2) == (Stat.SPD, 1, CHARGE_PARAM)
             continue
         m = pattern.search(_script(effect))
         assert m, name
