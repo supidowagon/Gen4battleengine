@@ -2388,6 +2388,70 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   (tests/strategies.py M1_SPECIES: Magma Armor, Own Tempo, Water Veil, Oblivious become drawable slots); outcome
   changes where a player's Natural Cure / forbidding holder ends a won battle with a status, and where a switch-out
   meets a status the party ability forbids.
+- H-3 Color Change (16), Marvel Scale (63), Soundproof (43): rule sheets ability-color-change.md,
+  ability-marvel-scale.md, ability-soundproof.md. New `AbilityId` COLOR_CHANGE 102, MARVEL_SCALE 103, SOUNDPROOF 104
+  (`ABILITY_DECOMP_IDS`, tools/effect_map.py `DECOMP_ABILITY_TO_ID`, data/game_constants.py); their holders are no
+  longer refused. Kaizo holders (Kecleon 352, Milotic 350, Whismur / Loudred / Exploud 293-295) are player-side only.
+  Color Change (`effects._contact_ability`, reference `_color_change`): BattleSystem_TriggerAbilityOnHit's case
+  (battle_lib.c:4232-4253), the defender's own `Battler_Ability` (Mold Breaker moot; Gastro Acid NONE), no contact or
+  attacker test. Fires when the defender has HP, `h.effective` (no MOVE_STATUS_NO_EFFECTS), not Struggle, this hit's
+  physical / specialDamageTaken (`h.dealt > 0` on the HP path, bcp.c:3413-3424; a substitute hit returns at :4209),
+  table power != 0 (Seismic Toss's 1 counts) and neither raw type is the move type; the type is `move_type_of`
+  (battleCtx->moveType: Hidden Power, Weather Ball, Natural Gift, Judgment) else the table's. subscript_color_change.s
+  :9-10 set both types; :6 tags the holder (TAG_NICKNAME_ABILITY_TYPE): new reveal phase TYPE_CHANGE. SYSCTL_UTURN_ACTIVE
+  (:4247) is set only at U-turn's list (subscript_attack_then_switch_out.s:68), after its own call (:7): the resumed
+  tail has no contact-ability step in either engine. Raw types: a roosting holder's Flying is stored as Mystery while
+  the move's chart runs (`damage.chart_types`); Color Change reads it back as Flying (no battler has Mystery
+  otherwise), and the move end's roost restore keeps the new types (they differ from the stripped ones).
+  Normalize (:4235-4236) is an unsupported ability (as in TriggerImmunityAbility's absorbers): not modelled.
+  Manager order, Color Change on a multi-hit move: the decomp re-runs CHECK_TYPE_CHART every hit
+  (bcp.c:3272-3278; SYSCTL_MULTI_HIT_MOVE, system_control.h:87-93, sets no SYSCTL_SKIP_TYPE_CHART_CHECK; LoopMultiHit
+  re-runs TRY_MOVE, bcp.c:3780-3792; BattleSystem_SetupLoop clears moveStatusFlags, battle_lib.c:3357-3362). Finding:
+  both engines already do. The per-hit damage is `damage_for_roll` inside `effects.play_hit` (each `fori_loop` pass,
+  reading the carried `state.types`: STAB and the chart, ApplyTypeChart battle_lib.c:2592-2646), and the hit's
+  MOVE_STATUS_SUPER_EFFECTIVE (Enigma Berry, Expert Belt, Solid Rock) is recomputed per hit from the live types; the
+  reference's `_hit` likewise. `step._use_move`'s `chart` (computed once, before the hits) feeds only per-action reads
+  of hit 0's chart: the absorbers' `chart > 0`, Wonder Guard's test and moveFailFlags.noEffect. A Color Change between
+  hits sets the holder to the move's own type, which no Gen 4 chart row makes immune (type_chart[t, t] != 0 for every
+  t, read from the built tables), and a Color Change holder has none of those abilities; so no change was needed
+  there. Test: Double Kick on Normal Kecleon deals hit 1 at x2 and hit 2 at x1 (Fighting).
+  Marvel Scale (`damage._pre_random`, reference `_calc_move_damage`): after Guts, `d_ability_eff` (the Mold Breaker
+  view) == MARVEL_SCALE and the defender's status != NONE: Defense x150/100 (battle_lib.c:6797-6800), before the stage
+  scaling (a crit keeps it), Explosion's halving and Sp. Def (never). The confusion self-hit passes the battler as
+  defender (CALC_SELF_HIT, include/battle/common.h:35-46). The AI's estimate reads it through the same function
+  (`ai_damage_for_roll`, trainer_ai.c:3081-3091). No message: never revealed.
+  Soundproof (`step._use_move` `sound_block`, reference `_fight`): TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES
+  (bcp.c:3281-3286); the accuracy, override and chart states always go on (they return 0, bcp.c:2902-3043), and the
+  Soundproof script runs under MOVE_STATUS_DID_NOT_HIT too (:2791-2792): an ignorable Soundproof and a move with
+  MoveFlag.SOUND (sSoundMoves, battle_lib.c:3473-3486; moveCur, a called Snore as itself) on an acting user with a
+  target whose script did not fail. It reveals (subscript_blocked_by_soundproof.s:9, SOUND_BLOCKED) and sets
+  MOVE_STATUS_NO_MORE_WORK: CheckMoveFailure goes to LOOP_SPREAD_MOVES (bcp.c:3313-3314) before subscript_missed.s,
+  so a blocked miss or Protect has no unlock, no crash and no miss / protected event; no hit (no damage, no Roar
+  drag, no Uproar start, no Snore flinch), no AfterMoveEffects. Uproar (own `Battler_Ability`): the move-time wake
+  (bcp.c:2432-2433, `roused`) and the turn end's (`_uproar_check`, bcp.c:1509-1511) spare a Soundproof sleeper; the
+  uproar sleep block (subscript_fall_asleep.s:15, :44; `effects._inflict`, `kept_awake`) is skipped for a Soundproof
+  target. Perish Song (`effects.perish_song_eligible(state, user_side)`, reference `_perish_eligible`): each battler
+  also needs `ignorable(user, b) != SOUNDPROOF` (battle_script.c:5474; the user skips itself, its Mold Breaker pierces
+  a foe's), failing when none is eligible (:5482-5484); its "blocks" message tags BTLSCR_MSG_TEMP: no reveal. Rest,
+  Yawn and Heal Bell read Soundproof by decomp id (unchanged). AI: Basic_CheckSoundproof (built).
+  Enumerate: Soundproof in `INPUT_NEUTRAL_ABILITIES` and in `absorbs` (a sound move has no hit, no flinch); Color
+  Change and Marvel Scale in `INPUT_CLAUSE_ABILITIES`: the color-change clause (the side's holder hit first by a foe's
+  damaging move: its STAB; a later hit of the side's damaging move on a foe holder: the chart) and the marvel-scale
+  clause (a physical hit on a foe holder: any earlier foe move, and every later hit of the side's move).
+  Coverage: docs/kaizo/mechanics_backlog.md regenerated (tools/kaizo/backlog.py): the Color Change, Marvel Scale and
+  Soundproof rows close, and so do H-2's Immunity and Own Tempo rows (not regenerated then); one partner-row group
+  fewer.
+  Tests: tests/engine/test_e1_batch_h.py (H-3 block: Color Change's change, reveal, next hit and STAB; Double Kick per
+  hit; no change behind a substitute, for power 0, a KO, its own type, Struggle and Gastro Acid; Mold Breaker, Seismic
+  Toss and Hidden Power change it; the switch restores the species types; Marvel Scale on paralysis and sleep, not on
+  a healthy holder or a special move, not under Mold Breaker or Gastro Acid, kept on a crit and before Explosion's
+  halving, on a burned self-hit, on Twineedle's second hit after its poison, in the AI's estimate; Soundproof against
+  Hyper Voice and Mold Breaker, a missed or protected Supersonic, Roar, Uproar, sleep through its own uproar, Perish
+  Song three ways). tests/engine/test_ai_inputs.py and tests/engine/test_roar.py: Voltorb's Soundproof is no longer the
+  unsupported example (Lileep's Suction Cups). tests/test_damage_oracle.py: Soundproof joins departure 6 (the block is
+  step's; @smogon/calc returns 0).
+  Snapshot (expected): no divergence: tests/strategies.py's M1_SPECIES has no Color Change, Marvel Scale or Soundproof
+  holder (no generator drift), and the changed paths need one on the field.
 
 ## Stream state (restart point, 2026-11-19)
 

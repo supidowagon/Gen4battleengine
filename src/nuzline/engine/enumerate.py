@@ -1209,6 +1209,9 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.WATER_VEIL,
     AbilityId.MAGMA_ARMOR,
     AbilityId.OBLIVIOUS,
+    # H-3: a blocked sound move has no hit (``absorbs`` in ``outcome_laws``); its uproar and Perish
+    # Song tests change sleep and the perish count only, no damage input.
+    AbilityId.SOUNDPROOF,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -1237,6 +1240,12 @@ INPUT_CLAUSE_ABILITIES = (
     # F-6: Castform's types follow the weather, which changes mid-turn only by an earlier foe
     # weather move (weather clause) or a switch-in weather ability or Cloud Nine (switch clause).
     AbilityId.FORECAST,
+    # H-3: a damaging hit on the holder sets its types (battle_lib.c:4232-4253): the color-change
+    # clause (the holder's later STAB, a later hit's chart against it).
+    AbilityId.COLOR_CHANGE,
+    # H-3: the holder's status, which can change before a physical hit on it, is a Defense
+    # factor (battle_lib.c:6797-6800): the marvel-scale clause, Guts' mirror.
+    AbilityId.MARVEL_SCALE,
 )
 INPUT_NEUTRAL_ITEMS = (
     ItemId.NONE,
@@ -1591,6 +1600,13 @@ def damage_inputs_can_change(
     * **recycle**: the foe's earlier Recycle gives it back an item (B13-19; any, conservative);
     * **embargo**: the foe's earlier Embargo hides the side's held item (B13-31: a holder of one
       as ``state.held_item`` reads it at the turn start);
+    * **color-change** (H-3): the side's Color Change holder hit first by a foe's damaging move
+      gets that move's type (its STAB); a later hit of the side's damaging move on a foe holder
+      meets the types its first hit set (the chart);
+    * **marvel-scale** (H-3): a physical hit on a foe Marvel Scale holder reads the holder's
+      status, which the foe's earlier move (its wake-up, thaw, Rest, Refresh, Psycho Shift, a
+      contact status, Synchronize) or an earlier hit of the side's move (a secondary status, the
+      holder's status berry) can change;
     * **own move**: a later hit of a move other than ``MULTI_HIT``, ``TRIPLE_KICK`` and
       ``BEAT_UP`` (Twineedle's second hit, B13-1: its first can poison a Synchronize holder;
       Triple Kick's and Beat Up's own hits change no input but the HP and contact clauses',
@@ -1634,6 +1650,12 @@ def damage_inputs_can_change(
     physical = category == PHYSICAL
     special = category == SPECIAL
     guts = physical & (ability == AbilityId.GUTS)  # any status counts (damage.py :6793)
+    # H-3: Guts' mirror on the defender (battle_lib.c:6797-6800): any status of a foe holder.
+    marvel = physical & (foes(ability) == AbilityId.MARVEL_SCALE)
+    # H-3: Color Change (battle_lib.c:4232-4253) needs a move with table power.
+    damaging = tables.move_power[moves] != 0
+    color_own = (ability == AbilityId.COLOR_CHANGE) & foes(damaging)
+    color_foe = (foes(ability) == AbilityId.COLOR_CHANGE) & damaging
     burnable = physical & (ability != AbilityId.GUTS)  # a burn halves it (:6978)
     attack_stat = jnp.where(physical, Stat.ATK, Stat.SPA)
     defense_stat = jnp.where(physical, Stat.DEF, Stat.SPD)
@@ -1724,6 +1746,11 @@ def damage_inputs_can_change(
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
+        # H-3 marvel-scale: any earlier foe move can change the holder's own status (a wake-up or
+        # thaw at its status check, Rest, Refresh, Psycho Shift, a contact status, Synchronize).
+        | marvel
+        # H-3 color-change: the foe's damaging hit sets the side's types (its STAB).
+        | color_own
         | ((foe_effect == _E.REFLECT) & physical)
         | ((foe_effect == _E.LIGHT_SCREEN) & special)
         | ((foe_effect == _E.MUD_SPORT) & (move_type == Type.ELECTRIC))
@@ -1833,7 +1860,9 @@ def damage_inputs_can_change(
     repeat = _any_of(effect, (_E.MULTI_HIT, _E.TRIPLE_KICK, _E.BEAT_UP))
     # F-16: a later hit against a Sky Shaymin frozen at the turn start meets Land Forme.
     sky_frozen = foes(sky & (status == Status.FREEZE))
-    own_hits = hp_sensitive | ~repeat | contact_status | sync_back | sky_frozen
+    # H-3: a later hit meets a foe holder's types set by the first (color-change) or its status
+    # changed by a secondary or its berry (marvel-scale).
+    own_hits = hp_sensitive | ~repeat | contact_status | sync_back | sky_frozen | color_foe | marvel
     own_pre_move = (guts & _any_of(status, (Status.SLEEP, Status.FREEZE))) | (
         effect == _E.SELF_DESTRUCT
     )
@@ -2713,6 +2742,10 @@ def outcome_laws(
     # Flash Fire takes a Fire move too, unless its holder is frozen (F-2; a Fire flinch move has power).
     absorbs = absorbs | (
         (ignorable == AbilityId.FLASH_FIRE) & (kinds == Type.FIRE) & (foes(status) != Status.FREEZE)
+    )
+    # Soundproof takes a sound move whole (step._use_move's ``sound_block``, H-3): Snore's flinch.
+    absorbs = absorbs | (
+        (ignorable == AbilityId.SOUNDPROOF) & ((tables.move_flags[moves] & MoveFlag.SOUND) != 0)
     )
     flinch_sure = (
         # Snore (FLINCH with SNORE_PARAM) fails unless its user is asleep when it acts

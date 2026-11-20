@@ -192,6 +192,7 @@ from nuzline.engine.hooks import (
     DAMAGE_AVOIDED,
     OHKO_BLOCKED,
     REDIRECTED,
+    SOUND_BLOCKED,
     STATUS_CURE,
     STATUS_HP,
     TORMENT,
@@ -1093,11 +1094,13 @@ def _use_move(
     # CHECK_STATUS_STATE_SLEEP (:2430): the counter drops by 1 (Early Bird is not
     # implemented); still asleep disrupts the move, while waking up (subscript_wake_up)
     # clears the status and the checks go on. While FIELD_CONDITION_UPROAR is set (an uproar,
-    # a faster one of this turn included) a sleeper without Soundproof (unsupported) wakes
-    # instead, with no counter drop (:2432-2439, subscript_wake_up.s:19 clears every sleep bit).
+    # a faster one of this turn included) a sleeper whose Battler_Ability is not Soundproof
+    # (H-3) wakes instead, with no counter drop (:2432-2439, subscript_wake_up.s:19 clears every
+    # sleep bit); a Soundproof sleeper counts down as usual.
     status = state.status[party(fmt, side), user]
     asleep = checks & (status == Status.SLEEP)
-    roused = asleep & fcm.uproar_any(state)
+    deaf = battler_ability(state, side, user) == AbilityId.SOUNDPROOF
+    roused = asleep & fcm.uproar_any(state) & ~deaf
     sleep_left = jnp.maximum(state.status_counter[party(fmt, side), user].astype(_I32) - 1, 0)
     sleep_left = jnp.where(roused, 0, sleep_left)
     sleeping = asleep & (sleep_left > 0)
@@ -1831,6 +1834,23 @@ def _use_move(
     )
     state = know_ability(state, target_side, target, yawn_shown)
     connected = can_act & has_target & hit & ~failed & ~blocked & ~charging
+    # TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES (bcp.c:3281-3286, after the accuracy, override and
+    # chart states, which always go on: bcp.c:2902-3043 return 0): an ignorable Soundproof
+    # (battle_lib.c:3523-3530) takes a move of sSoundMoves (:3473-3486, MoveFlag.SOUND; moveCur, so
+    # a called Snore as itself), and unlike the absorbers it does so under MOVE_STATUS_DID_NOT_HIT
+    # too (bcp.c:2791-2792): a miss, a Protect, a semi-invulnerable target (H-3).
+    # subscript_blocked_by_soundproof.s:9 tags the defender's ability (TAG_NICKNAME_ABILITY_MOVE,
+    # battle_script.c:11798-11810); MOVE_STATUS_NO_MORE_WORK then skips subscript_missed.s (no
+    # unlock, no miss message: bcp.c:3313-3314), the hits and AfterMoveEffects.
+    sound_block = (
+        can_act
+        & has_target
+        & ~failed
+        & ~charging
+        & (ignorable(state, side, target_side) == AbilityId.SOUNDPROOF)
+        & ((tables.move_flags[used] & MoveFlag.SOUND) != 0)
+    )
+    state = reveal_ability(state, target_side, target, SOUND_BLOCKED, sound_block)
     # The effect script runs before TryMove's accuracy roll and CheckMoveHitOverrides (bcp.c:
     # 3211-3213, then :3256, :3264), so its own commands act on a move that then misses. Psych
     # Up's CopyStatStages (effect_script_0143.s:5) copies on a semi-invulnerable miss (accuracy 0
@@ -1884,8 +1904,9 @@ def _use_move(
         protect_count=state.protect_count.at[side].set(count.astype(state.protect_count.dtype))
     )
     # Roar / Whirlwind (effect_script_0028.s: a DIRECT ON_HIT effect, run only for a move
-    # that connected: no miss, no Protect, battle_lib.c:1485-1490; Soundproof, Suction Cups,
-    # Ingrain and the semi-invulnerable test are unsupported, refused by coverage) ->
+    # that connected: no miss, no Protect, battle_lib.c:1485-1490; Soundproof took it first,
+    # ``sound_block``, H-3; Suction Cups, Ingrain and the semi-invulnerable test are unsupported,
+    # refused by coverage) ->
     # subscript_force_target_to_switch_or_flee.s -> BtlCmd_TryWhirlwind (battle_script.c:
     # 5241-5320, the trainer-battle singles branch): with no eligible bench Pokemon
     # (outcome.roar_bench) it fails before any draw (:5299-5300); else
@@ -1904,7 +1925,7 @@ def _use_move(
     # OPCODE_EQU: only a mask that is exactly MOVE_EFFECT_INGRAIN anchors it ("{0} anchored
     # itself with its roots!", :86, MOVE_STATUS_FAILED); Ingrain beside any other bit of the mask
     # lets Roar through (ruling B7-n; ``ingrain_anchors``).
-    roar = connected & (tables.move_effect[used] == EffectId.ROAR)
+    roar = connected & ~sound_block & (tables.move_effect[used] == EffectId.ROAR)
     anchored = roar & ingrain_anchors(tables, state, target_side)
     roar = roar & ~anchored
     eligible = roar_bench(state, target_side, target)
@@ -1929,7 +1950,7 @@ def _use_move(
     )
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
-    state = _unlock(state, side, can_act & ~connected & ~charging & ~reflect)
+    state = _unlock(state, side, can_act & ~connected & ~charging & ~reflect & ~sound_block)
     # The charge (B10-12): the lock into moveCur (subscript_vanish_on_charge_turn.s:10), the
     # semi-invulnerable bit (effect_script_0155.s:7, _0255.s:7, _0256.s:7, _0263.s:7, _0272.s:8)
     # and Skull Bash's Defense +1 (effect_script_0145.s:8).
@@ -2064,7 +2085,7 @@ def _use_move(
     heal = absorbed & ~flash & (target_hp != target_max)
     state = _set_mon(state, "hp", target_side, target, healed, heal)
     state = reveal_ability(state, target_side, target, ABSORB, absorbed)
-    no_more_work = no_more_work | absorbed
+    no_more_work = no_more_work | absorbed | sound_block
     # Jump Kick / Hi Jump Kick (EffectId.CRASH, B10-2): effect_script_0045.s set
     # SYSCTL_CRASH_DAMAGE before CalcCrit / CalcDamage, so a move that ran its script and did
     # not connect (missed, protected) ends in subscript_missed.s, whose last call (:98) is
@@ -2119,6 +2140,10 @@ def _use_move(
         & (state.hp[party(fmt, target_side), target] > 0)
         & ~sleepless(ignorable(state, side, target_side))  # :23-24 Vital Spirit too (G-47)
         & (state.status[party(fmt, target_side), target] != Status.SLEEP)
+        # :44 the target's own Soundproof (CheckAbility) skips the uproar test (H-3); a sound
+        # sleep move never gets here (``sound_block``).
+        & (battler_ability(state, target_side, target) != AbilityId.SOUNDPROOF)
+        & ~sound_block
         # :40 CheckSubstitute comes first: behind a substitute it fails instead (B10-4).
         & (state.substitute_hp[target_side] == 0)
         & fcm.uproar_any(state)
@@ -2348,7 +2373,8 @@ def _use_move(
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
         # at 0 HP before its only hit, so the first hit is exempt).
-        going = connected & ~absorbed & ((hit_index == 0) | (state.hp[party(fmt, side), user] > 0))
+        going = connected & ~absorbed & ~sound_block
+        going = going & ((hit_index == 0) | (state.hp[party(fmt, side), user] > 0))
         going = going & head_on & ~stopped & ~disrupted
         # Triple Kick (B13-6): SYSCTL_TRIPLE_KICK has no SYSCTL_SKIP_ACCURACY_CHECK, so every
         # later hit's TryMove rolls CheckMoveHitAccuracy again with this moment's state
@@ -2913,8 +2939,9 @@ def _use_move(
         ),
         # subscript_missed.s tests PROTECTED before MISSED (:18, :157): a miss into a
         # Protect shows "protected itself"; a failed Fake Out prints "But it failed!" (:58).
-        "missed": can_act & has_target & ~hit & ~failed & ~blocked,
-        "protected": can_act & has_target & blocked & ~failed,
+        # A Soundproof block prints "blocks" instead (no subscript_missed.s, H-3).
+        "missed": can_act & has_target & ~hit & ~failed & ~blocked & ~sound_block,
+        "protected": can_act & has_target & blocked & ~failed & ~sound_block,
         "protect_ok": protect_ok,
         "endure_ok": endure_ok,
         "protect_failed": protect_failed,
@@ -4219,8 +4246,9 @@ def _disable_check(tables: Tables, state: BattleState, side) -> BattleState:
 
 def _uproar_check(tables: Tables, state: BattleState, side, failed) -> BattleState:
     """``MON_COND_CHECK_STATE_UPROAR`` (battle_controller_player.c:1505-1541) for ``side`` in an
-    uproar: every battler, in battler order, that is asleep with HP left (Soundproof, which is
-    spared, is unsupported) wakes (subscript_wake_up.s: every sleep bit cleared, :19), the check
+    uproar: every battler, in battler order, that is asleep with HP left and whose
+    Battler_Ability is not Soundproof (:1509-1511, H-3) wakes (subscript_wake_up.s: every sleep
+    bit cleared, :19), the check
     repeating until none sleeps (``STATE_DONE``, :1518-1521); then the count drops by 1 and the
     uproar ends (subscript_uproar_end.s; the volatile bits and the battler's
     ``FIELD_CONDITION_UPROAR`` bit cleared, :1525-1535) when this turn's ``moveFailFlags`` are
@@ -4236,6 +4264,7 @@ def _uproar_check(tables: Tables, state: BattleState, side, failed) -> BattleSta
             on
             & (state.status[party(fmt, battler), mon] == Status.SLEEP)
             & (state.hp[party(fmt, battler), mon] > 0)
+            & (battler_ability(state, battler) != AbilityId.SOUNDPROOF)
         )
         state = _set_mon(state, "status", battler, mon, Status.NONE, wake)
         state = _set_mon(state, "status_counter", battler, mon, 0, wake)

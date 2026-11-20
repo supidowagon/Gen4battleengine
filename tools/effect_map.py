@@ -830,6 +830,10 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Water Veil": AbilityId.WATER_VEIL,
     "Magma Armor": AbilityId.MAGMA_ARMOR,
     "Oblivious": AbilityId.OBLIVIOUS,
+    # E1 batch H, H-3 (engine/ids.py AbilityId).
+    "Color Change": AbilityId.COLOR_CHANGE,
+    "Marvel Scale": AbilityId.MARVEL_SCALE,
+    "Soundproof": AbilityId.SOUNDPROOF,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

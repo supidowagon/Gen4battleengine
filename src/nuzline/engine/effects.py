@@ -243,9 +243,11 @@ Leaf Guard and Synchronize (E1 Gardenia batch, rulings G-12..G-17): Leaf Guard i
 read it by decomp id); ``synchronize`` is AfterMoveEffects' step, run by ``step._use_move``.
 Immunity, Water Veil, Magma Armor (``_inflict``, ``_contact_ability``), Own Tempo (the confusion
 effects) and Oblivious (``_attract``, ``_contact_ability``): E1 batch H, H-2; their cures are
-``hooks.recover_status_by_ability`` and ``step._restore_status_on_switch``.
+``hooks.recover_status_by_ability`` and ``step._restore_status_on_switch``. Color Change
+(``_contact_ability``) and Soundproof's uproar sleep test (``_inflict``) and Perish Song test
+(``perish_song_eligible``): H-3.
 Unreachable branches are not modelled: Clear Body, Hyper Cutter, Liquid Ooze,
-Magic Guard, Skill Link, Normalize and Color Change are unsupported abilities
+Magic Guard, Skill Link and Normalize are unsupported abilities
 (Grip Claw is E1 Batch D's, ``_trap``). Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
 (``outcome.secondary_chance``), Reckless on the damage (``damage.script_power_mul``),
@@ -613,10 +615,12 @@ def _inflict(
     # indirect effect.
     blocked = blocked | (cond & (state.safeguard[side_of(h.target_side)] != 0))
     # subscript_fall_asleep.s:43-45 (:14-16 for a move effect): a target not asleep yet stays
-    # awake while FIELD_CONDITION_UPROAR is set (Soundproof, which skips it, is unsupported);
-    # a direct effect then ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an
-    # indirect one silently (:_292).
-    blocked = blocked | (cond & (status == Status.SLEEP) & fcm.uproar_any(state))
+    # awake while FIELD_CONDITION_UPROAR is set unless its own Soundproof skips the test
+    # (CheckAbility, :15, :44: Battler_Ability, Mold Breaker moot; H-3); a direct effect then
+    # ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an indirect one silently
+    # (:_292).
+    soundproof = battler_ability(state, h.target_side, h.target) == AbilityId.SOUNDPROOF
+    blocked = blocked | (cond & (status == Status.SLEEP) & fcm.uproar_any(state) & ~soundproof)
     cond = cond & ~blocked & can_have_status(tables, state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[party(fmt, h.target_side), h.target]
@@ -1819,7 +1823,7 @@ def primary_effect_fails(
         # subscript_lock_on.s:6, :33.
         | ((effect == _E.LOCK_ON) & lock_on_fails(state, target_side))
         # BtlCmd_TryPerishSong (battle_script.c:5482-5484): no battler eligible.
-        | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state)))
+        | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state, side)))
         # subscript_curse_ghost.s:22-24 (a Ghost user's Curse).
         | ((effect == _E.CURSE) & ghost_user(state, side) & curse_fails(state, target_side))
         # subscript_yawn.s's failures (``yawn_blocks``).
@@ -2575,13 +2579,18 @@ def _lock_on(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 PERISH_SONG_TURNS = 3  # BtlCmd_TryPerishSong (battle_script.c:5478)
 
 
-def perish_song_eligible(state: BattleState) -> jnp.ndarray:
-    """``bool[2]``: the battlers ``BtlCmd_TryPerishSong`` marks (battle_script.c:5471-5479): no
-    MOVE_EFFECT_PERISH_SONG yet and HP left (Soundproof, the third test, is an unsupported
-    ability). Every battler, whatever its side (doubles convention 4)."""
+def perish_song_eligible(state: BattleState, user_side) -> jnp.ndarray:
+    """``bool[B]``: the battlers ``BtlCmd_TryPerishSong`` marks (battle_script.c:5471-5479) for
+    the Perish Song of battler ``user_side``: no MOVE_EFFECT_PERISH_SONG yet, HP left and no
+    ``Battler_IgnorableAbility(attacker, i, ABILITY_SOUNDPROOF)`` (:5474, H-3): a Soundproof user
+    skips itself, the user's Mold Breaker pierces another's. Every battler, whatever its side
+    (doubles convention 4). The "blocks" message tags BTLSCR_MSG_TEMP
+    (subscript_perish_song_start.s:12-19): no reveal (battle_script.c:11801-11802)."""
     fmt = format_of(state)
+    battlers = range(state.active.shape[0])
     sides = jnp.arange(state.active.shape[0])
-    return (state.perish_song == 0) & (state.hp[party(fmt, sides), state.active] > 0)
+    deaf = jnp.stack([ignorable(state, user_side, b) == AbilityId.SOUNDPROOF for b in battlers])
+    return (state.perish_song == 0) & (state.hp[party(fmt, sides), state.active] > 0) & ~deaf
 
 
 def _perish_song(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2589,7 +2598,7 @@ def _perish_song(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     move that connected; RANGE_FIELD, its own defender): ``BtlCmd_TryPerishSong`` gives every
     eligible battler (``perish_song_eligible``) the effect and a count of ``PERISH_SONG_TURNS``;
     with none eligible it fails (:5482-5484, MOVE_STATUS_FAILED: ``primary_effect_fails``)."""
-    eligible = perish_song_eligible(state)
+    eligible = perish_song_eligible(state, h.side)
     for battler in range(state.active.shape[0]):
         cond = (h.effect == _E.PERISH_SONG) & h.landed & eligible[battler]
         state = _set(state, "perish_song", battler, 1, cond)
@@ -2966,7 +2975,10 @@ def _struggle_recoil(state: BattleState, h: _Hit, struggling) -> BattleState:
     return hp_update(state, h.side, h.user, -cost, cost > 0)
 
 
-def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+def _contact_ability(tables, state, h: _Hit, outcome: Outcome, move_type) -> BattleState:
+    """``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200-4371) after hit ``h``;
+    ``move_type`` is the action's ``battleCtx->moveType`` or the table type (``move_type_of``),
+    which Color Change reads."""
     fmt = format_of(state)
     # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4200-4371): Battler_Ability.
     ability = battler_ability(state, h.target_side, h.target)
@@ -3044,6 +3056,37 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & _attractable(state, h.side, h.user, h.target_side, h.target)
     )
     state = _set(state, "infatuated", h.side, 1, charm)
+    # Color Change (battle_lib.c:4232-4253, H-3): no contact or attacker test. The type is
+    # battleCtx->moveType when set, else the table's (``move_type``; the attacker's Normalize,
+    # :4235-4236, is an unsupported ability). The defender has HP, no MOVE_STATUS_NO_EFFECTS
+    # (``h.effective``), not Struggle, physical / specialDamageTaken from this hit's UpdateHP
+    # (bcp.c:3413-3424: ``h.dealt`` on the HP path; a substitute hit returned at :4209), no
+    # SYSCTL_UTURN_ACTIVE (the resumed U-turn tail never reaches here), table power, and neither
+    # BATTLEMON_TYPE is the type. Those are the raw types: a roosting defender's Flying reads as
+    # Mystery in ``state.types`` only for the chart's sake (``damage.chart_types``; no battler has
+    # Mystery otherwise). subscript_color_change.s:9-10 sets both; :6 tags the defender's ability.
+    types = state.types[party(fmt, h.target_side), h.target].astype(_I32)
+    roosting = state.roosting[h.target_side] != 0
+    raw = jnp.where(roosting & (types == Type.MYSTERY), Type.FLYING, types)
+    color = (
+        (ability == AbilityId.COLOR_CHANGE)
+        & _alive(state, h.target_side, h.target)
+        & h.effective
+        & (h.move != MOVE_STRUGGLE)
+        & (h.dealt > 0)
+        & ~h.sub_hit
+        & (tables.move_power[h.move] != 0)
+        & ~jnp.any(raw == move_type)
+    )
+    new_types = jnp.where(color, jnp.stack([move_type, move_type]), types)
+    state = state._replace(
+        types=state.types.at[party(fmt, h.target_side), h.target].set(
+            new_types.astype(state.types.dtype)
+        )
+    )
+    from nuzline.engine.hooks import TYPE_CHANGE
+
+    state = reveal_ability(state, h.target_side, h.target, TYPE_CHANGE, color)
     state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond | charm)
     # subscript_aftermath.s:6 tags BTLSCR_DEFENDER's ability (BattleMessage_AbilityTag).
     state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough | aftermath)
@@ -4200,7 +4243,7 @@ def play_hit(
         # (BattleSystem_Defender, battle_lib.c:1665-1669): the foe's Shaymin is left as it is.
         on_foe = h.landed & ~targets_user(tables, move, ghost_user(state, side))
         state = shaymin_land(tables, state, target_side, on_foe)
-    state = _contact_ability(tables, state, h, outcome)
+    state = _contact_ability(tables, state, h, outcome, move_type)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)
     # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431; the substitute's share, :3361, :3366)

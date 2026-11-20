@@ -56,7 +56,9 @@ Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
 Simple, Mold Breaker, Adaptability and Solid Rock in ``damage.py``; Keen Eye, Inner
 Focus, Rock Head, Static, Poison Point, Flame Body, Rough Skin and Limber in
 ``effects.py`` (Limber's cure here); Immunity, Own Tempo, Water Veil, Magma Armor and Oblivious
-block in ``effects.py`` and cure here (``recover_status_by_ability``, H-2); Steadfast, Natural Cure,
+block in ``effects.py`` and cure here (``recover_status_by_ability``, H-2); Color Change in
+``effects._contact_ability``, Marvel Scale in ``damage.py``, Soundproof in ``step.py`` (its block
+and the uproar wake-ups) and ``effects.py`` (sleep in an uproar, Perish Song), H-3; Steadfast, Natural Cure,
 the switch-out cure of ``Ability_ForbidsStatus`` and Shed Skin in ``step.py``,
 Compoundeyes, Sand Veil and Snow Cloak (accuracy) in ``outcome.py``, Swift
 Swim in ``order.py``; Sand Veil and Snow Cloak also in the end-of-turn weather chip
@@ -143,6 +145,8 @@ REDIRECTED = "redirected"
 # H-2: the "prevents" messages of Immunity, Water Veil, Own Tempo and Oblivious.
 POISON_BLOCKED, BURN_BLOCKED = "poison_blocked", "burn_blocked"
 CONFUSION_BLOCKED, ROMANCE_BLOCKED = "confusion_blocked", "romance_blocked"
+# H-3: Color Change's "made it the {2} type!" and Soundproof's "blocks {2}!".
+TYPE_CHANGE, SOUND_BLOCKED = "type_change", "sound_blocked"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -211,6 +215,13 @@ CONFUSION_BLOCKED, ROMANCE_BLOCKED = "confusion_blocked", "romance_blocked"
 #   "prevents confusion"); an indirect, held-item or move-effect one ends silently.
 # * Oblivious (H-2): a direct Attract it blocks (subscript_infatuate.s:5 -> :_055, :39, "prevents
 #   romance"); Cute Charm's (an ability side effect, :_082 -> :_117) ends silently.
+# * Color Change (H-3): subscript_color_change.s:6 "{0}'s {1} made it the {2} type!"
+#   (``TAG_NICKNAME_ABILITY_TYPE``, BTLSCR_DEFENDER: battle_script.c:11798-11810).
+# * Soundproof (H-3): subscript_blocked_by_soundproof.s:9 "{0}'s {1} blocks {2}!"
+#   (``TAG_NICKNAME_ABILITY_MOVE``, BTLSCR_DEFENDER), also after a miss or a Protect
+#   (bcp.c:2791-2792). Perish Song's "blocks" (subscript_perish_song_start.s:12-19) tags
+#   BTLSCR_MSG_TEMP: no reveal (battle_script.c:11801-11802).
+# Marvel Scale prints nothing (CalcMoveDamage, battle_lib.c:6797-6800).
 # Magma Armor's freeze block prints the attack message only (subscript_freeze.s:_128). The cures of
 # ``recover_status_by_ability`` tag ``BTLSCR_MSG_TEMP``, which never reaches
 # ``BattleAI_SetAbility`` (battle_script.c:11801-11802): Immunity, Own Tempo, Water Veil, Magma
@@ -247,6 +258,8 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.WATER_VEIL: frozenset({BURN_BLOCKED}),
     AbilityId.OWN_TEMPO: frozenset({CONFUSION_BLOCKED}),
     AbilityId.OBLIVIOUS: frozenset({ROMANCE_BLOCKED}),
+    AbilityId.COLOR_CHANGE: frozenset({TYPE_CHANGE}),  # H-3
+    AbilityId.SOUNDPROOF: frozenset({SOUND_BLOCKED}),
     AbilityId.DRIZZLE: frozenset({WEATHER_SET}),
     AbilityId.SAND_STREAM: frozenset({WEATHER_SET}),
     AbilityId.DROUGHT: frozenset({WEATHER_SET}),

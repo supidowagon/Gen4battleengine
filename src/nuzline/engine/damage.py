@@ -1668,6 +1668,13 @@ def _pre_random(
     attack = jnp.where(
         (a_ability == AbilityId.GUTS) & (a_status != Status.NONE), attack * 150 // 100, attack
     )
+    # :6797-6800 Marvel Scale (Battler_IgnorableAbility; H-3): defenseStat x150/100 when the
+    # defender's BATTLEMON_STATUS (defenderParams.statusMask, :6652) is set, before the stage
+    # scaling (a crit keeps it) and Explosion's halving. A confusion self-hit's defender is the
+    # attacker (CALC_SELF_HIT, include/battle/common.h:35-46).
+    d_status = _i32(s.status[party(fmt, def_side), d_slot])
+    marvel = (d_ability_eff == AbilityId.MARVEL_SCALE) & (d_status != Status.NONE)
+    defense = jnp.where(marvel, defense * 150 // 100, defense)
 
     # :6802-6809 Plus / Minus (attackerParams.ability): spAttackStat x150/100 when a living
     # battler of the attacker's side (COUNT_ALIVE_BATTLERS_OUR_SIDE) has the other ability.

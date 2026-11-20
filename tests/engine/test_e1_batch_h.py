@@ -3,7 +3,8 @@
 classes over the union of every mask the hit can read (``outcome.future_thresholds``' field
 axis, ``outcome._future_fields``), and the roll kept whole (``loose``) only on a battler whose hit
 is due (bcp.c:1767-1769, :1782; accuracy 0 draws nothing, bcp.c:2900-2902). H-2: Immunity, Own Tempo,
-Water Veil, Magma Armor and Oblivious (blocks, MoveEnd cures, the switch-out and battle-won cures)."""
+Water Veil, Magma Armor and Oblivious (blocks, MoveEnd cures, the switch-out and battle-won cures).
+H-3: Color Change (per hit), Marvel Scale and Soundproof."""
 
 from __future__ import annotations
 
@@ -13,9 +14,15 @@ import numpy as np
 import pytest
 
 from nuzline.engine.actions import MOVE_ACTIONS
+from nuzline.engine.damage import (
+    ai_damage_for_roll,
+    confusion_damage,
+    damage_for_roll,
+    hidden_power,
+)
 from nuzline.engine.effects import apply_move_effect
 from nuzline.engine.enumerate import _future_hit, hit_class_law, outcome_laws
-from nuzline.engine.ids import AbilityId, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
 from nuzline.engine.order import is_switch, move_effects
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -441,3 +448,292 @@ def test_the_battle_won_cure_clears_a_suppressed_holders_status(tables, names):
     out = assert_matches_reference(tables, s, A("Scratch", "Leer", s, names), empty_outcome())
     assert int(out.over) == 1 and int(out.winner) == 2
     assert int(out.status[0, 0]) == Status.NONE
+
+
+# --- H-3: Color Change, Marvel Scale, Soundproof ----------------------------------------------
+# Rule sheets ability-color-change.md, ability-marvel-scale.md, ability-soundproof.md. Color
+# Change: BattleSystem_TriggerAbilityOnHit (battle_lib.c:4232-4253), subscript_color_change.s;
+# each hit of a multi-hit move re-runs CHECK_TYPE_CHART (bcp.c:3272-3278, SYSCTL_MULTI_HIT_MOVE
+# does not skip it; BattleSystem_SetupLoop clears moveStatusFlags, battle_lib.c:3357-3362).
+# Marvel Scale: CalcMoveDamage's defenseStat x150/100 (battle_lib.c:6797-6800). Soundproof:
+# TriggerImmunityAbility (battle_lib.c:3473-3486, :3523-3530) under MOVE_STATUS_DID_NOT_HIT too
+# (bcp.c:2791-2792), the uproar wake-ups (bcp.c:2430-2439, :1505-1515), the uproar sleep test
+# (subscript_fall_asleep.s:44) and TryPerishSong (battle_script.c:5474). Their Kaizo holders
+# (Kecleon, Milotic, Whismur's line) are player Pokemon: the holder is the player's lead.
+
+DECOMP_H3 = {"Color Change": 16, "Marvel Scale": 63, "Soundproof": 43}
+_ROLL = 15  # empty_outcome's roll (100 %)
+
+
+def _types(s, side=0, slot=0):
+    return tuple(int(t) for t in s.types[side, slot])
+
+
+def _lost(before, after, side=0, slot=0):
+    return int(before.hp[side, slot]) - int(after.hp[side, slot])
+
+
+def _dmg(tables, s, names, move, side=1, crit=False):
+    """The engine's damage of ``side``'s ``move`` on the other side's lead at ``_ROLL``."""
+    return int(damage_for_roll(tables, s, side, names.move(move), crit, _ROLL, def_side=1 - side))
+
+
+def _kecleon(tables, names, opp_moves, **kw):
+    return _holder(tables, names, "Kecleon", "Color Change", opp_moves, **kw)
+
+
+def test_color_change_takes_the_hits_type_and_reveals_and_the_next_hit_reads_it(tables, names):
+    """A Flamethrower makes Kecleon Fire / Fire (subscript_color_change.s:9-10) and tags its
+    ability (:6, TAG_NICKNAME_ABILITY_TYPE: battle_script.c:11798-11810). The next turn's
+    Flamethrower meets Fire (x0.5); Kecleon's own Flamethrower gets STAB (MON_HAS_TYPE,
+    battle_lib.c:2592)."""
+    s = _kecleon(tables, names, ("Flamethrower",), player_moves=("Leer", "Flamethrower"))
+    out = assert_matches_reference(tables, s, A("Leer", "Flamethrower", s, names), empty_outcome())
+    assert _types(out) == (Type.FIRE, Type.FIRE)
+    assert int(out.ai_ability_known[0]) == DECOMP_H3["Color Change"]
+    assert _lost(s, out) == _dmg(tables, s, names, "Flamethrower")
+    again = assert_matches_reference(
+        tables, out, A("Flamethrower", "Flamethrower", out, names), empty_outcome()
+    )
+    normal = out._replace(types=s.types)
+    assert _lost(out, again) == _dmg(tables, out, names, "Flamethrower")
+    assert _lost(out, again) < _dmg(tables, normal, names, "Flamethrower")
+    stab = _dmg(tables, out, names, "Flamethrower", side=0)
+    assert _lost(out, again, side=1) == stab > _dmg(tables, normal, names, "Flamethrower", side=0)
+
+
+def test_double_kicks_second_hit_reads_the_type_its_first_hit_set(tables, names):
+    """Manager order: hit 1 meets Normal (x2) and makes Kecleon Fighting; hit 2's own
+    CHECK_TYPE_CHART (bcp.c:3272-3278 per hit, the loop re-runs TryMove: bcp.c:3780-3792) meets
+    Fighting (x1)."""
+    s = _kecleon(tables, names, ("Double Kick",))
+    first = _dmg(tables, s, names, "Double Kick")
+    fighting = s._replace(types=s.types.at[0, 0].set(Type.FIGHTING))
+    second = _dmg(tables, fighting, names, "Double Kick")
+    assert second < first
+    out = assert_matches_reference(tables, s, A("Leer", "Double Kick", s, names), empty_outcome())
+    assert _types(out) == (Type.FIGHTING, Type.FIGHTING)
+    assert _lost(s, out) == first + second
+
+
+@pytest.mark.parametrize(
+    "case, move",
+    [
+        ("substitute", "Flamethrower"),  # :4209 returns on a substitute hit
+        ("power 0", "Thunder Wave"),  # :4249 CURRENT_MOVE_DATA.power
+        ("fainted", "Flamethrower"),  # :4243 DEFENDING_MON.curHP
+        ("own type", "Tackle"),  # :4250-4251 Normal already
+    ],
+)
+def test_color_change_does_nothing(tables, names, case, move):
+    s = _kecleon(tables, names, (move,))
+    if case == "substitute":
+        s = s._replace(substitute_hp=s.substitute_hp.at[0].set(int(s.max_hp[0, 0]) // 4))
+    if case == "fainted":
+        s = s.replace_hp(0, 0, 1)
+    out = assert_matches_reference(tables, s, A("Leer", move, s, names), empty_outcome())
+    assert _types(out) == _types(s) and int(out.ai_ability_known[0]) == 0
+
+
+def test_struggle_and_a_suppressed_holder_keep_the_type(tables, names):
+    """:4245 moveCur != MOVE_STRUGGLE: a Fire Kecleon stays Fire. Gastro Acid makes
+    Battler_Ability NONE (battle_lib.c:3088-3093): a Flamethrower changes nothing."""
+    s = _kecleon(tables, names, ("Flamethrower", "Gastro Acid"))
+    fire = assert_matches_reference(tables, s, A("Leer", "Flamethrower", s, names), empty_outcome())
+    stuck = fire._replace(pp=fire.pp.at[1, 0].set(0))
+    out = assert_matches_reference(tables, stuck, A("Leer", 0, stuck, names), empty_outcome())
+    assert int(out.hp[0, 0]) < int(fire.hp[0, 0]) and _types(out) == (Type.FIRE, Type.FIRE)
+    acid = assert_matches_reference(tables, s, A("Leer", "Gastro Acid", s, names), empty_outcome())
+    out = assert_matches_reference(
+        tables, acid, A("Leer", "Flamethrower", acid, names), empty_outcome()
+    )
+    assert _types(out) == _types(s) and int(out.ai_ability_known[0]) == 0
+
+
+@pytest.mark.parametrize(
+    "move, opp_species",
+    [
+        ("Flamethrower", "Cranidos"),  # Battler_Ability, not ignorable: Mold Breaker moot
+        ("Seismic Toss", None),  # table power 1
+        ("Hidden Power", None),  # battleCtx->moveType, battle_script.c:6018-6029
+    ],
+)
+def test_color_change_reads_moveType_and_ignores_mold_breaker(tables, names, move, opp_species):
+    s = _kecleon(tables, names, (move,), opp_species=opp_species)
+    out = assert_matches_reference(tables, s, A("Leer", move, s, names), empty_outcome())
+    want = int(tables.move_type[names.move(move)])
+    if move == "Hidden Power":
+        want = int(hidden_power(s.ivs[1, 0])[0])
+    assert _types(out) == (want, want)
+    assert int(out.ai_ability_known[0]) == DECOMP_H3["Color Change"]
+
+
+def test_a_switch_gives_kecleon_its_species_types_back(tables, names):
+    """The send-out reloads the party types (BattleSystem_InitBattleMon)."""
+    s = _kecleon(tables, names, ("Flamethrower", "Leer"))
+    out = assert_matches_reference(tables, s, A("Leer", "Flamethrower", s, names), empty_outcome())
+    out = assert_matches_reference(tables, out, A(SWITCH_TO_1, "Leer", out, names), empty_outcome())
+    back = assert_matches_reference(
+        tables, out, A(MOVE_ACTIONS, "Leer", out, names), empty_outcome()
+    )
+    assert int(back.active[0]) == 0 and _types(back) == _types(s)
+
+
+def _milotic(tables, names, opp_moves, status=Status.NONE, counter=0, **kw):
+    s = _holder(tables, names, "Milotic", "Marvel Scale", opp_moves, **kw)
+    return s.with_status(0, 0, status, counter)
+
+
+def _scaled(s, on=True):
+    """``s`` with Milotic's ability gone and, where ``on``, its Defense stat x150/100: the
+    damage CalcMoveDamage computes with the factor (battle_lib.c:6797-6800)."""
+    out = s._replace(ability=s.ability.at[0, 0].set(AbilityId.NONE))
+    d = Stat.DEF - 1
+    if on:
+        out = out._replace(stats=out.stats.at[0, 0, d].set(int(s.stats[0, 0, d]) * 150 // 100))
+    return out
+
+
+@pytest.mark.parametrize(
+    "move, status, factor",
+    [
+        ("Tackle", Status.PARALYSIS, True),
+        ("Tackle", Status.SLEEP, True),
+        ("Tackle", Status.NONE, False),
+        ("Ember", Status.PARALYSIS, False),  # Sp. Def never
+    ],
+)
+def test_marvel_scale_raises_defense_of_a_statused_holder(tables, names, move, status, factor):
+    s = _milotic(tables, names, (move,), status, counter=3 if status == Status.SLEEP else 0)
+    out = assert_matches_reference(tables, s, A("Leer", move, s, names), empty_outcome())
+    assert _lost(s, out) == _dmg(tables, _scaled(s, factor), names, move)
+    assert int(out.ai_ability_known[0]) == 0  # no message
+
+
+def test_mold_breaker_and_gastro_acid_drop_marvel_scale(tables, names):
+    """Battler_IgnorableAbility (battle_lib.c:3108-3121) and Gastro Acid's NONE (:3088-3093)."""
+    s = _milotic(tables, names, ("Tackle",), Status.PARALYSIS, opp_species="Cranidos")
+    out = assert_matches_reference(tables, s, A("Leer", "Tackle", s, names), empty_outcome())
+    assert _lost(s, out) == _dmg(tables, _scaled(s, False), names, "Tackle")
+    s = _milotic(tables, names, ("Gastro Acid", "Tackle"), Status.PARALYSIS)
+    acid = assert_matches_reference(tables, s, A("Leer", "Gastro Acid", s, names), empty_outcome())
+    out = assert_matches_reference(tables, acid, A("Leer", "Tackle", acid, names), empty_outcome())
+    assert _lost(acid, out) == _dmg(tables, _scaled(acid, False), names, "Tackle")
+
+
+def test_marvel_scale_survives_a_crit_and_comes_before_explosions_halving(tables, names):
+    """A crit drops the holder's +2 Defense stage (battle_lib.c:6963-6973), not the stat factor;
+    Explosion halves the scaled Defense (:6943-6945)."""
+    s = _milotic(tables, names, ("Tackle", "Explosion"), Status.PARALYSIS)
+    s = s.with_stages(0, def_=2)
+    o = empty_outcome()._replace(crit=jnp.zeros((2, MAX_HITS), jnp.int8).at[1, 0].set(1))
+    out = assert_matches_reference(tables, s, A("Leer", "Tackle", s, names), o)
+    assert _lost(s, out) == _dmg(tables, _scaled(s), names, "Tackle", crit=True)
+    assert _lost(s, out) < _dmg(tables, _scaled(s, False), names, "Tackle", crit=True)
+    out = assert_matches_reference(tables, s, A("Leer", "Explosion", s, names), empty_outcome())
+    hit = _dmg(tables, _scaled(s), names, "Explosion")
+    assert _lost(s, out) == min(hit, int(s.hp[0, 0]))
+
+
+def test_a_burned_holders_confusion_self_hit_reads_marvel_scale(tables, names):
+    """CALC_SELF_HIT passes the battler as attacker and defender (include/battle/common.h:35-46,
+    bcp.c:2632): Defense x1.5 and the burn's halving both apply; then the burn's 1/8 at the turn
+    end."""
+    s = _milotic(tables, names, ("Leer",), Status.BURN)
+    s = s._replace(confusion=s.confusion.at[0].set(3))
+    o = empty_outcome()._replace(confusion_hit=jnp.array([1, 0], jnp.int8))
+    out = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), o)
+    hit = int(confusion_damage(tables, _scaled(s), 0, _ROLL))
+    assert hit < int(confusion_damage(tables, _scaled(s, False), 0, _ROLL))
+    assert _lost(s, out) == hit + max(int(s.max_hp[0, 0]) // 8, 1)
+
+
+def test_twineedles_second_hit_reads_the_poison_its_first_set(tables, names):
+    """The first hit's poison (MULTI_HIT_TRIGGER_SECONDARY, bcp.c:3555-3565) comes before the
+    second hit's CalcMoveDamage: x1.5 on it; then the poison's 1/8 at the turn end."""
+    s = _milotic(tables, names, ("Twineedle",))
+    o = empty_outcome()._replace(secondary=jnp.zeros((2, MAX_HITS), jnp.int8).at[1, 0].set(1))
+    out = assert_matches_reference(tables, s, A("Leer", "Twineedle", s, names), o)
+    assert int(out.status[0, 0]) == Status.POISON
+    first = _dmg(tables, s, names, "Twineedle")
+    second = _dmg(tables, _scaled(s.with_status(0, 0, Status.POISON)), names, "Twineedle")
+    assert second < first
+    assert _lost(s, out) == first + second + max(int(s.max_hp[0, 0]) // 8, 1)
+
+
+def test_the_ai_damage_estimate_reads_marvel_scale(tables, names):
+    """TrainerAI_CalcDamage calls CalcMoveDamage with the real battlers (trainer_ai.c:3081-3091)."""
+    s = _milotic(tables, names, ("Tackle",), Status.PARALYSIS)
+    tackle = names.move("Tackle")
+    ai = int(ai_damage_for_roll(tables, s, 1, tackle, _ROLL, def_side=0))
+    assert ai == int(ai_damage_for_roll(tables, _scaled(s), 1, tackle, _ROLL, def_side=0))
+    assert ai < int(ai_damage_for_roll(tables, _scaled(s, False), 1, tackle, _ROLL, def_side=0))
+
+
+def _exploud(tables, names, opp_moves, **kw):
+    return _holder(tables, names, "Exploud", "Soundproof", opp_moves, **kw)
+
+
+@pytest.mark.parametrize("opp_species", [None, "Cranidos"])
+def test_soundproof_blocks_hyper_voice_and_mold_breaker_pierces_it(tables, names, opp_species):
+    s = _exploud(tables, names, ("Hyper Voice",), opp_species=opp_species)
+    out = assert_matches_reference(tables, s, A("Leer", "Hyper Voice", s, names), empty_outcome())
+    if opp_species is None:
+        assert _lost(s, out) == 0 and int(out.ai_ability_known[0]) == DECOMP_H3["Soundproof"]
+    else:
+        assert _lost(s, out) > 0 and int(out.ai_ability_known[0]) == 0
+
+
+def test_soundproof_reveals_on_a_missed_or_protected_sound_move(tables, names):
+    """bcp.c:2791-2792: subscript_blocked_by_soundproof.s runs under MOVE_STATUS_DID_NOT_HIT."""
+    s = _exploud(tables, names, ("Supersonic",), player_moves=("Protect", "Leer"))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    out = assert_matches_reference(tables, s, A("Leer", "Supersonic", s, names), miss)
+    assert int(out.confusion[0]) == 0
+    assert int(out.ai_ability_known[0]) == DECOMP_H3["Soundproof"]
+    out = assert_matches_reference(tables, s, A("Protect", "Supersonic", s, names), empty_outcome())
+    assert int(out.confusion[0]) == 0
+    assert int(out.ai_ability_known[0]) == DECOMP_H3["Soundproof"]
+
+
+@pytest.mark.parametrize("move", ["Roar", "Uproar"])
+def test_soundproof_stops_roar_and_uproar(tables, names, move):
+    """MOVE_STATUS_NO_MORE_WORK: no drag (effect_script_0028.s), no uproar (subscript_uproar.s)."""
+    s = _exploud(tables, names, (move,))
+    out = assert_matches_reference(tables, s, A("Leer", move, s, names), empty_outcome())
+    assert int(out.active[0]) == 0 and int(out.uproar[1]) == 0 and int(out.locked_move[1]) == 0
+    assert int(out.ai_ability_known[0]) == DECOMP_H3["Soundproof"]
+
+
+def test_a_soundproof_holder_sleeps_through_its_own_uproar(tables, names):
+    """Exploud's Uproar is up when Geodude's Hypnosis lands: its own Soundproof skips the uproar
+    test (subscript_fall_asleep.s:44), the turn end's check spares it (bcp.c:1509-1511) and so
+    does its next status check (bcp.c:2432-2433). Without the ability Hypnosis fails (:45)."""
+    s = _exploud(tables, names, ("Hypnosis", "Leer"), player_moves=("Uproar", "Leer"))
+    out = assert_matches_reference(tables, s, A("Uproar", "Hypnosis", s, names), empty_outcome())
+    assert int(out.uproar[0]) > 0 and int(out.status[0, 0]) == Status.SLEEP
+    counter = int(out.status_counter[0, 0])
+    nxt = assert_matches_reference(tables, out, A("Uproar", "Leer", out, names), empty_outcome())
+    assert int(nxt.status[0, 0]) == Status.SLEEP and int(nxt.status_counter[0, 0]) == counter - 1
+    bare = s._replace(ability=s.ability.at[0, 0].set(AbilityId.NONE))
+    out = assert_matches_reference(tables, bare, A("Uproar", "Hypnosis", bare, names),
+                                   empty_outcome())  # fmt: skip
+    assert int(out.status[0, 0]) == Status.NONE
+
+
+@pytest.mark.parametrize(
+    "user, opp_species, marked",
+    [
+        ("foe", None, (0, 1)),  # the holder skipped, no reveal (BTLSCR_MSG_TEMP)
+        ("foe", "Cranidos", (1, 1)),  # the user's Mold Breaker pierces (:5474)
+        ("holder", None, (0, 1)),  # the user skips itself
+    ],
+)
+def test_perish_song_skips_a_soundproof_battler(tables, names, user, opp_species, marked):
+    s = _exploud(tables, names, ("Perish Song", "Leer"), opp_species=opp_species,
+                 player_moves=("Perish Song", "Leer"))  # fmt: skip
+    moves = ("Perish Song", "Leer") if user == "holder" else ("Leer", "Perish Song")
+    acts = A(*moves, s, names)
+    out = assert_matches_reference(tables, s, acts, empty_outcome())
+    assert (int(out.perish_song[0]), int(out.perish_song[1])) == marked
+    assert int(out.ai_ability_known[0]) == 0

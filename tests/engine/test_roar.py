@@ -724,8 +724,9 @@ def test_roar_is_supported_and_its_blockers_refused(tables, names):
     mon = replace_spec(base[0], moves=(names.move("Roar"), *base[0].moves[1:]))
     report = check_coverage(tables, names, [mon, *base[1:]], roark_trainer(), roark_party(names), 0)
     assert not any("ROAR" in m.upper() for m in report.missing)
-    # Suction Cups (Lileep, vanilla) and Soundproof (Voltorb) are unsupported abilities.
-    for species, ability in (("Lileep", "Suction Cups"), ("Voltorb", "Soundproof")):
+    # Suction Cups (Lileep, vanilla) is an unsupported ability; Soundproof's block is modelled
+    # (E1 batch H, H-3: step._use_move's ``sound_block``).
+    for species, ability in (("Lileep", "Suction Cups"),):
         sp = names.species(species)
         k = [names.ability_names[a] for a in names.species_abilities(sp)].index(ability)
         foe = replace_spec(roark_party(names)[0], species=sp, form=0, ability_slot=k)

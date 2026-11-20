@@ -879,6 +879,17 @@ class AbilityId(IntEnum):
     WATER_VEIL = 99
     MAGMA_ARMOR = 100
     OBLIVIOUS = 101
+    # E1 batch H, H-3. Color Change: BattleSystem_TriggerAbilityOnHit (battle_lib.c:4232-4253;
+    # ``effects._contact_ability``) sets both of the defender's types to the move's type
+    # (subscript_color_change.s:9-10). Marvel Scale: CalcMoveDamage's defenseStat x150/100 on a
+    # statused holder (battle_lib.c:6797-6800; ``damage._pre_random``). Soundproof:
+    # TriggerImmunityAbility's sSoundMoves block (battle_lib.c:3473-3486, :3523-3530;
+    # ``step._use_move``), the uproar wake-ups it skips (bcp.c:2430-2439, :1505-1515), the
+    # uproar sleep block it skips (subscript_fall_asleep.s:15, :44) and TryPerishSong's test
+    # (battle_script.c:5474; ``effects.perish_song_eligible``).
+    COLOR_CHANGE = 102
+    MARVEL_SCALE = 103
+    SOUNDPROOF = 104
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -988,6 +999,9 @@ ABILITY_DECOMP_IDS = {
     AbilityId.WATER_VEIL: 41,
     AbilityId.MAGMA_ARMOR: 40,
     AbilityId.OBLIVIOUS: 12,
+    AbilityId.COLOR_CHANGE: 16,
+    AbilityId.MARVEL_SCALE: 63,
+    AbilityId.SOUNDPROOF: 43,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and

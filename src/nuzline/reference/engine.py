@@ -1567,6 +1567,11 @@ def _calc_move_damage(
     # lib.c:6793 Guts.
     if a_ability == AbilityId.GUTS and atk.status != Status.NONE:
         attack = attack * 150 // 100
+    # lib.c:6797-6800 Marvel Scale (ignorable; H-3): defenseStat x150/100 on a statused defender
+    # (defenderParams.statusMask, :6652), before the stages and Explosion's halving; a confusion
+    # self-hit's defender is the attacker (CALC_SELF_HIT, include/battle/common.h:35-46).
+    if d_ability == AbilityId.MARVEL_SCALE and dfn.status != Status.NONE:
+        defense = defense * 150 // 100
     # lib.c:6802-6809 Plus / Minus: spAttackStat x150/100 when a living battler of the
     # attacker's side (COUNT_ALIVE_BATTLERS_OUR_SIDE) has the other ability.
     if (a_ability == AbilityId.PLUS and _side_ability_count(s, attacker, AbilityId.MINUS)) or (
@@ -3669,14 +3674,16 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     if _shielded(turn, s, target):
         return
     # subscript_fall_asleep.s:43-45: an uproar keeps a target not asleep awake before the
-    # Safeguard test (:51); the other subscripts' Safeguard tests (paralyze :28, burn :45, ...).
-    if status == Status.SLEEP and mon.status != Status.SLEEP and _uproar_on(s):
+    # Safeguard test (:51), unless its own Soundproof (CheckAbility, :15, :44; H-3) skips it; the
+    # other subscripts' Safeguard tests (paralyze :28, burn :45, ...).
+    deaf = _ability(s, mon) == AbilityId.SOUNDPROOF
+    if status == Status.SLEEP and mon.status != Status.SLEEP and _uproar_on(s) and not deaf:
         return
     if s.sides[side_of(target)].safeguard:  # B10-7
         return
     # subscript_fall_asleep.s:43-45: a target not asleep yet stays awake while any battler is in
-    # an uproar (FIELD_CONDITION_UPROAR; Soundproof is unsupported).
-    if status == Status.SLEEP and mon.status != Status.SLEEP and _uproar_on(s):
+    # an uproar (FIELD_CONDITION_UPROAR) unless its own Soundproof skips the test (:44, H-3).
+    if status == Status.SLEEP and mon.status != Status.SLEEP and _uproar_on(s) and not deaf:
         return
     if mon.hp and _can_have_status(turn.tables, s, target, status):
         mon.status = status
@@ -4279,10 +4286,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         if not fails:
             s.battlers[target].yawn = 2
     elif effect == EffectId.PERISH_SONG and landed:
-        # BtlCmd_TryPerishSong (script.c:5465-5487): every living battler without the effect.
-        for k in range(_fmt(s).B):
-            if not s.battlers[k].perish_song and _active(s, k).hp:
-                s.battlers[k].perish_song, s.battlers[k].perish_song_turns = 1, 3
+        # BtlCmd_TryPerishSong (script.c:5465-5487): every living battler without the effect and
+        # without Soundproof as the user sees it (:5474, H-3; the user's own included).
+        for k in _perish_eligible(s, side):
+            s.battlers[k].perish_song, s.battlers[k].perish_song_turns = 1, 3
     elif effect == EffectId.LOCK_ON and landed:
         # subscript_lock_on.s: a living defender without a substitute gets the counter 2 and
         # lockOnTarget = the attacker (:7-9), whatever it had.
@@ -4696,6 +4703,9 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
     paralysis silently, subscript_paralyze.s:5, :_170)."""
     target = _foe(side) if target is None else target
     ability = _ability(s, _active(s, target))
+    if ability == AbilityId.COLOR_CHANGE:
+        _color_change(turn, s, side, move, effective, dealt, target)
+        return
     contact = _t(turn.tables, "move_flags", move) & MoveFlag.CONTACT
     attacker = _active(s, side)
     if not (contact and effective and dealt > 0 and attacker.hp > 0):
@@ -4753,6 +4763,32 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         _status_landed(turn, side, status)  # TriggerAbilityOnHit: sideEffectMon = attacker
         # subscript_paralyze.s:44 / subscript_poison.s:57 tag the holder's ability
         # (BattleAI_SetAbility, script.c:11806).
+        if target == 0:
+            _know_ability(s, s.battlers[0].active)
+
+
+def _color_change(turn: _Turn, s: RefState, side: int, move: int, effective: bool, dealt: int,
+                  target: int) -> None:  # fmt: skip
+    """Color Change (lib.c:4232-4253, H-3): no contact or attacker test. The type is
+    battleCtx->moveType when set, else the table's (``_move_type``; the attacker's Normalize,
+    :4235-4236, is unsupported). The defender has HP, the hit has no MOVE_STATUS_NO_EFFECTS
+    (``effective``), not Struggle, physical / specialDamageTaken from this hit (bcp.c:3413-3424:
+    ``dealt`` on the HP path), table power, and neither raw BATTLEMON_TYPE is the type (a roosting
+    defender's Flying stripped for the chart counts as Flying). subscript_color_change.s:9-10 set
+    both types; :6 tags the defender's ability."""
+    tables = turn.tables
+    holder = _active(s, target)
+    kind = _move_type(tables, s, side, move, turn.gift)
+    raw = [Type.FLYING if turn.roosting[target] and t == Type.MYSTERY else t for t in holder.types]
+    if (
+        holder.hp
+        and effective
+        and move != MOVE_STRUGGLE
+        and dealt > 0
+        and _t(tables, "move_power", move) != 0
+        and kind not in raw
+    ):
+        holder.types = [kind, kind]
         if target == 0:
             _know_ability(s, s.battlers[0].active)
 
@@ -5291,9 +5327,10 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
 
     # CHECK_STATUS_STATE_SLEEP (bcp.c:2430): the counter drops by 1 (Early Bird is
     # unsupported); still asleep stops the move, waking up lets the checks go on. In an uproar
-    # (FIELD_CONDITION_UPROAR) a sleeper wakes at once (bcp.c:2432-2439, subscript_wake_up.s).
-    # Every wake-up runs subscript_wake_up.s, whose :20 clears VOLATILE_CONDITION_NIGHTMARE (G-32).
-    if mon.status == Status.SLEEP and _uproar_on(s):
+    # (FIELD_CONDITION_UPROAR) a sleeper without Soundproof (Battler_Ability, H-3) wakes at once
+    # (bcp.c:2432-2439, subscript_wake_up.s). Every wake-up runs subscript_wake_up.s, whose :20
+    # clears VOLATILE_CONDITION_NIGHTMARE (G-32).
+    if mon.status == Status.SLEEP and _uproar_on(s) and _ability(s, mon) != AbilityId.SOUNDPROOF:
         mon.status, mon.status_counter = Status.NONE, 0
         s.battlers[side].nightmare = 0
     if mon.status == Status.SLEEP:
@@ -6317,6 +6354,18 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # semi-invulnerable miss ends there as well (B10-12), and crashes (subscript_missed.s:189-191).
     protected = _protected(turn, s, side, move, unleash, tgt)
     blocked = missed or semi_miss or protected
+    # TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES (bcp.c:3281-3286): an ignorable Soundproof takes a
+    # move of sSoundMoves (lib.c:3473-3486, :3523-3530) hit, miss, Protect or semi-invulnerable
+    # alike (bcp.c:2791-2792), H-3: subscript_blocked_by_soundproof.s:9 tags the defender's
+    # ability; MOVE_STATUS_NO_MORE_WORK skips subscript_missed.s (no unlock, no crash), the hits
+    # and AfterMoveEffects (bcp.c:3313-3314).
+    if (
+        _ignorable(s, side, tgt) == AbilityId.SOUNDPROOF
+        and _t(tables, "move_flags", move) & MoveFlag.SOUND
+    ):
+        if tgt == 0:
+            _know_ability(s, s.battlers[0].active)
+        return record
     crash = effect == EffectId.CRASH and _ability(s, mon) != AbilityId.MAGIC_GUARD
     if (blocked or guarded) and crash:
         # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from
@@ -6572,8 +6621,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             and bool(foe_sd.substitute_hp or foe_sd.curse)
         )  # subscript_curse_ghost.s:6-7, :22-24
         full = full or (
-            effect == EffectId.PERISH_SONG
-            and not any(not x.perish_song and _active(s, k).hp for k, x in enumerate(s.battlers))
+            effect == EffectId.PERISH_SONG and not _perish_eligible(s, side)
         )  # BtlCmd_TryPerishSong's failure (script.c:5482-5484)
         full = full or (effect == EffectId.SPIKES and s.sides[side_of(tgt)].spikes >= SPIKES_MAX)
         full = full or (
@@ -6600,6 +6648,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             and foe.hp > 0
             and _ignorable(s, side, tgt) not in SLEEPLESS_ABILITIES
             and foe.status != Status.SLEEP
+            and _ability(s, foe) != AbilityId.SOUNDPROOF  # :44 skips the uproar test (H-3)
             and not s.battlers[tgt].substitute_hp  # :40 CheckSubstitute fails it first (B10-4)
             and _uproar_on(s)
         )
@@ -6691,10 +6740,22 @@ def _try_grudge(
         mon.pp[slot] = 0
 
 
+def _perish_eligible(s: RefState, side: int) -> list[int]:
+    """The battlers ``BtlCmd_TryPerishSong`` (script.c:5471-5479) marks for ``side``'s Perish
+    Song: no MOVE_EFFECT_PERISH_SONG, HP left, and no ``Battler_IgnorableAbility(attacker, i,
+    ABILITY_SOUNDPROOF)`` (:5474, H-3). Its "blocks" message tags BTLSCR_MSG_TEMP: no reveal."""
+    return [
+        k
+        for k, x in enumerate(s.battlers)
+        if not x.perish_song and _active(s, k).hp and _ignorable(s, side, k) != AbilityId.SOUNDPROOF
+    ]
+
+
 def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     """``subscript_force_target_to_switch_or_flee.s`` for ``side``'s Roar on the foe; returns
-    whether it dragged a Pokemon in. Its semi-invulnerable and Suction Cups tests (:5-6) and
-    Soundproof (lib.c:3523-3530) cannot be met: no supported move or ability sets them. Ingrain
+    whether it dragged a Pokemon in. Its semi-invulnerable and Suction Cups tests (:5-6) cannot
+    be met: no supported move or ability sets them; Soundproof (lib.c:3523-3530) took the move
+    in ``_fight`` before (H-3). Ingrain
     (:7) anchors a defender whose moveEffectsMask is exactly MOVE_EFFECT_INGRAIN
     (``_ingrain_anchors``). ``BtlCmd_TryWhirlwind`` (script.c:5241-5320), trainer battle, singles: count the
     foe party's slots with a species, not an egg and HP left (:5285-5296); one or none ->
@@ -7590,8 +7651,8 @@ def _bind_check(turn: _Turn, s: RefState, side: int) -> None:
 
 def _uproar_check(turn: _Turn, s: RefState, side: int) -> None:
     """``MON_COND_CHECK_STATE_UPROAR`` (bcp.c:1505-1541): while the battler is in an uproar,
-    the first battler (battler order) asleep with HP left wakes (subscript_wake_up.s; Soundproof
-    is unsupported) and the check repeats; then the count drops, and the uproar ends
+    the first battler (battler order) asleep with HP left and without Soundproof (bcp.c:1509-1511,
+    H-3) wakes (subscript_wake_up.s) and the check repeats; then the count drops, and the uproar ends
     (subscript_uproar_end.s) on this turn's moveFailFlags or at 0, which frees the battler's
     command: it never had VOLATILE_CONDITION_MOVE_LOCKED."""
     sd = s.battlers[side]
@@ -7602,7 +7663,9 @@ def _uproar_check(turn: _Turn, s: RefState, side: int) -> None:
             (
                 j
                 for j in range(_fmt(s).B)
-                if _active(s, j).status == Status.SLEEP and _active(s, j).hp
+                if _active(s, j).status == Status.SLEEP
+                and _active(s, j).hp
+                and _ability(s, _active(s, j)) != AbilityId.SOUNDPROOF
             ),
             None,
         )

@@ -234,9 +234,10 @@ def test_ability_slot_and_decomp_ability_ids(tables, names):
 @pytest.mark.fullset
 def test_an_unimplemented_ability_keeps_its_decomp_id(tables, names):
     decomp = tables.species_abilities_decomp
-    voltorb = names.species("Voltorb")
-    assert int(tables.species_abilities[voltorb, 0]) == AbilityId.UNSUPPORTED
-    assert int(decomp[voltorb, 0]) == names.ability("Soundproof")
+    # Lileep's Suction Cups (Voltorb's Soundproof is modelled since E1 batch H, H-3).
+    lileep = names.species("Lileep")
+    assert int(tables.species_abilities[lileep, 0]) == AbilityId.UNSUPPORTED
+    assert int(decomp[lileep, 0]) == names.ability("Suction Cups")
 
 
 # --- hit threshold of an item action ---------------------------------------------------
