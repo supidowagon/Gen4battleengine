@@ -118,6 +118,7 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
     stats and max HP are then ``recalc_stats``' at the drawn level and EVs."""
     a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
+    forms = np.asarray(tables.species_form_row)
     for slot in np.flatnonzero(a["species"][0]):
         if draw(st.integers(0, 9)) == 0:
             a["level"][0, slot] = draw(st.sampled_from((99, 100)))
@@ -147,7 +148,16 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
         a["friend_bonus"][slot] = draw(st.integers(0, 1))
         if draw(st.integers(0, 4)) == 0:
             a["learn_level"][slot] = draw(st.integers(2, max(2, level)))
-            a["learn_cursor"][slot] = draw(st.integers(0, 20))
+            # The cursor never passes the learnset's terminator: it starts at 0 (bs.c:9882) and
+            # moves only past a real entry (src/pokemon.c:3952, :3960). The learnset is the party
+            # Pokemon's own (a Transformed active's shadow, G-69).
+            sp, fm = (
+                (a["shadow_species"][0], a["shadow_form"][0])
+                if own
+                else (a["species"][0, slot], a["form"][0, slot])
+            )
+            entries = int(np.count_nonzero(np.asarray(tables.learnset_level)[forms[sp, fm]]))
+            a["learn_cursor"][slot] = draw(st.integers(0, entries))
     a["exp_mask"][...] = draw(st.integers(0, 63)) | (1 << int(a["active"][0]))
     for slot in np.flatnonzero(a["species"][0]):  # the drawn level and EVs' stats
         recalc_stats(tables, a, 0, int(slot))
