@@ -2200,12 +2200,6 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `CalcTerrain` (field_battle_data_transfer.c:470-504) always gives a terrain and `BattleSystem_GetTerrain`
   (battle_system.c:375-381) maps an out-of-range value to TERRAIN_MAX, read as `min(terrain, TERRAIN_SPECIAL)`
   (battle_script.c:8007-8010). No engine change.
-  Same class, called move (snapshot rest seed 120 turn 2, one more element `secondary(1, 0)`: 262144 -> 524288 rows):
-  when the Copycat user moves first it calls `move_prev` (battle_script.c:7328-7341), here Secret Power (290); 5da2dd49
-  (G-20..G-22) dropped `terrain_known` from `order.move_effects` / `called_move`, so terrain -1 clips to row 0 and its
-  30% secondary is read where main read none. The game takes Secret Power's effect from
-  `BtlCmd_GetTerrainSecondaryEffect` (battle_script.c:8063-8075) and never holds terrain -1; a fight with a terrain
-  move on -1 is refused (G-21). Called move and chance are the same on both sides. No engine change.
 - G-46 `enumerate._starf_reads` counted a plucked Starf Berry and the Pluck flag's second own eat as two
   sources (`twice` & `plucked`): with the attacker's own Starf that read `starf[d, 3]` with no Roar newcomer, a
   third eat G-28 shows unreachable. A plucked Starf draws while a stat of the five is below +6 and its
@@ -2241,6 +2235,17 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   item in `hooks.PLUCKABLE` minus Leppa / Micle / Starf; the other berries' conditions (full HP, no status, +6,
   Focus Energy) are over-approximated. Klutz / Embargo (:5838-5843) keep the flag but make the own Starf inert.
   Step and reference unchanged. `test_the_pluck_flags_second_starf_eat_needs_a_berry_that_can_keep_it`.
+- G-S7 Snapshot seed 120 turn 2 (rest: width-cap text, 262144 -> 524288 rows; one new 2-valued `secondary(1,0)`):
+  terrain-unknown class, the same root as seed 2's Camouflage line (G-45, renamed G-S2 in batch H). b1's Copycat
+  copies Secret Power (290) when b1 moves first (`move_prev`, battle_script.c:7328-7341). 5da2dd49 (G-20..G-22)
+  removed `terrain_known` from order.move_effects, so Secret Power on TERRAIN_UNKNOWN (-1) now resolves to row 0's
+  secondary effect (terrain_index clips to 0; SECRET_POWER_EFFECTS) instead of PLAIN, and its 30% proc becomes a
+  read. Decomp: effect_script_0197.s GetTerrainSecondaryEffect, battle_script.c:8063-8075 (min(terrain,
+  TERRAIN_SPECIAL), :8067-8070). In the game the terrain is never unknown (CalcTerrain
+  field_battle_data_transfer.c:470-504; BattleSystem_GetTerrain battle_system.c:375-381), and real fights with a
+  reachable terrain move are refused by coverage.terrain_refusal. The state is drawn only by
+  tests.strategies._draw_terrain, which batch H's first commit fixes: no TERRAIN_UNKNOWN when Nature Power, Secret
+  Power or Camouflage is reachable, directly or through a call move.
 
 ## Stream state (restart point, 2026-11-19)
 
