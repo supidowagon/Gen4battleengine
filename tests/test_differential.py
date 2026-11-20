@@ -110,17 +110,19 @@ EXP_ITEMS = (
 )
 
 
-def _exp_party(draw, tables, names, s, *, near_level: bool):
+def _exp_party(draw, tables, names, s, *, near_level: bool, markers: bool):
     """``s`` with the player's exp block redrawn to reach the payout's edges: exp anywhere in
     the level or just short of the next one, EVs near the 510 / 255 caps, friendship near the
     tier limits, the payout items, Pokerus, a Luxury Ball, any participation mask (fainted
-    slots included); sometimes a level-99 or level-100 Pokemon. No pending learn work: a payout
-    and a step start with ``learn_level`` 0 (an in-turn prompt pauses the turn and is answered
-    before it resumes, any other before the next step or replacement: ``search.expand``), and
-    the pending scans come from the payouts the tests run. The stats and max HP are then
+    slots included); sometimes a level-99 or level-100 Pokemon. With ``markers``, pending learn
+    markers too (a payout can start with them: a Pursuit payout leaves its scan to the action's
+    MoveEnd payout). A step starts with no pending learn (an in-turn prompt pauses the turn and is
+    answered before it resumes, any other before the next step or replacement:
+    ``search.expand``), so the step test draws none. The stats and max HP are then
     ``recalc_stats``' at the drawn level and EVs."""
     a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
+    forms = np.asarray(tables.species_form_row)
     for slot in np.flatnonzero(a["species"][0]):
         if draw(st.integers(0, 9)) == 0:
             a["level"][0, slot] = draw(st.sampled_from((99, 100)))
@@ -148,6 +150,18 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
         )
         a["pokerus"][slot] = draw(st.integers(0, 1))
         a["friend_bonus"][slot] = draw(st.integers(0, 1))
+        if markers and draw(st.integers(0, 4)) == 0:
+            a["learn_level"][slot] = draw(st.integers(2, max(2, level)))
+            # The cursor never passes the learnset's terminator: it starts at 0 (bs.c:9882) and
+            # moves only past a real entry (src/pokemon.c:3952, :3960). The learnset is the party
+            # Pokemon's own (a Transformed active's shadow, G-69).
+            sp, fm = (
+                (a["shadow_species"][0], a["shadow_form"][0])
+                if own
+                else (a["species"][0, slot], a["form"][0, slot])
+            )
+            entries = int(np.count_nonzero(np.asarray(tables.learnset_level)[forms[sp, fm]]))
+            a["learn_cursor"][slot] = draw(st.integers(0, entries))
     a["exp_mask"][...] = draw(st.integers(0, 63)) | (1 << int(a["active"][0]))
     for slot in np.flatnonzero(a["species"][0]):  # the drawn level and EVs' stats
         recalc_stats(tables, a, 0, int(slot))
@@ -200,7 +214,9 @@ def test_pay_exp_matches_the_per_level_loop(tables, names, data, pinned):
         s, j = _transformed_payer(tables, names), 0
     else:
         s = data.draw(supported_state(tables, names))
-        s = _exp_party(data.draw, tables, names, s, near_level=data.draw(st.booleans()))
+        s = _exp_party(
+            data.draw, tables, names, s, near_level=data.draw(st.booleans()), markers=True
+        )
         living = [j for j in range(6) if int(s.species[1, j]) and int(s.hp[1, j])]
         j = data.draw(st.sampled_from(living))
         s = s._replace(level=s.level.at[1, j].set(data.draw(st.integers(1, 100))))
@@ -227,7 +243,7 @@ def test_step_payouts_match_reference(tables, names, data):
     # end-of-turn residual, Stealth Rock on a replacement), and the player's are close to a
     # level-up, so the payout's level-up changes what the rest of the turn reads.
     s = data.draw(supported_state(tables, names))
-    s = _exp_party(data.draw, tables, names, s, near_level=True)
+    s = _exp_party(data.draw, tables, names, s, near_level=True, markers=False)
     hp = np.asarray(s.hp).copy()
     for j in range(6):
         if hp[1, j] > 1 and data.draw(st.booleans()):
