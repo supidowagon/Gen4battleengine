@@ -286,6 +286,30 @@ def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fight
     return jnp.where(ok, move, 0).astype(_I32)
 
 
+def me_first_target(tables: Tables, state: BattleState, side, picked):
+    """The battler whose chosen move ``side``'s Me First copies: the action's defender
+    (``BtlCmd_TryMeFirst`` reads ``DEFENDER_ACTION`` and ``Battler_SelectedMove(defender)``,
+    battle_script.c:7286-7312), ``targets.resolve``'s ``target_side`` for the move ``picked``. At
+    B = 2 it is the foe (``_foe(side)``). At B = 4 the resolver's draw bit is 0 and the order the
+    identity: the enumeration's stand-in (the draw and the order are the laws' D6-D7, as
+    ``enumerate.call_laws`` reads the other call kinds)."""
+    fmt = format_of(state)
+    if fmt.B == 2:
+        return _foe(side)
+    from nuzline.engine import targets  # lazy: targets imports effects, which imports this module
+
+    return targets.resolve(
+        tables,
+        state,
+        side,
+        picked,
+        targets.fight_randomizes(state, side, False),
+        state.chosen_target[side],
+        jnp.arange(fmt.B),
+        0,
+    ).target_side
+
+
 def invoked_move(
     tables: Tables, state: BattleState, side, move, call, move_prev=None, me_first=None
 ):
@@ -541,10 +565,12 @@ def used_moves(
     for side in range(fmt.B):
         foe = _foe(side)
         prev = jnp.where(after_foe[side], chosen[foe], state.move_prev.astype(_I32))
-        # Me First copies a target that has not acted: ``after_foe`` says it has (E3-2-3).
-        fights = (state.over == 0) & ~is_switch(actions[foe]) & ~is_item(actions[foe])
+        # Me First copies its action's defender's move, a target that has not acted: ``after_foe``
+        # says it has (E3-2-3; D3-5: the defender, the foe at B = 2).
+        target = me_first_target(tables, state, side, chosen[side])
+        fights = (state.over == 0) & ~is_switch(actions[target]) & ~is_item(actions[target])
         first = jnp.where(
-            after_foe[side], 0, me_first_copy(tables, state, foe, chosen[foe], fights)
+            after_foe[side], 0, me_first_copy(tables, state, target, chosen[target], fights)
         )
         invoked = invoked_move(tables, state, side, chosen[side], call[side], prev, first)
         out.append(

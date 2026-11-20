@@ -287,6 +287,7 @@ from nuzline.engine.order import (
     is_item,
     is_switch,
     me_first_copy,
+    me_first_target,
     metronome_weights,
     move_effects,
     sealed_state,
@@ -3892,10 +3893,22 @@ class CallLaws(NamedTuple):
 
 
 def _side_call_law(
-    tables: Tables, state: BattleState, side: int, chosen, kind, foe_chosen, foe_uses_move
+    tables: Tables,
+    state: BattleState,
+    side: int,
+    chosen,
+    kind,
+    foe_chosen,
+    foe_uses_move,
+    copy_from=None,
+    chosen_all=None,
+    uses_all=None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(weight int32[CALL_VALUES], called int32[CALL_VALUES])``: the call law of ``side``'s
-    move ``chosen`` of invoker kind ``kind``, read with ``state`` (``call_laws``)."""
+    move ``chosen`` of invoker kind ``kind``, read with ``state`` (``call_laws``). Me First copies
+    the move of ``copy_from``, its action's defender (``order.me_first_target``; default the foe
+    with ``foe_chosen`` / ``foe_uses_move``); ``chosen_all`` / ``uses_all`` are every battler's
+    chosen move and whether it fights."""
     values = jnp.arange(CALL_VALUES, dtype=_I32)
     talk_w = (values < SLEEP_TALK_VALUES).astype(_I32)
     talk = jax.vmap(lambda v: invoked_move(tables, state, side, chosen, v))(values)
@@ -3931,8 +3944,12 @@ def _side_call_law(
     )
     # Me First (E3-2-3): value 0, its target has not acted (it copies the target's chosen move),
     # value 1, it has (the call fails).
+    if copy_from is None:
+        first_from, first_move, first_fights = _foe(side), foe_chosen, foe_uses_move
+    else:
+        first_from, first_move, first_fights = copy_from, chosen_all[copy_from], uses_all[copy_from]
     first_called = jnp.where(
-        values == 0, me_first_copy(tables, state, _foe(side), foe_chosen, foe_uses_move), 0
+        values == 0, me_first_copy(tables, state, first_from, first_move, first_fights), 0
     )
     weight = jnp.where(
         kind == CALL_SLEEP_TALK,
@@ -4040,9 +4057,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     g_weights, g_called = [], []
     for side in range(fmt.B):
         foe = _foe(side)
+        mf = me_first_target(tables, state, side, chosen[side])
         weight, call = _side_call_law(
-            tables, state, side, chosen[side], kinds[side], chosen[foe], uses_move[foe]
-        )
+            tables, state, side, chosen[side], kinds[side], chosen[foe], uses_move[foe],
+            mf, chosen, uses_move,
+        )  # fmt: skip
         weights.append(weight)
         called.append(call)
         hyp = disabled_state(state, jnp.arange(fmt.B) == side)
@@ -4057,13 +4076,15 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         seals.append(jnp.where(can_seal[side], seal, call))
         took = encored_state(tables, state, jnp.arange(fmt.B) == side)
         t_weight, t_call = _side_call_law(
-            tables, took, side, encored[side], taken_kinds[side], chosen[foe], uses_move[foe]
-        )
+            tables, took, side, encored[side], taken_kinds[side], chosen[foe], uses_move[foe],
+            mf, chosen, uses_move,
+        )  # fmt: skip
         t_weights.append(t_weight)
         t_called.append(t_call)
         g_weight, g_call = _side_call_law(
-            tables, heavy, side, chosen[side], kinds[side], chosen[foe], uses_move[foe]
-        )
+            tables, heavy, side, chosen[side], kinds[side], chosen[foe], uses_move[foe],
+            mf, chosen, uses_move,
+        )  # fmt: skip
         g_weights.append(g_weight)
         g_called.append(jnp.where(can_gravity[side], g_call, call))
     return CallLaws(

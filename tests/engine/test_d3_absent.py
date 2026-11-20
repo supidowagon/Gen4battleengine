@@ -107,3 +107,77 @@ def test_b2_second_actor_ko_by_the_first_is_skipped(tables, names):
     p1 = party_of(s, 1)
     assert np.asarray(out.pp[p1, 0]).tolist() == pp_before[p1, 0].tolist()  # no PP spent
     assert int(out.last_move[1]) == int(s.last_move[1])
+
+
+# --- D3-2 sheet 4.5 bullets 1-4: the four-position step (D3-5's loop) -------------------------
+
+
+def _play(tables, s, acts, order, targets, outcome=None):
+    from tests.engine.test_d3_action_loop import play
+
+    return play(tables, s, acts, order, targets, outcome)
+
+
+def test_absent_battler_two_runs_nothing(tables, names):
+    """Battler 2 at 0 HP with nothing to send in: PP, ``last_move``, ``chosen_target`` and
+    ``protect_count`` unchanged, ``act_kind`` ACT_NONE."""
+    s = four(tables, names, DOUBLES, bench=2)
+    s = with_hp(s, 2, 0)
+    assert bool(absent_now(s, 2))
+    out, shown = _play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), (1, 0, 2, 2))
+    p, slot = party_of(s, 2), int(s.active[2])
+    assert np.asarray(out.pp[p, slot]).tolist() == np.asarray(s.pp[p, slot]).tolist()
+    assert int(out.last_move[2]) == int(s.last_move[2])
+    assert int(out.chosen_target[2]) == int(s.chosen_target[2])
+    assert int(out.protect_count[2]) == int(s.protect_count[2])
+    assert int(shown["act_kind"][2]) == 0
+
+
+def test_battler_one_koed_by_battler_zero_does_not_act(tables, names):
+    s = four(tables, names, DOUBLES, bench=2)
+    s = with_hp(s, 1, 1)
+    out, _ = _play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), (1, 0, 3, 2))
+    p0, p1, slot1 = party_of(s, 0), party_of(s, 1), int(s.active[1])
+    assert int(out.hp[p1, slot1]) == 0
+    assert int(out.hp[p0, int(s.active[0])]) == int(s.hp[p0, int(s.active[0])])
+    assert np.asarray(out.pp[p1, slot1]).tolist() == np.asarray(s.pp[p1, slot1]).tolist()
+    assert int(out.last_move[1]) == int(s.last_move[1])
+
+
+def test_battler_three_locked_into_rollout_runs_it_without_pp(tables, names):
+    s = four(tables, names, DOUBLES, bench=2)
+    s = with_moves(s, names, 3, ["Tackle", "Swords Dance", "Rollout"])
+    rollout = names.move("Rollout")
+    s = s._replace(
+        locked_move=s.locked_move.at[3].set(rollout),
+        rollout_count=s.rollout_count.at[3].set(3),
+        chosen_target=s.chosen_target.at[3].set(2),
+    )
+    out, _ = _play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), (1, 0, 3, 2))
+    p3, slot3 = party_of(s, 3), int(s.active[3])
+    assert int(out.pp[p3, slot3, 2]) == int(s.pp[p3, slot3, 2])  # no PP
+    assert int(out.last_move[3]) == rollout
+    assert int(out.hp[party_of(s, 2), int(s.active[2])]) < int(
+        s.hp[party_of(s, 2), int(s.active[2])]
+    )
+
+
+def test_battler_one_under_uproar_runs_it_without_pp(tables, names):
+    s = four(tables, names, DOUBLES, bench=2)
+    s = with_moves(s, names, 1, ["Tackle", "Uproar"])
+    uproar = names.move("Uproar")
+    s = s._replace(
+        locked_move=s.locked_move.at[1].set(uproar), uproar=s.uproar.at[1].set(2)
+    )
+    out, _ = _play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), (1, 0, 3, 2))
+    p1, slot1 = party_of(s, 1), int(s.active[1])
+    assert int(out.pp[p1, slot1, 1]) == int(s.pp[p1, slot1, 1])
+    assert int(out.last_move[1]) == uproar
+
+
+def test_reference_plays_battler_threes_action(tables, names):
+    s = four(tables, names, DOUBLES, bench=2)
+    s = with_moves(s, names, 3, ["Tackle"])
+    out, _ = _play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), (1, 0, 3, 2))
+    p3, slot3 = party_of(s, 3), int(s.active[3])
+    assert int(out.pp[p3, slot3, 0]) == int(s.pp[p3, slot3, 0]) - 1

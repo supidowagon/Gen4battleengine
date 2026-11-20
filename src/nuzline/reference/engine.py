@@ -5332,9 +5332,14 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             _t(tables, "move_effect", move) == EffectId.ME_FIRST
             and not moved[turn.target_side]
         ):
-            foe = _foe(side)
+            # The copied move is the resolved defender's (:7286-7312; D3-5), the foe at B = 2.
+            copied_from = turn.target_side
             first = _me_first_copy(
-                tables, s, foe, turn.choices[foe][0], turn.actions[foe] < MOVE_ACTIONS
+                tables,
+                s,
+                copied_from,
+                turn.choices[copied_from][0],
+                turn.actions[copied_from] < MOVE_ACTIONS,
             )
         called = _invoked_move(tables, s, side, move, turn.outcome.call[side], first)
         sleep_talk = _t(tables, "move_effect", move) == EffectId.SLEEP_TALK
@@ -5439,15 +5444,15 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # the attacker and CalcMoveDamage (criticalMul 1, the conditions of now) with its variance
         # (o.roll[side][0]); with one pending, "But it failed!" (subscript_but_it_failed.s:
         # MOVE_STATUS_NO_MORE_WORK). Then SYSCTL_NONSTANDARD_ACC_CHECK: no accuracy roll.
-        foe_sd = s.battlers[_foe(side)]
-        foe_sd_sc = s.sides[side_of(_foe(side))]
+        foe_sd = s.battlers[turn.target_side]
+        foe_sd_sc = s.sides[side_of(turn.target_side)]
         if foe_sd.future_timer:
             return record
         foe_sd_sc.future_sight = 1
         foe_sd.future_timer = FUTURE_SIGHT_TURNS
         foe_sd.future_move = move
         foe_sd.future_attacker = side + 1
-        damage = _calc_move_damage(tables, s, side, _foe(side), move, False)
+        damage = _calc_move_damage(tables, s, side, turn.target_side, move, False)
         # An s32 in the decomp; read only through min(damage, curHP) and damage >= curHP, so it is
         # kept capped to BattleState's int16 storage.
         foe_sd.future_damage = min(_variance(damage, o.roll[side][0]), 32767)
@@ -5694,7 +5699,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # skips AfterMoveEffects. After a drag the hit below plays against the newcomer: Roar
     # deals no damage and has no effect there, and AfterMoveEffects checks the items of the
     # attacker and the new defender.
-    if effect == EffectId.ROAR and not _roar(turn, s, side):
+    if effect == EffectId.ROAR and not _roar(turn, s, side, turn.target_side):
         return record
     # Baton Pass (effect_script_0127.s, subscript_baton_pass.s): no replacement fails (:5,
     # :19-20: subscript_missed.s, no AfterMoveEffects); else Natural Cure (:7-8) and the list.
@@ -5912,8 +5917,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # action: SYSCTL_MOVE_HIT), _THAW_DEFENDER (:3708) and _HELD_ITEM_STATUS (:3730) for
         # every battler. A restore subscript's PLUCK_CHECK keeps the item while the pluck flag
         # is set, and clears the flag.
-        for battler in (side, tgt):
-            if _held_item(turn, s, battler, keep=turn.pluck_flag):
+        for battler in _item_order(side, tgt, _fmt(s).B):
+            if _held_item(turn, s, battler, keep=turn.pluck_flag and battler in (side, tgt)):
                 turn.pluck_flag = False
         # TriggerHeldItemOnHit returns early once the substitute was hit (lib.c:5378), B10-4.
         if turn.damaged and not turn.sub_hit:
@@ -5930,8 +5935,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
                 turn.move_se,
             )
         _thaw_target(turn, s, side, move, dealt, tgt)
-        for battler in (side, tgt):
-            if _held_item(turn, s, battler, keep=turn.pluck_flag):
+        for battler in _item_order(side, tgt, _fmt(s).B):
+            if _held_item(turn, s, battler, keep=turn.pluck_flag and battler in (side, tgt)):
                 turn.pluck_flag = False
     # LOOP_FAINTED (bcp.c:3820-3823): subscript_faint_check_destiny_bond.s takes a living
     # attacker down with a defender that fainted holding Destiny Bond.
@@ -5950,8 +5955,17 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     return record
 
 
-def _roar(turn: _Turn, s: RefState, side: int) -> bool:
-    """``subscript_force_target_to_switch_or_flee.s`` for ``side``'s Roar on the foe; returns
+def _item_order(side: int, defender: int, count: int) -> list[int]:
+    """AfterMoveEffects' item states in the order they run: the attacker's (bcp.c:3684-3689), the
+    defender's unless it is the attacker (:3691-3696), then every other battler in battler order
+    (``AFTER_MOVE_EFFECT_HELD_ITEM_STATUS``, :3730-3756; D3-5)."""
+    return [side] + ([defender] if defender != side else []) + [
+        b for b in range(count) if b != side and b != defender
+    ]
+
+
+def _roar(turn: _Turn, s: RefState, side: int, foe: int) -> bool:
+    """``subscript_force_target_to_switch_or_flee.s`` for ``side``'s Roar on ``foe`` (its defender); returns
     whether it dragged a Pokemon in. Its semi-invulnerable and Suction Cups tests (:5-6) and
     Soundproof (lib.c:3523-3530) cannot be met: no supported move or ability sets them. Ingrain
     (:7) anchors a defender whose moveEffectsMask is exactly MOVE_EFFECT_INGRAIN
@@ -5966,7 +5980,6 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     switch-in effects (bcp.c:3672-3680). UpdateAfterSwitch sets the newcomer's action to
     MOVE_END (lib.c:2053): it does not act this turn."""
     o = turn.outcome
-    foe = _foe(side)
     sd = s.battlers[foe]
     sd_pt = _party_of(s, foe)
     if _ingrain_anchors(turn.tables, s, foe):
@@ -7210,10 +7223,15 @@ def _record_last_moves(tables, s: RefState, actions, choices) -> None:
         _record_seen_move(s.ai_seen_moves[player.active], player.last_move)
 
 
-def ref_step(tables, state: RefState, actions: tuple[int, ...], outcome, targets=None) -> RefState:
+def ref_step(
+    tables, state: RefState, actions: tuple[int, ...], outcome, targets=None, order=None,
+    actions_only: bool = False,
+) -> RefState:  # fmt: skip
     """``_ref_step`` with the turn's Starf Berry draws (``Outcome.starf``) loaded into
     ``RefBattler.starf_roll`` for its held-item checks and cleared after it (F-10), as
-    ``step.step_events`` does."""
+    ``step.step_events`` does. ``order`` (a test seam until D3-3's order is built in both engines):
+    the battler order of the turn, in place of the computed one; ``actions_only``: stop after the
+    actions, before the end of the turn (``step.execute_actions``'s contract)."""
     if state.over:
         return copy.deepcopy(state)
     loaded = copy.deepcopy(state)
@@ -7221,7 +7239,8 @@ def ref_step(tables, state: RefState, actions: tuple[int, ...], outcome, targets
     _resolve_starf(loaded, [draw[0] for draw in outcome.starf])
     for sd, draw in zip(loaded.battlers, outcome.starf, strict=True):
         sd.starf_roll = int(draw[0])
-    out = _ref_step(tables, loaded, actions, outcome, targets, copied=True)
+    out = _ref_step(tables, loaded, actions, outcome, targets, copied=True, forced=order,
+                    actions_only=actions_only)  # fmt: skip
     # The faint replacement's draw is kept where ``ref_replace`` can read it; 0 at a pause.
     kept = _starf_kept(tables, out)
     for sd, keep, draw in zip(out.battlers, kept, outcome.starf, strict=True):
@@ -7236,6 +7255,8 @@ def _ref_step(
     outcome,
     targets=None,
     copied: bool = False,
+    forced=None,
+    actions_only: bool = False,
 ) -> RefState:
     """Play one turn (``engine.step.step``'s contract): a state paused at a U-turn's or Baton
     Pass's party list (``pivot_battler``) resumes with ``actions[pivot]`` the switch to the
@@ -7334,11 +7355,15 @@ def _ref_step(
         turn.claw[side] = turn.claw[side] or bool(s.battlers[side].claw_flag)
         turn.custap[side] = turn.custap[side] or bool(s.battlers[side].custap_flag)
     turn.actions, turn.choices, turn.items = actions, choices, items
-    turn.commands, turn.order = commands, order
+    turn.commands = commands
+    turn.order = order if forced is None else [int(b) for b in forced]
     try:
         _actions(turn, s, 0)
     except _Pause:
         _write_scratch(turn, s)
+        return s
+    if actions_only:
+        _carry_flags(turn, s)
         return s
     return _end_turn(turn, s)
 
@@ -7365,7 +7390,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
     list raises ``_Pause`` with ``turn.position`` at the paused action."""
     tables = turn.tables
     actions, choices, items, commands = turn.actions, turn.choices, turn.items, turn.commands
-    for position in range(start, 2):
+    for position in range(start, len(turn.order)):
         side = turn.order[position]
         turn.position = position
         if s.over:
@@ -7431,7 +7456,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # UpdateFlagsWhenHit / UpdateMoveBuffers: the Choice lock (the foe is the defender
             # exactly when _fight returns its moveHit record); a Baton Pass that succeeded
             # (moveTemp, bcp.c:3928) never locks.
-            defender = _foe(side) if record is not None else None
+            defender = turn.target_side if record is not None else None
             exempt = move == MOVE_BATON_PASS and turn.attack_message
             _update_choice_lock(turn, s, side, defender, move, exempt)
             # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
@@ -7478,7 +7503,7 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
     # UpdateFlagsWhenHit runs after LOOP_FAINTED (bcp.c:3820-3837): a KO'd defender
     # keeps the record until its replacement clears it.
     if record is not None:
-        s.battlers[_foe(side)].move_hit = record
+        s.battlers[turn.target_side].move_hit = record
     # BattleControllerPlayer_MoveEnd -> ClearFlags (bcp.c:3986, :4389) clears the
     # actor's own moveHit, unless CheckBattleOver ended the battle first (:3969).
     # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then defender, both
@@ -7499,7 +7524,11 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
     # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
     # run when the opponent acted first and the player chose a move (learn_pin).
-    pending = position == 0 and side == 1 and turn.commands[0] == FIGHT
+    # (D3-5: any player-party battler whose action is not over and whose command is FIGHT.)
+    pending = side_of(side) == 1 and any(
+        side_of(b) == 0 and b not in turn.order[:position] and turn.commands[b] == FIGHT
+        for b in range(_fmt(s).B)
+    )
     _pay_exp(turn, s, pending, turn.actions[0])
 
 
@@ -7526,14 +7555,18 @@ def _stale_known_item(s: RefState, snaps: list[tuple[int, int, bool, int]], foug
             s.ai_item_known[slot] = 0
 
 
-def _end_turn(turn: _Turn, s: RefState) -> RefState:
-    """The end of the turn after the actions."""
-    tables, outcome = turn.tables, turn.outcome
-    # The flags standing at the turn's end carry into the next turn (SetupNextTurn clears neither,
-    # lib.c:2228-2253; SF2 (k)).
+def _carry_flags(turn: _Turn, s: RefState) -> None:
+    """The flags standing at the actions' end carry into the next turn (SetupNextTurn clears
+    neither, lib.c:2228-2253; SF2 (k))."""
     for b, sd in enumerate(s.battlers):
         sd.claw_flag = int(turn.claw[b] and _active(s, b).hp > 0)
         sd.custap_flag = int(turn.custap[b] and _active(s, b).hp > 0)
+
+
+def _end_turn(turn: _Turn, s: RefState) -> RefState:
+    """The end of the turn after the actions."""
+    tables, outcome = turn.tables, turn.outcome
+    _carry_flags(turn, s)
     order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
     snap = _stale_snapshot(s)
     _field_conditions(turn, s, order)
@@ -7810,6 +7843,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     # has no Destiny Bond) is paid at this MoveEnd.
     if turn.pursued >> foe & 1 and _active(s, foe).hp == 0 and side_of(foe) == 1:
         turn.payout.append(s.battlers[foe].active)
+    turn.target_side = foe  # the resumed tail's defender (D3-10 carries the kept one)
     _finish_action(turn, s, side, position, record)
     try:
         _actions(turn, s, position + 1)
