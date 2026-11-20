@@ -320,8 +320,6 @@ def _replacement_point(state: BattleState) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-11: end of turn over four (end_of_turn_order int32[2]); deleted by D3-11
-    TurnClause("D3-11", "end of turn over four battlers", lambda t, s, a: _four(s)),
     # D3-12: turn-end replacement over four (needs_replacement, _awaits_replacement);
     # deleted by D3-12
     TurnClause(

@@ -6533,7 +6533,11 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
 
 def _speed_order(tables, s: RefState, o) -> list[int]:
     """``BattleSystem_SortMonSpeedOrder`` (lib.c:3364): ``CompareBattlerSpeed`` with
-    ``ignoreQuickClaw`` (no priority); a tie swaps on ``outcome.end_speed_tie``."""
+    ``ignoreQuickClaw`` (no priority); a tie swaps on ``outcome.end_speed_tie``. At B = 4 it is
+    the sort made at ``turnOrderCounter == maxBattlers`` (bcp.c:888-891): ``_speed_sort`` with row
+    B of ``outcome.sort_tie`` (D3-11)."""
+    if _fmt(s).B == 4:
+        return _speed_sort(tables, s, list(o.quick_claw), o.sort_tie[4])
     second = _player_second(tables, s, (0, 0), o.end_speed_tie, list(o.quick_claw))
     return [1, 0] if second else [0, 1]
 
@@ -6674,6 +6678,9 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
     once after the last action, bcp.c:887, before the field pass); each check that ran
     is followed by the faint check, and nothing runs once the battle is over."""
     for battler in order:
+        # A battler in battlersSwitchingMask runs none of its checks (bcp.c:1305-1308).
+        if _absent_now(s, battler):
+            continue
         for check in (
             _ingrain_check,  # MON_COND_CHECK_STATE_INGRAIN, bcp.c:1311
             _aqua_ring_check,  # MON_COND_CHECK_STATE_AQUA_RING, bcp.c:1332
@@ -6721,7 +6728,8 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
     for d in order:
         sd = s.battlers[d]
         sd_sc = s.sides[side_of(d)]
-        if not sd.future_timer:
+        # Masked: skipped, the count stays (bcp.c:1759-1764).
+        if not sd.future_timer or _absent_now(s, d):
             continue
         sd.future_timer -= 1
         mon = _active(s, d)
@@ -6797,7 +6805,8 @@ def _perish_song_check(turn: _Turn, s: RefState, order: list[int]) -> None:
     drops; AnyFainted after each (:1749), no battle-over check."""
     for d in order:
         sd = s.battlers[d]
-        if not sd.perish_song:
+        # Masked: skipped (bcp.c:1792-1797).
+        if not sd.perish_song or _absent_now(s, d):
             continue
         if sd.perish_song_turns == 0:
             sd.perish_song = 0

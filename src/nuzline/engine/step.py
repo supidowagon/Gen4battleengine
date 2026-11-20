@@ -4240,7 +4240,16 @@ def end_of_turn_order(tables: Tables, state: BattleState, outcome: Outcome) -> j
     no priority, so ``order.player_second`` with Quick Claw (the flag is still computed,
     battle_lib.c:1278-1286, from this turn's ``speedRand``, drawn at bcp.c:853-857 before
     every sort of the turn: ``outcome.quick_claw``), Lagging Tail, Trick Room and speed; a
-    tie swaps on ``RandNext() & 1`` (``outcome.end_speed_tie``, 1 = opponent first)."""
+    tie swaps on ``RandNext() & 1`` (``outcome.end_speed_tie``, 1 = opponent first).
+
+    At B = 4 it is the sort made when ``turnOrderCounter == maxBattlers`` (bcp.c:888-891): the
+    D3-4 sort (``order.sort_mon_speed``) of the state after the last action, with row B of
+    ``outcome.sort_tie`` (D3-11). Nothing sorts again before the next TrainerMessage (bcp.c:891
+    -> :932 -> :1252 -> :1733 -> :1841 -> :1858, which sorts at :251), so every loop of the end of
+    the turn reads this one order, whatever HP or Speed changes inside it."""
+    fmt = format_of(state)
+    if fmt.B == 4:
+        return sort_mon_speed(tables, state, outcome.quick_claw, outcome.sort_tie[fmt.B])[0]
     first = player_second(tables, state, outcome.end_speed_tie, outcome.quick_claw)
     first = first.astype(_I32)
     return jnp.stack([first, _foe(first)])
@@ -4381,6 +4390,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
 
     Trick Room counts down in the turn end's side-condition pass (:1823-1826), not here,
     and is not implemented."""
+    fmt = format_of(state)
     live = state.over == 0
     counted = state._replace(
         **{name: _count_down(getattr(state, name)) for name in FIELD_SIDE_TIMERS}
@@ -4395,13 +4405,15 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         weather_timer=timer.astype(state.weather_timer.dtype),
     )
     state = _where(live, counted, state)
-    for position in (0, 1):
+    # Every battler in monSpeedOrder, absent or not: no ``battlersSwitchingMask`` test at bcp.c:
+    # 1086-1087 or in subscript_weather_continues.s:8-11; a battler with no HP only counts down.
+    for position in range(fmt.B):
         state = _where(live, _wish(state, sides[position]), state)
 
     before = state
     ability = battler_decomp_ability(tables, state, jnp.arange(state.active.shape[0]))
     effects = live & ~ended & ~weather_suppressed(tables, state)
-    for position in (0, 1):
+    for position in range(fmt.B):
         side = sides[position]
         state = _where(effects, _weather_effect(state, side, ability), state)
     state = _faint_check(tables, before, state)
@@ -4420,7 +4432,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
 
 
 def end_of_turn(
-    tables: Tables, state: BattleState, actions, outcome: Outcome, order, sides, failed=(0, 0)
+    tables: Tables, state: BattleState, actions, outcome: Outcome, order, sides, failed=None
 ) -> BattleState:
     """Phase 4: ``BattleControllerPlayer_CheckMonConditions`` (battle_controller_player.c:
     1289) runs every check of ``END_OF_TURN_ORDER`` for one battler, then for the next,
@@ -4428,10 +4440,20 @@ def end_of_turn(
     is sorted once, before ``field_conditions``, so a Tailwind that ended there still
     counts); a faint check follows each, and nothing runs once the battle is over.
     Flinch lasts only for the turn it is set in. ``failed`` (``int[2]``): each side's
-    ``moveFailFlags`` of the turn (the ``move_failed`` event), read by the Uproar check."""
-    for position in (0, 1):
+    ``moveFailFlags`` of the turn (the ``move_failed`` event), read by the Uproar check.
+
+    A battler in ``battlersSwitchingMask`` runs none of its checks (bcp.c:1305-1308); the mask
+    equals ``actions.absent_now`` (its docstring), read once at the head of the battler's checks:
+    the mask is set only by ``ReplaceFainted`` (bcp.c:4110, :4134), so a battler that faints inside
+    its own checks keeps running the rest (they find no HP to act on)."""
+    fmt = format_of(state)
+    if failed is None:
+        failed = (0,) * fmt.B
+    for position in range(fmt.B):
         side = sides[position]
         start = state
+        present = state.over == 0
+        present = present & ~absent_now(state, side)
         for name, check in END_OF_TURN_ORDER:
             before = state
             args = (
@@ -4442,7 +4464,7 @@ def end_of_turn(
                 else ()
             )
             after = check(tables, state, side, *args)
-            state = _faint_check(tables, before, _where(state.over == 0, after, state))
+            state = _faint_check(tables, before, _where(present & (state.over == 0), after, state))
         # The payout of CheckMonConditions' head (AnyFainted, then AnyExpPayout, bcp.c:
         # 1295-1299) runs after the faint check of the check that fainted the opponent. It is
         # paid once per battler here, after its last check (one inline copy per battler instead
@@ -4464,12 +4486,15 @@ def end_of_turn(
 
 def _turn_move_cur(read: dict, order) -> jnp.ndarray:
     """``battleCtx->moveCur`` at the turn's end: the last action in ``order`` whose FIGHT ran
-    (``read["move_cur"]``, 0 for none). Nothing else sets it after the actions, and
+    (``read["move_cur"]``, 0 for none), over the B positions of ``order``. Nothing else sets it after the actions, and
     ``BattleContext_Init`` keeps it (battle_lib.c:1974-2017). A turn with no FIGHT leaves an older
     moveCur, but then no battler is semi-invulnerable at the turn's end (the bit is set by a
     charge turn and its holder is locked into a FIGHT the next turn), so its range is never read."""
-    first, last = (read["move_cur"][order[k]] for k in (0, 1))
-    return jnp.where(last != 0, last, first).astype(_I32)
+    cur = jnp.zeros((), _I32)
+    for k in range(read["move_cur"].shape[0]):
+        move = read["move_cur"][order[k]].astype(_I32)
+        cur = jnp.where(move != 0, move, cur)
+    return cur
 
 
 def _future_sight(
@@ -4513,11 +4538,12 @@ def _future_sight(
     protecting = jnp.asarray(protecting)
     semi_tested = ~targets_foe_side(tables, jnp.asarray(move_cur, _I32))
     mid = state
-    for position in (0, 1):
+    for position in range(fmt.B):
         d = sides[position]
         mon = state.active[d]
         timer = state.future_timer[d].astype(_I32)
-        counting = live & (timer > 0)
+        # A battler in battlersSwitchingMask is skipped, its count stays (bcp.c:1759-1764).
+        counting = live & (timer > 0) & ~absent_now(state, d)
         left = jnp.where(counting, timer - 1, timer)
         fires = counting & (left == 0) & (state.hp[party(fmt, d), mon] > 0)
         state = _set_side(state, "future_timer", d, left, True)
@@ -4594,10 +4620,12 @@ def _perish_song_check(tables: Tables, state: BattleState, sides, live) -> Battl
     loses the effect and all its HP (subscript_continue_perish_song.s:6-7, UPDATE_HP of -curHP:
     no Focus Sash, no Magic Guard), or has its count drop by 1. Each re-entry of the pass runs
     ``AnyFainted`` first (:1749), with no battle-over check until TurnEnd."""
-    for position in (0, 1):
+    fmt = format_of(state)
+    for position in range(fmt.B):
         d = sides[position]
         mon = state.active[d]
-        on = live & (state.perish_song[d] != 0)
+        # Skipped when masked (bcp.c:1792-1797): the count stays.
+        on = live & (state.perish_song[d] != 0) & ~absent_now(state, d)
         turns = state.perish_song_turns[d].astype(_I32)
         dies = on & (turns == 0)
         before = state
