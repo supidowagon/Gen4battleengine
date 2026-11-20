@@ -7991,8 +7991,11 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
     _end_of_turn(turn, s, order)
     _future_sight(turn, s, order)
     _stale_known_item(s, snap, -1)  # B10-6
-    # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch and unlocks a sleeping
-    # battler (lib.c:2240-2243).
+    # BattleSystem_SetupNextTurn (lib.c:2228-2253), per battler: turnFlags -> the ``ts_*`` scratch,
+    # zeroed with the turn; flinch cleared (:2234); RECHARGING unsupported; a sleeping MOVE_LOCKED
+    # or THRASH battler unlocked (:2240-2247); followMe cleared (:2251-2252). CheckPreMoveActions
+    # (bcp.c:803-871): Focus Punch's tighten is a message only, Rage has no reachable holder,
+    # speedRand -> ``Outcome.quick_claw`` [B].
     for b, sd in enumerate(s.battlers):
         sd.flinched = 0
         if _party_of(s, b).mons[sd.active].status == Status.SLEEP:

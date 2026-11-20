@@ -314,9 +314,6 @@ def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-14: turn start and reset over four (_quick_claw_shown reads fight[0] & fight[1]);
-    # deleted by D3-14
-    TurnClause("D3-14", "turn start and reset over four battlers", lambda t, s, a: _four(s)),
     # D3-16: D2 step rules owed four-actor tests (D2-17, -20, -21/-31, -25, -32); deleted by D3-16
     TurnClause("D3-16", "D2 step rules owed four-actor tests", lambda t, s, a: _four(s)),
 )

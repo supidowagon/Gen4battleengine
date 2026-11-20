@@ -4801,8 +4801,10 @@ def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:
 
 
 def _unlock_sleepers(state: BattleState) -> BattleState:
-    """``BattleSystem_SetupNextTurn`` (battle_lib.c:2240-2243): a locked battler that is
-    asleep when the next turn is set up is unlocked."""
+    """``BattleSystem_SetupNextTurn`` (battle_lib.c:2240-2247): a sleeping battler that is
+    ``MOVE_LOCKED`` (:2240-2243) or ``THRASH`` (:2245-2247) is unlocked, for each of
+    ``MAX_BATTLERS``; here for each battler of the format (``range(fmt.B)``). THRASH and Uproar
+    locks share the one lock field ``locked_move``, so ``_unlock`` clears them all."""
     fmt = format_of(state)
     for side in range(fmt.B):
         asleep = state.status[party(fmt, side), state.active[side]] == Status.SLEEP
@@ -4861,6 +4863,13 @@ def step_events(
     6) returns the first half's events and stops before the end of the turn; the resuming call
     returns the second half's."""
     actions = jnp.asarray(actions, _I32)
+    # D3-14, SetupNextTurn (battle_lib.c:2228-2253) and where each piece lives, all per battler:
+    # turnFlags / moveFailFlags -> the ``ts_*`` scratch, zeroed when the turn completes; flinch ->
+    # ``end_of_turn`` (``flinched`` [B]); RECHARGING -> unsupported (``recharge`` reserved); the
+    # sleep unlock -> ``_unlock_sleepers``; followMe -> ``ts_follow_me``, zeroed with the scratch.
+    # CheckPreMoveActions (bcp.c:803-871): the Focus Punch tighten is a message only; the Rage
+    # clear has no reachable holder (no Rage EffectId); speedRand -> ``Outcome.quick_claw`` [B],
+    # kept by ``_keep_quick_claw``.
     s, events, read, move_cur = _action_phase(tables, state, actions, outcome, targets)
     halted = s.pivot_battler != 0
     sides = end_of_turn_order(tables, s, outcome)
