@@ -1333,6 +1333,22 @@ def _compare_battlers(
     return result
 
 
+def _speed_sort(tables, s: RefState, qc: list[int], ties) -> list[int]:
+    """``BattleSystem_SortMonSpeedOrder`` over four battlers (lib.c:3364-3383, sheet D3-4 rule 1):
+    ``order[i] = i``, then for each position pair (0,1) (0,2) (0,3) (1,2) (1,3) (2,3) the battlers
+    currently at the two positions are compared with ``ignoreQuickClaw`` (priorities 0, 0, no flag
+    written) and swapped on a nonzero result. ``ties``: one row of ``outcome.sort_tie`` (the
+    acting battler's); pair ``p``'s bit is ``ties[p]``."""
+    order = list(range(4))
+    p = 0
+    for i in range(3):
+        for j in range(i + 1, 4):
+            if _compare_battlers(tables, s, order[i], order[j], ties[p], qc, (0, 0)):
+                order[i], order[j] = order[j], order[i]
+            p += 1
+    return order
+
+
 def _four_turn_order(tables, s: RefState, commands, choices, outcome) -> tuple[list, list, list]:
     """``BattleControllerPlayer_CalcTurnOrder`` over four battlers (bcp.c:754-786): ``(order,
     custap, claw)``. Every ITEM or PARTY battler in battler order, then every other (an absent
@@ -7488,6 +7504,9 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         stale = _stale_snapshot(s)
         if turn.done[side] or _active(s, side).hp == 0:
             continue
+        if _fmt(s).B == 4:  # BranchActions' sort before this entry (bcp.c:888); row = the actor's
+            ties = turn.outcome.sort_tie[side]
+            turn.speed_order = _speed_sort(tables, s, list(turn.outcome.quick_claw), ties)
         # D3-6: PICK_COMMAND == MOVE_END of every battler at this action's start (an action over,
         # a Pursuit fired, dragged, a Pokemon entered its slot, fainted or absent: script.c:1801,
         # bcp.c:3988, :4430, :330-333, lib.c:2053). Fact A reads one entry, Fact B all but the

@@ -346,8 +346,6 @@ def _replacement_point(state: BattleState) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-4: monSpeedOrder before each action (identity speed_order); deleted by D3-4
-    TurnClause("D3-4", "speed order before each action", lambda t, s, a: _four(s)),
     # D3-7: side-out per format (_faint_check species[0] / [1]); deleted by D3-7
     TurnClause("D3-7", "side-out with two parties on a side", lambda t, s, a: _split_side_alive(s)),
     # D3-8: faint and payout order over four; deleted by D3-8

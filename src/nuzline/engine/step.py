@@ -251,6 +251,7 @@ from nuzline.engine.order import (
     player_second,
     resort_claw_flags,
     selected_move,
+    sort_mon_speed,
     truant_loafs,
 )
 from nuzline.engine.outcome import (
@@ -2783,6 +2784,7 @@ def _act(
     claw=(False, False),
     pursuit_sync=None,
     enduring=False,
+    speed_order=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -2855,6 +2857,7 @@ def _act(
         pursuit_sync,
         enduring,
         picks=(actions, choices[0]),
+        speed_order=speed_order,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -3225,6 +3228,14 @@ def _execute_actions(
         custap, claw, entered = carry[10:]
         active0 = state.active
         side = order[position].astype(_I32)
+        # BranchActions' BattleSystem_SortMonSpeedOrder before this entry (bcp.c:888), on the state
+        # after the previous MoveEnd; its tie bits are the acting battler's row (D3-4). A resumed
+        # or pursuit pass sorts afresh until D3-10's ``ts_speed_order``. B = 2: identity.
+        speed_order = (
+            sort_mon_speed(tables, state, outcome.quick_claw, outcome.sort_tie[side])[0]
+            if fmt.B == 4
+            else None
+        )
         # D3-6: PICK_COMMAND == MOVE_END of every battler at this action's start (script.c:1801,
         # bcp.c:3988, :4430, :330-333; lib.c:2053): its action is over, its Pursuit fired, it was
         # dragged or a Pokemon entered its slot this turn, or it is at 0 HP. Fact A reads one
@@ -3369,6 +3380,7 @@ def _execute_actions(
             claw=claw,
             pursuit_sync=pursuit_sync,
             enduring=enduring,
+            speed_order=speed_order,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         # A switcher the Pursuit KO'd still runs its switch's MoveEnd (bcp.c:1984, :4008), so

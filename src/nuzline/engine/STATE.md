@@ -743,7 +743,7 @@ three structs has a row.
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged`, `chosen_target` | mapped |
 | `BattleContext.battlerActionOrder` | `ts_order` | mapped (written from `order.action_order`'s `int8[B]` order; the position loop's tie bits are `Outcome.order_tie`, never stored) |
-| `BattleContext.monSpeedOrder` | `war_swaps` | mapped |
+| `BattleContext.monSpeedOrder` | `war_swaps` | mapped (the running action's: computed before each action at B = 4 (`order.sort_mon_speed`, `Outcome.sort_tie[b]`, b the acting battler), not stored; a paused action's: `ts_speed_order`, D3-10) |
 | `BattleContext.monSpeedValues` | — | later (M6) |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

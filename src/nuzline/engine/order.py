@@ -938,6 +938,27 @@ def _four_order(tables: Tables, state: BattleState, actions, order_tie, qc):
     return order.astype(jnp.int8), jnp.stack(reads)
 
 
+def sort_mon_speed(tables: Tables, state: BattleState, qc, ties):
+    """``(order int32[B], read bool[len(PAIRS)])``: ``BattleSystem_SortMonSpeedOrder``
+    (lib.c:3364-3383) at B = 4, the sort before an action (bcp.c:888): ``order[i] = i``, then for
+    each position pair of ``PAIRS`` the battlers currently at the two positions are compared with
+    ``ignoreQuickClaw`` TRUE (``compare_full``, both priorities 0, the claw bits of ``qc`` and
+    Custap's pinch on the current HP still deciding) and swapped on a result other than FASTER.
+    Every pair is compared whatever the commands. ``ties``: one row of ``Outcome.sort_tie`` (the
+    acting battler's, ledger D3-4); ``read[p]``: whether pair ``p``'s compare drew its bit. Not
+    called at B = 2 (``speed_order`` stays ``arange(2)``)."""
+    facts = _pair_facts(tables, state, qc)
+    order = jnp.arange(4, dtype=_I32)
+    reads = []
+    for p, (i, j) in enumerate(PAIRS):
+        b1, b2 = order[i], order[j]
+        result, read = compare_full(tables, state, b1, b2, ties[p], qc, 0, 0, facts)
+        swap = result != COMPARE_SPEED_FASTER
+        order = order.at[i].set(jnp.where(swap, b2, b1)).at[j].set(jnp.where(swap, b1, b2))
+        reads.append(read)
+    return order, jnp.stack(reads)
+
+
 def action_order_reads(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
     """``bool[TIE_PAIRS[B]]``: the elements of ``outcome.order_tie`` the order reads (the pair's
     compare drew its bit); empty at B = 2, where ``speed_tie`` is the one bit."""
