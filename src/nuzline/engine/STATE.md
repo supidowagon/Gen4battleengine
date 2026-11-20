@@ -29,6 +29,14 @@ three structs has a row.
   traced data the engine never reads. `replace_mul` is the decomp's `powerMul` kept
   for a pending player replacement (it persists until `BattleContext_Init`,
   battle_controller_player.c:1855), 0 otherwise.
+  `acid_rain` (int8, after `gravity` with the field conditions, outside the experience
+  block and the turn scratch after `replace_mul`; sticky to the
+  battle's end) is not decomp state either: the operand of Pursuit's
+  `fieldConditionsMask -=` (subscript_pursuit.s:100, :115; OPCODE_SUB_TO_ZERO,
+  battle_script.c:3282-3287), 1..3, 0 = none; set only where the subtraction happens with a
+  nonzero operand while a field condition is up. The engine cannot hold the result: a state
+  with `acid_rain != 0` is refused (`coverage.check_acid_rain`; the search's `exp_refused`
+  readers). Owed: FCM.md (the field conditions as the decomp mask).
 - **Battlers vs. party slots.** The decomp keeps a `BattleMon` per battler
   (`BattleContext.battleMons[4]`, built from the party mon by
   `BattleSystem_InitBattleMon`, `src/battle/battle_lib.c:70`) and writes HP, PP,
@@ -167,8 +175,9 @@ three structs has a row.
   speeds computed when the turn was ordered, by `BtlCmd_CalcGyroBallPower`
   (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
   unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw's
-  activation is `qc_roll` (below; the per-turn flag only shows its animation, a
-  `step` event), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
+  activation is `qc_roll` (below; the flag `claw_flag` carries its animation and the
+  Knock Off / Thief / Covet failures into the next turn when no BeforeMove cleared it,
+  SF2 (k)), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
   coverage work must add these fields before the mechanics that read them.
 - **Trace, the weather abilities and Truant (E2 batch 3).** `BattleMon.ability` is per
   battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
@@ -429,7 +438,7 @@ three structs has a row.
   subscript_baton_pass.s:17, else 0) and the turn scratch `ts_*` (per field: the
   `BattleContext` values a resumed turn reads: `turnOrderCounter`, `battlerActionOrder`, the
   command-selection picks (`ts_move`, `ts_struggling`, `ts_locked`, `ts_item`), the per-battler
-  `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6), the per-battler
+  `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6; between turns `custap_flag` / `claw_flag`, SF2 (k)), the per-battler
   `turnFlags` later actors read
   (`ts_protect_ok`, `ts_endure_ok` (`turnFlags.enduring`, Endure, G-65), `ts_taken`,
   `ts_follow_me` (per side, `SideConditions.followMe` / `followMeUser`: `1 + followMeUser`, 0 when `followMe`
@@ -445,11 +454,13 @@ three structs has a row.
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
   read by the second actor in `step._execute_actions`), the per-battler `moveFailFlags`
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
-  `ts_damaged`, `ts_dealt`), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
+  `ts_damaged`, `ts_dealt`), `moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE` (`ts_se`: the paused or
+  chased action's only; the U-turn's, or the last Pursuit's, lib.c:3359, script.c:6964-6973; the tail's
+  Enigma Berry reads it with `ts_sub_hit`, battle_lib.c:5378, :5421-5428), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
   `ts_switched`). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
   `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
-  Pursuit, `ts_pursued`, and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
+  Pursuit, `ts_pursued` (a bitmask of the battlers whose action a Pursuit ended, bit b = battler b, written `|= 1 << pursuer` by both engines; BtlCmd_TryPursuit's loop, battle_script.c:6884-6935 with subscript_pursuit.s:82, lets several battlers chase one switch), and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
   skip their actions in `step._execute_actions`) are kept only at such a pause.
 - The chosen target (D2-1): `chosen_target` (per battler, `battlerActions[b][1]`, a battler index
   0..B-1, not 1 + battler: it has no "none" value; initial `b ^ 1`). Unlike the other
@@ -563,8 +574,8 @@ three structs has a row.
 | `MoveEffectsData.canUnburden` | `can_unburden` | mapped |
 | `MoveEffectsData.metronomeTurns` | `metronome_turns` | mapped |
 | `MoveEffectsData.micleBerry` | `micle` | mapped |
-| `MoveEffectsData.custapBerry` | — | later (M6) |
-| `MoveEffectsData.quickClaw` | `ts_claw` | mapped |
+| `MoveEffectsData.custapBerry` | `custap_flag`, `ts_custap` | mapped |
+| `MoveEffectsData.quickClaw` | `claw_flag`, `ts_claw` | mapped |
 | `MoveEffectsData.meFirst` | `me_first` | mapped |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |
@@ -687,7 +698,7 @@ three structs has a row.
 | `BattleContext.meFirstTurnOrder` | — | not needed because it is `turn` + 1 (lib.c:2028 starts it at 1, bcp.c:1853 adds 1 at each TurnEnd with `totalTurns`): `damage.me_first_active` reads it so |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar` | mapped |
+| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar`, `acid_rain` | mapped |
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
@@ -709,7 +720,7 @@ three structs has a row.
 | `BattleContext.moveType` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.moveEffectChance` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.prizeMoneyMul` | — | not needed because prize money does not affect the battle |
-| `BattleContext.moveStatusFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.moveStatusFlags` | `ts_se` | mapped |
 | `BattleContext.sideEffectDirectFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectIndirectFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectAbilityFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |

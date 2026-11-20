@@ -507,6 +507,10 @@ def print_report(report) -> None:
         print(f"{title} ({len(lines)}):")
         for line in lines:
             _say(f"  {line}")
+    if report.runtime:
+        print(f"Runtime ({len(report.runtime)}):")
+        for line in report.runtime:
+            _say(f"  {line}")
 
 
 # The earlier private names, kept for existing importers (benchmarks).
