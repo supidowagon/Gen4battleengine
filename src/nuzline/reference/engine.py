@@ -271,6 +271,9 @@ class _Turn:
     # SYSCTL_ATTACK_MESSAGE_SHOWN of the current action (script.c:1432), for
     # UpdateMoveBuffers' moveProtect (bcp.c:3936-3942).
     attack_message: bool = False
+    # MOVE_STATUS_NO_PP of the current action (bcp.c:2285, :2293): no SYSCTL_MOVE_SUCCEEDED
+    # (bcp.c:3208-3212), so a Baton Pass is not exempt from the Choice lock (bcp.c:3928).
+    no_pp: bool = False
     # SYSCTL_FIRST_OF_MULTI_TURN of the current action: a charge turn (B10-12), which updates the
     # Choice locks as the attack message does (bcp.c:3921-3922, :4490-4491).
     charging: bool = False
@@ -5607,6 +5610,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     if not struggling and not locked:
         slot = action
         if mon.pp[slot] == 0:
+            turn.no_pp = True  # last_move stays MOVE_NONE (bcp.c:3208-3212, :3945-3949)
             return record
         mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, turn.defender, move), 0)
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306, :3190): BattleSystem_Defender found no
@@ -7843,7 +7847,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         else:
             move, struggling, locked = choices[side]
             turn.attack_message = turn.move_hit = turn.damaged = turn.sub_hit = False
-            turn.charging = False
+            turn.charging = turn.no_pp = False
             # FightCommand (bcp.c:1866-1883, B10-9): after Struggle, an encored battler uses the
             # encored move (its slot's PP and no-PP failure) when the slot holds it, whatever it
             # chose; else its encore ends and the slot's move (its forced choice) runs.
@@ -7881,9 +7885,10 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 _life_orb_recoil(turn, s, side)
             # UpdateFlagsWhenHit / UpdateMoveBuffers: the Choice lock (the foe is the defender
             # exactly when _fight returns its moveHit record); a Baton Pass that succeeded
-            # (moveTemp, bcp.c:3928) never locks.
+            # (moveTemp, bcp.c:3928; SYSCTL_MOVE_SUCCEEDED, not set on no PP, :3208-3212)
+            # never locks.
             defender = turn.target_side if record is not None else None
-            exempt = move == MOVE_BATON_PASS and turn.attack_message
+            exempt = move == MOVE_BATON_PASS and turn.attack_message and not turn.no_pp
             _update_choice_lock(turn, s, side, defender, move, exempt)
             # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
             # battle's movePrev is moveTemp (the chosen move) when the attack message showed.

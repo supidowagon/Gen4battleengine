@@ -1522,7 +1522,13 @@ def _use_move(
     # (HasNoTarget, bcp.c:2327-2334; its hit may still find none after a Power Herb), B10-12.
     first_charge = charge_move & ~second_turn & ~invoker & ~nature_power
     succeeded = can_act & (has_target | nature_power | self_invoker | first_charge)
-    state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
+    # MOVE_STATUS_NO_PP is a NO_EFFECTS status (moves.h:85): BeforeMove's NO_EFFECTS branch
+    # (bcp.c:3208-3209) goes to MOVE_FAILED -> subscript_no_pp.s (:3316-3319) without
+    # SYSCTL_MOVE_SUCCEEDED (:3212), so UpdateMoveBuffers writes MOVE_NONE (:3945-3949) and a
+    # Baton Pass is not exempt from the Choice lock (:3928). ``succeeded`` (past HasNoTarget)
+    # still drives the Metronome count, updated after that branch (:3221).
+    move_succeeded = succeeded & ~no_pp
+    state = _set_last_move(state, side, jnp.where(move_succeeded, move, 0), ready)
     # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
     # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
     # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
@@ -2702,7 +2708,7 @@ def _use_move(
     # succeeded (bcp.c:3927-3928, by moveTemp).
     ready_t = jnp.where(head_on, ready, True)
     exempt = ((move == MOVE_U_TURN) & resumed) | (
-        (move == MOVE_BATON_PASS) & jnp.where(head_on, succeeded, True)
+        (move == MOVE_BATON_PASS) & jnp.where(head_on, move_succeeded, True)
     )
     # SYSCTL_FIRST_OF_MULTI_TURN updates the Choice locks as the attack message does
     # (bcp.c:3921-3922, :4490-4491), B10-12.

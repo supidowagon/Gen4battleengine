@@ -443,6 +443,39 @@ def test_a_faster_encore_takes_over_this_turns_move(tables, names):
     )
 
 
+def test_an_encored_move_with_no_pp_fails_unrecorded_and_choice_locks(tables, names):
+    """B10-9: after Clefairy's faster Growl, Bidoof's Encore on Baton Pass (slot 1, 0 PP) takes
+    over its Tackle (FightCommand, bcp.c:1869-1873). DecrementPP flags MOVE_STATUS_NO_PP (bcp.c:2285), a
+    NO_EFFECTS status (moves.h:85): BeforeMove goes to MOVE_FAILED (bcp.c:3208-3209) without
+    SYSCTL_MOVE_SUCCEEDED (:3212), CheckMoveFailure runs subscript_no_pp.s (:3316-3319; its
+    PrintAttackMessage sets SYSCTL_ATTACK_MESSAGE_SHOWN, battle_script.c:1432), and
+    UpdateMoveBuffers writes movePrevByBattler = MOVE_NONE (bcp.c:3945-3949) and, the attack
+    message shown, locks the Choice Band holder into Baton Pass: a Baton Pass is exempt only with
+    SYSCTL_MOVE_SUCCEEDED (bcp.c:3921-3929). No switch, no PP spent."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Clefairy", ["Growl"], 40)],
+        [
+            _mon(n, "Bidoof", ["Tackle", "Baton Pass", "Baton Pass"], 30, "Choice Band"),
+            _mon(n, "Starly", ["Tackle"], 30),
+        ],
+    )
+    bp = n.move("Baton Pass")
+    s = s._replace(
+        pp=s.pp.at[1, 0, 1].set(0),
+        last_move=s.last_move.at[1].set(bp),
+        encore_move=s.encore_move.at[1].set(bp),
+        encore_slot=s.encore_slot.at[1].set(1),
+        encore_turns=s.encore_turns.at[1].set(3),
+    )
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.last_move[1]) == 0
+    assert int(out.choice_lock[1]) == bp
+    assert int(out.active[1]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
+    assert int(out.pp[1, 0, 1]) == 0 and int(out.pp[1, 0, 2]) == int(s.pp[1, 0, 2])
+
+
 def test_knock_off_leaves_the_ai_record_until_the_next_copy_to_party(tables, names):
     """B10-6: TryKnockOff runs no CopyToParty, so the AI's record of the player's knocked item
     stays (aiContext.battlerHeldItems) until the battler's next CopyToParty: its move attempt

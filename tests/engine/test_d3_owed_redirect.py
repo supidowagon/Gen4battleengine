@@ -44,7 +44,10 @@ def test_a_move_with_no_pp_neither_redirects_nor_records(tables, names):
     the Encore takes over what it chose (FightCommand, bcp.c:1866-1883). The slot is the first of
     two Thunderbolts: Encore's selection (``actions.usable_moves``) leaves a 0-PP encored move no
     legal slot and Struggles, so a 0-PP takeover is reached only while another slot still holds the
-    move. The move fails at DecrementPP (bcp.c:2285): no hit, no message, no record."""
+    move. The move fails at DecrementPP (bcp.c:2285): MOVE_STATUS_NO_PP is a NO_EFFECTS status
+    (moves.h:85), so no redirect (battle_lib.c:1796) and no SYSCTL_MOVE_SUCCEEDED (bcp.c:3208-3212);
+    subscript_no_pp.s prints the attack message and "no PP left" (bcp.c:3316-3319): no hit, no
+    ability message, no AI record, and movePrevByBattler = MOVE_NONE (bcp.c:3945-3949)."""
     s = state(tables, names, AbilityId.LIGHTNINGROD, "Thunderbolt")
     s = with_moves(s, names, 1, ["Swords Dance", "Thunderbolt", "Thunderbolt"])
     slot1 = int(s.active[1])
@@ -54,3 +57,4 @@ def test_a_move_with_no_pp_neither_redirects_nor_records(tables, names):
     assert hp(out, 0) == hp(s, 0) and hp(out, 2) == hp(s, 2)
     assert int(out.ai_ability_known[int(out.active[0])]) == int(s.ai_ability_known[0])
     assert int(out.pp[1, slot1, 1]) == 0
+    assert int(out.last_move[1]) == 0
