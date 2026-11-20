@@ -135,7 +135,6 @@ from nuzline.engine.effects import (
     copy_stat_stages,
     crit_blocked,
     defender_always,
-    defog_silent_fail,
     entry_hazards,
     focus_sash_damage,
     forget_item,
@@ -2118,16 +2117,18 @@ def _use_move(
     items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
     items_full = items_full & ~baton_failed & ~guarded
     # Conversion 2 (subscript_conversion_2.s:5, :12-14): TryConversion2's failure jump sets
-    # MOVE_STATUS_FAILED at the ON_HIT, so no AfterMoveEffects, and skips the attack message
-    # (``shown_t`` below): E3-B2-3.
+    # MOVE_STATUS_FAILED at the ON_HIT, so no AfterMoveEffects. The jump skips only the
+    # subscript's own attack message: CheckMoveFailure (bcp.c:3311-3327) then runs
+    # subscript_missed.s, whose PrintAttackMessage (:5) sets SYSCTL_ATTACK_MESSAGE_SHOWN
+    # (battle_script.c:1423-1434), and its commandNext LOOP_FAINTED (bcp.c:3326) skips
+    # AfterMoveEffects: E3-B2-3 (review b2 #1). The same holds for every failure below.
     conv2_failed = (
         connected
         & (tables.move_effect[used] == EffectId.CONVERSION_2)
         & conv2_fails(tables, state, side)
     )
     items_full = items_full & ~conv2_failed
-    # Spite (subscript_reduce_target_pp.s:5-6, :12-14): TrySpite's failure jump also skips the
-    # attack message (``shown_t``); its AfterMoveEffects are skipped by ``primary_effect_fails``.
+    # Spite (subscript_reduce_target_pp.s:5-6, :12-14): TrySpite's failure, E3-B2-4.
     spite_failed = (
         connected
         & (tables.move_effect[used] == EffectId.SPITE)
@@ -2135,22 +2136,13 @@ def _use_move(
     )
     items_full = items_full & ~spite_failed
     # Role Play (effect_script_0178.s:5-6, subscript_copy_ability.s:6-9, :31-32): every failure
-    # jumps before the subscript's attack message (``shown_t``), E3-B2-5; its AfterMoveEffects are
-    # skipped by ``primary_effect_fails``.
+    # sets MOVE_STATUS_FAILED, E3-B2-5.
     role_failed = (
         connected
         & (tables.move_effect[used] == EffectId.ROLE_PLAY)
         & role_play_fails(tables, state, side, target_side)
     )
     items_full = items_full & ~role_failed
-    # Defog behind a Substitute with nothing to clear (subscript_defog.s:5-13,
-    # subscript_update_stat_stage.s:60): no attack message (``shown_t``), E3-B2-14; its
-    # AfterMoveEffects are skipped by ``primary_effect_fails``.
-    defog_silent = (
-        connected
-        & (tables.move_effect[used] == EffectId.DEFOG)
-        & defog_silent_fail(state, side, target_side, tables.move_param[used, 0].astype(_I32))
-    )
     # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
     # (:3672): a Roar's AfterMoveEffects, or the resumed tail's. The Synchronize flag is the
     # newcomer's Toxic Spikes poison (the U-turn subscript cleared it before the list,
@@ -2657,12 +2649,7 @@ def _use_move(
     # (battle_script.c:1431-1432), B10-12.
     shown_t = jnp.where(
         head_on,
-        can_act
-        & ~(charging & ~def_up)
-        & ~conv2_failed
-        & ~spite_failed
-        & ~role_failed
-        & ~defog_silent,
+        can_act & ~(charging & ~def_up),
         True,
     )
     hit_record = jnp.where(record, jnp.where(shown_t, used_t, 0), state.move_hit[target_side])

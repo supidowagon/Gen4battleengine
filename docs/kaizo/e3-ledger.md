@@ -643,7 +643,9 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   order, +1 for the Foresight rows after the 0xFE separator at 108); `damage.conv2_pairs`, checked
   against the decomp source by `test_the_row_table_is_the_decomps`.
   Script: effect_script_0093.s:5 direct ON_HIT (lib.c:1485-1491), subscript_conversion_2.s:5
-  TryConversion2, failure -> :12-14 MOVE_STATUS_FAILED with the attack message skipped.
+  TryConversion2, failure -> :12-14 MOVE_STATUS_FAILED, past the subscript's own attack message only:
+  CheckMoveFailure (bcp.c:3311-3327) then runs subscript_missed.s, whose PrintAttackMessage (:5) sets
+  SYSCTL_ATTACK_MESSAGE_SHOWN (bs.c:1423-1434), so the failure shows the move (review b2 #1).
   `BtlCmd_TryConversion2` (bs.c:4765-4820): `effects.conv2_fails` = raw-ability Multitype (:4770,
   `battler_decomp_ability`), no record (:4775-4776), a recorded `Move_IsMultiTurn` move (lib.c:2975-2992:
   Bide and `MoveFlag.CHARGE`) whose attacker has `locked_move` (:4778-4782), or no eligible row.
@@ -669,8 +671,10 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   after the faint check like `move_hit`, then clears the actor's own `conv2_move` (ClearFlags
   :4390). A switch-in or faint clears all three (lib.c:2131-2133, :2209-2211). A pivot's resumed tail
   writes for its landed hit. Reference engine: `_conv2_writes`, `_conv2_fails`, `_conv2_type`,
-  `_finish_action`. A failed Conversion 2 joins `items_full` (no AfterMoveEffects, as
-  `weather_failed`) and `shown_t` (no attack message: no movePrev, no Choice lock).
+  `_finish_action`. A failed Conversion 2 joins `items_full` (no AfterMoveEffects: subscript_missed's
+  commandNext LOOP_FAINTED, bcp.c:3326, as `weather_failed`); its attack message is shown, so
+  UpdateFlagsWhenHit writes moveHit, movePrev, moveCopied and the Choice-lock clear as for any shown
+  move (bcp.c:4480-4503; review b2 #1 removed the earlier `shown_t` term).
   Hit chance: none (accuracy 0, RANGE_USER). Damage and crit: none of its own; the new types are
   the foe's later chart (`INPUT_CLAUSE_EFFECTS`, the foe-effect camouflage clause, and
   `NON_TABLE_DAMAGE_EFFECTS`). Held items: none.
@@ -694,16 +698,17 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   no array or key changed (as Conversion 2).
   Script: effect_script_0100.s:5 direct ON_HIT TO_DEFENDER (lib.c:1485-1491: not on NO_EFFECTS, so not
   on a miss, Protect or a semi-invulnerable foe), subscript_reduce_target_pp.s:5 skips MISSED |
-  SEMI_INVULNERABLE, :6 TrySpite, failure -> :12-14 `MOVE_STATUS_FAILED` with the attack message (:7)
-  skipped. `BtlCmd_TrySpite` (bs.c:4990-5016): `effects.spite_slot`: the first slot holding the
+  SEMI_INVULNERABLE, :6 TrySpite, failure -> :12-14 `MOVE_STATUS_FAILED`, past the subscript's attack
+  message (:7) only; subscript_missed.s:5 then shows it (bcp.c:3311-3327, review b2 #1).
+  `BtlCmd_TrySpite` (bs.c:4990-5016): `effects.spite_slot`: the first slot holding the
   defender's `movePrevByBattler` (`last_move`; Battler_SlotForMove, lib.c:2376-2387) fails when
   `last_move` is 0 (:4995, :5011-5013), is in no slot (Struggle, a move no longer held: :4996) or its
   slot is at 0 PP (:4996-4998); else `dec = min(4, ppCur)` (:5000-5003), `ppCur -= dec`, CopyToParty.
   `effects._spite` writes `pp[party, active, slot]` only: a Mimic slot's `shadow_pp` stays (CopyToParty
   skips flagged slots). Through a Substitute, no ability check.
-  Failure joins `primary_effect_fails` (no AfterMoveEffects) and `shown_t` (no attack message: no
-  movePrev, no Choice lock, no moveHit) beside Conversion 2's. Reference engine: `_spite_slot`, the
-  `_move_effect` branch, the `full` flag, and `_actions` clearing the foe's moveHit for a failed Spite.
+  Failure joins `primary_effect_fails` (no AfterMoveEffects); the attack message shows (moveHit, movePrev,
+  moveCopied: Spite is CAN_MIRROR_MOVE, the Choice-lock clear), review b2 #1. Reference engine:
+  `_spite_slot`, the `_move_effect` branch and the `full` flag.
   Hit chance: acc 100, standard. Damage and crit: none (status move). The enumeration classes it
   `INPUT_NEUTRAL_EFFECTS` / `NON_TABLE_DAMAGE_EFFECTS` (no damage input changes; a foe move it empties
   fails with NO_PP, which only removes later draws); `test_accuracy_classes` lists it as writing no stage.
@@ -739,9 +744,9 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Acid suppressed defender still gives it, the user's own suppression bit stays); only the user changes.
   `effects.role_play_fails` (shared by `_role_play`, `primary_effect_fails`, `step`'s `role_failed`) and
   `effects._role_play`; the AI is tagged with the user's new ability (`know_ability`,
-  battle_script.c:3401-3404; the GET at :14 reveals nothing). A failure skips the attack message (the
-  subscript's `Call`, :10 / effect script's early End): `step`'s `shown_t` and `items_full`, the
-  reference `_fight` (`attack_message = False`) and `_actions` (moveHit record cleared, as Spite).
+  battle_script.c:3401-3404; the GET at :14 reveals nothing). A failure skips the subscript's `Call` (:10)
+  or ends the effect script early, then reaches CheckMoveFailure's subscript_missed.s, whose
+  PrintAttackMessage (:5) shows the move (bcp.c:3311-3327, review b2 #1): `step`'s `items_full` only.
   Accuracy 0: no roll (bcp.c:2901-2903), so the hit draw is irrelevant.
   Entry abilities: no announced flag is touched, so an entry ability the user now holds acts at the
   move's end through `hooks.move_end_switch_in` (bcp.c:3973) when its flag is clear (Intimidate,
@@ -756,11 +761,12 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   roll site 4429); `BattleEffect.COPY_ABILITY` (the Encore table entry :3252 was already in `commands`);
   no Basic entry; read bounds and backlog regenerated (the #178 AI row closes).
   Rulings. (1) A copied Slow Start (:16-21) cannot arise: unsupported ability, coverage refuses its
-  holders (as Skill Swap). (2) Skill Swap's own failure paths do not yet clear the attack message /
-  movePrev record (its subscript fails before its `Call` too, subscript_exchange_abilities.s:5-14);
-  found while building this, not changed here: owed to Skill Swap. (3) Doubles: the target is the chosen
+  holders (as Skill Swap). (2) Skill Swap's failure paths (subscript_exchange_abilities.s:5-14) show the
+  attack message like Role Play's (subscript_missed.s:5) and skip AfterMoveEffects (review b2 #1, #2:
+  `effects.skill_swap_fails` beside Role Play's in `primary_effect_fails`; reference `_skill_swap_fails` in `full`). (3) Doubles: the target is the chosen
   `h.target`; `role_play_fails` reads `state.active[target_side]`.
-  Tests: tests/engine/test_e3_batch2.py (`test_role_play_*`, `test_the_copy_ends_with_the_battler`),
+  Tests: tests/engine/test_e3_batch2.py (`test_role_play_*`, `test_the_copy_ends_with_the_battler`,
+  `test_a_failed_skill_swap_skips_after_move_effects`),
   tests/ai/test_kaizo_policy.py (`test_role_play_shares_the_change_user_ability_block`, the exact-equals-loose
   list), tests/engine/test_accuracy_classes.py (`_FOLLOWED`); `fullset`-free.
 
@@ -1184,11 +1190,12 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Shield Dust is indirect-only); then, whatever the drop did, Reflect, Light Screen, Mist, Safeguard, Spikes, Toxic
   Spikes and Stealth Rock of `side_of(t)` cleared (:21-61; Mist after the drop met it) and the field's deep fog
   (:64-69, `weather` FOG -> none, timer 0). `effects._defog` (second dispatch tuple); the user's side is never touched.
-  Failure: a drop that reaches the Substitute test sets MOVE_STATUS_FAILED (subscript_update_stat_stage.s:60), which is in
+  Failure: a drop that reaches the Substitute test sets MOVE_STATUS_FAILED (subscript_update_stat_stage.s:43-45), which is in
   `MOVE_STATUS_NO_EFFECTS` and skips AfterMoveEffects: `effects.defog_stage_fails` joins `primary_effect_fails` (Mist,
-  Clear Body / White Smoke and -6 are `result == 1` or a return: no failure). That failure branch prints no message, so
-  with nothing to clear the attack message is never shown and moveHit / movePrev / Choice lock are not updated
-  (`effects.defog_silent_fail`, `step._use_move`'s `shown_t`; reference `_defog_fails`, `turn.defog_failed`).
+  Clear Body / White Smoke and -6 are `result == 1` or a return: no failure). With nothing to clear the subscript plays
+  no attack message, but the failure then reaches CheckMoveFailure's subscript_missed.s, whose PrintAttackMessage (:5)
+  shows it (bcp.c:3311-3327): moveHit / movePrev / Choice lock are updated as for any shown move (review b2 #1 removed
+  `effects.defog_silent_fail` and the reference's silent flag).
   Hit chance: acc 0, no roll; a faster foe's Defog clears the fog before the side's check, so
   `outcome._threshold_grid` has the foe-Defog fog variant (its own evasion drop is the side's, read only by the foe's
   hit). Damage inputs: Defog never changes a hit's inputs but through the fog (Weather Ball power, SolarBeam halving):
@@ -1224,10 +1231,10 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
     Spikes, Toxic Spikes :2706-2707 (one `_set` loop over the six names); Stealth Rock :2708; fog :2709-2713.
   - Reference `src/nuzline/reference/engine.py:_move_effect` (def :3740), branch `effect == EffectId.DEFOG` :4108:
     the seven side fields :4118-4119 (loop over `_DEFOG_SIDE_FIELDS`, defined :2971-2979); fog :4120-4121.
-  Readers of the same fields (they change with the mask too, no writes): JAX `effects.defog_silent_fail` (:2668-2693,
-  the seven names inline, plus fog), `effects.defog_stage_fails` (:2654), `outcome._threshold_grid` fog variant
-  (:1059-1065), `enumerate.damage_inputs_can_change` fog clause (:1705-1707); reference `_defog_fails` (:2982-2998,
-  `_DEFOG_SIDE_FIELDS`, fog), its callers :4112 and :6234-6235; AI `policy._basic_check_defog` (:563),
+  Readers of the same fields (they change with the mask too, no writes): JAX
+  `effects.defog_stage_fails` (:2654), `outcome._threshold_grid` fog variant
+  (:1059-1065), `enumerate.damage_inputs_can_change` fog clause (:1705-1707); reference `_defog_fails`,
+  its caller in `_actions`' `full`; AI `policy._basic_check_defog` (:563),
   `policy._expert_defog` (:2208).
 - E3-B2-15 Gyro Ball's TrainerAI_CalcDamage case (effect 219, move 360 in both games; sheet gyro_ball_ai.md; closes
   Owed B13-27 of docs/kaizo/e2-mechanics-ledger.md). The mechanic itself was modelled by B13-14 and is unchanged

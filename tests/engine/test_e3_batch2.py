@@ -694,16 +694,18 @@ def test_the_users_own_move_end_clears_its_record(tables, names):
     assert int(out.conv2_move[0]) == 0 and int(out.conv2_battler[0]) == 2
 
 
-def test_conversion_2_fails_without_a_record_and_skips_the_attack_message(tables, names):
+def test_conversion_2_fails_without_a_record_and_still_shows_the_attack_message(tables, names):
     """BtlCmd_TryConversion2 (:4775-4776) with no recorded move jumps to subscript_conversion_2.s:12
-    (MOVE_STATUS_FAILED) before the attack message: the types stay and movePrev is 0 (the foe's
-    Swords Dance, a self-range move, left no record and the user acts last), while a success shows
-    it (movePrev is Conversion 2)."""
+    (MOVE_STATUS_FAILED), past the subscript's own attack message; CheckMoveFailure
+    (bcp.c:3311-3327) then runs subscript_missed.s, whose PrintAttackMessage (:5) sets
+    SYSCTL_ATTACK_MESSAGE_SHOWN (battle_script.c:1423-1434), so UpdateFlagsWhenHit writes movePrev
+    (bcp.c:4499-4503, review b2 #1): the types stay (the foe's Swords Dance, a self-range move,
+    left no record and the user acts last), and movePrev is Conversion 2 failed or not."""
     t, n = tables, names
     s = _c2_fight(t, n, foe=("Swords Dance",))
     failed = _c2_go(t, n, s, "Swords Dance")
     assert _types(failed) == _types(s)
-    assert int(failed.move_prev) == 0
+    assert int(failed.move_prev) == n.move("Conversion 2")
     s = _record(s, 0, n.move("Tackle"), 1, NORMAL)
     worked = _c2_go(t, n, s, "Swords Dance", out=_c2_out(ROCK))
     assert int(worked.move_prev) == n.move("Conversion 2")
@@ -813,7 +815,8 @@ def test_the_draw_is_sampled_from_the_law(tables, names):
 # effect_script_0100.s -> subscript_reduce_target_pp.s -> BtlCmd_TrySpite (battle_script.c:4990-
 # 5016): the slot of the target's movePrevByBattler (``last_move``) loses min(4, ppCur); no last
 # move, a move in no slot (Struggle) or a slot at 0 PP is MOVE_STATUS_FAILED
-# (subscript_reduce_target_pp.s:12-14) and the attack message is skipped. No random draw.
+# (subscript_reduce_target_pp.s:12-14), which still shows the attack message (subscript_missed.s:5).
+# No random draw.
 
 
 def _spite_fight(t, n, foe=("Tackle", "Growl"), last="Tackle", fast=True, foe_item=""):
@@ -875,19 +878,19 @@ def test_spite_takes_only_the_pp_left(tables, names):
     assert _pp(_spite(t, n, empty))[0] == 0
 
 
-def test_spite_fails_without_a_usable_last_move_and_skips_the_attack_message(tables, names):
+def test_spite_fails_without_a_usable_last_move_and_still_shows_the_attack_message(tables, names):
     """No last move (:4995, :5011-5013), Struggle (in no slot) or a move the foe holds in no slot
-    (Battler_SlotForMove finds none, :4996) fail it: no PP changes. The attack message
-    (subscript_reduce_target_pp.s:6, after TrySpite) is skipped, so movePrev stays 0 behind a
-    slower user's sleeping foe (whose own failed move zeroed it and zeroed its last move), where
-    the foe's Growl first lets Spite succeed and show itself."""
+    (Battler_SlotForMove finds none, :4996) fail it: no PP changes. The failure skips only the
+    subscript's attack message (subscript_reduce_target_pp.s:6); subscript_missed.s:5 then shows
+    it (bcp.c:3311-3327, review b2 #1), so movePrev is Spite behind a slower user's sleeping foe
+    (whose own failed move zeroed its last move) as after the foe's Growl."""
     t, n = tables, names
     s = _spite_fight(t, n, fast=False)
     worked = _spite(t, n, s)
     assert int(worked.move_prev) == n.move("Spite")
     sleeper = s.with_status(1, 0, Status.SLEEP, 5)
     out = _spite(t, n, sleeper)
-    assert _pp(out) == _pp(sleeper) and int(out.move_prev) == 0
+    assert _pp(out) == _pp(sleeper) and int(out.move_prev) == n.move("Spite")
     # A faster user meets the turn-start last move: none, Struggle, a move in no slot, 0 PP left.
     fast = _spite_fight(t, n).with_status(1, 0, Status.SLEEP, 5)
     assert _pp(_spite(t, n, fast))[0] == _pp(fast)[0] - 4
@@ -1014,17 +1017,20 @@ def test_role_play_copies_the_targets_ability_only_and_the_ai_learns_it(
         assert int(out.ai_ability_known[0]) == ABILITY_DECOMP_IDS[AbilityId.ROCK_HEAD]
 
 
-def test_role_play_fails_on_its_listed_conditions_and_skips_the_attack_message(tables, names):
+def test_role_play_fails_on_its_listed_conditions_and_still_shows_the_attack_message(tables, names):
     """effect_script_0178.s:5-6 (the user's Multitype, a held Griseous Orb) and
     subscript_copy_ability.s:6-9 (the defender's Wonder Guard, Multitype, no ability; the user's
-    Multitype): nothing is copied, truant stays, and the attack message after the failure jump is
-    skipped, so the battle's movePrev stays empty (the Monferno acts last here); a success
-    records the move. The defender's Orb, the user's own Wonder Guard or no ability, and a Substitute do not stop it."""
+    Multitype): nothing is copied and truant stays. The failure (MOVE_STATUS_FAILED) reaches
+    CheckMoveFailure's subscript_missed.s, whose PrintAttackMessage (:5) shows the move
+    (bcp.c:3311-3327, review b2 #1): movePrev is Role Play, as on a success (the Monferno acts
+    last here). The defender's Orb, the user's own Wonder Guard or no ability, and a Substitute
+    do not stop it."""
     t, n = tables, names
     orb = n.item("Griseous Orb")
     base = _rp(t, n, AbilityId.BLAZE, AbilityId.ROCK_HEAD)
     ok = _rpgo(t, n, base)
-    assert int(ok.move_prev) == n.move("Role Play")
+    rp = n.move("Role Play")
+    assert int(ok.move_prev) == rp
     fails = {
         "wonder guard foe": base._replace(
             ability=base.ability.at[1, 0].set(AbilityId.WONDER_GUARD)
@@ -1036,13 +1042,13 @@ def test_role_play_fails_on_its_listed_conditions_and_skips_the_attack_message(t
         out = _rpgo(t, n, case)
         assert out.ability[:, 0].tolist() == case.ability[:, 0].tolist(), label
         assert out.truant.tolist() == case.truant.tolist(), label
-        assert int(out.move_prev) == 0, label
+        assert int(out.move_prev) == rp, label
     arceus = as_species(t, base, 1, 0, n.species("Arceus"))
     out = _rpgo(t, n, arceus)  # the defender's Multitype
-    assert int(out.ability[0, 0]) == int(arceus.ability[0, 0]) and int(out.move_prev) == 0
+    assert int(out.ability[0, 0]) == int(arceus.ability[0, 0]) and int(out.move_prev) == rp
     mt_user = as_species(t, base, 0, 0, n.species("Arceus"))
     out = _rpgo(t, n, mt_user)  # the user's Multitype
-    assert int(out.ability[0, 0]) == int(mt_user.ability[0, 0]) and int(out.move_prev) == 0
+    assert int(out.ability[0, 0]) == int(mt_user.ability[0, 0]) and int(out.move_prev) == rp
     for case in (
         base._replace(ability=base.ability.at[0, 0].set(AbilityId.WONDER_GUARD)),
         base._replace(ability=base.ability.at[0, 0].set(AbilityId.NONE)),
@@ -1056,6 +1062,36 @@ def test_role_play_fails_on_its_listed_conditions_and_skips_the_attack_message(t
     assert _rpgo(t, n, base, miss).ability[:, 0].tolist() == [AbilityId.ROCK_HEAD] * 2
     gone = base._replace(semi_invulnerable=base.semi_invulnerable.at[1].set(1))
     assert _rpgo(t, n, gone).ability[:, 0].tolist() == base.ability[:, 0].tolist()
+
+
+def test_a_failed_skill_swap_skips_after_move_effects(tables, names):
+    """Review b2 #2: subscript_exchange_abilities.s:12-13 (both abilities ABILITY_NONE) jumps to
+    :156 (MOVE_STATUS_FAILED); CheckMoveFailure sends it to subscript_missed.s with commandNext
+    LOOP_FAINTED (bcp.c:3324-3327), so AfterMoveEffects' ATTACKER_ITEM check (bcp.c:3684-3689)
+    does not run. A faster Monferno at 1 HP holding a Sitrus Berry: after a swap it eats the
+    berry at once, then the Geodude's Pain Split averages the HP; after a failed swap the Pain
+    Split lifts it above half first, so the berry is never eaten this turn."""
+    t, n = tables, names
+    sitrus = n.item("Sitrus Berry")
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 20, ("Skill Swap",), "Sitrus Berry")],
+        [_spec(n, "Geodude", 40, ("Pain Split",))],
+    )
+    s = s._replace(
+        stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1),
+        hp=s.hp.at[0, 0].set(1),
+        ability=s.ability.at[0, 0].set(AbilityId.BLAZE).at[1, 0].set(AbilityId.ROCK_HEAD),
+    )
+    acts = A("Skill Swap", "Pain Split", s, n)
+    worked = assert_matches_reference(t, s, acts, _hits())
+    assert int(worked.ability[0, 0]) == AbilityId.ROCK_HEAD
+    assert int(worked.item[0, 0]) == 0 and int(worked.item_consumed[0, 0]) == sitrus
+    none = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    failed = assert_matches_reference(t, none, acts, _hits())
+    assert failed.ability[:, 0].tolist() == [AbilityId.NONE] * 2
+    assert int(failed.item[0, 0]) == sitrus
+    assert 2 * int(failed.hp[0, 0]) > int(failed.max_hp[0, 0])
 
 
 def test_role_play_reads_the_raw_ability_through_gastro_acid(tables, names):
@@ -2734,11 +2770,12 @@ def test_clear_body_and_stage_minimum_stop_the_drop_not_the_clears(tables, names
 
 
 def test_defog_behind_a_substitute_fails_but_still_clears(tables, names):
-    """subscript_update_stat_stage.s:60: a drop stopped by the Substitute sets MOVE_STATUS_FAILED
+    """subscript_update_stat_stage.s:43-45: a drop stopped by the Substitute sets MOVE_STATUS_FAILED
     (``defog_stage_fails``), yet the clears run (subscript_defog.s:21-69). With a condition to clear
     the attack message was shown (:5-13: movePrev is Defog, the slower mover's); with nothing to
-    clear it never is, so movePrev stays 0; Mist stops the drop first (no failure, the message of
-    the stage subscript shows)."""
+    clear CheckMoveFailure's subscript_missed.s:5 shows it (bcp.c:3311-3327, review b2 #1), so
+    movePrev is Defog too; Mist stops the drop first (no failure, the message of the stage
+    subscript shows)."""
     t, n = tables, names
 
     def behind(s):
@@ -2748,7 +2785,7 @@ def test_defog_behind_a_substitute_fails_but_still_clears(tables, names):
     assert _stage(out, 1, Stat.EVA) == 0 and _no_conditions(out, 1)
     assert int(out.move_prev) == n.move("Defog")
     bare = behind(_slower(_dg(t, n, fields=())))
-    assert int(_dgo(t, n, bare).move_prev) == 0  # the failure shows no message
+    assert int(_dgo(t, n, bare).move_prev) == n.move("Defog")  # subscript_missed.s:5
     open_ = bare._replace(substitute_hp=bare.substitute_hp.at[1].set(0))
     assert int(_dgo(t, n, open_).move_prev) == n.move("Defog")
     misted = behind(_slower(_dg(t, n, fields=(("mist", 5),))))
@@ -2790,16 +2827,15 @@ def test_defog_is_seen_by_hit_thresholds_and_the_damage_clauses(tables, names):
 
 
 def test_defog_takes_its_target_side_as_an_argument(tables, names):
-    """Doubles-ready (docs/doubles-state-design.md section 5, rules 1, 2 and 6): the failure and
-    the silent-failure helpers take the defender's side, and the clears index ``side_of(target)``
+    """Doubles-ready (docs/doubles-state-design.md section 5, rules 1, 2 and 6): the failure
+    helper takes the defender's side, and the clears index ``side_of(target)``
     for each field, never a computed foe: a Defog whose user's side holds every condition too
     clears the target's only."""
     import inspect
 
     from nuzline.engine import effects as effects_module
 
-    for fn in (effects_module.defog_stage_fails, effects_module.defog_silent_fail):
-        assert "target_side" in inspect.signature(fn).parameters
+    assert "target_side" in inspect.signature(effects_module.defog_stage_fails).parameters
     t, n = tables, names
     both = _dg(t, n)
     for field, value in _SIDE_FIELDS:

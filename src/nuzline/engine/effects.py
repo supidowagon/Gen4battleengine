@@ -1743,6 +1743,8 @@ def primary_effect_fails(
         | ((effect == _E.SPITE) & spite_slot(tables, state, target_side)[0])
         # effect_script_0178.s:5-6, subscript_copy_ability.s:6-9 (MOVE_STATUS_FAILED), E3-B2-5.
         | ((effect == _E.ROLE_PLAY) & role_play_fails(tables, state, side, target_side))
+        # subscript_exchange_abilities.s:6-13 -> :156 (MOVE_STATUS_FAILED), review b2 #2.
+        | ((effect == _E.SKILL_SWAP) & skill_swap_fails(tables, state, side, target_side))
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
         # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
         | ((effect == _E.TAILWIND) & (state.tailwind[side_of(side)] != 0))
@@ -1984,19 +1986,11 @@ def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     fmt = format_of(state)
     side, user, foe, target = h.side, h.user, h.target_side, h.target
     pu, pt = party(fmt, side), party(fmt, foe)
-    raw = decomp_abilities(tables, state)  # raw: subscript_exchange_abilities.s:6-13
-    mine, theirs = raw[pu, user], raw[pt, target]
-    wonder = ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD]
-    banned = jnp.asarray([wonder, ABILITY_MULTITYPE], raw.dtype)
     cond = (
         (h.effect == _E.SKILL_SWAP)
         & h.landed
         & _alive(state, foe, target)
-        & ~jnp.isin(mine, banned)
-        & ~jnp.isin(theirs, banned)
-        & (state.item[pu, user] != ITEM_GRISEOUS_ORB)
-        & (state.item[pt, target] != ITEM_GRISEOUS_ORB)
-        & ((mine != 0) | (theirs != 0))
+        & ~skill_swap_fails(tables, state, side, foe)
     )
     # Raw: subscript_exchange_abilities.s:21-24 swaps BATTLEMON_ABILITY.
     a_user, a_target = state.ability[pu, user], state.ability[pt, target]
@@ -2011,6 +2005,30 @@ def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     state = know_ability(state, side, user, cond)
     return know_ability(state, foe, target, cond)
+
+
+def skill_swap_fails(tables: Tables, state: BattleState, side, target_side) -> jnp.ndarray:
+    """``bool``: ``side``'s Skill Swap on ``target_side``'s battler, if it lands, ends with
+    ``MOVE_STATUS_FAILED`` (subscript_exchange_abilities.s:6-13 -> :156): a raw Wonder Guard (:6-7)
+    or Multitype (:8-9) ``BattleMon.ability`` of either battler, a held Griseous Orb of either
+    (:10-11), or both abilities ABILITY_NONE (:12-13; the user's alone is fine). The miss and
+    semi-invulnerable test (:5) is ``landed``'s. The failure goes to CheckMoveFailure's
+    subscript_missed.s (bcp.c:3311-3327): the attack message shows (:5) and LOOP_FAINTED skips
+    AfterMoveEffects (``primary_effect_fails``), review b2 #2."""
+    fmt = format_of(state)
+    user, target = state.active[side], state.active[target_side]
+    pu, pt = party(fmt, side), party(fmt, target_side)
+    raw = decomp_abilities(tables, state)  # raw: subscript_exchange_abilities.s:6-13
+    mine, theirs = raw[pu, user], raw[pt, target]
+    wonder = ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD]
+    banned = jnp.asarray([wonder, ABILITY_MULTITYPE], raw.dtype)
+    return (
+        jnp.isin(mine, banned)
+        | jnp.isin(theirs, banned)
+        | (state.item[pu, user] == ITEM_GRISEOUS_ORB)
+        | (state.item[pt, target] == ITEM_GRISEOUS_ORB)
+        | ((mine == 0) & (theirs == 0))
+    )
 
 
 def role_play_fails(tables: Tables, state: BattleState, side, target_side) -> jnp.ndarray:
@@ -2663,34 +2681,6 @@ def defog_stage_fails(state: BattleState, target_side, seen, stat) -> jnp.ndarra
     blocked = blocked | (seen == AbilityId.WHITE_SMOKE)
     blocked = blocked | (state.stages[target_side, stat] <= STAGE_MIN)
     return ~blocked & (state.substitute_hp[target_side] != 0)
-
-
-def defog_silent_fail(state: BattleState, side, target_side, stat) -> jnp.ndarray:
-    """``bool``: Defog's evasion drop fails on the Substitute (``defog_stage_fails``) with nothing
-    to clear: subscript_defog.s:5-13 plays the attack message only when the target's side has
-    Reflect, Light Screen, Mist, Safeguard, Spikes, Toxic Spikes or Stealth Rock, or the field
-    has deep fog, and the failure branch of subscript_update_stat_stage.s (:41-44 -> :60) prints
-    none, so ``SYSCTL_ATTACK_MESSAGE_SHOWN`` stays clear (moveHit, movePrev, Choice lock)."""
-    target = side_of(target_side)
-    clearable = (state.weather == Weather.FOG) | jnp.any(
-        jnp.stack(
-            [
-                getattr(state, field)[target] != 0
-                for field in (
-                    "reflect",
-                    "light_screen",
-                    "mist",
-                    "safeguard",
-                    "spikes",
-                    "toxic_spikes",
-                    "stealth_rock",
-                )
-            ]
-        )
-    )
-    return defog_stage_fails(state, target_side, ignorable(state, side, target_side), stat) & ~(
-        clearable
-    )
 
 
 def _defog(tables, state, h: _Hit, outcome: Outcome) -> BattleState:

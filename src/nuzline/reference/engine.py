@@ -1948,6 +1948,22 @@ def _spite_slot(s: RefState, target: int) -> tuple[bool, int, int]:
     return mon.pp[slot] == 0, slot, min(4, mon.pp[slot])
 
 
+def _skill_swap_fails(tables, s: RefState, side: int, target: int) -> bool:
+    """Skill Swap's failure after the miss test (subscript_exchange_abilities.s:6-13 -> :156,
+    MOVE_STATUS_FAILED): a raw Wonder Guard or Multitype ability of either battler, a held
+    Griseous Orb of either, or both abilities ABILITY_NONE. The failure still shows the attack
+    message (subscript_missed.s:5) and skips AfterMoveEffects (bcp.c:3311-3327), review b2 #2."""
+    mon, foe_mon = _active(s, side), _active(s, target)
+    mine, theirs = _decomp_ability(tables, mon), _decomp_ability(tables, foe_mon)
+    banned = (ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD], ABILITY_MULTITYPE)
+    return (
+        mine in banned
+        or theirs in banned
+        or ITEM_GRISEOUS_ORB in (mon.item, foe_mon.item)
+        or not (mine or theirs)
+    )
+
+
 def _role_play_fails(tables, s: RefState, side: int, target: int) -> bool:
     """Role Play's failure after the miss test (effect_script_0178.s:5-6; subscript_copy_ability.s:
     6-9; E3-B2-5): the user's Multitype (``Battler_Ability`` or raw: Multitype survives Gastro
@@ -2988,23 +3004,19 @@ _DEFOG_SIDE_FIELDS = (
 )
 
 
-def _defog_fails(s: RefState, seen: int, target: int, stat: int) -> tuple[bool, bool]:
+def _defog_fails(s: RefState, seen: int, target: int, stat: int) -> bool:
     """Defog's evasion drop (subscript_defog.s:19-20, BtlCmd_ChangeStatStage, script.c:2874-2923,
-    a direct effect): ``(fails, silent)``. It fails (``MOVE_STATUS_FAILED``,
-    subscript_update_stat_stage.s:60) when the target's Substitute is the first test it meets: no
-    Mist (:2877), no Clear Body / White Smoke as the attacker sees it (``seen``, :2883-2884) and
-    the stage above -6 (:2904); every earlier test only stops the drop. ``silent``: it fails
-    with nothing for subscript_defog.s:5-13 to play the attack message for (a screen, Mist,
-    Safeguard or hazard on the target's side, or deep fog), so the message is never shown (E3-B2-14)."""
-    sd = s.sides[side_of(target)]
-    fails = (
+    a direct effect) fails (``MOVE_STATUS_FAILED``, subscript_update_stat_stage.s:43-45) when the
+    target's Substitute is the first test it meets: no Mist (:2877), no Clear Body / White Smoke
+    as the attacker sees it (``seen``, :2883-2884) and the stage above -6 (:2904); every earlier
+    test only stops the drop. A failure with nothing to clear still shows the attack message:
+    CheckMoveFailure's subscript_missed.s:5 (bcp.c:3311-3327), E3-B2-14 (review b2 #1)."""
+    return (
         not _mist_blocks_drop(s, target, -1)
         and not _drop_blocked(seen, stat, -1)
         and s.battlers[target].stages[stat] > STAGE_MIN
         and bool(s.battlers[target].substitute_hp)
     )
-    clearable = s.weather == Weather.FOG or any(getattr(sd, f) for f in _DEFOG_SIDE_FIELDS)
-    return fails, fails and not clearable
 
 
 def _recover_status_by_ability(s: RefState, side: int) -> None:
@@ -3819,9 +3831,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # effect_script_0100.s -> subscript_reduce_target_pp.s -> BtlCmd_TrySpite (script.c:4990-
         # 5016): the slot of the target's last move loses min(4, ppCur) (E3-B2-4).
         fails, slot, taken = _spite_slot(s, target)
-        if fails:  # :12-14: the attack message (:6) is skipped
-            turn.attack_message = False
-        else:
+        if not fails:
             _active(s, target).pp[slot] -= taken
     elif effect == EffectId.CONVERSION_2 and landed:
         # effect_script_0093.s -> subscript_conversion_2.s -> BtlCmd_TryConversion2 (script.c:
@@ -3969,16 +3979,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # totalTurns & 1 (:17-20) and the BattleMon abilities swap (:21-24); the AI tags both
         # (:3402-3404). No Substitute test. Slow Start (:25-38) is unsupported: no holder exists.
         mon, foe_mon = _active(s, side), _active(s, target)
-        # Raw BATTLEMON_ABILITY (subscript_exchange_abilities.s:6-13, :21-24).
-        mine, theirs = _decomp_ability(tables, mon), _decomp_ability(tables, foe_mon)
-        banned = (ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD], ABILITY_MULTITYPE)
-        if (
-            foe_mon.hp
-            and mine not in banned
-            and theirs not in banned
-            and ITEM_GRISEOUS_ORB not in (mon.item, foe_mon.item)
-            and (mine or theirs)
-        ):
+        # Raw BATTLEMON_ABILITY swapped (subscript_exchange_abilities.s:21-24).
+        if foe_mon.hp and not _skill_swap_fails(tables, s, side, target):
             s.battlers[side].truant = s.battlers[target].truant = s.turn & 1
             mon.ability, foe_mon.ability = foe_mon.ability, mon.ability
             if 0 in (side, target):
@@ -4119,8 +4121,6 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # the evasion drop first (:19-20; Mist, Clear Body / White Smoke, -6, Substitute), then the
         # target's side's screens, Mist, Safeguard and hazards and the field's deep fog cleared
         # (:21-69), whatever the drop did (E3-B2-14).
-        if _defog_fails(s, seen, target, p0)[1]:
-            turn.attack_message = False
         blocked = _mist_blocks_drop(s, target, p1) or _drop_blocked(seen, p0, p1)
         if not blocked and not _sub_blocks_drop(s, target, p1):
             _change_stage(s, target, p0, p1)
@@ -6219,18 +6219,16 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
                 bool(s.battlers[side].substitute_hp) or all(own[x] >= 6 for x in ACUPRESSURE_STATS)
             )
         )
-        # BtlCmd_TryConversion2's failure (subscript_conversion_2.s:12-14, MOVE_STATUS_FAILED): the
-        # attack message is skipped too (E3-B2-3).
-        if effect == EffectId.CONVERSION_2 and _conv2_fails(tables, s, side):
-            full = True
-            turn.attack_message = False
-        # Role Play's failure (effect_script_0178.s:5-6, subscript_copy_ability.s:6-9): the attack
-        # message after it is skipped (E3-B2-5).
-        if effect == EffectId.ROLE_PLAY and _role_play_fails(tables, s, side, tgt):
-            full = True
-            turn.attack_message = False
-        # BtlCmd_TrySpite's failure (subscript_reduce_target_pp.s:12-14, MOVE_STATUS_FAILED); the
-        # attack message it skips is cleared where the move connects (``_move_effect``), E3-B2-4.
+        # BtlCmd_TryConversion2's failure (subscript_conversion_2.s:12-14, MOVE_STATUS_FAILED),
+        # E3-B2-3. Like every MOVE_STATUS_FAILED below it still shows the attack message:
+        # CheckMoveFailure runs subscript_missed.s, PrintAttackMessage at :5 (bcp.c:3311-3327,
+        # battle_script.c:1423-1434), review b2 #1.
+        full = full or (effect == EffectId.CONVERSION_2 and _conv2_fails(tables, s, side))
+        # Role Play's failure (effect_script_0178.s:5-6, subscript_copy_ability.s:6-9), E3-B2-5.
+        full = full or (effect == EffectId.ROLE_PLAY and _role_play_fails(tables, s, side, tgt))
+        # subscript_exchange_abilities.s:6-13 -> :156 (MOVE_STATUS_FAILED), review b2 #2.
+        full = full or (effect == EffectId.SKILL_SWAP and _skill_swap_fails(tables, s, side, tgt))
+        # BtlCmd_TrySpite's failure (subscript_reduce_target_pp.s:12-14, MOVE_STATUS_FAILED), E3-B2-4.
         full = full or (effect == EffectId.SPITE and _spite_slot(s, tgt)[0])
         # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
         full = full or (effect == EffectId.ENCORE and _encore_fails(tables, s, tgt)[0])
@@ -6242,7 +6240,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         full = full or (effect == EffectId.LUCKY_CHANT and bool(s.sides[side_of(side)].lucky_chant))
         # Defog's evasion drop behind a Substitute (subscript_update_stat_stage.s:60), E3-B2-14.
         full = full or (
-            effect == EffectId.DEFOG and _defog_fails(s, _ignorable(s, side, tgt), tgt, Stat.EVA)[0]
+            effect == EffectId.DEFOG and _defog_fails(s, _ignorable(s, side, tgt), tgt, Stat.EVA)
         )
         # subscript_pain_split.s:5 (MOVE_STATUS_FAILED), B10-5.
         full = full or (effect == EffectId.PAIN_SPLIT and bool(s.battlers[tgt].substitute_hp))
@@ -7821,17 +7819,6 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 # A move that changed them (Shaymin-Sky's revert, F-16) leaves its own.
                 if _active(s, _foe(side)) is foe and foe.types == chart_types:
                     foe.types = saved
-            # A failed Spite or Role Play skipped its attack message (subscript_reduce_target_pp.s:6,
-            # subscript_copy_ability.s:5-6, effect_script_0178.s:10-12) and a Defog stopped by a
-            # Substitute with nothing to clear (subscript_defog.s:5-13): UpdateFlagsWhenHit then
-            # clears moveHit instead of recording the move (bcp.c:4498-4508), E3-B2-4, E3-B2-5.
-            if (
-                record
-                and not turn.attack_message
-                and _t(tables, "move_effect", turn.move_cur)
-                in (EffectId.SPITE, EffectId.ROLE_PLAY, EffectId.DEFOG)
-            ):
-                record = 0
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
             no_effects = turn.met_reached and not (turn.met_worked and not turn.met_immune)
             last_of_multi = turn.charge_strike or turn.bide_ended
