@@ -68,6 +68,7 @@ class RefBattler:
     stages: list[int]  # index ids.Stat, 0 = neutral
     confusion: int
     leech_seed: int
+    leech_seed_recipient: int  # 1 + the seeder's battler, 0 = not seeded (D3-11b)
     substitute_hp: int
     taunt: int
     torment: int  # VOLATILE_CONDITION_TORMENT (E3-2-1)

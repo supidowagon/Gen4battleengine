@@ -206,7 +206,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine import targets
-from nuzline.engine.actions import imprisoning_foe
+from nuzline.engine.actions import absent_now, imprisoning_foe
 from nuzline.engine.damage import (
     PHYSICAL,
     ROLLS,
@@ -2379,6 +2379,11 @@ def outcome_laws(
     on_field = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
     order_tie_live = live & (fmt.B == 4) & (jnp.sum(on_field.astype(jnp.int32)) >= 2)
 
+    # bcp.c:1759-1764: a battler in battlersSwitchingMask is skipped by the Future Sight pass, so
+    # its count never fires (``step._future_sight`` skips it by ``absent_now``, D3-11); B = 2: no
+    # battler is absent while the battle is live, so this is all True.
+    present_now = jnp.stack([~absent_now(state, b) for b in range(fmt.B)])
+
     def branch_relevant(m: dict) -> Outcome:
         return Outcome(
             speed_tie=speed_tie,
@@ -2407,7 +2412,7 @@ def outcome_laws(
             call=jnp.zeros((fmt.B,), bool),  # stamped per call variant (enumerate_turn), not drawn
             # The Future Sight hit of this turn's end on side d's battler: its count is 1 now
             # (step._future_sight; read when the battler has HP then, over-approximate).
-            future_hit=live & (state.future_timer == 1),
+            future_hit=live & present_now & (state.future_timer == 1),
             # Yawn's sleep of this turn's end: a count of 1 now reaches 0 there (a Yawn of this
             # turn sets 2; over-approximate: the sleep may still be blocked).
             yawn_sleep=live & (state.yawn == 1),
@@ -2417,7 +2422,7 @@ def outcome_laws(
             focus_band=m["focus_band"],
             # The Future Sight hit's Focus Band roll: future_hit's gate, a living holder in the
             # party (the battler on the field at the turn's end), G-1.
-            future_band=live & (state.future_timer == 1) & band_party,
+            future_band=live & present_now & (state.future_timer == 1) & band_party,
             berry_confusion=m["berry_confusion"],
             chatter=m["chatter"],
             starf=starf_draw,

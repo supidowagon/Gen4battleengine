@@ -10,8 +10,7 @@ The end of the turn is played as ``step_events`` plays it after the actions: ``e
 ``field_conditions``, ``end_of_turn``, ``_future_sight`` (``end_turn``), and as the reference's
 ``_end_turn`` does (``ref_end_turn``); every case asserts the two equal in every field. The
 states are four-battler DOUBLES states: battlers 0 and 2 send from party 0, battlers 1 and 3 from
-party 1; the Leech Seed recipient is the seeded battler's opposite number (``b ^ 1``, the engine's
-``_foe``: no state field records the seeder, see the ledger's D3-11 entry).
+party 1; the Leech Seed recipient is the battler that used the move (``leech_seed_recipient``, D3-11b).
 """
 
 from __future__ import annotations
@@ -131,7 +130,10 @@ def seeded_pair(tables, names, speed):
     s = speeds(base(tables, names), speed)
     s = poisoned(s, 2)
     s = with_hp(s, 2, 5)
-    return s._replace(leech_seed=s.leech_seed.at[3].set(1))
+    return s._replace(
+        leech_seed=s.leech_seed.at[3].set(1),
+        leech_seed_recipient=s.leech_seed_recipient.at[3].set(3),  # seeded by battler 2
+    )
 
 
 def drain_and_poison(state):

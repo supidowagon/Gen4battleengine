@@ -91,7 +91,7 @@ three structs has a row.
   `VOLATILE_CONDITION_TORMENT` bit 31, set by subscript_torment_start.s:8 with no count, cleared
   with the volatiles; Baton Pass drops it, condition.h:72-76, battle_lib.c:2075; it only blocks
   the slot holding `last_move` at the next move selection, `actions.usable_moves`).
-- **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
+- **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Leech Seed recipient -> `leech_seed_recipient` (`1 + battler`, the battler that used the move, MOVE_EFFECT_LEECH_SEED_RECIPIENT, moves.h:8-10; D3-11b), Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`), Ingrain -> `ingrain`,
   Imprison -> `imprison` (its user) and Imprisoned -> `imprisoned` (its foes) (E2 batch 7, per
@@ -579,7 +579,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `leech_seed_recipient`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 

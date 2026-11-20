@@ -283,6 +283,7 @@ def test_the_outgoing_pokemon_leaves_everything_behind(tables, names):
         disabled_move=s.disabled_move.at[1].set(names.move("Leer")),
         disable_turns=s.disable_turns.at[1].set(2),
         leech_seed=s.leech_seed.at[1].set(1),
+        leech_seed_recipient=s.leech_seed_recipient.at[1].set(1),  # seeded by battler 0
         trapped=s.trapped.at[1].set(3).at[0].set(4),  # Bind both ways
         trap_move=s.trap_move.at[1].set(20).at[0].set(20),
         infatuated=s.infatuated.at[0].set(1).at[1].set(1),  # in love both ways
@@ -619,6 +620,7 @@ def _setup(tables, names, case):
             stats=s.stats.at[1, 0, _SPE].set(4 * spe).at[1, 1:3, _SPE].set(spe),
             status=s.status.at[1, 1:3].set(Status.POISON),
             leech_seed=s.leech_seed.at[0].set(1),
+            leech_seed_recipient=s.leech_seed_recipient.at[0].set(2),  # seeded by battler 1
         )
         s = _faint(s, 1, *range(1 + bench, 3))
         return s, A("Roar", "Tackle", s, names)

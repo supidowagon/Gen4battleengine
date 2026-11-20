@@ -3790,25 +3790,29 @@ def _hp_change(state: BattleState, side, mon, delta) -> BattleState:
 
 
 def _leech_seed_check(tables: Tables, state: BattleState, side) -> BattleState:
-    """``side``'s seeded active Pokemon with HP left loses ``BattleSystem_Divide(maxHP, 8)``
-    (capped at its HP) and the other side's active Pokemon, if alive, gains what it lost
-    (``hitDamage``), times ``(100 + 30) / 100`` with a Big Root (``effects.big_root``;
-    ``subscript_leech_seed_effect.s``)."""
+    """``MON_COND_CHECK_STATE_LEECH_SEED`` (bcp.c:1378-1391) for battler ``side``: seeded, its
+    recipient (``leech_seed_recipient``, the battler that used the move) holding a Pokemon with HP
+    now, no Magic Guard, HP left. It loses ``BattleSystem_Divide(maxHP, 8)`` (capped at its HP) and
+    the recipient battler's CURRENT occupant gains what it lost (``hitDamage``), times
+    ``(100 + 30) / 100`` with a Big Root (``effects.big_root``;
+    ``subscript_leech_seed_effect.s``, :7-26). A seeder that switched out leaves the newcomer of
+    its slot the recipient; one that fainted and is not yet replaced (or is absent) has 0 HP, so
+    nothing drains (bcp.c:1380); a Baton Pass or a later replacement receives."""
     fmt = format_of(state)
-    other = _foe(side)
-    mon, recipient = state.active[side], state.active[other]
+    r = jnp.clip(state.leech_seed_recipient[side].astype(_I32) - 1, 0, fmt.B - 1)
+    mon, recipient = state.active[side], state.active[r]
     hp = state.hp[party(fmt, side), mon].astype(_I32)
     guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD  # bcp.c:1381
     on = (
         (state.leech_seed[side] != 0)
         & (hp > 0)
-        & (state.hp[party(fmt, other), recipient] > 0)
+        & (state.hp[party(fmt, r), recipient] > 0)
         & ~guarded
     )
     drained = jnp.minimum(jnp.maximum(state.max_hp[party(fmt, side), mon].astype(_I32) // 8, 1), hp)
     drained = jnp.where(on, drained, 0)
-    gained = big_root(tables, state, other, drained)
-    return _hp_change(_hp_change(state, side, mon, -drained), other, recipient, gained)
+    gained = big_root(tables, state, r, drained)
+    return _hp_change(_hp_change(state, side, mon, -drained), r, recipient, gained)
 
 
 def _aqua_ring_check(tables: Tables, state: BattleState, side, field="aqua_ring") -> BattleState:

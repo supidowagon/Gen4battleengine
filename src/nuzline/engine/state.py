@@ -355,6 +355,14 @@ class BattleState(NamedTuple):
     stages: jnp.ndarray  # int8[B,8], index ids.Stat, 0 = neutral
     confusion: jnp.ndarray  # int8, turns left
     leech_seed: jnp.ndarray  # int8
+    # int8, MOVE_EFFECT_LEECH_SEED_RECIPIENT (moves.h:8-10, :40; bits 0-1 of moveEffectsMask), the
+    # battler that used Leech Seed, as ``1 + battler`` (doubles convention 3), 0 = not seeded;
+    # nonzero exactly when ``leech_seed`` is. Written with it (subscript_leech_seed_start.s:14-15
+    # ORs BTLVAR_ATTACKER into the defender's mask). Cleared only by a switch without Baton Pass
+    # (battle_lib.c:2071) and a faint (:2166); Baton Pass keeps it (:2076; moves.h:46). Nothing
+    # clears it when the seeder leaves or faints (battle_lib.c:2056-2098, :2168-2183): the drain
+    # reads the CURRENT occupant of that battler slot (bcp.c:1378-1391, ``step._leech_seed_check``).
+    leech_seed_recipient: jnp.ndarray
     substitute_hp: jnp.ndarray  # int16
     taunt: jnp.ndarray  # int8, turns left
     torment: jnp.ndarray  # int8, VOLATILE_CONDITION_TORMENT (bit 31; no turn count), E3-2-1
@@ -648,6 +656,7 @@ def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
 VOLATILE_FIELDS = (
     "confusion",
     "leech_seed",
+    "leech_seed_recipient",
     "substitute_hp",
     "taunt",
     "torment",
@@ -727,6 +736,7 @@ VOLATILE_FIELDS = (
 BATON_PASSED_FIELDS = (
     "confusion",
     "leech_seed",
+    "leech_seed_recipient",
     "substitute_hp",
     "water_sport",
     "mud_sport",
@@ -785,6 +795,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "stages": ((*_BATTLER, 8), np.int8),
     "confusion": (_BATTLER, np.int8),
     "leech_seed": (_BATTLER, np.int8),
+    "leech_seed_recipient": (_BATTLER, np.int8),
     "substitute_hp": (_BATTLER, np.int16),
     "taunt": (_BATTLER, np.int8),
     "torment": (_BATTLER, np.int8),

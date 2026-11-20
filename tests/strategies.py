@@ -1599,6 +1599,7 @@ def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: N
                 a["status_counter"][side, active] = 0
             elif kind == 1:
                 a["leech_seed"][side] = 1
+                a["leech_seed_recipient"][side] = 1 + (side ^ 1)
             elif kind == 2:
                 a["trapped"][side] = rnd.randint(2, _BIND_MAX)
                 a["trap_move"][side] = names.move("Bind")
@@ -2062,6 +2063,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         a["trapped"][side] = trapped
         a["trap_move"][side] = draw(st.sampled_from(trap_moves.tolist())) if trapped else 0
         a["leech_seed"][side] = draw(st.integers(0, 1))
+        a["leech_seed_recipient"][side] = (1 + (side ^ 1)) * a["leech_seed"][side]
         a["water_sport"][side] = draw(st.integers(0, 1))
         a["mud_sport"][side] = draw(st.integers(0, 1))
         a["aqua_ring"][side] = draw(st.integers(0, 1))

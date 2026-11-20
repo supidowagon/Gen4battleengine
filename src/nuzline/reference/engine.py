@@ -1923,8 +1923,8 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
 # What Baton Pass keeps (BattleSystem_UpdateAfterSwitch, lib.c:2078-2079, :2107; condition.h:72,
 # moves.h:46-48), with the stat stages (InitBattleMon, lib.c:97-101).
 BATON_PASSED = (
-    "confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring",
-    "ingrain", "mean_look", "mean_look_target", "lock_on", "lock_on_target",
+    "confusion", "leech_seed", "leech_seed_recipient", "substitute_hp", "water_sport",
+    "mud_sport", "aqua_ring", "ingrain", "mean_look", "mean_look_target", "lock_on", "lock_on_target",
     "perish_song", "perish_song_turns", "curse", "focus_energy", "power_trick", "embargo",
     "magnet_rise", "magnet_rise_turns", "ability_suppressed",
 )  # fmt: skip
@@ -1938,6 +1938,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
     for name in (
         "confusion",
         "leech_seed",
+        "leech_seed_recipient",
         "substitute_hp",
         "taunt",
         "torment",  # VOLATILE_CONDITION_TORMENT: statusVolatile, not Baton-passed (E3-2-1)
@@ -4026,6 +4027,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         shielded = _shielded(turn, s, target)  # subscript_leech_seed_start.s:5
         if target_alive and not shielded and not grass and not s.battlers[target].leech_seed:
             s.battlers[target].leech_seed = 1
+            # subscript_leech_seed_start.s:14-15: the recipient is the battler that used the move.
+            s.battlers[target].leech_seed_recipient = 1 + side
     elif effect == EffectId.FORESIGHT and landed:
         # effect_script_0113.s / subscript_foresight.s: an ON_HIT indirect effect on a
         # living target, no failure check.
@@ -6926,16 +6929,17 @@ def _aqua_ring_check(turn: _Turn, s: RefState, side: int) -> None:
 
 
 def _leech_seed_check(turn: _Turn, s: RefState, side: int) -> None:
-    """Seeded and alive, with the seeder's battler slot alive:
+    """Seeded and alive, with the recipient battler's current occupant alive (bcp.c:1378-1391):
     ``subscript_leech_seed_effect.s`` drains ``maxHP / 8`` (at least 1, capped at HP)
     and the recipient gains what was lost."""
     if not s.battlers[side].leech_seed:
         return
-    mon, recipient = _active(s, side), _active(s, _foe(side))
+    r = s.battlers[side].leech_seed_recipient - 1
+    mon, recipient = _active(s, side), _active(s, r)
     if mon.hp and recipient.hp and _ability(s, mon) != AbilityId.MAGIC_GUARD:  # bcp.c:1381
         lost = _lose_hp(turn, s, side, max(mon.max_hp // 8, 1))
         # subscript_leech_seed_effect.s: the recipient gains hitDamage, Big Root applied.
-        _gain_hp(s, _foe(side), _big_root(turn, s, _foe(side), lost))
+        _gain_hp(s, r, _big_root(turn, s, r, lost))
 
 
 def _poison_check(turn: _Turn, s: RefState, side: int) -> None:

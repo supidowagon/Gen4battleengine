@@ -142,7 +142,8 @@ many are real). Decomp sources:
   (no HP check, battle_lib.c:1519-1524) running ``subscript_pluck.s``: ``hooks.pluck_berry``
   (after every other effect function: each move has one effect).
 * Leech Seed: ``subscript_leech_seed_start.s``: Grass types and already seeded
-  targets are immune. The end-of-turn drain is in ``step``.
+  targets are immune; the recipient is the user's battler (``leech_seed_recipient``, :14-15).
+  The end-of-turn drain is in ``step``.
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Fire power while any active battler has it.
 * Light Screen, Reflect: ``effect_script_0035.s`` / ``_0065.s`` (``BtlCmd_TryLightScreen``,
@@ -2521,6 +2522,8 @@ def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & ~grass
         & (state.leech_seed[h.target_side] == 0)
     )
+    # subscript_leech_seed_start.s:14-15: the recipient is the battler that used the move.
+    state = _set(state, "leech_seed_recipient", h.target_side, 1 + h.side, cond)
     return _set(state, "leech_seed", h.target_side, 1, cond)
 
 
