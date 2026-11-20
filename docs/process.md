@@ -69,6 +69,11 @@ of each other (about 3 hours), the managing session names a train order.
 - **Per batch and per merge:** CLAUDE.md, Batches and Merges.
 - **Nightly:** the fast tier on `main`'s tip on the nightly pod (section 5). Tests that need
   the ROM, saves, the calc archive or the docs sheet skip there; run them locally afterwards.
+- **Slow tier:** after each merge wave (the merges of one day), at most once a day, the
+  managing session runs `-m slow` on `main`'s tip on the test pod: one run agent,
+  `MARK='slow' bash tools/ops/day/pack.sh <tip> <tables> slow-<yyyymmdd>-<short tip> <list>`
+  with the one-line list `tests 8` (DAYBOX.md, Send a run). A red slow tier is fixed before
+  new batches start, like a red nightly.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
 - **Local runs:** CLAUDE.md, Where tests run.
