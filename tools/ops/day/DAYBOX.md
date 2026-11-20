@@ -34,6 +34,32 @@ Trigger: a stream message with the line `MERGE CANDIDATE <tip> fullset`, or a st
 3. A `fullset` failure goes back to the stream before the merge-gate review.
 4. A merged `main` tip that differs from every stream tip with a passed `fullset` run (a merge of several batches, or a merge commit) has had no `fullset` check: its merge-gate run (`CLAUDE.md`, Merges) packs with `MARK='not slow'` instead of the default, so it runs the `fullset` tests too.
 
+## Snapshot compare
+
+Rules: `docs/process.md` section 5. Pod folders: `/work/snapmain-<short main sha>` (capture of a `main` tip; its `snap/` is what compares read) and `/work/snapcmp-<stream>-<short tip>` (compare of a merge candidate). Each holds `repo/`, a `git archive` checkout without `.git`, so `snap_compare.py` needs `--commit <full sha>`. No beacon: these are not pack.sh runs, and `status.sh` does not list them.
+
+1. Payload (PC, Git Bash, main checkout), for commit `<sha>` and folder `<F>`. Tables per Send a run step 1, then:
+   ```
+   . tools/ops/common.sh; O="$RENT/out/<F>"; mkdir -p "$O"
+   git -c core.autocrlf=false archive --format=tar -o "$O/code.tar" <sha>
+   cp "$RENT/tables_<short>.tar.xz" "$O/tables.tar.xz"
+   tar -tJf "$O/tables.tar.xz" | grep -v '/$' | grep -vE "$TABLE_ALLOW"   # must print nothing
+   tar -tJf "$O/tables.tar.xz" | grep -E "$TABLE_DENY"                    # must print nothing
+   (cd "$O" && tar -cf payload.tar code.tar tables.tar.xz && HOME="$RENT/home" USERPROFILE="$RENT/home" nohup "$RPC" send payload.tar > send.log 2>&1 < /dev/null &)
+   for i in $(seq 60); do grep -q 'code is' "$O/send.log" 2>/dev/null && break; sleep 0.5; done
+   grep -o 'code is: [^ ]*' "$O/send.log"; git -C external/pokeplatinum rev-parse HEAD
+   ```
+   The second line printed is `<decomp>`. `/work/_decomp/<decomp>` exists once any `setup.sh` on the pod ran with that decomp commit.
+2. exec-pod `{"command":["sh","-c","<prep>"],"timeoutSeconds":25}` with `<prep>` (quotes escaped for JSON):
+   ```
+   mkdir -p /work/<F> && cd /work/<F> && nohup sh -c 'export PATH=/root/.local/bin:/work/_bin:$PATH UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python; /work/_bin/runpodctl receive <code> && tar --no-same-owner -xf payload.tar && mkdir repo && tar --no-same-owner -xf code.tar -C repo && tar --no-same-owner -xJf tables.tar.xz -C repo && mkdir -p repo/external && ln -sfn /work/_decomp/<decomp> repo/external/pokeplatinum && cd repo && uv sync --frozen -q && echo PREP_OK && while [ $(( $(cat /sys/fs/cgroup/memory.current) / 1000000000 )) -ge 88 ]; do sleep 30; done && <job>; echo "RC=$?"' > job.log 2>&1 < /dev/null & sleep 15; tail -3 /work/<F>/job.log
+   ```
+3. `<job>` for a capture (`<F>` = `snapmain-<short>`): `uv run --frozen python tools/snap_compare.py capture /work/<F>/snap 0-199 --repo /work/<F>/repo --commit <full sha> -v`. About 90 minutes.
+4. `<job>` for a merge candidate (`<F>` = `snapcmp-<stream>-<short tip>`): `uv run --frozen python tools/snap_compare.py compare /work/snapmain-<short main>/snap 0-199 --repo /work/<F>/repo --commit <full tip sha> --allow-new <the stream's list> -v`. About 85 minutes. `<short main>` is the `main` tip the candidate's branch contains (`git merge-base <tip> main`). When compare refuses the capture as written by an older `snap_compare` (another `format`), re-capture that `main` tip with the candidate's script: `uv run --frozen python tools/snap_compare.py capture /work/snapmain-<short main>/snap2 0-199 --repo /work/snapmain-<short main>/repo --commit <full main sha> -v` from `/work/<F>/repo`, and compare against `snap2`.
+5. Result: read exec `{"command":["sh","-c","tail -5 /work/<F>/job.log"],"timeoutSeconds":25}` once after the time above, again only while it has no `RC=` line. Pass: `capture: ok` or `compare: ok` and `RC=0`. A compare failure goes to the stream with its diverged parts.
+6. Keep and delete: the newest two `snapmain-*` folders stay; `rm -rf` an older one only when no compare reads it (exec `pgrep -af '[s]nap_compare'` names no path in it). Delete a `snapcmp-*` folder once its result is sent.
+7. Copy off before a pod is deleted: exec `cd /work/snapmain-<short> && tar -czf snap.tgz snap && nohup /work/_bin/runpodctl send snap.tgz > send.log 2>&1 < /dev/null & sleep 10; grep -o 'code is: [^ ]*' /work/snapmain-<short>/send.log`, then PC `cd "$RENT" && mkdir -p snapmain-<short> && cd snapmain-<short> && HOME="$RENT/home" USERPROFILE="$RENT/home" "$RPC" receive <code>`. On the next pod: send `snap.tgz` back the same way into `/work/snapmain-<short>/` and `tar -xzf snap.tgz` there (the compare reads only `snap/`); or re-make the capture (steps 1-3).
+
 ## Wait
 
 `bash tools/ops/day/wait.sh <run> [--until done|first-failure] [--timeout <hours>] [--every <s>]` (defaults: `done`, 8 h, 120 s; every receive fetches the relay list from GitHub, so keep `--every` at 120 s or more) blocks on the PC until the run is over, or with `first-failure` until its first failure, and needs no pod exec: the exec-pod body starts `bin/notify.sh`, which reads `status.sh` every 20 s and offers two beacons with `runpodctl send --code <code>`: `f` = `firstfail.txt` (the status text) under `WATCH_F` at the first failure (a `BAD` unit, `COLLECT FAILED`, a running unit with F/E marks, `SETUP_FAILED`, a dead run), `d` = `results.tgz` (`fetch.sh --pack`) under `WATCH_D` once the run is over (`DONE=y`, or a failed run as defined under Status, seen twice 20 s apart). Each beacon is offered until taken or `WATCH_HOURS` pass; `f` also stops once `d` is taken. runpodctl's croc fork (`cmd/transfer/croc.go`) puts a transfer in the relay room named by the code's first 3 characters, so the two codes start with 3 random letters that differ. A croc code ends in the relay index the sender picked, so `wait.sh` tries `runpodctl receive <code>-<i>` for every relay index each round, at most 30 s each (a wrong index answers `room not ready` in under a second). The sweep ends at `relay index <i> not found` (end of the list) or `could not get list of relays` (HTTP 429 included); any other answer, such as an unreachable relay, is logged and the sweep goes on to the next index. Each round it also reads the payload send's `send.log`: a send that ended with `SEND_RC=<non-zero>` (written by `pack.sh`) before any beacon was taken exits 4 (`payload not delivered`). A run whose `results/agg.txt` already has a `RESULT:` line is reported at once. On `d` it unpacks the results with `collect.sh <run> --local`. One `wait.sh` per run at a time (lock `watch/lock`; a second call exits 4).
@@ -54,7 +80,7 @@ For a timeout, a run without `WATCH_F`/`WATCH_D`, or a question the beacons do n
 
 ## Delete
 
-When nothing is queued and `status.sh` of the last run prints `DONE=y` (or shows a failed run as defined under Status) and exactly `other active runs: none` (any listed run, `(beacon)` included, or `pytest_outside_this_run` keeps the pod up): collect every run, MCP `delete-pod`, confirm with `list-pods`, clear `POD_ID`, log the hours and cost. Never stop the pod instead: a stopped CPU pod loses `/work` and saves nothing.
+When nothing is queued and `status.sh` of the last run prints `DONE=y` (or shows a failed run as defined under Status) and exactly `other active runs: none` (any listed run, `(beacon)` included, or `pytest_outside_this_run` keeps the pod up), and exec `pgrep -af '[s]nap_compare'` prints nothing: collect every run, copy off the newest capture (Snapshot compare, step 7), MCP `delete-pod`, confirm with `list-pods`, clear `POD_ID`, log the hours and cost. Never stop the pod instead: a stopped CPU pod loses `/work` and saves nothing.
 
 ## Never upload
 

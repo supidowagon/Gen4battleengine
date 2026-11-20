@@ -37,9 +37,11 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    `fullset` marker.
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
    the targeted run on the merged tip (CLAUDE.md, Merges) on the pod. The `fullset`
-   tests are their own pod run (DAYBOX.md: one mark per run).
+   tests are their own pod run (DAYBOX.md: one mark per run). The managing session runs the
+   tip's snapshot compare (section 5); the stream explains every diverged part in its ledger.
 7. The stream sends one message: the final tip, the batch contents with citations, the
-   review outcome, and the targeted run's results with time and peak memory per test file.
+   review outcome, the targeted run's results with time and peak memory per test file, and
+   its `--allow-new` list.
 8. The managing session dispatches a fresh Opus review agent as the merge gate. Give it the
    diff range and the criteria, never the stream's conclusions. Verdict: MERGE or FIX. When
    only tests or docs changed since an already-reviewed commit, a diff stat of `src` and
@@ -86,6 +88,16 @@ per day is the rate used for estimates.
   file, or the first failure when the brief asked for `--until first-failure`. No polling
   turns: the agent does not call `status.sh` while `wait.sh` runs. Only committed code runs
   on the pod.
+- **Snapshot capture of `main`.** After every push of `main` the managing session starts
+  one capture of the new tip on a test pod, in `/work/snapmain-<short sha>` (seeds 0-199,
+  about 90 minutes; steps: DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
+  delete an older one only when no compare reads it. Before a pod is deleted, copy the
+  newest capture off or re-make it on the next pod.
+- **Snapshot compare of a merge candidate.** Compare only (about 85 minutes), against the
+  capture of the `main` tip its branch contains, with `--allow-new <the stream's list>`.
+  The stream explains every diverged part in its ledger, in a tests/docs-only commit, before
+  the merge. Never compare a merge candidate against an older base once `main` was merged
+  into the branch.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Start a chunk only while container memory
