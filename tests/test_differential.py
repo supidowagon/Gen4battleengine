@@ -230,6 +230,25 @@ def test_pay_exp_matches_the_per_level_loop(tables, names, data, pinned):
 jit_replace = jax.jit(replace)
 
 
+def _resume_learn_pauses(tables, out, data):
+    """``out`` with every learn pause (E3-B2-21) answered and its turn resumed, on both engines.
+    TurnEnd's ReplaceFainted (bcp.c:1848) comes after the whole turn, so a replacement never
+    sees a paused turn: its scratch (``ts_*``) is 0 between turns (``step.replace``)."""
+    np_tables = to_numpy(tables)
+    for _ in range(8):
+        if not int(out.learn_site):
+            return out
+        options = [bool(x) for x in np.asarray(jit_options(tables, out))]
+        assert options == ref_learn_options(np_tables, to_ref(out)) and options[4]
+        pick = data.draw(st.sampled_from([k for k, ok in enumerate(options) if ok]))
+        want = from_ref(ref_learn(np_tables, to_ref(out), pick))
+        out = jit_learn(tables, out, jnp.int32(pick))
+        _assert_same(out, want)
+        if not bool(needs_learn(out)):  # the payout's last prompt: the turn goes on
+            out = _step_both(tables, out, jnp.zeros(2, jnp.int32), data.draw(any_outcome()), data)
+    raise AssertionError("more than eight learn prompts in one turn")
+
+
 @pytest.mark.slow
 @settings(
     max_examples=300,
@@ -251,7 +270,7 @@ def test_step_payouts_match_reference(tables, names, data):
     s = s._replace(hp=jnp.asarray(hp, s.hp.dtype))
     acts = data.draw(legal_action_pair(tables, s))
     o = data.draw(any_outcome())
-    jax_out = _step_both(tables, s, acts, o, data)
+    jax_out = _resume_learn_pauses(tables, _step_both(tables, s, acts, o, data), data)
     if int(needs_replacement(jax_out)[1]):
         bench = [
             j
@@ -263,6 +282,35 @@ def test_step_payouts_match_reference(tables, names, data):
         want = from_ref(ref_replace(to_numpy(tables), to_ref(jax_out), 1, slot))
         for name, a, b in zip(got._fields, got, want):
             np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
+
+
+@pytest.mark.slow
+def test_replacement_follows_the_resumed_learn_pause(tables, names):
+    # train5 u_004 (375094ac): a MoveEnd learn pause keeps the turn's assuranceDamageMask
+    # (subscript_update_hp.s:18-19; cleared by CleanupFaintedMon and SetupNextTurn, battle_lib.c:
+    # 2190-2193, :2231), and the test sent the opponent's replacement into the paused turn,
+    # where ``replace`` zeroes the scratch and the reference kept it. Geodude's Quick Attack
+    # damages Prinplup first, Bubble KOs it, the payout's BubbleBeam prompt pauses MoveEnd
+    # (bcp.c:3968); the answer resumes the turn, then Bonsly comes in.
+    from nuzline.engine.levelup import GIVE_UP, LEARN_MOVE_END
+    from nuzline.engine.outcome import empty_outcome
+    from tests.engine.helpers import A, assert_matches_reference
+    from tests.engine.test_e3_batch2 import _learn_state
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Geodude", 12, moves=("Quick Attack",)), _mon(names, "Bonsly", 15)]
+    s = _learn_state(tables, names, opp).replace_hp(1, 0, 1)
+    acts = A("Bubble", "Quick Attack", s, names)
+    paused = assert_matches_reference(tables, s, acts, empty_outcome())
+    assert int(paused.learn_site) == LEARN_MOVE_END and int(paused.ts_assurance[0]) == 1
+    assert int(needs_replacement(paused)[1])
+    np_tables = to_numpy(tables)
+    answered = jit_learn(tables, paused, jnp.int32(GIVE_UP))
+    _assert_same(answered, from_ref(ref_learn(np_tables, to_ref(paused), GIVE_UP)))
+    done = assert_matches_reference(tables, answered, jnp.zeros(2, jnp.int32), empty_outcome())
+    assert int(done.learn_site) == 0 and int(done.ts_assurance[0]) == 0
+    got = jit_replace(tables, done, 1, 1)
+    _assert_same(got, from_ref(ref_replace(np_tables, to_ref(done), 1, 1)))
 
 
 # --- K3d-exp T6: the learnset resolve (JAX scan vs the decomp's Pokemon_LevelUpMove loop) ------
