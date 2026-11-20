@@ -17,8 +17,8 @@ Entry points:
   like ``engine.step.replace``.
 * ``ref_damage_table(tables, state, atk_side, move, crit) -> list[int]``: the 16
   damage rolls, like ``engine.damage.damage_table``.
-* ``ref_grant_exp(tables, state, slot, pending, selected) -> RefState``: the exp payout for
-  the opponent's party ``slot`` fainting, like ``engine.levelup.pay_exp``.
+* ``ref_grant_exp(tables, state, slot) -> RefState``: the exp payout for the opponent's
+  party ``slot`` fainting, like ``engine.levelup.pay_exp``.
 * ``ref_advance_learns(tables, state)``, ``ref_learn_options(tables, state)`` and
   ``ref_learn(tables, state, option)``: the deferred learnset scan, like
   ``engine.levelup.advance_learns`` / ``learn_options`` / ``learn``.

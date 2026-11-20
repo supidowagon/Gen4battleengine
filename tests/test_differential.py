@@ -197,17 +197,16 @@ def test_pay_exp_matches_the_per_level_loop(tables, names, data, pinned):
     # decomp's literal per-level ShouldLevelUp loop. A foe up to level 100 pays up to
     # 255 * 100 / 7 = 3642 before the multipliers: many levels at once.
     if pinned:
-        s, j, pending, selected = _transformed_payer(tables, names), 0, False, 0
+        s, j = _transformed_payer(tables, names), 0
     else:
         s = data.draw(supported_state(tables, names))
         s = _exp_party(data.draw, tables, names, s, near_level=data.draw(st.booleans()))
         living = [j for j in range(6) if int(s.species[1, j]) and int(s.hp[1, j])]
         j = data.draw(st.sampled_from(living))
         s = s._replace(level=s.level.at[1, j].set(data.draw(st.integers(1, 100))))
-        pending, selected = data.draw(st.booleans()), data.draw(st.integers(0, 3))
     after = s.replace_hp(1, j, 0)
-    got = jit_pay(tables, s, after, jnp.asarray(pending), jnp.asarray(selected, jnp.int32))
-    want = from_ref(ref_grant_exp(to_numpy(tables), to_ref(after), j, pending, selected))
+    got = jit_pay(tables, s, after)
+    want = from_ref(ref_grant_exp(to_numpy(tables), to_ref(after), j))
     for name, a, b in zip(got._fields, got, want):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
 
