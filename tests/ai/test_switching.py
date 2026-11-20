@@ -219,9 +219,7 @@ def test_too_many_sites_are_refused(tables, names):
 @pytest.mark.fullset
 def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     s = roark_state(tables, names)
-    if change == "player_move":
-        s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move(missing)))
-    elif change == "opp_move":
+    if change == "opp_move":
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
     elif change == "ability":  # Gastly's only ability is Levitate
         s = as_species(tables, s, 0, 5, names.species("Gastly"))

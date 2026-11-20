@@ -1485,7 +1485,7 @@ def test_magic_coats_doubles_paths_follow_the_decomp(tables, names):
     assert _waiting(turn) == 1
 
 
-@pytest.mark.slow  # 49 s, peak 8.17 GB, +4 GB over a loaded step (fast tier: 60 s, 4 GB); run on the pod
+@pytest.mark.slow  # 49 s, peak 8.17 GB, +4 GB over a loaded step (fast tier: 60 s, 2 GB above a loaded step); run on the pod
 def test_kaizos_reflectable_moves_are_reflected_too(kaizo_tables, kaizo_names):
     """Owed 1 (E3-1-3, E3-2-1) and E3-B2-4's ruling 1: Kaizo's Disable, Encore, Spite, Torment and
     the hazards carry CAN_MAGIC_COAT and meet the Magic Coat with the holder as attacker (the
@@ -2829,7 +2829,7 @@ def test_a_called_feint_reads_the_same_flag(tables, names):
     assert _foe_hp(_fego(t, n, s, me="Sleep Talk", foe="Tackle", out=out)) == _foe_hp(s)
 
 
-@pytest.mark.slow  # 157 s (fast tier: 60 s, 4 GB); run on the pod
+@pytest.mark.slow  # 157 s (fast tier: 60 s, 2 GB above a loaded step); run on the pod
 def test_feint_enumeration_matches_the_brute_force(tables, names):
     """The exact enumeration (Feint a table-damage, input-neutral effect; the foe's chain roll a
     read of the Protect) equals the brute-force one, at chain 2 (the roll is drawn)."""

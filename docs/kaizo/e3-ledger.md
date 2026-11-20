@@ -1375,6 +1375,8 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   `test_the_natural_run_is_the_injected_schedule_of_the_first_compare`, the slow `test_gyro_ball_exact_equals_loose` and
   `test_with_the_record_equal_to_the_speeds_the_compare_order_is_irrelevant`, and `test_batch13_refusals_lifted`, a fullset
   test run on the pod); tests/strategies.py draws `speed_rec`.
+  Gate fix (doubles, section 5 item 4): `policy._refused`'s zero-divisor test loops `format_of(state).B` battlers, not
+  `range(2)`.
 - E3-B2-16 Pay Day (#34, move 6 in both games; sheet e034_pay_day.md): AI only. The mechanic is already modelled:
   `tools/effect_map.py:149` maps effect 34 to PLAIN (effect_script_0034.s:5-7: a CHECK_SUBSTITUTE hit that sets
   subscript_pay_day.s, which only adds `5 * level` to BTLVAR_PAY_DAY_COUNT when the attacker is not on the enemy side, :5-8;

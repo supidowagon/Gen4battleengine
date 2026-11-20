@@ -110,6 +110,7 @@ from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_sl
 from nuzline.engine.bag import bag_item_category
 from nuzline.engine.damage import AI_GYRO_BALL, ai_weather_ball_typed, decomp_abilities
 from nuzline.engine.enumerate import WIDTH_CAP
+from nuzline.engine.format import format_of
 from nuzline.engine.ids import ItemAiCategory, Stat
 from nuzline.engine.order import COMPARE_SPEED_SLOWER
 from nuzline.engine.state import BAG_SLOTS, MOVES, BattleState
@@ -4594,7 +4595,9 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     # the record's, or the current speed after the decision's first speed compare; a 0 divisor is
     # left to the ROM's division routine (as the mechanic's, coverage.GYRO_SPEED_MIN), E3-B2-15.
     speeds = c.current_speeds(tables, state)
-    zero = jnp.stack([(state.speed_rec[b] == 0) | (speeds[b] == 0) for b in range(2)])
+    zero = jnp.stack(
+        [(state.speed_rec[b] == 0) | (speeds[b] == 0) for b in range(format_of(state).B)]
+    )
     calc_damage = calc_damage | (known & (moves[1] == AI_GYRO_BALL) & zero[1])
     # Weather Ball's TrainerAI_MoveType case assigns nothing outside its weathers (B13-26).
     move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
