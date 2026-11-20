@@ -246,7 +246,13 @@ from nuzline.engine.ids import (
     Weather,
     sleepless,
 )
-from nuzline.engine.levelup import pay_exp, pay_exp_leveled
+from nuzline.engine.levelup import (
+    LEARN_FIELD,
+    LEARN_MON,
+    LEARN_MOVE_END,
+    learn_prompt,
+    pay_exp,
+)
 from nuzline.engine.order import (
     CALL_ME_FIRST,
     CALL_NONE,
@@ -300,7 +306,6 @@ PURSUIT_POWER_MUL = 20  # BtlCmd_TryPursuit (battle_script.c:6884): powerMul = 2
 NORMAL_POWER_MUL = 10  # BattleContext_Init (battle_lib.c:1980): powerMul = 10
 # BattleState.exp_refused: a payout inside the opponent's replacement loop left learn work
 # (design §3.3(c)).
-EXP_REFUSED_WINDOW_C = 2
 # MON_CONDITION_TOXIC_COUNTER is 4 bits (include/constants/battle/condition.h:23).
 TOXIC_COUNTER_MAX = 15
 
@@ -944,7 +949,7 @@ def _use_move(
     head_on = (mode == MODE_FULL) | reflected_pass
     resumed = mode == MODE_RESUME
     after_pursuit = mode == MODE_PURSUIT
-    move, struggling, locked = choice
+    move, struggling, locked = choice[:3]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     user = state.active[side]
     # BattleControllerPlayer_FightCommand (bcp.c:1866-1883), B10-9: after Struggle, an encored
@@ -969,7 +974,9 @@ def _use_move(
         state_in,
         side,
         move,
-        targets.fight_randomizes(state_in, side, choice[1]),
+        targets.fight_randomizes(
+            state_in, side, choice[1], choice[3] if len(choice) > 3 else False
+        ),
         state_in.chosen_target[side],
         speed_order,
         outcome.target_draw[side],
@@ -2922,6 +2929,7 @@ def _act(
     claw=(False, False),
     pursuit_sync=None,
     foe_enduring=False,
+    reselected=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -2960,6 +2968,8 @@ def _act(
     )
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
+    if reselected is not None:  # FightCommand's branch 1.5 (bcp.c:1889-1893), E3-B2-21
+        choice = (*choice, reselected[side])
     # U-turn's Pursuit reads the battler it hits (convention 1: passed in by the caller).
     pursuit = (actions[foe], choices[0][foe], choices[1][foe])
     moved, own, foe_events, ctl = _use_move(
@@ -3206,25 +3216,18 @@ def _faint_check(
     return after
 
 
-def _move_end(
-    tables: Tables,
-    state: BattleState,
-    acted: BattleState,
-    side,
-    ran,
-    copied=(0, 0),
-    conv2=None,
-    trace_pick=None,
-) -> BattleState:
-    """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
+def _move_end_head(
+    state: BattleState, acted: BattleState, side, ran, copied=(0, 0), conv2=None
+) -> tuple[BattleState, jnp.ndarray]:
+    """After ``side``'s action and its faint check, up to the status recovery: ``(state,
+    clear)``, ``clear`` the test of the tail (``_move_end_tail``). The foe keeps the ``move_hit`` that
     ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
     (LOOP_FAINTED before LOOP_SPREAD_MOVES, battle_controller_player.c:3820-3837), so a
     fainted defender holds the record until its replacement clears it. Then
     ``BattleControllerPlayer_MoveEnd`` clears the actor's own (``ClearFlags``, :4389, via
     :3986) where ``ran``: the action ran (a move, switch or item; neither a fainted
     battler's action nor a pursuer's, which ``TryPursuit`` ends, battle_script.c:6931,
-    reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969). ``trace_pick``:
-    ``Outcome.trace_pick``, the coins of a Trace that acts at the move's end."""
+    reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969)."""
     foe = _foe(side)
     move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
     clear = ran & (state.over == 0)
@@ -3264,13 +3267,20 @@ def _move_end(
     # battle that CheckBattleOver ended returns first.
     state = recover_status_by_ability(state, side, clear)
     state = recover_status_by_ability(state, foe, clear)
-    # BattleSystem_TriggerEffectOnSwitch over every battler (bcp.c:3973): an entry ability gained
-    # mid-battle (Skill Swap, E3-2-5) acts now; a no-op while every flag is set or no holder.
+    return state, clear
+
+
+def _move_end_tail(tables: Tables, state: BattleState, clear, trace_pick=None) -> BattleState:
+    """MoveEnd after its payout (E3-B2-21; ``trace_pick``: ``Outcome.trace_pick``, the coins of a Trace that
+    acts at the move's end): ``BattleSystem_TriggerEffectOnSwitch`` over every
+    battler (bcp.c:3973, after ``AnyExpPayout`` :3968): an entry ability gained mid-battle (Skill
+    Swap, E3-2-5) acts now, and the HELD_ITEM_STATUS state sees the learner's raised HP; a no-op
+    while every flag is set or no holder. The same TriggerEffectOnSwitch's
+    SWITCH_IN_CHECK_STATE_FORM_CHANGE (battle_lib.c:4115, after the Trace / weather / Intimidate /
+    Download states; AfterMoveEffects' :3672-3680 before it): its Castform form change runs after
+    every move, so a weather move or a type change takes effect before the next battler acts (F-6).
+    A learn pause (``learn_site``) stands between the payout and this tail: the resume runs it."""
     state = move_end_switch_in(tables, state, clear, trace_pick)
-    # The same TriggerEffectOnSwitch's SWITCH_IN_CHECK_STATE_FORM_CHANGE (battle_lib.c:4115, after
-    # the Trace / weather / Intimidate / Download states; AfterMoveEffects' :3672-3680 before it):
-    # its Castform form change runs after every move, so a weather move or a type change takes
-    # effect before the next battler acts (F-6).
     return forecast(tables, state, clear)
 
 
@@ -3293,8 +3303,8 @@ _TAKEN = ("phys_taken", "spec_taken", "last_taken", "phys_from", "spec_from", "l
 
 def _execute_actions(
     tables: Tables, state: BattleState, actions, outcome: Outcome, order, paused, power_mul
-) -> tuple[BattleState, dict, dict]:
-    """``execute_actions`` with the turn's events: ``(state, read, shown)``. ``read``: every
+) -> tuple[BattleState, dict, dict, dict]:
+    """``execute_actions`` with the turn's events: ``(state, read, shown, scratch)``. ``read``: every
     event of the turn so far (later actors read the turn flags in it; on a resume it starts from
     the scratch); ``shown``: this call's own (the observation's; ``pursuit``: a Pursuit hit ran,
     which shows the pursuer's move).
@@ -3307,11 +3317,23 @@ def _execute_actions(
     the turn flags, the bitmask of the faints handled, ``power_mul`` (the search's turn
     ``powerMul``), the AI switch, the list's ``powerMul``). ``paused`` (the state is such a
     pause): the picks, the order and the turn flags come from the scratch, ``actions[pivot]`` is
-    the switch to the picked slot, and the loop resumes at the cursor (``MODE_RESUME``)."""
+    the switch to the picked slot, and the loop resumes at the cursor (``MODE_RESUME``).
+
+    E3-B2-21: a payout at MoveEnd whose learnset scan leaves a prompt stops the loop after the
+    payout (``learn_site`` ``LEARN_MOVE_END``, ``ts_cursor`` the action's position, ``ts_ran`` its
+    ``clear``); ``paused`` with that site resumes with MoveEnd's tail (``_move_end_tail``), then
+    the next position. The pending actions re-read their move slot, as FightCommand does
+    (bcp.c:1889-1895), unless they Struggle or are locked. A pause at ``LEARN_FIELD`` or
+    ``LEARN_MON`` (``step_events``) comes after the last action: the loop has nothing to run.
+    ``scratch``: the ``ts_*`` values of a pause after the last action (what ``step_events`` writes
+    for those two sites); the state holds them only where this call stopped."""
     fmt = format_of(state)
+    pivot_paused = state.pivot_battler != 0
+    site = state.learn_site.astype(_I32)
+    lres = site == LEARN_MOVE_END
     real = jnp.where(paused, state.ts_actions.astype(_I32), actions)
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, fmt.B - 1)
-    acts = jnp.where(paused & (jnp.arange(fmt.B) == pivot), actions, real)
+    acts = jnp.where(pivot_paused & (jnp.arange(fmt.B) == pivot), actions, real)
     # Each side's move and bag item are fixed when chosen, from the turn's starting state.
     picks = [selected_move(tables, state, side, real[side]) for side in range(fmt.B)]
     locked = jnp.stack([locked_slot(state, side) >= 0 for side in range(fmt.B)])
@@ -3321,6 +3343,18 @@ def _execute_actions(
         jnp.where(paused, state.ts_struggling != 0, jnp.stack([p[1] for p in picks]) & ~locked),
         jnp.where(paused, state.ts_locked != 0, locked),
     )
+    # A MoveEnd learn pause: the battlers whose action is still to come run the move their slot
+    # holds now (FightCommand reads moves[moveSlot] when the action runs, bcp.c:1889-1895); a
+    # Struggle or a lock fixed at the selection stays (bcp.c:335, :1885-1888).
+    rows = party(fmt, jnp.arange(fmt.B))
+    cursor = state.ts_cursor.astype(_I32)
+    to_run = jnp.stack(
+        [jnp.any((state.ts_order == b) & (jnp.arange(2) > cursor)) for b in range(fmt.B)]
+    )
+    held = state.moves[rows, state.active, jnp.clip(real, 0, MOVE_ACTIONS - 1)].astype(_I32)
+    reread = lres & to_run & (real < MOVE_ACTIONS) & ~choices[1] & ~choices[2]
+    reselected = reread & (held != choices[0])
+    choices = (jnp.where(reread, held, choices[0]), choices[1], choices[2])
     items = jnp.stack([state.trainer_items[side, _bag_slot(real[side])] for side in range(fmt.B)])
     items = jnp.where(is_item(real), items, 0)
     items = jnp.where(paused, state.ts_item, items).astype(_I32)
@@ -3330,7 +3364,16 @@ def _execute_actions(
     claw = jnp.where(paused, state.ts_claw != 0, claw_flags(tables, state, real))
     consumed = _consume_trainer_items(state, real).trainer_items
     state = state._replace(trainer_items=jnp.where(paused, state.trainer_items, consumed))
-    state = state._replace(pivot_battler=jnp.zeros_like(state.pivot_battler))
+    # MoveEnd's tail, after the payout and the answers of a MoveEnd pause (bcp.c:3973).
+    state = _where(
+        lres,
+        _move_end_tail(tables, state, state.ts_ran != 0, outcome.trace_pick),
+        state,
+    )
+    state = state._replace(
+        pivot_battler=jnp.zeros_like(state.pivot_battler),
+        learn_site=jnp.zeros_like(state.learn_site),
+    )
     read = _empty_events(format_of(state))
     for name, field in (
         ("protect_ok", "ts_protect_ok"),
@@ -3342,6 +3385,7 @@ def _execute_actions(
         read[name] = jnp.where(paused, state.ts_taken[:, k].astype(_I32), 0)
     read["dragged"] = jnp.where(paused, state.ts_dragged.astype(_I32), 0)
     read["move_failed"] = jnp.where(paused, state.ts_move_failed.astype(_I32), 0)
+    read["move_cur"] = jnp.where(site != 0, state.ts_move_cur.astype(_I32), 0)
     shown = _empty_events(format_of(state))
 
     def put(events_pair, side, values, cond):
@@ -3350,10 +3394,12 @@ def _execute_actions(
 
     def cond(carry):
         state, _, _, position = carry[:4]
-        return (position < 2) & (state.pivot_battler == 0)
+        return (position < 2) & (state.pivot_battler == 0) & (state.learn_site == 0)
 
     def body(carry):
-        state, read, shown, position, phase, pursued, base, pick_mul, fired, sync, coat = carry
+        state, read, shown, position, phase, pursued, base, pick_mul, fired, sync, coat, lran = (
+            carry
+        )
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
         start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
@@ -3443,6 +3489,7 @@ def _execute_actions(
             claw=claw,
             pursuit_sync=pursuit_sync,
             foe_enduring=foe_enduring,
+            reselected=reselected,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         ran = (state.over == 0) & ((state.hp[party(fmt, side), state.active[side]] > 0) | ~start)
@@ -3485,50 +3532,63 @@ def _execute_actions(
         # E3-B2-6: a reflected move's first pass ends before the mover's move end and faint check:
         # the holder's pass comes next, then both run (bcp.c:3831-3837, LoopSpreadMoves).
         hold = ctl["reflect"] & ~reflecting
-        done = _move_end(
-            tables,
+        done, clear = _move_end_head(
             _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted),
             acted,
             side,
             ran,
             (ctl["copy_foe"], ctl["copy_self"]),
             ctl["conv2"],
-            outcome.trace_pick,
         )
-        # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
-        # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first
-        # and the player chose a move (design §3.3(a), ``learn_pin``).
-        pending = (position == 0) & (side == 1) & (real[0] < MOVE_ACTIONS)
-        done = pay_exp(tables, _with_alive(acted, base), done, pending, real[0])
+        # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver and
+        # TriggerEffectOnSwitch (bcp.c:3965-3973). Its learnset scan and prompt run inside the
+        # payout (E3-B2-21): a prompt pauses the turn here, the tail waits for the resume.
+        done = pay_exp(tables, _with_alive(acted, base), done)
+        done, prompt = learn_prompt(tables, done)
+        lstop = prompt & ~(stop | hold)
+        tail = _move_end_tail(tables, done, clear, outcome.trace_pick)
+        waiting = done._replace(learn_site=jnp.full_like(done.learn_site, LEARN_MOVE_END))
+        done = _where(lstop, waiting, tail)
         state = _where(stop | hold, acted, done)
-        position = jnp.where(stop | hold, position, position + 1)
+        position = jnp.where(stop | hold | lstop, position, position + 1)
+        lran = jnp.where(lstop, clear, lran)
         phase = jnp.where(ctl["pursue"], _PURSUIT, jnp.where(hold, _REFLECT, _START)).astype(_I32)
         coat = jnp.where(hold, ctl["reflect_move"], 0).astype(_I32)
         sync = (
             jnp.where(ctl["pursue"], ctl["sync_flag"], sync[0]),
             jnp.where(ctl["pursue"], ctl["sync_sem"], sync[1]).astype(_I32),
         )
-        return state, read, shown, position, phase, pursued, base, pick_mul, fired, sync, coat
+        return state, read, shown, position, phase, pursued, base, pick_mul, fired, sync, coat, lran
 
     start = (
         state,
         read,
         shown,
-        jnp.where(paused, state.ts_cursor.astype(_I32), 0),
-        jnp.where(paused, _RESUME, _START).astype(_I32),
+        # A pivot resumes at its action; a MoveEnd pause at the next one; a pause after the last
+        # action (LEARN_FIELD, LEARN_MON) has none.
+        jnp.where(
+            site >= LEARN_FIELD,
+            2,
+            jnp.where(lres, cursor + 1, jnp.where(pivot_paused, cursor, 0)),
+        ).astype(_I32),
+        jnp.where(pivot_paused, _RESUME, _START).astype(_I32),
         jnp.where(paused, state.ts_pursued.astype(_I32), 0),
-        jnp.where(paused, state.ts_alive, _alive_mask(state)),
+        jnp.where(pivot_paused, state.ts_alive, _alive_mask(state)),
         jnp.where(paused, state.ts_pick_mul.astype(_I32), NORMAL_POWER_MUL),
         jnp.bool_(False),
         (jnp.bool_(False), _I32(0)),  # the stopped head's Synchronize flag and sideEffectMon
         _I32(0),  # the move a reflection's holder pass runs (E3-B2-6)
+        jnp.bool_(False),  # a MoveEnd pause: its ``clear``
     )
     out = jax.lax.while_loop(cond, body, start)
-    state, read, shown, position, _, pursued, base, pick_mul, fired, _, _ = out
+    state, read, shown, position, _, pursued, base, pick_mul, fired, _, _, lran = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
-    stopped = state.pivot_battler != 0
-    # The sort BranchActions runs once more after the last action (bcp.c:888, :889-891).
-    state = record_speeds(tables, state, ~stopped)
+    learn_stopped = state.learn_site != 0
+    pivot_stopped = state.pivot_battler != 0
+    stopped = pivot_stopped | learn_stopped
+    # The sort BranchActions runs once more after the last action (bcp.c:888, :889-891); a pause
+    # after the last action (LEARN_FIELD, LEARN_MON) resumes past it: the order stays.
+    state = record_speeds(tables, state, ~stopped & (site < LEARN_FIELD))
     # turnFlags.magicCoat ends with the turn (SetupNextTurn, battle_lib.c:2231); a pause keeps it.
     state = state._replace(
         magic_coat=jnp.where(stopped, state.magic_coat, 0).astype(state.magic_coat.dtype)
@@ -3541,7 +3601,10 @@ def _execute_actions(
         # Battler_MovedThisTurn (battle_lib.c:5365-5368) of each battler: the actions before the
         # paused one are over (MoveEnd, bcp.c:3989).
         "ts_acted": jnp.stack(
-            [jnp.any((order == b) & (jnp.arange(2) < position)) for b in range(fmt.B)]
+            [
+                jnp.any((order == b) & (jnp.arange(2) < position + learn_stopped.astype(_I32)))
+                for b in range(fmt.B)
+            ]
         ),
         "ts_order": order,
         "ts_actions": real,
@@ -3560,14 +3623,15 @@ def _execute_actions(
         "ts_taken": jnp.stack([read[n] for n in _TAKEN], axis=1),
         "ts_dragged": read["dragged"],
         "ts_move_failed": read["move_failed"],
-        "ts_used": state.ts_used,
-        "ts_damaged": state.ts_damaged,
-        "ts_dealt": state.ts_dealt,
-        "ts_sub_hit": state.ts_sub_hit,
-        "ts_alive": base,
+        # The paused action's own inputs and the party list's: a learn pause has none (0).
+        "ts_used": jnp.where(pivot_stopped, state.ts_used, 0),
+        "ts_damaged": jnp.where(pivot_stopped, state.ts_damaged, 0),
+        "ts_dealt": jnp.where(pivot_stopped, state.ts_dealt, 0),
+        "ts_sub_hit": jnp.where(pivot_stopped, state.ts_sub_hit, 0),
+        "ts_alive": jnp.where(pivot_stopped, base, 0),
         "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),
         "ts_switched": is_switch(real),
-        "ts_pick_mul": pick_mul,
+        "ts_pick_mul": jnp.where(pivot_stopped, pick_mul, 0),
         # turnFlags.assuranceDamageMask (B13-17): the turn's, kept at a pause.
         "ts_assurance": state.ts_assurance,
         # SideConditions.followMe / followMeUser (D2-11): cleared by SetupNextTurn at the turn end
@@ -3575,6 +3639,13 @@ def _execute_actions(
         "ts_follow_me": state.ts_follow_me,
         # Trace fires of the step (D2-16): 0 once the turn completes, kept at a pause.
         "ts_trace_fires": state.ts_trace_fires,
+        # E3-B2-21: the MoveEnd pause's ``clear``; each battler's moveCur of the turn (the turn
+        # end's semi-invulnerability read, ``_turn_move_cur``); the turn end's order and speedRand
+        # draw, which a pause after the last action sets (``step_events``).
+        "ts_ran": lran,
+        "ts_move_cur": jnp.where(pivot_stopped, 0, read["move_cur"]),
+        "ts_eot": jnp.zeros((fmt.B,), _I32),
+        "ts_qc": jnp.zeros((fmt.B,), _I32),
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")
@@ -3589,7 +3660,7 @@ def _execute_actions(
             state.roosting.dtype
         ),
     )
-    return state, read, {**shown, "pursuit": fired.astype(_I32)}
+    return state, read, {**shown, "pursuit": fired.astype(_I32)}, scratch
 
 
 def _hp_change(state: BattleState, side, mon, delta) -> BattleState:
@@ -4236,7 +4307,9 @@ def _wish(state: BattleState, side) -> BattleState:
     return _set_mon(state, "hp", side, mon, healed, heals)
 
 
-def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
+def field_conditions(
+    tables: Tables, state: BattleState, sides, resume=0
+) -> tuple[BattleState, jnp.ndarray]:
     """``BattleControllerPlayer_CheckFieldConditions`` (battle_controller_player.c:
     932-1254), between the actions and ``end_of_turn``; nothing runs once the battle is
     over (``CheckBattleOver`` before every step, :939-944). In order:
@@ -4258,7 +4331,15 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     4. Gravity (:1227-1238) drops by 1.
 
     Trick Room counts down in the turn end's side-condition pass (:1823-1826), not here,
-    and is not implemented."""
+    and is not implemented.
+
+    E3-B2-21: ``(state, prompt)``. The chip's payout runs its learnset scan (the loop head's
+    ``AnyExpPayout`` runs the whole ``GetExpTask``, bcp.c:938-944), and a prompt left stops the
+    pass before Gravity (``prompt``; ``step_events`` pauses the turn at ``LEARN_FIELD``).
+    ``resume`` is the ``learn_site`` the call resumes: ``LEARN_FIELD`` runs Gravity alone,
+    ``LEARN_MON`` nothing (the pause was in a later phase)."""
+    resume = jnp.asarray(resume, _I32)
+    entry = state
     live = state.over == 0
     counted = state._replace(
         **{name: _count_down(getattr(state, name)) for name in FIELD_SIDE_TIMERS}
@@ -4285,6 +4366,9 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     state = _faint_check(tables, before, state)
     # The loop head's AnyExpPayout (bcp.c:938-944) pays for the chip's faint.
     state = pay_exp(tables, before, state)
+    state = _where(resume != 0, entry, state)
+    state, prompt = learn_prompt(tables, state)
+    prompt = prompt & (resume == 0)
 
     # FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238): one turn off the counter; at 0 vanilla's
     # subscript_gravity_end only prints, Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets the
@@ -4293,22 +4377,39 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     counted = _count_down(state.gravity)
     rearm = (tables.gravity_rearm != 0) & (state.gravity > 0) & (counted == 0) & (state.over == 0)
     gravity = jnp.where(rearm, GRAVITY_TURNS, counted)
-    state = state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
-    return gravity_ground(state, rearm)
+    ticked = state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
+    ticked = gravity_ground(ticked, rearm)
+    return _where(prompt | (resume == LEARN_MON), state, ticked), prompt
 
 
 def end_of_turn(
-    tables: Tables, state: BattleState, actions, outcome: Outcome, order, sides, failed=(0, 0)
-) -> BattleState:
+    tables: Tables,
+    state: BattleState,
+    actions,
+    outcome: Outcome,
+    order,
+    sides,
+    failed=(0, 0),
+    begin=0,
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray]:
     """Phase 4: ``BattleControllerPlayer_CheckMonConditions`` (battle_controller_player.c:
     1289) runs every check of ``END_OF_TURN_ORDER`` for one battler, then for the next,
     in ``sides`` (``end_of_turn_order`` of the state after the actions: ``monSpeedOrder``
     is sorted once, before ``field_conditions``, so a Tailwind that ended there still
     counts); a faint check follows each, and nothing runs once the battle is over.
     Flinch lasts only for the turn it is set in. ``failed`` (``int[2]``): each side's
-    ``moveFailFlags`` of the turn (the ``move_failed`` event), read by the Uproar check."""
+    ``moveFailFlags`` of the turn (the ``move_failed`` event), read by the Uproar check.
+
+    E3-B2-21: ``(state, halt, position)``. A battler's payout runs its learnset scan, and a prompt
+    left stops the pass after that battler's block (``halt``, ``position`` its position in
+    ``sides``): the next re-entry of CheckMonConditions would pay and prompt at its head
+    (bcp.c:1294-1299) before any later check. ``begin``: the first position to run (a resume
+    after a pause at ``position`` passes ``position + 1``)."""
+    halt = jnp.bool_(False)
+    pause_at = jnp.int32(0)
     for position in (0, 1):
         side = sides[position]
+        go = (jnp.asarray(begin, _I32) <= position) & ~halt
         start = state
         for name, check in END_OF_TURN_ORDER:
             before = state
@@ -4337,7 +4438,13 @@ def end_of_turn(
         # again. The reference engine pays after every check, as the decomp does; the
         # differential tests compare the two.
         state = pay_exp(tables, start, state)
-    return state._replace(flinched=jnp.zeros_like(state.flinched))
+        state, prompt = learn_prompt(tables, state)
+        # A position before ``begin``, or after a pause, runs nothing.
+        state = _where(go, state, start)
+        pause_at = jnp.where(go & prompt, position, pause_at)
+        halt = halt | (go & prompt)
+    cleared = state._replace(flinched=jnp.zeros_like(state.flinched))
+    return _where(halt, state, cleared), halt, pause_at
 
 
 def _turn_move_cur(read: dict, order) -> jnp.ndarray:
@@ -4533,11 +4640,11 @@ def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp
 
 def _action_phase(
     tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
-) -> tuple[BattleState, dict, dict, jnp.ndarray]:
-    """Phases 2-3 with the turn's events: ``(state, shown, read, order)``. ``learn_pin`` is the
-    turn's own (design §3.3(a)): it starts each turn at 0. A resumed pause (``pivot_battler``)
-    skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
-    Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch.
+) -> tuple[BattleState, dict, dict, jnp.ndarray, dict]:
+    """Phases 2-3 with the turn's events: ``(state, shown, read, order, scratch)``. A resumed
+    pause (``pivot_battler``, ``learn_site``) skips the turn's prologue (the AI's record of the
+    player's move, the order and its Quick Claw, the bag items and a switch's Pursuit) and reads
+    the order from the scratch.
     ``targets`` (``int8[B]``, the menu's picks) is required at B = 4 and ignored at B = 2, where
     the range decides (D2-1); the selection writes ``chosen_target`` before the turn order in both
     formats (ruling D2-33: a locked battler's defender reads it at B = 2 too, lib.c:1711)."""
@@ -4545,14 +4652,13 @@ def _action_phase(
         if state.active.shape[0] != 2:
             raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
         targets = jnp.zeros(state.active.shape[0], jnp.int8)
-    paused = state.pivot_battler != 0
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
     # A battle-start Starf Berry still open (a state no root drew for) draws here first; then the
     # turn's Starf Berry draws, read by hooks.starf_stat (F-10); step_events replaces them.
     turn_draw = jnp.asarray(outcome.starf)[:, 0]
     state = resolve_starf(state, turn_draw)
     state = state._replace(starf_roll=turn_draw.astype(state.starf_roll.dtype))
-    fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
-    fresh = _clear_stale_choice_locks(tables, fresh, actions)
+    fresh = _clear_stale_choice_locks(tables, state, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
@@ -4560,8 +4666,10 @@ def _action_phase(
     order = jnp.where(paused, state.ts_order, order).astype(_I32)
     power_mul = replacement_power_mul(tables, state, actions)
     s = _where(paused, state, fresh)
-    s, read, shown = _execute_actions(tables, s, actions, outcome, order, paused, power_mul)
-    return s, {**shown, "order": order, "quick_claw": claw}, read, order
+    s, read, shown, scratch = _execute_actions(
+        tables, s, actions, outcome, order, paused, power_mul
+    )
+    return s, {**shown, "order": order, "quick_claw": claw}, read, order, scratch
 
 
 def turn_events(
@@ -4581,20 +4689,40 @@ def step_events(
     ``shown`` (the side's turn showed a message), ``crit`` (``[2, MAX_HITS]``) and
     ``EVENT_FLAGS``; ``order`` (``action_order``) and ``pursuit``. A call that pauses (E2 batch
     6) returns the first half's events and stops before the end of the turn; the resuming call
-    returns the second half's."""
+    returns the second half's.
+
+    E3-B2-21: the turn also pauses at a learn prompt (``levelup.learn_prompt``), at MoveEnd
+    (``_execute_actions``), after the field conditions' weather payout (``LEARN_FIELD``) and
+    after the payout of a battler's end-of-turn block (``LEARN_MON``, ``ts_cursor`` its position
+    in the turn end's order). The pause after the last action keeps the turn end's order
+    (``ts_eot``, sorted before the pause: a level-up changes the speeds, but ``monSpeedOrder`` is
+    sorted at the last BranchActions, bcp.c:888-891) and its speedRand draw (``ts_qc``); the call
+    that resumes it plays the rest of the turn end."""
     actions = jnp.asarray(actions, _I32)
-    s, events, read, order = _action_phase(tables, state, actions, outcome, targets)
-    halted = s.pivot_battler != 0
-    sides = end_of_turn_order(tables, s, outcome)
-    e = field_conditions(tables, s, sides)
-    e = end_of_turn(tables, e, actions, outcome, order, sides, read["move_failed"])
+    site = state.learn_site.astype(_I32)
+    eot_in = state.ts_eot.astype(_I32)
+    qc_in = state.ts_qc != 0
+    cursor_in = state.ts_cursor.astype(_I32)
+    s, events, read, order, scratch = _action_phase(tables, state, actions, outcome, targets)
+    halted = (s.pivot_battler != 0) | (s.learn_site != 0)
+    sides = jnp.where(site >= LEARN_FIELD, eot_in, end_of_turn_order(tables, s, outcome))
+    fs, f_prompt = field_conditions(tables, s, sides, site)
+    # A resume at LEARN_MON begins after the battler whose block paused; a resume at LEARN_FIELD
+    # (the weather payout's pause) begins at the first.
+    begin = jnp.where(site == LEARN_MON, cursor_in + 1, 0)
+    cs, c_halt, c_pos = end_of_turn(
+        tables, fs, actions, outcome, order, sides, read["move_failed"], begin
+    )
+    bc_pause = f_prompt | c_halt  # a pause in the turn end (``f_prompt`` first: it stops the rest)
+    e = cs
     e = _future_sight(tables, e, sides, outcome, read["protect_ok"], _turn_move_cur(read, order))
     e = _stale_known_item(s, e, False)  # B10-6: the end of the turn's HP updates
     e = _unlock_sleepers(e)
     e = e._replace(turn=(e.turn + 1).astype(e.turn.dtype))
     e = _turn_start_items(tables, e)
-    # The turn's speedRand draw, kept for the next turn's readers (qc_kept).
-    e = _keep_quick_claw(tables, e, outcome.quick_claw)
+    # The turn's speedRand draw, kept for the next turn's readers (qc_kept): a resumed pause keeps
+    # the draw its turn end was sorted with.
+    e = _keep_quick_claw(tables, e, jnp.where(site >= LEARN_FIELD, qc_in, outcome.quick_claw))
     # turnFlags.roosting lives until BattleSystem_SetupNextTurn (battle_lib.c:2229-2231), after
     # the faint replacements (bcp.c:1843-1856): kept while one is pending (``roosting_now``).
     pending = jnp.any(needs_replacement(e) != 0)
@@ -4602,12 +4730,37 @@ def step_events(
         roosting=jnp.where(pending, roosting_now(e, read["roosted"]), 0).astype(e.roosting.dtype)
     )
     e = canonical_target(e)
-    s = _where(halted, s, e)
+    # The pause in the turn end: the state at it, with the turn's scratch (``_execute_actions``)
+    # and the site (the order and the draw it was sorted with).
+    paused = _where(f_prompt, fs, cs)
+    values = {
+        **scratch,
+        # The turn flags only an action reads are not kept after the last action.
+        "ts_assurance": jnp.zeros_like(scratch["ts_assurance"]),
+        "ts_follow_me": jnp.zeros_like(scratch["ts_follow_me"]),
+        "ts_trace_fires": jnp.zeros_like(scratch["ts_trace_fires"]),
+        "ts_cursor": jnp.where(f_prompt, 2, c_pos),
+        "ts_eot": sides,
+        "ts_qc": jnp.asarray(outcome.quick_claw) != 0,
+    }
+    paused = paused._replace(
+        **{
+            name: jnp.asarray(value).astype(getattr(paused, name).dtype)
+            for name, value in values.items()
+        },
+        learn_site=jnp.where(f_prompt, LEARN_FIELD, LEARN_MON).astype(paused.learn_site.dtype),
+        roosting=roosting_now(paused, read["roosted"]),
+        qc_roll=jnp.zeros_like(paused.qc_roll),
+    )
+    paused = _stale_known_item(s, paused, False)
+    out = _where(bc_pause, paused, e)
+    s = _where(halted, s, out)
+    all_halted = halted | bc_pause
     # The faint replacement's Starf Berry draw, kept for ``replace`` where it can be read; 0 at a
     # pause and elsewhere, so states merge (F-10).
     # Stored modulo 5: a replacement's check always meets five stats below +6 (a fresh battler;
     # at most an Intimidate or Download stage before it), so states that read alike merge.
-    kept = starf_kept(tables, s) & ~halted
+    kept = starf_kept(tables, s) & ~all_halted
     replacement_draw = jnp.asarray(outcome.starf)[:, 1].astype(_I32) % len(STARF_STATS)
     s = s._replace(starf_roll=jnp.where(kept, replacement_draw, 0).astype(s.starf_roll.dtype))
     return _where(state.over != 0, state, s), events
@@ -4851,16 +5004,10 @@ def replace(
     out = out._replace(
         entry_pending=out.entry_pending.at[side].set(waits.astype(out.entry_pending.dtype))
     )
-    # TurnEnd's AnyExpPayout (bcp.c:1846) pays for a newcomer the hazards fainted. Learn work
-    # it leaves inside the opponent's replacement loop would be read by the next replacement
-    # pick before the learn resolve: refused as window (c) (design §3.3(c)).
-    out, leveled = pay_exp_leveled(tables, entered, out)
-    window_c = (jnp.asarray(side) == 1) & jnp.any(leveled) & (out.over == 0)
-    out = out._replace(
-        exp_refused=jnp.where(window_c, EXP_REFUSED_WINDOW_C, out.exp_refused).astype(
-            out.exp_refused.dtype
-        )
-    )
+    # TurnEnd's AnyExpPayout (bcp.c:1846) pays for a newcomer the hazards fainted; its prompt
+    # comes before the next ReplaceFainted (:1848): the learn work stays in the state for the
+    # caller's decision (E3-B2-21, ``search.playout.send_replacements`` stops at it).
+    out = pay_exp(tables, entered, out)
     # The kept Starf Berry draw (F-10) is read; kept on for a side whose next replacement can
     # still eat one (a newcomer that the hazards fainted) or whose newcomer's checks wait for
     # ShowBattleMon (``entry_pending``, G-32), else 0.

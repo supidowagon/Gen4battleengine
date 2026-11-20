@@ -3061,3 +3061,115 @@ def test_baton_pass_keeps_aqua_ring_and_the_newcomer_heals_at_the_turns_end(tabl
     plain = s._replace(aqua_ring=s.aqua_ring.at[0].set(1))
     switch = jnp.array([MOVE_ACTIONS + 1, n.move_slot(s, 1, "Tackle")], jnp.int32)
     assert assert_matches_reference(t, plain, switch, empty_outcome()).aqua_ring.tolist() == [0, 0]
+
+
+# --- E3-B2-21: the mid-turn learn prompt ----------------------------------------------------------
+# The payout runs the whole GetExpTask, every level's learn prompt included, inside itself
+# (battle_script.c:9882; MoveEnd bcp.c:3968 then the tail :3973, the field conditions :941, a
+# battler's turn-end block :1296): ``step`` pauses at the prompt (``learn_site``), the answer is
+# ``levelup.learn``, and the same ``step`` resumes the turn. Both engines agree on every field at
+# the pause and after the resume (``assert_matches_reference``).
+
+
+def _learner_moves():
+    return ("Bubble", "Roar", "Tackle", "Water Gun")
+
+
+def _prinplup(t, n, level=18):
+    """A Prinplup one exp short of the next level (BubbleBeam at 19, vanilla learnset)."""
+    from tests.engine.test_levelup import _base, _mon
+
+    return _mon(
+        n,
+        "Prinplup",
+        level,
+        moves=_learner_moves(),
+        ivs=(3,) * 6,
+        exp=_base(t, n, "Prinplup", level + 1) - 1,
+    )
+
+
+def _learn_state(t, n, opp, **kw):
+    from tests.engine.test_levelup import _mon
+
+    return make_state(t, [_prinplup(t, n), _mon(n, "Machop", 20)], opp, **kw)
+
+
+def _resume_learn(t, state, option=None):
+    """The state answered (``option``: give up when None) and resumed through both engines."""
+    from nuzline.engine.levelup import GIVE_UP, learn
+
+    answered = jax.jit(learn)(t, state, jnp.int32(GIVE_UP if option is None else option))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    return answered, assert_matches_reference(t, answered, jnp.zeros(2, jnp.int32), miss)
+
+
+def test_midturn_learn_pauses_at_the_move_end_payout(tables, names):
+    # Prinplup's Bubble KOs the 1-HP Geodude: the payout levels it to 19 and the BubbleBeam prompt
+    # comes inside MoveEnd (bcp.c:3968), before Geodude's own action could be skipped or the
+    # next action run. The pause holds the turn at the action's position (ts_cursor).
+    from nuzline.engine.levelup import LEARN_MOVE_END, needs_learn
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Geodude", 12), _mon(names, "Bonsly", 15)]
+    s = _learn_state(tables, names, opp).replace_hp(1, 0, 1)
+    paused = assert_matches_reference(tables, s, A("Bubble", "Tackle", s, names), empty_outcome())
+    assert int(paused.learn_site) == LEARN_MOVE_END and bool(needs_learn(paused))
+    assert int(paused.level[0, 0]) == 19 and int(paused.hp[1, 0]) == 0
+    _, done = _resume_learn(tables, paused)
+    assert int(done.learn_site) == 0 and int(done.turn) == int(s.turn) + 1
+    assert not bool(needs_learn(done))
+
+
+def test_midturn_learn_field_payout_pauses_before_gravity_and_the_turn_end(tables, names):
+    # Hail faints the 1-HP Geodude in the field conditions (bcp.c:941): the payout and its prompt
+    # come there, with the turn end's order fixed at the last BranchActions (ts_eot, :888-891).
+    from nuzline.engine.levelup import LEARN_FIELD
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Geodude", 12), _mon(names, "Bonsly", 15)]
+    s = _learn_state(tables, names, opp, start_condition=Weather.HAIL).replace_hp(1, 0, 1)
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    paused = assert_matches_reference(tables, s, A("Tackle", "Tackle", s, names), miss)
+    assert int(paused.learn_site) == LEARN_FIELD and int(paused.level[0, 0]) == 19
+    _, done = _resume_learn(tables, paused)
+    assert int(done.learn_site) == 0
+
+
+def test_midturn_learn_battler_block_payout_pauses_in_the_turn_end_order(tables, names):
+    # Burn faints the 1-HP Geodude in its end-of-turn block (bcp.c:1296): the prompt comes after
+    # that block, and the resume runs the other battlers' blocks in the stored order.
+    from nuzline.engine.levelup import LEARN_MON
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Geodude", 12), _mon(names, "Bonsly", 15)]
+    s = _learn_state(tables, names, opp).replace_hp(1, 0, 1)
+    s = s._replace(status=s.status.at[1, 0].set(int(Status.BURN)))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    paused = assert_matches_reference(tables, s, A("Tackle", "Tackle", s, names), miss)
+    assert int(paused.learn_site) == LEARN_MON and int(paused.level[0, 0]) == 19
+    _, done = _resume_learn(tables, paused)
+    assert int(done.learn_site) == 0
+
+
+@pytest.mark.parametrize("answer", ["give up", "replace slot 3"])
+def test_midturn_learn_pending_action_rereads_the_replaced_slot(tables, names, answer):
+    # Geodude is faster and Selfdestructs; the payout levels Prinplup before its selected Water
+    # Gun (slot 3) runs. FightCommand reads moves[moveSlot] when the action runs (bcp.c:1889-1895):
+    # replacing slot 3 runs BubbleBeam and spends its PP; giving up keeps Water Gun.
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Geodude", 12, moves=("Selfdestruct",)), _mon(names, "Bonsly", 15)]
+    s = _learn_state(tables, names, opp)
+    s = s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(int(s.stats[0, 0, Stat.SPE - 1]) + 1))
+    paused = assert_matches_reference(
+        tables, s, A("Water Gun", "Selfdestruct", s, names), empty_outcome()
+    )
+    assert int(paused.learn_site) == 1 and int(paused.ts_actions[0]) == 3
+    bubble_beam = names.move("BubbleBeam")
+    answered, done = _resume_learn(tables, paused, None if answer == "give up" else 3)
+    if answer == "give up":
+        assert int(done.moves[0, 0, 3]) == names.move("Water Gun")
+    else:
+        assert int(done.moves[0, 0, 3]) == bubble_beam
+        assert int(done.pp[0, 0, 3]) < int(answered.pp[0, 0, 3])

@@ -3,7 +3,8 @@ the resolve after a turn, before any faint replacement.
 
 The decomp's ``TurnEnd`` pays exp and runs its learn-move prompts (battle_controller_player.c:
 1846) before ``ReplaceFainted`` (:1848), so ``finish_turn`` resolves the learns first and the
-replacements then read the moves after them. The engine side (``advance_learns``,
+replacements then read the moves after them. A prompt inside a turn is answered at the pause
+(``playout.step_through``, E3-B2-21). The engine side (``advance_learns``,
 ``needs_learn``, ``learn``, ``learn_options``) is ``nuzline.engine.levelup``.
 
 This module never imports ``nuzline.search.playout``: ``settle_learns`` takes
@@ -18,7 +19,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, needs_learn
 from nuzline.engine.state import SLOTS, BattleState
-from nuzline.engine.step import EXP_REFUSED_WINDOW_C, needs_replacement
+from nuzline.engine.step import needs_replacement
 
 __all__ = ["learn_policy", "learn_reason", "resolve_learns", "settle_learns", "settle_reason"]
 
@@ -98,14 +99,10 @@ def settle_reason(tables: Tables, state: BattleState, send_reason, carried_mul):
 
 
 def learn_reason(state: BattleState) -> str | None:
-    """The refusal message for a concrete state's ``exp_refused``, or ``None``."""
+    """The refusal message for a concrete state's ``exp_refused``, or ``None``. No code is set
+    since E3-B2-21 (a payout inside the opponent's replacement loop no longer refuses: its prompt
+    stays for the caller's decision)."""
     code = int(state.exp_refused)
     if code == 0:
         return None
-    if code == EXP_REFUSED_WINDOW_C:
-        return (
-            "a level-up from an opponent replacement fainting on entry (entry hazards) "
-            "leaves learn-move work inside the opponent's replacement loop "
-            "(K3d-exp design §3.3, window (c))"
-        )
     return f"learn-move work refused (exp_refused = {code})"

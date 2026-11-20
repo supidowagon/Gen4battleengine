@@ -97,14 +97,19 @@ def random_opponent(state: BattleState, attacker, bit):
     return jnp.where(alive(state, pick), pick, other), jnp.asarray(True)
 
 
-def fight_randomizes(state: BattleState, side, struggling) -> jnp.ndarray:
+def fight_randomizes(state: BattleState, side, struggling, reselected=False) -> jnp.ndarray:
     """``bool``: the fight command's ``randomizeTarget`` (bcp.c:1861-1903, D2-9 rule 1).
     ``struggling`` (:1866-1868), or an Encore on the attacker at the action's start (:1869-1884):
     both Encore branches randomize, whether or not the slot still holds the encored move. The
     lock branch (:1885-1888) and the plain slot (:1894-1896) do not; a locked battler is never
-    struggling. Branch 1.5 (:1889-1893, the selected move left its slot) cannot occur: the move is
-    read from the slot at the action (``levelup.learn_pin``)."""
-    return jnp.asarray(struggling, bool) | (state.encore_move[side] != 0)
+    struggling. Branch 1.5 (:1889-1893) randomizes when the selected move left its slot:
+    ``reselected``, a learn prompt answered between the selection and the action replaced the
+    slot (``step._execute_actions``, E3-B2-21)."""
+    return (
+        jnp.asarray(struggling, bool)
+        | (state.encore_move[side] != 0)
+        | jnp.asarray(reselected, bool)
+    )
 
 
 def multi_turn(tables: Tables, move) -> jnp.ndarray:
@@ -312,9 +317,7 @@ def resolve(
         live_foe = jnp.where(alive(state, foe), foe, none)
         fm = follow_me_target(state, attacker)
         random_def = live_foe
-        single_def = jnp.where(
-            fm != none, fm, jnp.where(alive(state, chosen), chosen, live_foe)
-        )
+        single_def = jnp.where(fm != none, fm, jnp.where(alive(state, chosen), chosen, live_foe))
         random_drew = single_drew = uoa_random_drew = jnp.asarray(False)
 
     is_ = lambda *ranges: jnp.isin(rng, jnp.asarray([int(r) for r in ranges], _I32))

@@ -178,6 +178,9 @@ class RefBattler:
     ts_taken: list[int]
     ts_dragged: int
     ts_move_failed: int
+    ts_move_cur: int  # moveCur of the battler's action this turn (E3-B2-21)
+    ts_eot: int  # monSpeedOrder of the turn end, sorted before a learn pause (E3-B2-21)
+    ts_qc: int  # the turn's speedRand draw at a learn pause (E3-B2-21)
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
     ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
@@ -237,6 +240,8 @@ class RefState:
     # E2 batch 6: the mid-turn switch decision (engine.state docstring): 0 between turns.
     pivot_battler: int
     ts_cursor: int
+    learn_site: int  # E3-B2-21: the learn pause's site (engine.state docstring), 0 none
+    ts_ran: int
     ts_pursued: int
     ts_used: int
     ts_damaged: int

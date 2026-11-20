@@ -33,10 +33,9 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine import levelup, stats
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.levelup import pay_exp
-from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import EXP_REFUSED_WINDOW_C, replace, step
+from nuzline.engine.step import replace, step
 from nuzline.reference import engine as ref_engine
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_grant_exp, ref_replace
@@ -75,12 +74,12 @@ def _same(a, b):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
 
 
-def _ko(tables, s, slot: int = 0, *, pending: bool = False, selected: int = 0):
+def _ko(tables, s, slot: int = 0):
     """The payout for the opponent's party ``slot`` fainting, in both engines (asserted
     equal); the JAX state."""
     after = s.replace_hp(1, slot, 0)
-    out = _pay(tables, s, after, jnp.asarray(pending), jnp.asarray(selected, jnp.int32))
-    ref = ref_grant_exp(to_numpy(tables), to_ref(after), slot, pending, selected)
+    out = _pay(tables, s, after)
+    ref = ref_grant_exp(to_numpy(tables), to_ref(after), slot)
     _same(out, from_ref(ref))
     return out
 
@@ -448,69 +447,32 @@ def test_roar_into_stealth_rock_pays_from_the_newcomer(tables, names):
     assert int(out.exp[1]) == int(s.exp[1])
 
 
-def _selfdestruct_state(tables, names):
-    """Geodude (faster) Selfdestructs, which faints it on a miss too; the player chose a
-    move. Prinplup is one short of L17."""
-    opp = [_mon(names, "Geodude", 12, moves=("Selfdestruct",)), _mon(names, "Bonsly", 15)]
-    s = _prinplup_state(tables, names, opp=opp)
-    return s._replace(stats=s.stats.at[1, 0, _SPE].set(int(s.stats[0, 0, _SPE]) + 1))
-
-
-def test_learn_pin_marks_the_pending_move_of_a_leveled_active(tables, names):
-    s = _selfdestruct_state(tables, names)
-    # Geodude L12: E = 73 * 12 / 7 = 125, t = 187; exp 3119 + 187: L17 before Water Gun runs.
-    out = assert_matches_reference(tables, s, A("Water Gun", "Selfdestruct", s, names), MISS)
-    assert int(out.hp[1, 0]) == 0 and int(out.level[0, 0]) == 17
-    assert int(out.learn_pin) == 1 + names.move_slot(s, 0, "Water Gun") == 4
-
-
-def test_learn_pin_needs_a_pending_move(tables, names):
-    s = _selfdestruct_state(tables, names)
-    # The player switches to Machop (switches go first): no move is pending when Geodude
-    # faints. Mask {0, 1}: g = 125 / 2 = 62, t = 93; Prinplup 3119 + 93 levels on the bench.
-    out = assert_matches_reference(tables, s, A(MOVE_ACTIONS + 1, "Selfdestruct", s, names), MISS)
-    assert int(out.learn_pin) == 0 and int(out.level[0, 0]) == 17  # Prinplup was paid
-    # The player moved first (it is faster) and KO'd the foe: its move has run.
-    s = _prinplup_state(tables, names).replace_hp(1, 0, 1)
-    out = assert_matches_reference(tables, s, A("Bubble", "Tackle", s, names), empty_outcome())
-    assert int(out.level[0, 0]) == 17 and int(out.learn_pin) == 0
-
-
-def test_learn_pin_is_cleared_every_turn(tables, names):
-    s = _prinplup_state(tables, names)
-    s = s._replace(learn_pin=jnp.asarray(3, jnp.int8))
-    out = assert_matches_reference(tables, s, A("Tackle", "Tackle", s, names), empty_outcome())
-    assert int(out.learn_pin) == 0
-
-
 def _replace_both(tables, s, side, slot):
     out = replace(tables, s, side, slot)
     _same(out, from_ref(ref_replace(to_numpy(tables), to_ref(s), side, slot)))
     return out
 
 
-@pytest.mark.fullset
-def test_a_hazard_ko_inside_the_replacement_loop_refuses_learn_work(tables, names):
+def test_a_hazard_ko_inside_the_replacement_loop_pays_and_leaves_the_prompt(tables, names):
     # The opponent sends Bonsly (1 HP) into Stealth Rock: TurnEnd's payout (bcp.c:1846) levels
-    # Prinplup, and the next replacement pick would read the moves before the learn
-    # resolve: window (c), exp_refused = 2.
+    # Prinplup and its learnset scan runs inside it, before the next ReplaceFainted (:1848;
+    # E3-B2-21): the learn work stays in the state for the caller's decision, no refusal.
     opp = [_mon(names, "Geodude", 12, current_hp=0), _mon(names, "Bonsly", 15, current_hp=1)]
     opp.append(_mon(names, "Geodude", 12))
     s = _prinplup_state(tables, names, opp=opp)
     s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
     out = _replace_both(tables, s, 1, 1)
     assert int(out.hp[1, 1]) == 0 and int(out.level[0, 0]) == 17
-    assert int(out.exp_refused) == EXP_REFUSED_WINDOW_C == 2
-    # No level-up, no learn work: no refusal.
+    assert int(out.exp_refused) == 0 and int(out.learn_level[0]) == 17
+    # No level-up, no learn work.
     low = _with(s, exp={0: _base(tables, names, "Prinplup", 16)})
     out = _replace_both(tables, low, 1, 1)
     assert int(out.level[0, 0]) == 16 and int(out.exp[0]) > int(low.exp[0])
-    assert int(out.exp_refused) == 0
-    # The battle is over: nothing is left to pick, no refusal (the learn stays, ruling D8).
+    assert int(out.learn_level[0]) == 0
+    # The battle is over: nothing is left to pick (the learn stays, ruling D8).
     last = s.replace_hp(1, 2, 0)
     out = _replace_both(tables, last, 1, 1)
     assert int(out.over) == 1 and int(out.level[0, 0]) == 17
-    assert int(out.exp_refused) == 0
 
 
 # --- the closed form, the constants, the program size -------------------------------------------
@@ -598,7 +560,7 @@ PAY_EXP_CEILING = 880
 
 def test_pay_exp_stays_small(tables, names):
     s = _prinplup_state(tables, names)
-    jaxpr = jax.make_jaxpr(pay_exp)(tables, s, s, jnp.asarray(False), jnp.asarray(0))
+    jaxpr = jax.make_jaxpr(pay_exp)(tables, s, s)
     assert _equations(jaxpr.jaxpr) <= PAY_EXP_CEILING
     assert "while" not in str(jaxpr)  # no loop in the unrolled end of turn
 

@@ -1,7 +1,7 @@
 """Learn-move prompts in the pluggable player's loop (``nuzline.search.learn``, K3d-exp
 design §3.5): ``player_playout`` resolves a turn's learns before the replacements and
 settles a pending learn at its root, as ``playout`` does, and both loops'
-``refusal_reason`` name a refused learn (window (c)). The states are
+``refusal_reason`` name a refused learn (none since E3-B2-21: no window (c)). The states are
 ``tests/search/test_learn.py``'s.
 
 Compile cost shapes this module (each loop or turn program is the whole engine, several GB
@@ -121,22 +121,20 @@ def test_greedy_equals_playout_through_learns(tables, roots):
         got, out = _run(tables, s, GREEDY, (), k, TURNS)
         _same(got, want, root)
         if root.startswith(_window_c_root.__name__):
-            # Refused at the settle with turns left: both loops' cond stops on a refused root
-            # (test_a_pending_learn_root_window_c_is_refused_and_named runs no turn).
-            assert int(got.refused) == 1 and int(want.refused) == 1, root
+            # E3-B2-21: no window (c) any more; the settle refuses nothing.
+            assert int(got.refused) == 0 and int(want.refused) == 0, root
         if not int(got.refused):
             assert not bool(needs_learn(out)), f"{root}: a learn prompt was left pending"
 
 
 @pytest.mark.fullset
-def test_a_pending_learn_root_window_c_is_refused_and_named(tables, names):
-    # Refused at the root's settle, before any turn: both loops refuse with no turn to play
-    # (max_turns 0, the no-turn programs: the root's settle alone, about 1.5 GB each where a
-    # turn program passes 4 GB), so the refusal can only come from the settle.
+def test_a_pending_learn_root_is_not_refused(tables, names):
+    # E3-B2-21: the root's settle refuses nothing (no window (c)): both loops run with no turn to
+    # play (max_turns 0, the no-turn programs: the root's settle alone).
     s = _window_c_root(tables, names)
     key = jax.random.PRNGKey(7)
-    assert int(_run(tables, s, GREEDY, (), key, 0)[0].refused) == 1
-    assert int(playout(tables, s, key, 0).refused) == 1
+    assert int(_run(tables, s, GREEDY, (), key, 0)[0].refused) == 0
+    assert int(playout(tables, s, key, 0).refused) == 0
     # Both refusal_reason replays name it with no turn to replay (max_turns 0), so the name
     # can only come from the root's settle (player._replay's and playout.refusal_reason's
     # settle_reason, as _resolve_pending's settle_learns); with turns, the first replayed
@@ -144,9 +142,9 @@ def test_a_pending_learn_root_window_c_is_refused_and_named(tables, names):
     # test_refusal_reason_settles_a_pending_learn_root. Python-level replays: no new program.
     for turns in (0, TURNS):
         reason = player_module.refusal_reason(tables, s, GREEDY, (), key, turns) or ""
-        assert "window (c)" in reason, ("player", turns)
+        assert not reason, ("player", turns)
         reason = playout_module.refusal_reason(tables, s, 0, key, turns) or ""
-        assert "window (c)" in reason, ("playout", turns)
+        assert not reason, ("playout", turns)
 
 
 def test_the_empty_line_equals_playout_through_learns(tables, roots):
@@ -173,30 +171,29 @@ def test_a_turn_resolves_its_learns(tables, names):
 
 
 @pytest.mark.fullset
-def test_a_turn_window_c_refuses_the_fixed_player_and_is_named(tables, names):
+def test_a_hazard_ko_turn_does_not_refuse_the_fixed_player(tables, names):
     # The playout's window (c) turn (the test below) in the player loop, on the FIXED
     # program of the test above; its refusal_reason replays the turn in playout's _play_jit,
     # compiled after the loop program is dropped.
     s = _window_c(tables, names)
     action = names.move_slot(s, 0, "Bubble")
     key = jax.random.PRNGKey(3)
-    assert int(_run(tables, s, FIXED, action, key, FIXED_TURNS)[0].refused) == 1
+    assert int(_run(tables, s, FIXED, action, key, FIXED_TURNS)[0].refused) == 0
     drop_programs()
-    reason = player_module.refusal_reason(tables, s, FIXED, action, key, FIXED_TURNS)
-    assert "window (c)" in reason
+    assert not player_module.refusal_reason(tables, s, FIXED, action, key, FIXED_TURNS)
 
 
 @pytest.mark.fullset
-def test_a_turn_window_c_refuses_the_playout_and_is_named(tables, names):
+def test_a_hazard_ko_turn_does_not_refuse_the_playout(tables, names):
     # Refused in the first turn's payout (test_learn.py::_window_c). Formerly
     # test_learn.py::test_window_c_refuses_the_playout_and_names_it. The replay's _play_jit
     # and finish_turn programs, then the loop program after they are dropped.
     s = _window_c(tables, names)
     action = names.move_slot(s, 0, "Bubble")
     key = jax.random.PRNGKey(3)
-    assert "window (c)" in playout_module.refusal_reason(tables, s, action, key, FIXED_TURNS)
+    assert not playout_module.refusal_reason(tables, s, action, key, FIXED_TURNS)
     drop_programs()
-    assert int(playout_from_action(tables, s, action, key, FIXED_TURNS).refused) == 1
+    assert int(playout_from_action(tables, s, action, key, FIXED_TURNS).refused) == 0
 
 
 # test_greedy_equals_playout_through_learns' two pending roots hold the property too (it

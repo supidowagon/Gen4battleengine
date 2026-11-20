@@ -460,32 +460,30 @@ three structs has a row.
     battle_lib.c:1456-1479, battle_script.c:543-635).
   - `learn_level` / `learn_cursor` are the deferred learnset scan: the level whose scan is
     next and the index into it (the decomp restarts `GET_EXP_LEARNSET_INDEX` at 0 for each
-    level, battle_script.c:9882). `learn_pin` (the move slot the player selected, when a
-    payout reached its active before its move ran) and `exp_refused` (a sticky refusal
-    code) are the engine's own bookkeeping. All four are 0 until the payout and the learn
+    level, battle_script.c:9882). `learn_pin` and `exp_refused` are kept in the pytree but
+    never set since E3-B2-21 (below). The four others are 0 until the payout and the learn
     resolve set them.
-  - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
-    replacing the active learner's disabled or encored move, or the slot pinned by
-    `learn_pin` (the decomp ends Disable and Encore at the turn end, and re-reads the pinned slot
-    when its move runs, after any learn of the turn; none of these masks once the battle is over,
-    bcp.c:3965-3969; the locked and choice-locked moves are read by id and stay offered;
-    `levelup` module docstring), and every replacement when the offered move's effect is
-    unsupported (ruling D10; coverage then refuses it only where it could auto-learn into an
-    empty slot, `coverage.learnable_moves`). They are legal game choices the search skips, so plan
-    values at learn nodes are achievable lower bounds (`levelup.learn_options`; the playout
-    always gives the move up, ruling D3). The scan, auto-learns and prompts run after `step`,
-    before any faint replacement (`levelup.advance_learns` / `learn`,
-    `search.learn.resolve_learns`); prompts pending when the battle ends stay (ruling D8).
-  - Known limitation (T8 review M1): Stage B's learn node comes after the whole turn's
-    outcome (`expand._turn`), but the decomp can prompt mid-turn, at a payout in `MoveEnd`
-    (battle_controller_player.c:3968), `CheckFieldConditions` (:941) or `CheckMonConditions`
-    (:1296), before a later draw of the same turn such as Shed Skin's
-    (`BattleSystem_RandNext(battleSys) % 10 < 3`, battle_lib.c:3567-3570, run from
-    `MON_COND_CHECK_STATE_ABILITY`, battle_controller_player.c:1354-1355). The search then
-    picks the answer knowing that draw, which the player cannot, so in that case the learn
-    node's value is possibly optimistic: it may exceed what the player can achieve. It
-    needs a chance event after a mid-turn payout in the same turn; the replayed state
-    stays exact, only the choice is better informed than the player's.
+  - **Mid-turn learn prompts (E3-B2-21).** The payout runs the whole `GetExpTask`, every level's
+    learnset scan and prompt included, inside itself, so the prompt comes before any later
+    action or draw of the turn: at `MoveEnd` (`AnyExpPayout`, battle_controller_player.c:3968,
+    before the tail `TriggerEffectOnSwitch` at :3973), in `CheckFieldConditions` (:941, the
+    weather faints), in `CheckMonConditions` (:1296, a battler's end-of-turn block) and at the
+    `TurnEnd` payout (:1846, before `ReplaceFainted`, :1848). `step` pauses at the prompt:
+    `learn_site` (per field, 0 none, 1 `LEARN_MOVE_END`, 2 `LEARN_FIELD`, 3 `LEARN_MON`) and
+    the turn scratch (`ts_ran`: the MoveEnd `clear`; `ts_move_cur`: each battler's `moveCur`;
+    `ts_eot` and `ts_qc`: the turn end's order and speedRand draw, fixed at the last
+    `BranchActions`, :888-891) hold the turn, and the answered state resumes it through the
+    same `step` (`levelup.learn_prompt`, `levelup.learn`). A pending action re-reads its move
+    slot (`FightCommand`, :1889-1895), so the learner's replaced slot runs the new move. The
+    answer is a request `(state, option)` of `search.expand.expand`; a playout gives the
+    move up at the pause (`resolve_learns`, ruling D3). A payout that ends the battle leaves
+    its prompts (ruling D8: `over`).
+  - The search masks only the HM slots and, when the offered move's effect is unsupported,
+    every replacement (ruling D10; coverage then refuses it only where it could auto-learn
+    into an empty slot, `coverage.learnable_moves`). The D2 masks (Disable, Encore) and the
+    `learn_pin` mask are gone: the prompt is answered at the payout, before the turn end
+    that ends them and before the slot is read again. They are legal game choices the search
+    skips, so plan values at learn nodes are achievable lower bounds (`levelup.learn_options`).
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is
@@ -515,7 +513,8 @@ three structs has a row.
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
   `ts_damaged`, `ts_dealt`), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
-  `ts_switched`). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
+  `ts_switched`; E3-B2-21: `ts_ran`, `ts_move_cur`, `ts_eot`, `ts_qc`, with `learn_site` the
+  learn pause above). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
   `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
   Pursuit, `ts_pursued`, and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
   skip their actions in `step._execute_actions`) are kept only at such a pause.

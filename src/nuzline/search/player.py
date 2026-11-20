@@ -169,6 +169,9 @@ def _player_run(
         played, pass_refused = _replace_while_needed(
             tables, played, player, params, sent_refused, SLOTS - 1, k_policy, 1, layout
         )
+        # A newcomer's hazard faint inside the replacement loop leaves its prompt (E3-B2-21), but
+        # not at a finished battle (ruling D8).
+        played = _select(played.over != 0, played, resolve_learns(tables, played))
         refused = refused | pass_refused | act_refused | (played.exp_refused != 0)
         s = _select(refused, s, played)
         counted = jnp.where(refused, 0, 1)
@@ -296,7 +299,7 @@ def _replay(
         reason = reason or learn_reason(after)
         if reason:
             return reason, state, turns
-        state = after
+        state = _resolve_jit(tables, after)  # the loop's hazard-faint prompts (E3-B2-21)
     return None, state, max_turns
 
 

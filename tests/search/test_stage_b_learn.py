@@ -1,11 +1,11 @@
 """K3d-exp T8: the Stage B learn node (design §3.5, ``expand._turn`` / ``expand._learn``,
 ``stage_b`` learn decisions).
 
-``TurnEnd`` pays exp and runs its learn-move prompts (battle_controller_player.c:1846)
-before ``ReplaceFainted`` (:1848): a turn's child stops at the prompt before the opponent's
-replacement, holding the turn's ``powerMul`` (the stop ``send_replacements`` makes at a
-player replacement, playout.py ``send_replacements``), and is refused when the opponent
-needs a replacement after an AI switch. Learn work at a finished battle is no prompt (D8).
+A payout runs its learn-move prompts inside it (E3-B2-21: MoveEnd bcp.c:3968, the field
+and battler checks :941, :1296, TurnEnd :1846, before ``ReplaceFainted`` :1848): a turn's
+child is paused at the prompt (``BattleState.learn_site``) before the opponent's replacement,
+the turn's ``powerMul`` kept in ``ts_power_mul``; an answer resumes the turn through
+``expand``. Learn work at a finished battle is no prompt (D8).
 
 Bulbasaur learns PoisonPowder (index 4) and Sleep Powder (index 5) at level 13 (vanilla
 learnset); one exp short of 13, any payout levels it.
@@ -20,11 +20,18 @@ import pytest
 
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.ids import Stat, Status
-from nuzline.engine.levelup import GIVE_UP, advance_learns, learn_options, needs_learn
+from nuzline.engine.levelup import (
+    GIVE_UP,
+    LEARN_MON,
+    LEARN_MOVE_END,
+    advance_learns,
+    learn_options,
+    needs_learn,
+)
 from nuzline.engine.observe import OBS_FIELDS
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import NORMAL_POWER_MUL, PURSUIT_POWER_MUL, replacement_power_mul, step
+from nuzline.engine.step import PURSUIT_POWER_MUL, replacement_power_mul, step
 from nuzline.search import expand, stage_b
 from nuzline.search.leaves import LeafValue
 from nuzline.search.plan_tree import render, to_json
@@ -83,34 +90,52 @@ def _move(names, name: str) -> int:
 # --- the learn stop and the answers (expand._turn / expand._learn) ----------------------------
 
 
+def _resume(tables, state, option):
+    """The one child of answering the paused ``state``'s last prompt through ``expand`` (the
+    turn resumes, E3-B2-21): ``(child state, child)``."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(expand, "CHUNK", 1024)  # as test_expand's small_chunk: no 16384-row padding
+        store, kids = expand.expand(tables, _batch(state), [(0, option, 0)])
+    (child,) = kids[0]
+    return jax.tree.map(lambda x: x[child.state_row], store), child
+
+
+# Slow: the resume runs expand's whole-engine laws and step programs (11.7 GB at a compile).
+@pytest.mark.slow
 def test_a_turn_child_stops_at_the_learn_prompt(tables, names):
+    # E3-B2-21: the payout and its prompts run inside MoveEnd (bcp.c:3968), so the child is
+    # paused there (``LEARN_MOVE_END``), before the opponent's replacement.
     s = _vs(tables, names, [_geodude_1hp(names), _mon(names, "Bonsly", 15)])
     after, refused, obs, keep = _turn(tables, s, A("Tackle", "Tackle", s, names), empty_outcome())
     assert bool(keep)  # expand._turn's call_consistent row flag (E2 batch 5)
     assert not bool(refused)
     assert bool(needs_learn(after)) and int(after.learn_level[0]) == 13
+    assert int(after.learn_site) == LEARN_MOVE_END
     assert stage_b._offered_move(tables, after) == _move(names, "PoisonPowder")
-    # Stopped before the opponent's replacement: Geodude is still down, the mul is held.
+    # Stopped before the opponent's replacement: Geodude is still down.
     assert (int(after.active[1]), int(after.hp[1, GEODUDE])) == (0, 0)
-    assert int(after.replace_mul) == NORMAL_POWER_MUL
     assert int(np.asarray(obs)[_OBS["learn_level"]][0]) == 13  # observed after the scan
     assert stage_b._pending(_batch(after)) == ["learn"]
-    # Giving PoisonPowder up leaves the Sleep Powder prompt; giving that up sends Bonsly in.
-    second, refused, _ = _learn(tables, after, jnp.int32(GIVE_UP))
-    assert not bool(refused) and bool(needs_learn(second))
+    # Giving PoisonPowder up leaves the Sleep Powder prompt (one child, no turn played);
+    # giving that up resumes the turn: the opponent's Bonsly comes in.
+    second, child = _resume(tables, after, GIVE_UP)
+    assert not child.refused and bool(needs_learn(second)) and int(second.learn_site) != 0
     assert stage_b._offered_move(tables, second) == _move(names, "Sleep Powder")
-    assert int(second.active[1]) == 0 and int(second.replace_mul) == NORMAL_POWER_MUL
-    done, refused, _ = _learn(tables, second, jnp.int32(GIVE_UP))
-    assert not bool(refused) and not bool(needs_learn(done))
-    assert int(done.active[1]) == 1 and int(done.replace_mul) == 0
+    assert int(second.active[1]) == 0
+    done, child = _resume(tables, second, GIVE_UP)
+    assert not child.refused and not bool(needs_learn(done))
+    assert int(done.learn_site) == 0 and int(done.active[1]) == 1
     assert stage_b._pending(_batch(done)) == [""]
 
 
+# Slow: the resume runs expand's whole-engine laws and step programs (11.7 GB at a compile).
+@pytest.mark.slow
 def test_the_learn_stop_holds_the_turns_pursuit_power_mul(tables, names):
     # Steelix switches to Bulbasaur; Geodude's Pursuit hits the switcher (powerMul 20,
     # BtlCmd_TryPursuit, battle_script.c:6884), then faints to poison at the end of the turn:
     # the payout levels the newcomer (a participant: it entered while Geodude had HP), whose
-    # prompt stops the child with the 20 held for the opponent's replacement.
+    # prompt pauses the turn (``LEARN_MON``) with the 20 kept in ``ts_power_mul`` for the
+    # opponent's replacement after the resume.
     steelix = _mon(names, "Steelix", 30)
     geodude = _geodude_1hp(names, moves=("Pursuit",), status=int(Status.POISON))
     opp = [geodude, _mon(names, "Onix", 12), _mon(names, "Cranidos", 14)]
@@ -122,7 +147,13 @@ def test_the_learn_stop_holds_the_turns_pursuit_power_mul(tables, names):
     assert not bool(refused)
     assert int(after.hp[1, GEODUDE]) == 0 and int(after.active[1]) == GEODUDE
     assert bool(needs_learn(after)) and int(after.learn_level[1]) == 13
-    assert int(after.replace_mul) == PURSUIT_POWER_MUL
+    assert int(after.learn_site) == LEARN_MON
+    assert int(after.ts_power_mul) == PURSUIT_POWER_MUL
+    second, _ = _resume(tables, after, GIVE_UP)
+    assert bool(needs_learn(second)) and int(second.ts_power_mul) == PURSUIT_POWER_MUL
+    done, child = _resume(tables, second, GIVE_UP)
+    assert not child.refused and int(done.learn_site) == 0
+    assert int(done.active[1]) != GEODUDE and int(done.replace_mul) == 0
 
 
 def test_a_learn_answer_sends_the_opponent_replacement_with_the_carried_mul(tables, names):

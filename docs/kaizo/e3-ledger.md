@@ -1373,3 +1373,41 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   existing tests/engine/test_aqua_ring.py covers the set, fail, heal, Big Root, order and switch), tests/ai/test_kaizo_policy.py
   (`test_aqua_ring_tables_are_the_decomps`, `test_aqua_ring_basic`, `test_expert_aqua_ring`,
   `test_aqua_ring_is_scored_not_refused_and_exact_equals_loose`).
+- E3-B2-21 Mid-turn learn prompt (sheet g21_midturn_learn.md; no move, no table). The exp payout runs the whole
+  `GetExpTask`, every level's learnset scan and prompt included, inside itself (battle_script.c:9882), so a prompt comes before
+  any later action or draw of the turn; the engine deferred it to after `step` and compensated (`learn_pin`, the D2 Disable/Encore
+  masks, `exp_refused` window (c)). Now `step` pauses at the prompt: `BattleState.learn_site` (`levelup.LEARN_MOVE_END` 1 =
+  `MoveEnd`'s `AnyExpPayout`, bcp.c:3968, with the tail `TriggerEffectOnSwitch` at :3973 run after the answer; `LEARN_FIELD` 2 =
+  `CheckFieldConditions` head, :941; `LEARN_MON` 3 = a battler's `CheckMonConditions` block, :1296; the `TurnEnd` payout, :1846,
+  before `ReplaceFainted`, :1848, and Pursuit's, subscript_pursuit.s:106, are the MoveEnd and replacement-loop cases) and the new
+  scratch `ts_ran` (the MoveEnd `clear`), `ts_move_cur`, `ts_eot` (the turn end's order, sorted at the last BranchActions,
+  bcp.c:888-891, so a level-up cannot reorder it) and `ts_qc` (its speedRand draw). The answer is `levelup.learn`; the same
+  `step` resumes. `levelup.learn_prompt` runs the scan and tests `needs_learn & over == 0` (D8: a battle-ending payout leaves its
+  prompts). `pay_exp` loses its pending/selected parameters, `learn_pin` and `exp_refused` stay in the pytree but are never set.
+  A pending action re-reads `moves[moveSlot]` when it runs (FightCommand, bcp.c:1889-1895; branch 1.5 re-randomizes the target when
+  the selected move left its slot: `targets.fight_randomizes(..., reselected)`), a Struggle or lock fixed at the selection stays.
+  Search: an answer to a learn-paused state is a request `(state, option, 0)` of `expand` (the option applied, another prompt left
+  is the one child through `expand_learns`, else the turn resumes as a chance node); Stage B routes paused learn nodes through
+  `_expand_pivots`; playouts answer with `resolve_learns` (give-up) in `step_through`; `outcome.pivot_view` shows a learn pause to
+  the laws (acted battlers: a no-op switch to their own active, others: `ts_actions`). Reference engine: `_LearnPause`,
+  `_resume_learn`, `_turn_from_scratch`. `tools/trace_to_state.py` replays the turn with give-up answers (`AUTO_LEARN`) and fits
+  the recorded answers afterwards (`_Fit.asked`).
+  Rulings: L1 a payout's prompt is answered at the payout (above); L2 a pause at LEARN_FIELD / LEARN_MON zeroes the pivot-only
+  scratch and `ts_assurance`, `ts_follow_me`, `ts_trace_fires` in both engines (the end of the turn reads none of them); L3 the
+  opponent's replacement loop is exact deferred: the AI's replacement pick never reads the player's moves, so a prompt of its
+  payout waits for the replacement without a different line. Removed (E1's masks, reported): the D2 Disable/Encore masks and the
+  `learn_pin` mask in `levelup.learn_options` (only the HM and D10 masks stay), the window (c) refusal (`EXP_REFUSED_WINDOW_C`),
+  the trace converter's refusal of those answers. The known limitation (optimism after a Shed Skin draw) is gone.
+  Doubles (section 5): the learner is a party slot; `reselected` feeds `fight_randomizes` per battler; `ts_move_cur`, `ts_eot`,
+  `ts_qc` are `[B]`.
+  Owed lines closed: none. Owed lines added: (1) the laws' view of a Struggling player at a pause: `selected_move` recomputes
+  Struggle from the current PP while `step` keeps `ts_struggling` (an edge: the learner's PP changed by a learn); (2) the doubles
+  laws (`enumerate` ~:2499) pass no `reselected` to `fight_randomizes`; (3) the AI-switch-then-needed-replacement refusal at the
+  learn stop (`test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop`, fullset) is unverified here: the stop moved
+  to the payout. Not built: none. No table array or key changed, no manifest bump.
+  Tests: tests/engine/test_e3_batch2.py (`test_midturn_learn_pauses_at_the_move_end_payout`,
+  `test_midturn_learn_field_payout_pauses_before_gravity_and_the_turn_end`,
+  `test_midturn_learn_battler_block_payout_pauses_in_the_turn_end_order`,
+  `test_midturn_learn_pending_action_rereads_the_replaced_slot`), tests/engine/test_learn.py, tests/engine/test_levelup.py,
+  tests/search/test_learn.py, tests/search/test_stage_b_learn.py, tests/search/test_player_learn.py,
+  tests/test_trace_to_state.py (the old window and mask tests rewritten).

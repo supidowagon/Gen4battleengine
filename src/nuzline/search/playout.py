@@ -449,10 +449,15 @@ def finish_turn(
     """``(state, refused)``: ``send_replacements``, then while the player needs a
     replacement (``SLOTS - 1`` passes at most) ``replacement_pass`` with
     ``replacement_policy``'s slot. The turn's learn-move prompts are resolved first
-    (``resolve_learns``), as ``TurnEnd`` runs them before ``ReplaceFainted``."""
+    (``resolve_learns``), as ``TurnEnd`` runs them before ``ReplaceFainted``; the ones a newcomer's
+    hazard faint leaves inside the replacement loop (E3-B2-21) are resolved at its end: the
+    answers do not change the opponent's pick (it never reads the move list,
+    ``ai.replacement.post_ko_switch_in``), and ``resolve_learns`` answers give-up."""
     state = resolve_learns(tables, state)
     state, refused = send_replacements(tables, state, ai_switched, power_mul)
     state, refused = _replace_while_needed(tables, state, refused, SLOTS - 1)
+    # A battle-ending payout leaves its prompts (ruling D8).
+    state = _select(state.over != 0, state, resolve_learns(tables, state))
     return state, refused | (state.exp_refused != 0)
 
 
@@ -493,7 +498,7 @@ def turn_muls(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndarray,
     opponent's switch; at a pause (E2 batch 6) the turn start's (``ts_power_mul``,
     ``ts_switched[1]``): the resume's actions are switch-shaped."""
     actions = jnp.asarray(actions, _I32)
-    paused = state.pivot_battler != 0
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
     power_mul = jnp.where(
         paused, state.ts_power_mul.astype(_I32), replacement_power_mul(tables, state, actions)
     )
@@ -520,21 +525,25 @@ def step_through(
     pick when the state is paused at a party list (``pivot_pick``; at the first pass ``pick``, a
     switch action, overrides the player's own), draws ``sample_outcome`` (``first_key`` at the
     first pass, then from ``key``: each half reads its own draws) and plays ``step``; it loops
-    while ``step`` pauses (at most twice a turn). One ``step``, one ``sample_outcome`` and one
+    while ``step`` pauses (a party list, E2 batch 6, or a learn prompt, E3-B2-21: the playout's
+    answers (``resolve_learns``) are made at the pause; at most nine passes a turn). One ``step``, one ``sample_outcome`` and one
     ``pivot_pick`` in the program. ``refused``: the AI refused its pick. ``replacement``
     (static): ``sample_outcome``'s, ``outcome.replacement_known`` of the states played."""
 
     def cond(carry):
         s, _, _, refused, n = carry
-        return (n == 0) | ((s.pivot_battler != 0) & ~refused & (n < 3))
+        return (n == 0) | (((s.pivot_battler != 0) | (s.learn_site != 0)) & ~refused & (n < 9))
 
     def body(carry):
         s, a, k, refused, n = carry
         paused = s.pivot_battler != 0
+        # A learn pause (E3-B2-21): the playout's answers, then the turn goes on as chosen.
+        learning = s.learn_site != 0
+        s = _select(learning, resolve_learns(tables, s), s)
         picked, bad = pivot_pick(tables, s)
         mine = (s.pivot_battler == 1) & (n == 0) & (pick >= MOVE_ACTIONS)
         picked = jnp.where(mine, picked.at[0].set(pick), picked)
-        a = jnp.where(paused, picked, a)
+        a = jnp.where(paused, picked, jnp.where(learning, s.ts_actions.astype(_I32), a))
         k, k_half = jax.random.split(k)
         k_half = jnp.where(n == 0, first_key, k_half)
         played = step(tables, s, a, sample_outcome(k_half, tables, s, a, replacement))
@@ -562,7 +571,7 @@ def _play(
     k_ai, k_turn = jax.random.split(key)
     ai_outcome = sample_ai_outcome(k_ai, tables, state, layout)
     opp_action = ai_policy(tables, state, ai_outcome, layout)
-    paused = state.pivot_battler != 0
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
     ai_refused = (opp_action < 0) & ~paused  # switching.REFUSED_ACTION
     actions = jnp.stack([player_action, jnp.maximum(opp_action, 0)]).astype(_I32)
     power_mul, ai_switched = turn_muls(tables, state, actions)
@@ -630,7 +639,7 @@ def _run(
 ):
     # A root paused at a party list (E2 batch 6) has nothing pending before its resume: its
     # fainted actives wait for the turn's end.
-    paused = state.pivot_battler != 0
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
     settled, settled_first, settled_refused = _resolve_pending(tables, state, first_action)
     state = _select(paused, state, settled)
     first_action = jnp.where(paused, first_action, settled_first)
@@ -649,7 +658,7 @@ def _run(
         q_refused = q_refused & ~_fixed(turns, first_action)
         action = _first_action(turns, first_action, chosen)
         # A paused root (E2 batch 6) resumes first: the rest of its turn, not a turn of its own.
-        resumed = s.pivot_battler != 0
+        resumed = (s.pivot_battler != 0) | (s.learn_site != 0)
         q_refused = q_refused & ~resumed
         pick = jnp.where(_fixed(turns, first_action), first_action, -1)
         played, refused = _turn(tables, s, action.astype(_I32), k_turn, layout, pick, replacement)

@@ -317,7 +317,11 @@ def _rate(
     fmt = format_of(state)
     weather = state.weather if weather is None else weather
     # A pivot's newcomer (``pivot_view``) is not fresh: its view holds its own stages / volatiles.
-    fresh = jnp.asarray(target_switches, bool) & (state.pivot_battler != target + 1)
+    fresh = (
+        jnp.asarray(target_switches, bool)
+        & (state.pivot_battler != target + 1)
+        & (state.learn_site == 0)
+    )
     if target_confused is None:
         target_confused = ~fresh & (state.confusion[target] > 0)
     accuracy = tables.move_accuracy[move].astype(_I32)
@@ -1644,11 +1648,17 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
     (``ts_acted``), else a switch to its own active Pokemon (no move). Its switch-in effects
     (weather, Trace, Intimidate) are still a switch's: ``fresh_switch`` tells the laws that its
     stages and volatiles are the view's, not a fresh battler's. The paused action's own King's
-    Rock read is ``enumerate.outcome_laws``'. Any other state: unchanged, but for an armed
-    Trace holder whose foe enters this turn, which holds the copy (``_armed_trace``, G-25)."""
+    Rock read is ``enumerate.outcome_laws``'. A state paused at a learn prompt (E3-B2-21,
+    ``learn_site``) resumes the rest of the turn: a battler whose action is over
+    (``ts_acted``) does nothing (a switch to its own active Pokemon, as above, with no entry
+    effects: ``noop``), the others take the action chosen (``ts_actions``); the state is the
+    answered one, whose move lists the pending actions read (``step._execute_actions``). Any
+    other state: unchanged, but for an armed Trace holder whose foe enters this turn, which holds
+    the copy (``_armed_trace``, G-25)."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     paused = state.pivot_battler != 0
+    resumed = state.learn_site != 0
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, fmt.B - 1)
     sides = jnp.arange(fmt.B)
     acted = state.ts_acted != 0
@@ -1656,6 +1666,7 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
         acted, MOVE_ACTIONS + state.active.astype(_I32), state.ts_actions.astype(_I32)
     )
     viewed = jnp.where(sides == pivot, actions, other)
+    viewed = jnp.where(resumed, other, viewed)
     slot = jnp.clip(actions[pivot] - MOVE_ACTIONS, 0, state.hp.shape[1] - 1)
     baton = tables.move_effect[state.ts_used] == EffectId.BATON_PASS
 
@@ -1671,11 +1682,14 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
     )
     seen = clear_copied(seen, pivot)  # the foes' moveCopied of the newcomer's switch-in (E3-B2-2)
     view = jax.tree.map(lambda a, b: jnp.where(paused, a, b), seen, state)
-    viewed = jnp.where(paused, viewed, actions)
-    return _armed_trace(tables, view, viewed, paused, pivot), viewed
+    viewed = jnp.where(paused | resumed, viewed, actions)
+    noop = resumed & acted
+    return _armed_trace(tables, view, viewed, paused, pivot, resumed, noop), viewed
 
 
-def _armed_trace(tables: Tables, state: BattleState, actions, paused, pivot) -> BattleState:
+def _armed_trace(
+    tables: Tables, state: BattleState, actions, paused, pivot, resumed=False, noop=None
+) -> BattleState:
     """The laws' view of an armed Trace holder (ruling G-25). A Trace holder facing a foe whose
     ability ``ChooseTraceTarget`` skips (Trace, battle_lib.c:7750-7775) keeps its
     ``traceAnnounced`` clear (:3726-3733), so ``SWITCH_IN_CHECK_STATE_TRACE`` copies the next
@@ -1693,7 +1707,8 @@ def _armed_trace(tables: Tables, state: BattleState, actions, paused, pivot) -> 
     from nuzline.engine.step import pursuit_fires  # step imports this module
 
     sides = jnp.arange(fmt.B)
-    enters = jnp.where(paused, sides == pivot, is_switch(actions))
+    noop = jnp.zeros((fmt.B,), bool) if noop is None else noop
+    enters = jnp.where(paused, sides == pivot, is_switch(actions) & ~noop)
     picks = [selected_move(tables, state, side, actions[side]) for side in range(fmt.B)]
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
     ability = state.ability
@@ -1704,8 +1719,8 @@ def _armed_trace(tables: Tables, state: BattleState, actions, paused, pivot) -> 
         magnet = jnp.where(paused, state.magnet_rise[foe] != 0, False)  # Baton Pass keeps it too
         loss = hazards_loss(tables, state, foe, slot, ingrained, magnet)
         alive = state.hp[party(fmt, foe), slot].astype(_I32) - loss > 0
-        stays = ~jnp.where(paused, sides[side] == pivot, is_switch(actions[side]))
-        pursued = ~paused & pursuit_fires(tables, state, foe, actions, choices)
+        stays = ~jnp.where(paused, sides[side] == pivot, is_switch(actions[side]) & ~noop[side])
+        pursued = ~paused & ~resumed & pursuit_fires(tables, state, foe, actions, choices)
         copies = (
             enters[foe]
             & stays
@@ -1727,7 +1742,11 @@ def fresh_switch(state: BattleState, actions, side) -> jnp.ndarray:
     confusion, Foresight and Miracle Eye reset at its switch-in). A paused pivot's switch
     (``pivot_view``)
     already holds the newcomer's state, a Baton Pass's carried stages included (ruling B6-10)."""
-    return is_switch(jnp.asarray(actions)[side]) & (state.pivot_battler != side + 1)
+    return (
+        is_switch(jnp.asarray(actions)[side])
+        & (state.pivot_battler != side + 1)
+        & (state.learn_site == 0)
+    )
 
 
 def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:

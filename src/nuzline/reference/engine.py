@@ -149,6 +149,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
+from nuzline.engine.levelup import LEARN_FIELD, LEARN_MON, LEARN_MOVE_END
 from nuzline.reference.state import BATTLER_FIELDS, RefBattler, RefPokemon, RefState, format_of_ref
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot, 4-9 switch to party slot action - 4
@@ -348,6 +349,12 @@ class _Turn:
     # one coin per battler), None inside it (the outcome's).
     trace_fires: list[int] = field(default_factory=lambda: [0, 0])
     trace_pick: list[int] | None = None
+    # E3-B2-21: each battler's moveCur of the turn (BattleState.ts_move_cur), the turn end's order and
+    # speedRand draw a pause after the last action keeps (ts_eot, ts_qc).
+    move_curs: list[int] = field(default_factory=lambda: [0, 0])
+    reselected: list[bool] = field(default_factory=lambda: [False, False])  # bcp.c:1889-1893
+    eot: list[int] | None = None
+    qc_draw: list[int] | None = None
 
     def __post_init__(self) -> None:
         n = self.battler_count
@@ -357,6 +364,8 @@ class _Turn:
             setattr(self, name, [False] * n)
         self.items, self.dragged = [0] * n, [0] * n
         self.trace_fires = [0] * n
+        self.move_curs = [0] * n
+        self.reselected = [False] * n
         self.taken = [[0] * 6 for _ in range(n)]
         self.order = list(range(n))
         self.actions = (0,) * n
@@ -371,6 +380,17 @@ _TURN_FLAGS = (
 class _Pause(Exception):
     """The turn stops at a U-turn's or Baton Pass's party list (``ref_step`` writes the
     scratch, ``_resume`` goes on)."""
+
+
+class _LearnPause(_Pause):
+    """E3-B2-21: the turn stops at a learn-move prompt (``engine.levelup.LEARN_*``): ``site``;
+    ``cursor`` the paused action's position (MoveEnd) or the battler position of the turn end's
+    block (``LEARN_MON``), 2 at ``LEARN_FIELD``; ``clear`` MoveEnd's tail test; ``order`` the turn
+    end's monSpeedOrder (the two pauses after the last action)."""
+
+    def __init__(self, site: int, cursor: int, clear: bool = False, order=None):
+        super().__init__(site)
+        self.site, self.cursor, self.clear, self.order = site, cursor, clear, order
 
 
 def _fmt(s: RefState):
@@ -2164,7 +2184,7 @@ def _hold_effect(tables, mon: RefPokemon) -> int:
     return _t(tables, "item_hold_effect", mon.item)
 
 
-def _pay_exp(turn: _Turn, s: RefState, pending: bool = False, selected: int = 0) -> bool:
+def _pay_exp(turn: _Turn, s: RefState) -> bool:
     """``BattleControllerPlayer_AnyExpPayout`` (bcp.c:4449-4469), re-entered until no payout
     flag is left: ``subscript_grant_exp.s`` for the lowest flagged battler each time. Returns
     whether a player Pokemon gained a level."""
@@ -2172,21 +2192,19 @@ def _pay_exp(turn: _Turn, s: RefState, pending: bool = False, selected: int = 0)
     while turn.payout:
         slot = min(turn.payout)
         turn.payout.remove(slot)
-        leveled |= _grant_exp(turn.tables, s, slot, pending, selected)
+        leveled |= _grant_exp(turn.tables, s, slot)
     return leveled
 
 
-def ref_grant_exp(
-    tables, state: RefState, slot: int, pending: bool = False, selected: int = 0
-) -> RefState:
+def ref_grant_exp(tables, state: RefState, slot: int) -> RefState:
     """The payout for the opponent's party ``slot`` fainting (``engine.levelup.pay_exp``'s
     contract); the input state is not modified."""
     s = copy.deepcopy(state)
-    _grant_exp(tables, s, slot, pending, selected)
+    _grant_exp(tables, s, slot)
     return s
 
 
-def _grant_exp(tables, s: RefState, fainted: int, pending: bool, selected: int) -> bool:
+def _grant_exp(tables, s: RefState, fainted: int) -> bool:
     """``subscript_grant_exp.s``: ``BtlCmd_CalcExpGain`` (script.c:2187-2245), then
     ``BattleScript_GetExpTask`` (script.c:9700-10193) for every party slot in turn. The engine
     plays trainer singles only: the fainted battler is a ``SOLO_ENEMY`` (script.c:2196), the
@@ -2254,8 +2272,6 @@ def _grant_exp(tables, s: RefState, fainted: int, pending: bool, selected: int) 
                 if s.learn_level[slot] == 0:
                     s.learn_level[slot] = mon.level
                     s.learn_cursor[slot] = 0
-                if pending and slot == s.battlers[0].active:
-                    s.learn_pin = selected + 1
         s.exp_mask &= ~(1 << slot)  # SEQ_GET_EXP_CHECK_DONE, :10190-10193
     return leveled
 
@@ -2455,17 +2471,21 @@ def _prompted(s: RefState) -> int | None:
     return next((i for i, level in enumerate(s.learn_level) if level), None)
 
 
+def _learn_prompt(tables, s: RefState) -> bool:
+    """``engine.levelup.learn_prompt``: the pending learnset scans run at a payout site, and a
+    prompt is left in a battle that goes on (D8: none once it is over)."""
+    _scan_learnsets(tables, s)
+    return _prompted(s) is not None and not s.over
+
+
 def ref_learn_options(tables, state: RefState) -> list[bool]:
     """``engine.levelup.learn_options``: replacing a slot whose move is an HM is not allowed
     (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:1724-1735;
-    ``Item_IsHMMove``, src/item.c:306-315); the search also skips, for the active learner, the
-    disabled and the encored move (ruling D2; the locked and the choice-locked move are read by
-    id and offered, ``engine.levelup``'s module docstring) and the slot pinned by
-    ``learn_pin`` (ruling U1), none of them once the battle is over, and every replacement when
-    the offered move's effect is unsupported (ruling D10). Giving up is always allowed."""
+    ``Item_IsHMMove``, src/item.c:306-315), and every replacement is masked when the offered
+    move's effect is unsupported (ruling D10). Nothing else is masked (E3-B2-21: the prompt is
+    answered at the payout). Giving up is always allowed."""
     prompted = _prompted(state)
     slot = 0 if prompted is None else prompted
-    battler = state.battlers[0]
     mon = state.parties[0].mons[slot]
     supported = True
     if prompted is not None:
@@ -2475,22 +2495,11 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
         entry = entries[index] if index < len(entries) else LEARNSET_SENTINEL_ENTRY
         offered = 0 if entry == LEARNSET_SENTINEL_ENTRY else entry & 0x1FF
         supported = _t(tables, "move_effect", offered) != EffectId.UNSUPPORTED
-    options = []
     with _party_moves(state, slot):
         party = list(mon.moves)
-    for k in range(LEARNED_MOVES_MAX):
-        move = party[k]
-        ok = supported and not _t(tables, "move_is_hm", move)
-        if (
-            slot == battler.active
-            and not state.over  # no turn end or move after the battle ends (bcp.c:3965-3969)
-            and (
-                mon.moves[k] in (battler.disabled_move, battler.encore_move)
-                or state.learn_pin == k + 1
-            )
-        ):
-            ok = False
-        options.append(ok)
+    options = [
+        supported and not _t(tables, "move_is_hm", party[k]) for k in range(LEARNED_MOVES_MAX)
+    ]
     return [*options, True]
 
 
@@ -5543,7 +5552,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # FightCommand (bcp.c:1900) picks the defender first: the foe while it is alive (any
     # HP for RANGE_OPPONENT_SIDE), the user for SELF_DEFENDER ranges.
     # Randomized: Struggle or any Encore at the action's start (bcp.c:1866-1884).
-    randomize = struggling or bool(s.battlers[side].encore_move)
+    # Branch 1.5 (:1889-1893): the selected move left its slot (a learn prompt, E3-B2-21).
+    randomize = struggling or bool(s.battlers[side].encore_move) or turn.reselected[side]
     order = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
     if reflect_pass:
         # E3-B2-6, the holder's pass of a reflected move: BtlCmd_MagicCoat (battle_script.c:
@@ -6779,11 +6789,16 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
             _know_ability(s, s.battlers[0].active)
 
 
-def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
+def _field_conditions(turn: _Turn, s: RefState, order: list[int], resume: int = 0) -> None:
     """``BattleControllerPlayer_CheckFieldConditions`` (bcp.c:932-1254). Every step is
     preceded by ``AnyFainted`` / ``CheckBattleOver`` (:939-944): nothing runs once the
-    battle is over, and the chip's faints are checked once, after every battler's."""
-    if s.over:
+    battle is over, and the chip's faints are checked once, after every battler's.
+    E3-B2-21: the payout's learn prompt pauses the pass before Gravity (``_LearnPause``);
+    ``resume`` is the ``learn_site`` it resumes (``LEARN_FIELD``: Gravity alone)."""
+    if s.over or resume == LEARN_MON:
+        return
+    if resume == LEARN_FIELD:
+        _gravity(turn, s)
         return
     # REFLECT, LIGHT_SCREEN, MIST, SAFEGUARD, TAILWIND, LUCKY_CHANT (:947-1083), each for
     # side 0 then side 1: the count drops and the condition ends at 0.
@@ -6818,9 +6833,15 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
         _pay_exp(turn, s)  # the loop head's AnyExpPayout, :938-944
         if s.over:
             return
-    # GRAVITY (:1227-1238): one turn off; at 0 vanilla's subscript_gravity_end only prints,
-    # Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets it again and runs the grounding loop
-    # (G-67).
+        if _learn_prompt(turn.tables, s):
+            raise _LearnPause(LEARN_FIELD, 2, order=order)
+    _gravity(turn, s)
+
+
+def _gravity(turn: _Turn, s: RefState) -> None:
+    """FIELD_COND_CHECK_STATE_GRAVITY (:1227-1238): one turn off; at 0 vanilla's
+    subscript_gravity_end only prints, Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets it
+    again and runs the grounding loop (G-67)."""
     if s.gravity:
         s.gravity -= 1
         if not s.gravity and _t(turn.tables, "gravity_rearm"):
@@ -6828,12 +6849,19 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
             _gravity_ground(s)
 
 
-def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
+def _end_of_turn(turn: _Turn, s: RefState, order: list[int], begin: int = 0) -> None:
     """``BattleControllerPlayer_CheckMonConditions`` (bcp.c:1289): every implemented
     check for one battler, then for the next, in ``monSpeedOrder`` (``order``: sorted
     once after the last action, bcp.c:887, before the field pass); each check that ran
-    is followed by the faint check, and nothing runs once the battle is over."""
-    for battler in order:
+    is followed by the faint check, and nothing runs once the battle is over.
+
+    E3-B2-21: a payout that leaves a learn prompt pauses the turn after that battler's block
+    (``_LearnPause``; the remaining checks of a fainted battler change nothing, and the engine
+    pays once per block): the resume begins at the next position (``begin``)."""
+    for position, battler in enumerate(order):
+        if position < begin:
+            continue
+        prompted = False
         for check in (
             _ingrain_check,  # MON_COND_CHECK_STATE_INGRAIN, bcp.c:1311
             _aqua_ring_check,  # MON_COND_CHECK_STATE_AQUA_RING, bcp.c:1332
@@ -6863,6 +6891,9 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             check(turn, s, battler)
             _faint_check(turn, s)
             _pay_exp(turn, s)  # CheckMonConditions' head: AnyFainted, AnyExpPayout (:1295-1299)
+            prompted = prompted or _learn_prompt(turn.tables, s)
+        if prompted:
+            raise _LearnPause(LEARN_MON, position, order=order)
 
 
 def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
@@ -7600,7 +7631,11 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome, targets
     # The faint replacement's draw is kept where ``ref_replace`` can read it; 0 at a pause.
     kept = _starf_kept(tables, out)
     for sd, keep, draw in zip(out.battlers, kept, outcome.starf, strict=True):
-        sd.starf_roll = int(draw[1]) % len(STARF_STATS) if keep and not out.pivot_battler else 0
+        sd.starf_roll = (
+            int(draw[1]) % len(STARF_STATS)
+            if keep and not (out.pivot_battler or out.learn_site)
+            else 0
+        )
     return out
 
 
@@ -7624,7 +7659,8 @@ def _ref_step(
     actions = (int(actions[0]), int(actions[1]))
     if s.pivot_battler:
         return _resume(tables, s, actions, outcome)
-    s.learn_pin = 0  # the turn's own pin (design §3.3(a))
+    if s.learn_site:
+        return _resume_learn(tables, s, actions, outcome)
     # The command selection's CheckInvalidMoves (bcp.c:433, every FIGHT battler that picks a
     # command, :335) clears a Choice lock its holder no longer knows (lib.c:2307-2310).
     for side in range(_fmt(s).B):
@@ -7702,10 +7738,10 @@ def _ref_step(
     turn.commands, turn.order = commands, order
     try:
         _actions(turn, s, 0)
-    except _Pause:
-        _write_scratch(turn, s)
+        return _end_turn(turn, s)
+    except _Pause as pause:
+        _write_scratch(turn, s, pause)
         return s
-    return _end_turn(turn, s)
 
 
 def _pursues(tables, s: RefState, side: int, actions, choices) -> bool:
@@ -7802,6 +7838,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             repeated = (
                 _t(tables, "move_effect", turn.move_cur) == EffectId.ROLLOUT and rollout0 != 0
             )
+            turn.move_curs[side] = turn.move_cur
             _metronome_verify(tables, s, side, move, no_effects, repeated, last_of_multi)
             # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915): Shell Bell (:4736-4752), then Life
             # Orb's recoil, which needs SYSCTL_MOVE_HIT and a non-status moveCur (:4758-4772).
@@ -7847,7 +7884,9 @@ def _copied_writes(tables, turn: _Turn, move: int, record) -> tuple[int, int]:
 def _finish_action(
     turn: _Turn, s: RefState, side: int, position: int, record, copied=(0, 0), conv2=None
 ) -> None:
-    """An action's end: its faint check, ``moveHit``, ``MoveEnd`` and its payout."""
+    """An action's end: its faint check, ``moveHit``, ``MoveEnd``, its payout and the tail
+    (``TriggerEffectOnSwitch``). A learn prompt the payout leaves pauses the turn between the
+    payout and the tail (``_LearnPause``; ``engine.step._execute_actions``)."""
     turn.done[side] = True
     _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
     # UpdateFlagsWhenHit runs after LOOP_FAINTED (bcp.c:3820-3837): a KO'd defender
@@ -7867,22 +7906,30 @@ def _finish_action(
     # BattleControllerPlayer_MoveEnd -> ClearFlags (bcp.c:3986, :4389) clears the
     # actor's own moveHit and conversion2Move, unless CheckBattleOver ended the battle first
     # (:3969).
-    if not s.over:
+    clear = not s.over
+    if clear:
         s.battlers[side].move_hit = 0
         s.battlers[side].conv2_move = 0
         # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then
         # defender (bcp.c:3965-3967).
         _recover_status_by_ability(s, side)
         _recover_status_by_ability(s, _foe(side))
-        _move_end_switch_in(turn, s)  # bcp.c:3973: an ability gained mid-battle acts now (E3-2-5)
+    # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver and
+    # TriggerEffectOnSwitch (bcp.c:3965-3973): a KO that ends the battle pays too. The whole
+    # GetExpTask, the learn prompts included, runs inside it (E3-B2-21).
+    _pay_exp(turn, s)
+    if _learn_prompt(turn.tables, s):
+        raise _LearnPause(LEARN_MOVE_END, position, clear)
+    _move_end_tail(turn, s, clear)
+
+
+def _move_end_tail(turn: _Turn, s: RefState, clear: bool) -> None:
+    """MoveEnd after its payout: ``TriggerEffectOnSwitch`` (bcp.c:3973), where ``clear``."""
+    if clear:
+        _move_end_switch_in(turn, s)  # an ability gained mid-battle acts now (E3-2-5)
         # The same TriggerEffectOnSwitch's SWITCH_IN_CHECK_STATE_FORM_CHANGE (lib.c:4115), after
         # its Trace / weather / Intimidate / Download states: Castform's Forecast, F-6.
         _forecast(turn.tables, s)
-    # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
-    # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
-    # run when the opponent acted first and the player chose a move (learn_pin).
-    pending = position == 0 and side == 1 and turn.commands[0] == FIGHT
-    _pay_exp(turn, s, pending, turn.actions[0])
 
 
 def _stale_snapshot(s: RefState) -> tuple[int, bool, int]:
@@ -7902,14 +7949,22 @@ def _stale_known_item(s: RefState, snap: tuple[int, bool, int], fought: bool) ->
         s.ai_item_known[slot] = 0
 
 
-def _end_turn(turn: _Turn, s: RefState) -> RefState:
-    """The end of the turn after the actions."""
+def _end_turn(turn: _Turn, s: RefState, site: int = 0, cursor: int = 0) -> RefState:
+    """The end of the turn after the actions. ``site``, ``cursor``: the learn pause it resumes
+    (``_resume_learn``): the order and the speedRand draw are the pause's (E3-B2-21)."""
     tables, outcome = turn.tables, turn.outcome
-    _record_speeds(tables, s)  # the sort after the last action (bcp.c:888-891), E3-B2-15
-    order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
+    if site < LEARN_FIELD:
+        _record_speeds(tables, s)  # the sort after the last action (bcp.c:888-891), E3-B2-15
+        order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
+    else:
+        order = list(turn.eot)
     snap = _stale_snapshot(s)
-    _field_conditions(turn, s, order)
-    _end_of_turn(turn, s, order)
+    try:
+        _field_conditions(turn, s, order, site)
+        _end_of_turn(turn, s, order, cursor + 1 if site == LEARN_MON else 0)
+    except _LearnPause:
+        _stale_known_item(s, snap, False)  # B10-6: the HP updates so far
+        raise
     _future_sight(turn, s, order)
     _stale_known_item(s, snap, False)  # B10-6
     # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch and unlocks a sleeping
@@ -7930,8 +7985,9 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
         _forecast(tables, s)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE precedes the item check (F-6)
         for side in range(_fmt(s).B):
             _held_item(turn, s, side)
-    # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept).
-    _keep_qc(tables, s, list(outcome.quick_claw))
+    # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept); a resumed
+    # pause keeps the draw its turn end was sorted with.
+    _keep_qc(tables, s, list(turn.qc_draw if site >= LEARN_FIELD else outcome.quick_claw))
     # turnFlags.roosting until SetupNextTurn (lib.c:2229-2231), after the replacements.
     _set_roosting(s, _roosting(s, turn) if waiting and not s.over else [0] * _fmt(s).B)
     # step.canonical_target (ruling D2-35): at B = 2 an unread stored target is b ^ 1.
@@ -7962,22 +8018,36 @@ def _roosting(s: RefState, turn: _Turn) -> list[int]:
     return [int(turn.roosting[k] and _active(s, k).hp > 0) for k in range(_fmt(s).B)]
 
 
-def _write_scratch(turn: _Turn, s: RefState) -> None:
-    """The turn stopped at a party list: ``BattleState``'s scratch (``engine.state``
-    docstring), field for field as ``step`` writes it."""
+def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> None:
+    """The turn stopped (at a party list, or at a learn prompt: ``pause`` a ``_LearnPause``):
+    ``BattleState``'s scratch (``engine.state`` docstring), field for field as ``step`` writes it."""
+    learn = isinstance(pause, _LearnPause)
     side = turn.order[turn.position]
-    assert not turn.payout, "the payouts before a list are paid"
-    s.pivot_battler = side + 1
-    s.ts_cursor = turn.position
-    _put(s, "ts_acted", [int(b in turn.order[: turn.position]) for b in range(_fmt(s).B)])
+    assert learn or not turn.payout, "the payouts before a list are paid"
+    if learn:
+        s.learn_site, s.ts_cursor, s.ts_ran = pause.site, pause.cursor, int(pause.clear)
+        # Battler_MovedThisTurn: a MoveEnd pause is after its action's, the others after the last.
+        upto = turn.position + 1 if pause.site == LEARN_MOVE_END else 2
+        if pause.site != LEARN_MOVE_END:
+            _put(s, "ts_eot", pause.order)
+            _put(s, "ts_qc", [int(bool(f)) for f in turn.outcome.quick_claw])
+        _put(s, "ts_move_cur", turn.move_curs)
+    else:
+        s.pivot_battler = side + 1
+        s.ts_cursor = turn.position
+        upto = turn.position
+    _put(s, "ts_acted", [int(b in turn.order[:upto]) for b in range(_fmt(s).B)])
     _put(s, "ts_order", turn.order)
     _put(s, "ts_actions", turn.actions)
     _put(s, "ts_move", [c[0] for c in turn.choices])
     _put(s, "ts_struggling", [int(c[1]) for c in turn.choices])
     _put(s, "ts_locked", [int(c[2]) for c in turn.choices])
     _put(s, "ts_item", turn.items)
-    _put(s, "ts_custap", [int(f) for f in turn.custap])
-    _put(s, "ts_claw", [int(f) for f in turn.claw])
+    # Only an actor still to come keeps its flag (engine.step._execute_actions).
+    first_coming = 2 if learn and pause.site != LEARN_MOVE_END else turn.position + 1
+    coming = [b in turn.order[first_coming:] for b in range(_fmt(s).B)]
+    _put(s, "ts_custap", [int(f and c) for f, c in zip(turn.custap, coming, strict=True)])
+    _put(s, "ts_claw", [int(f and c) for f, c in zip(turn.claw, coming, strict=True)])
     s.ts_pursued = turn.pursued
     _put(s, "ts_protect_ok", [int(f) for f in turn.protecting])
     _put(s, "ts_endure_ok", [int(f) for f in turn.enduring])
@@ -7985,21 +8055,29 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     _put(s, "ts_taken", [list(row) for row in turn.taken])
     _put(s, "ts_dragged", turn.dragged)
     _put(s, "ts_move_failed", [int(f) for f in turn.move_failed])
-    s.ts_used = turn.move_cur
-    s.ts_damaged = int(turn.damaged)
-    s.ts_dealt = turn.pivot_dealt
-    # The paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT sits on its defender (F-4).
-    _put(s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)])
-    fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
-    for k, pt in enumerate(s.parties):
-        pt.ts_alive = sum(1 << i for i, m in enumerate(pt.mons) if m.hp > 0 or (k, i) in fainted)
+    if not learn:
+        s.ts_used = turn.move_cur
+        s.ts_damaged = int(turn.damaged)
+        s.ts_dealt = turn.pivot_dealt
+        # The paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT sits on its defender (F-4).
+        _put(
+            s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)]
+        )
+        fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
+        for k, pt in enumerate(s.parties):
+            pt.ts_alive = sum(
+                1 << i for i, m in enumerate(pt.mons) if m.hp > 0 or (k, i) in fainted
+            )
+        s.ts_pick_mul = turn.pick_mul
     s.ts_power_mul = turn.power_mul
     _put(s, "ts_switched", [int(c == SWITCH) for c in turn.commands])
-    s.ts_pick_mul = turn.pick_mul
-    _put(s, "ts_assurance", [int(f) for f in turn.assurance])
-    _put(s, "ts_trace_fires", turn.trace_fires)
+    # The turn flags only an action reads (Assurance, Follow Me, the Trace fires) are not kept at a
+    # pause after the last action: the turn end reads none, and SetupNextTurn clears them.
+    after_actions = learn and pause.site != LEARN_MOVE_END
+    _put(s, "ts_assurance", [int(f and not after_actions) for f in turn.assurance])
+    _put(s, "ts_trace_fires", [0 if after_actions else f for f in turn.trace_fires])
     for k, sc in enumerate(s.sides):
-        sc.ts_follow_me = turn.follow_me[k]
+        sc.ts_follow_me = 0 if after_actions else turn.follow_me[k]
     for sd in s.battlers:  # read by the order, next read at the next turn
         sd.qc_roll = 0
 
@@ -8017,18 +8095,13 @@ def _fainted_battler(s: RefState, k: int, i: int) -> int:
 
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_pursued": 0, "ts_used": 0, "ts_damaged": 0,
-    "ts_dealt": 0, "ts_power_mul": 0, "ts_pick_mul": 0,
+    "ts_dealt": 0, "ts_power_mul": 0, "ts_pick_mul": 0, "learn_site": 0, "ts_ran": 0,
 }  # fmt: skip
 
 
-def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
-    """Resume a turn paused at a party list: the turn's scratch back into ``_Turn``, the
-    switch of ``subscript_show_party_list.s`` (``SwitchAndUpdateMon``, a Baton Pass keeping its
-    effects, ``PokemonSendOut``, the hazards, the faint check: :9-24), then the rest of the paused
-    action on the newcomer (``AfterMoveMessage``'s King's Rock, ``AfterMoveEffects``: the switch-in
-    effects, the item checks, the thaw; the guarded Sticky Barb, Shell Bell and Life Orb skipped;
-    ``UpdateMoveBuffers``, ``MoveEnd``), the later actions and the end of the turn."""
-    side = s.pivot_battler - 1
+def _turn_from_scratch(tables, s: RefState, outcome, acted_upto: int) -> _Turn:
+    """The paused turn's ``_Turn`` from the scratch (``_write_scratch``); the first ``acted_upto``
+    positions of its order are over."""
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     turn.actions = tuple(_get(s, "ts_actions"))
     turn.choices = [
@@ -8060,16 +8133,18 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
         for i, m in enumerate(pt.mons)
         if m.hp == 0 and pt.ts_alive >> i & 1
     ]
-    for position in range(s.ts_cursor):
+    for position in range(acted_upto):
         turn.done[turn.order[position]] = True
     if s.ts_pursued:
         turn.done[s.ts_pursued - 1] = True
     for k in range(_fmt(s).B):
         if s.battlers[k].ts_dragged:
             turn.done[k] = True
-    move, used = s.battlers[side].ts_move, s.ts_used
-    damaged, dealt = bool(s.ts_damaged), s.ts_dealt
-    position = s.ts_cursor
+    return turn
+
+
+def _clear_scratch(s: RefState) -> None:
+    """Every ``ts_*`` field and the pause flags back to 0 (the turn resumes)."""
     for name, value in _SCRATCH_ZERO.items():
         setattr(s, name, copy.deepcopy(value))
     for bt in s.battlers:
@@ -8079,6 +8154,54 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
         pt.ts_alive = 0
     for sc in s.sides:
         sc.ts_follow_me = 0
+
+
+def _resume_learn(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
+    """Resume a turn paused at a learn prompt (E3-B2-21; ``engine.step.step_events``): the turn's
+    scratch back into ``_Turn``, then MoveEnd's tail and the later actions (``LEARN_MOVE_END``;
+    the pending actions re-read their move slot, FightCommand, bcp.c:1889-1895) or the rest of the
+    turn end (``LEARN_FIELD``: Gravity on; ``LEARN_MON``: the next battler's checks on), both on
+    the order and the speedRand draw the pause kept."""
+    del actions
+    site, cursor, ran = s.learn_site, s.ts_cursor, bool(s.ts_ran)
+    upto = cursor + 1 if site == LEARN_MOVE_END else 2
+    turn = _turn_from_scratch(tables, s, outcome, upto)
+    turn.eot, turn.qc_draw = _get(s, "ts_eot"), _get(s, "ts_qc")
+    turn.move_curs = list(_get(s, "ts_move_cur"))
+    last, first = (turn.move_curs[turn.order[k]] for k in (1, 0))
+    turn.move_cur = last or first  # engine.step._turn_move_cur
+    _clear_scratch(s)
+    try:
+        if site == LEARN_MOVE_END:
+            for position in range(cursor + 1, 2):
+                b = turn.order[position]
+                _, struggling, locked = turn.choices[b]
+                if turn.commands[b] == FIGHT and not struggling and not locked:
+                    held = _active(s, b).moves[turn.actions[b]]
+                    turn.reselected[b] = held != turn.choices[b][0]
+                    turn.choices[b] = (held, struggling, locked)
+            _move_end_tail(turn, s, ran)
+            _actions(turn, s, cursor + 1)
+            return _end_turn(turn, s)
+        return _end_turn(turn, s, site, cursor)
+    except _Pause as pause:
+        _write_scratch(turn, s, pause)
+        return s
+
+
+def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
+    """Resume a turn paused at a party list: the turn's scratch back into ``_Turn``, the
+    switch of ``subscript_show_party_list.s`` (``SwitchAndUpdateMon``, a Baton Pass keeping its
+    effects, ``PokemonSendOut``, the hazards, the faint check: :9-24), then the rest of the paused
+    action on the newcomer (``AfterMoveMessage``'s King's Rock, ``AfterMoveEffects``: the switch-in
+    effects, the item checks, the thaw; the guarded Sticky Barb, Shell Bell and Life Orb skipped;
+    ``UpdateMoveBuffers``, ``MoveEnd``), the later actions and the end of the turn."""
+    side = s.pivot_battler - 1
+    turn = _turn_from_scratch(tables, s, outcome, s.ts_cursor)
+    move, used = s.battlers[side].ts_move, s.ts_used
+    damaged, dealt = bool(s.ts_damaged), s.ts_dealt
+    position = s.ts_cursor
+    _clear_scratch(s)
     foe = _foe(side)
     baton = _t(tables, "move_effect", used) == EffectId.BATON_PASS
     # The list (subscript_show_party_list.s): the outgoing Pokemon goes back to the party
@@ -8136,13 +8259,13 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     if record is not None:
         clears = _move_target(tables, used) in CONV2_CLEARING
         conv2 = (0, 0, 0) if clears else (used, side + 1, _move_type(tables, s, side, used))
-    _finish_action(turn, s, side, position, record, copied, conv2)
     try:
+        _finish_action(turn, s, side, position, record, copied, conv2)
         _actions(turn, s, position + 1)
-    except _Pause:
-        _write_scratch(turn, s)
+        return _end_turn(turn, s)
+    except _Pause as pause:
+        _write_scratch(turn, s, pause)
         return s
-    return _end_turn(turn, s)
 
 
 def _qc_rolls(s: RefState) -> list[int]:
@@ -8191,10 +8314,9 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
     _send_out_exp(s, side)
     _entry_hazards(turn, s, side)
     _faint_check(turn, s)
-    # TurnEnd's AnyExpPayout (bcp.c:1846) for a newcomer the hazards fainted. Learn work it
-    # leaves inside the opponent's replacement loop is refused (window (c), design §3.3).
-    if _pay_exp(turn, s) and side == 1 and not s.over:
-        s.exp_refused = 2
+    # TurnEnd's AnyExpPayout (bcp.c:1846) for a newcomer the hazards fainted; its prompt comes
+    # before the next ReplaceFainted (E3-B2-21: the learn work stays for the caller's decision).
+    _pay_exp(turn, s)
     if not s.over and effects:
         _switch_in_effects(turn, s, side)
     s.battlers[side].entry_pending = int(not effects and not s.over and _active(s, side).hp > 0)

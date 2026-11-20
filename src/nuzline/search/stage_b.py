@@ -54,9 +54,7 @@ x outcome probability; player choices are excluded. Child kinds:
   (``expand_replacements``, again for a newcomer that faints on entry) and never counts a
   turn or is a leaf. A group at a learn-move prompt (K3d-exp design §3.5: the turn's
   child stops there, ``expand._turn``) is a **learn decision** (``decision == "learn"``),
-  handled the same way: a max node over ``levelup.learn_options`` (the D2 and pin masks
-  drop legal game choices, so its value is an achievable lower bound, ruling D2, apart from
-  the limitation below), no AI
+  handled the same way: a max node over ``levelup.learn_options``, no AI
   distribution, expanded by ``expand_learns`` (the answer, then the opponent's
   replacement with the turn's carried ``powerMul``), its children again pending decisions
   when another prompt or a player replacement follows. A root may be either; the AI
@@ -64,13 +62,14 @@ x outcome probability; player choices are excluded. Child kinds:
   refused (or has a sampling-only pair) is dropped from the ranking with the reason. A
   root's unscanned learn work is scanned first (``advance_learns``, deterministic).
 
-  Known limitation: the learn node sits after the whole turn's outcome, while the decomp
-  can prompt mid-turn, at a payout in ``MoveEnd``, ``CheckFieldConditions`` or
-  ``CheckMonConditions`` (battle_controller_player.c:3968, :941, :1296), before a later draw
-  of the turn such as Shed Skin's (battle_lib.c:3567-3570, from
-  battle_controller_player.c:1354-1355). The answer is then chosen knowing that draw, so in
-  that rare case the node's value is possibly optimistic: it may exceed what the player
-  can achieve (``STATE.md``, "Experience").
+  A learn prompt inside a turn (E3-B2-21: a payout at MoveEnd, in the field conditions or in a
+  battler's turn-end checks pays and prompts before any later draw of the turn,
+  battle_controller_player.c:3968, :941, :1296) is a learn decision of a **paused** state
+  (``BattleState.learn_site``; ``_paused``): its answers resume the turn as a chance node, like a
+  party list's pick (``_expand_pivots``; ``expand`` applies the option first), so the answer is
+  made before the later draws of the turn, as the game's player makes it. A prompt at the turn's
+  end (Future Sight, Perish Song, a replacement's hazard faint, bcp.c:1846-1848) is the
+  unpaused learn decision above.
 
 A node classifies in this order: refused, terminal, failed, pruned, learn decision,
 replacement decision, leaf, decision. Learn work at a finished battle is no prompt (ruling
@@ -350,6 +349,7 @@ class _Store:
         self.won: list[bool] = []
         self.failed: list[bool] = []  # over the death budget (ruling 3)
         self.pending: list[str] = []  # "learn", "replacement" or "" (``_pending``)
+        self.paused: list[bool] = []  # waits mid-turn: a party list or a learn prompt (E3-B2-21)
         self.faints: list[int] = []
         self.bucket: list[int] = []  # ``deaths.BUCKETS`` index of a finished battle
         self._all: BattleState | None = None
@@ -377,6 +377,11 @@ class _Store:
             self.won.extend(ok.tolist())
             self.failed.extend(np.asarray(deaths.over_budget(part)).tolist())
             self.pending.extend(_pending(part))
+            self.paused.extend(
+                (
+                    (np.asarray(part.pivot_battler) != 0) | (np.asarray(part.learn_site) != 0)
+                ).tolist()
+            )
             self.faints.extend(np.asarray(part.player_faints).astype(int).tolist())
             self.bucket.extend(
                 deaths.bucket(won, over, part.player_faints, part.deaths, part.protected).tolist()
@@ -574,8 +579,16 @@ class _Solver:
                 kids = [(ids[c.state_row], c.obs, c.prob, c.refused) for c in kids]
             self.expansions[request] = kids
 
+    def _resumes(self, node: _Node) -> bool:
+        """The node's answers resume a paused turn: a party list (``decision == "pivot"``) or a
+        learn prompt inside a turn (E3-B2-21; its states share ``_paused`` through the group key)."""
+        if node.decision == "pivot":
+            return True
+        return node.decision == "learn" and self.store.paused[next(iter(node.states))]
+
     def _expand_pivots(self, nodes: list[_Node], played: int) -> list[_Node]:
-        """Expand the pivot decisions ``nodes`` (E2 batch 6: a turn paused at a party list): each
+        """Expand the pivot decisions ``nodes`` (E2 batch 6: a turn paused at a party list; E3-B2-21:
+        at a learn prompt, whose answers are the options of ``levelup.learn_options``): each
         legal answer (the player's slot at its own list, ``decision_actions``; the placeholder 0
         at the opponent's, whose pick ``expand`` makes) of each state resumes the turn through
         ``expand``, a chance node of its own: the children are grouped by ``(observation,
@@ -626,9 +639,9 @@ class _Solver:
         self._depth = depth
         todo = nodes
         while todo:
-            pivots = [node for node in todo if node.decision == "pivot"]
+            pivots = [node for node in todo if self._resumes(node)]
             chained = self._expand_pivots(pivots, played) if pivots else []
-            todo = [node for node in todo if node.decision != "pivot"]
+            todo = [node for node in todo if not self._resumes(node)]
             requests: dict[str, dict[tuple[int, int], None]] = {"replacement": {}, "learn": {}}
             for node in todo:
                 node.legal = self._node_legal(node)
@@ -797,10 +810,10 @@ class _Solver:
         return kids + self._group_nodes(groups, k + 1, depth)
 
     def _paused(self, sid: int) -> bool:
-        """The state waits at a party list (E2 batch 6): part of a group's key, since the
-        observation does not carry ``pivot_battler`` and a group must not mix a paused state with
-        a finished one."""
-        return self.store.pending[sid] == "pivot"
+        """The state waits mid-turn, at a party list (E2 batch 6) or a learn prompt (E3-B2-21):
+        part of a group's key, since the observation does not carry ``pivot_battler`` or
+        ``learn_site`` and a group must not mix a paused state with a finished one."""
+        return self.store.paused[sid]
 
     def _group_nodes(
         self, groups: dict[tuple[bytes, bool, bool], dict[int, float]], played: int, depth: int

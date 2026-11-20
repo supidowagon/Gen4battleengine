@@ -257,8 +257,10 @@ Encodings:
   ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask[0]`` as a
   bitmask over the player's party slots: ``1 << lead`` at the start, then written by every
   send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
-  scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
-  them (later K3d-exp tasks).
+  scan) are 0 until the payout and the learn resolve set them; ``learn_pin`` and ``exp_refused``
+  are never set since E3-B2-21. E3-B2-21: a payout's learn prompt pauses the turn
+  (``learn_site``, ``levelup.LEARN_*``), with the scratch ``ts_ran``, ``ts_move_cur``,
+  ``ts_eot`` and ``ts_qc``; all 0 between turns (``STATE.md`` "Mid-turn learn prompts").
 * E2 batch 13 (B13-29, B13-30). ``embargo`` is the active battler's
   ``MoveEffectsData.embargoTurns`` (battle_mon.h:30, 3 bits), 0 = none. Its
   ``MOVE_EFFECT_EMBARGO`` bit (moves.h:34) is set and cleared with it (subscript_embargo_start.s:
@@ -574,6 +576,12 @@ class BattleState(NamedTuple):
     # E2 batch 6: the mid-turn switch decision (U-turn, Baton Pass; see the docstring).
     pivot_battler: jnp.ndarray  # int8, 1 + the battler owing the party pick, 0 = none
     ts_cursor: jnp.ndarray  # int8, turnOrderCounter: the paused action's position
+    # E3-B2-21: the mid-turn learn pause (the learn prompt at its payout; module docstring)
+    learn_site: jnp.ndarray  # int8, 0 none, else the LEARN_* site the turn paused at
+    ts_ran: jnp.ndarray  # int8, a MoveEnd pause: the action's ``clear`` (MoveEnd's tail runs)
+    ts_move_cur: jnp.ndarray  # int16[B], each battler's moveCur of the turn (``read["move_cur"]``)
+    ts_eot: jnp.ndarray  # int8[B], monSpeedOrder of the turn end, sorted before the pause
+    ts_qc: jnp.ndarray  # int8[B], the turn's speedRand draw (Quick Claw), kept for the next turn
     ts_acted: jnp.ndarray  # int8[B], the battler's action is over (Battler_MovedThisTurn)
     # int8[B], battlerActionOrder (written from order.action_order's [2] until D6-D7)
     ts_order: jnp.ndarray
@@ -970,6 +978,11 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "replace_mul": (_FIELD, np.int8),
     "pivot_battler": (_FIELD, np.int8),
     "ts_cursor": (_FIELD, np.int8),
+    "learn_site": (_FIELD, np.int8),
+    "ts_ran": (_FIELD, np.int8),
+    "ts_move_cur": (_BATTLER, np.int16),
+    "ts_eot": (_BATTLER, np.int8),
+    "ts_qc": (_BATTLER, np.int8),
     "ts_acted": (_BATTLER, np.int8),
     "ts_order": (_BATTLER, np.int8),
     "ts_actions": (_BATTLER, np.int8),

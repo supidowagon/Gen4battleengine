@@ -120,6 +120,11 @@ _MAX_CANDIDATES = 4096
 # to this length so that one compile serves every count).
 MAX_LEARNS = 8
 _NO_LEARNS = np.full(MAX_LEARNS, -1, np.int32)  # learn_array(()) on the host
+# ``learn_choices[0] == AUTO_LEARN``: every prompt is answered by giving up and the turn resumes
+# (the per-turn fit, which replays no recorded answer; ``_fit_learns`` then fits them).
+AUTO_LEARN = -2
+_AUTO_LEARNS = np.asarray([AUTO_LEARN, *[-1] * (MAX_LEARNS - 1)], np.int32)
+MAX_PAUSES = 8  # learn pauses in one turn (the sites of ``engine.levelup.LEARN_*``, at most 7)
 _CHUNK = 16  # candidates replayed per jitted call (one compile)
 _I8, _I32 = jnp.int8, jnp.int32
 
@@ -200,6 +205,7 @@ class _Fit:
     need: tuple[bool, bool]
     player_slot: int
     learn_choices: tuple[int, ...] = ()
+    asked: bool = False  # the per-turn replay gave up a learn-move prompt (``_fit_learns``)
 
 
 def decode_weather(mask: int) -> Weather:
@@ -407,31 +413,60 @@ def apply_turn(
     return _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, learn_choices)[0]
 
 
-def _answer_prompts(tables, state, choices):
-    """``advance_learns``, then each answer of ``choices`` (``int32[MAX_LEARNS]``, -1 none)
-    given to the pending prompt (``levelup.learn``) while one is pending."""
+def _answer_prompts(tables, state, choices, k, auto):
+    """``advance_learns``, then the answers ``choices[k:]`` (``int32[MAX_LEARNS]``, -1 none) given
+    to the pending prompts in order (``levelup.learn``), or give-up for each with ``auto``:
+    ``(state, k')``."""
     state = advance_learns(tables, state)
 
-    def answer(s, c):
-        r = learn(tables, s, jnp.maximum(c, 0))
-        do = (c >= 0) & needs_learn(s)
-        return jax.tree.map(lambda x, y: jnp.where(do, x, y), r, s), None
+    def answer(carry, _):
+        s, k = carry
+        pick = jnp.where(auto, GIVE_UP, choices[jnp.minimum(k, MAX_LEARNS - 1)])
+        do = needs_learn(s) & (auto | ((k < MAX_LEARNS) & (pick >= 0)))
+        r = learn(tables, s, jnp.maximum(pick, 0))
+        s = jax.tree.map(lambda x, y: jnp.where(do, x, y), r, s)
+        return (s, k + (do & ~auto).astype(_I32)), None
 
-    return jax.lax.scan(answer, state, choices)[0]
+    return jax.lax.scan(answer, (state, k), None, length=MAX_LEARNS)[0]
 
 
 def _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, choices):
     """``(apply_turn, needs_replacement(...) != 0 after the step (bool[B]), the state after
-    the learn answers and before the replacements)``."""
-    s = step(tables, state, jnp.asarray(actions, _I32), outcome)
+    the learn answers and before the replacements, the player slots whose prompts the turn
+    asked (bool[SLOTS]))``.
+
+    A learn prompt pauses the turn (E3-B2-21: ``step`` pays and prompts inside the turn); the
+    answers are given in order and the turn resumes with the same outcome, up to
+    ``MAX_PAUSES`` times, and stops at a prompt with no answer left. ``choices[0] ==
+    AUTO_LEARN``: every prompt is given up."""
+    actions = jnp.asarray(actions, _I32)
+    auto = choices[0] == AUTO_LEARN
+
+    def cond(carry):
+        s, k, _, n = carry
+        more = auto | ((k < MAX_LEARNS) & (choices[jnp.minimum(k, MAX_LEARNS - 1)] >= 0))
+        return (n == 0) | ((s.learn_site != 0) & more & (n < MAX_PAUSES))
+
+    def body(carry):
+        s, k, asked, n = carry
+        asked = asked | ((s.learn_site != 0) & (s.learn_level > 0))
+        s, k = _answer_prompts(tables, s, choices, k, auto)
+        resumed = step(tables, s, actions, outcome)
+        s = jax.tree.map(lambda x, y: jnp.where(needs_learn(s) & (n > 0), x, y), s, resumed)
+        return s, k, asked, n + 1
+
+    asked0 = jnp.zeros(SLOTS, bool)
+    s, k, asked, _ = jax.lax.while_loop(cond, body, (state, jnp.int32(0), asked0, jnp.int32(0)))
     need = needs_replacement(s) != 0
-    s = learned = _answer_prompts(tables, s, choices)
+    asked = asked | (s.learn_level > 0)
+    s, k = _answer_prompts(tables, s, choices, k, auto)  # TurnEnd's prompts (unpaused)
+    learned = s
     for side, slot in ((0, player_slot), (1, opp_slot)):
         slot = jnp.asarray(slot, _I32)
         r = replace(tables, s, side, jnp.maximum(slot, 0))
         do = need[side] & (slot >= 0)
         s = jax.tree.map(lambda x, y, do=do: jnp.where(do, x, y), r, s)
-    return s, need, learned
+    return s, need, learned, asked
 
 
 @jax.jit
@@ -501,14 +536,16 @@ def _holds_quick_claw(tables: Tables, state: BattleState, side: int, mon: int) -
 
 
 def _mismatches(
-    result: BattleState, after: dict[str, np.ndarray], open_learns: bool = False
+    result: BattleState, after: dict[str, np.ndarray], open_learns: bool = False, asked=None
 ) -> np.ndarray:
     """``bool[N, len(COMPARED_FIELDS)]``: where each replayed row differs from ``after``.
-    With ``open_learns`` (the per-turn fit, which replays no learn answer; ``_fit_learns``
-    then fits them), the moves and PP of a player slot with learnset work left are not
-    compared."""
+    With ``open_learns`` (the per-turn fit, which gives every prompt up; ``_fit_learns`` then
+    fits the answers), the moves and PP of a player slot that was asked a prompt (``asked``,
+    ``bool[N, SLOTS]``) or has learnset work left are not compared."""
     wrong = np.zeros((len(result.hp), len(COMPARED_FIELDS)), bool)
     pending = np.asarray(result.learn_level) > 0  # [N, SLOTS]
+    if asked is not None:
+        pending = pending | np.asarray(asked)
     for f, name in enumerate(COMPARED_FIELDS):
         got = np.asarray(getattr(result, name))
         if open_learns and name in ("moves", "pp") and pending.any():
@@ -918,13 +955,13 @@ class _Turn:
             outcomes = _engine_outcome(
                 np.stack([o[name] for _, _, o in padded]) for name in Outcome._fields
             )
-            result, need, _ = _replay(
-                self.tables, self.state, qcs, actions, outcomes, *slots, _NO_LEARNS
+            result, need, _, asked = _replay(
+                self.tables, self.state, qcs, actions, outcomes, *slots, _AUTO_LEARNS
             )
-            wrong = _mismatches(result, self.after, open_learns=True)
-            yield start, chunk, result, np.asarray(need), wrong
+            wrong = _mismatches(result, self.after, open_learns=True, asked=asked)
+            yield start, chunk, result, np.asarray(need), wrong, np.asarray(asked)
 
-    def _fit(self, start, chunk, result, need, wrong, k) -> _Fit:
+    def _fit(self, start, chunk, result, need, wrong, asked, k) -> _Fit:
         qc, pair, outcome = chunk[k]
         player_need = bool(need[k, 0])
         return _Fit(
@@ -936,16 +973,17 @@ class _Turn:
             mismatched=tuple(n for n, w in zip(COMPARED_FIELDS, wrong[k]) if w),
             need=(player_need, bool(need[k, 1])),
             player_slot=int(self.after["active"][0]) if player_need else -1,
+            asked=bool(asked[k].any()),
         )
 
     def infer(self) -> _Fit:
         """The best candidate: the first with the fewest mismatched fields."""
         best = None
-        for start, chunk, result, need, wrong in self._replays():
+        for start, chunk, result, need, wrong, asked in self._replays():
             score = wrong.sum(axis=1)[: len(chunk)]
             k = int(np.argmin(score))
             if best is None or score[k] < best[0]:
-                best = (int(score[k]), self._fit(start, chunk, result, need, wrong, k))
+                best = (int(score[k]), self._fit(start, chunk, result, need, wrong, asked, k))
             if best[0] == 0:
                 break
         return best[1]
@@ -955,9 +993,9 @@ class _Turn:
         ``candidate_list`` order (cached: the start state and the record do not change)."""
         if self._ties is None:
             self._ties = []
-            for start, chunk, result, need, wrong in self._replays():
+            for start, chunk, result, need, wrong, asked in self._replays():
                 for k in np.flatnonzero(~wrong[: len(chunk)].any(axis=1)):
-                    self._ties.append(self._fit(start, chunk, result, need, wrong, int(k)))
+                    self._ties.append(self._fit(start, chunk, result, need, wrong, asked, int(k)))
         return self._ties
 
     def unexplained_self_hit(self) -> bool:
@@ -1056,11 +1094,6 @@ def _accept(tables: Tables, turns: list[Turn], fits: list[_Turn], inference: _Tu
     0 HP in the record that the replay keeps alive (a newcomer that fainted on entry)."""
     state, after, i = inference.state, inference.after, inference.index
     fit = _fit_learns(tables, inference, fit)
-    if int(fit.state.exp_refused):
-        raise TraceError(
-            f"turn {i}: a payout inside the opponent's replacement left learn-move work "
-            "(BattleState.exp_refused, design §3.3 window (c))"
-        )
     if fit.need[0] and fit.need[1]:
         raise TraceError(f"turn {i}: both sides need a replacement (a double KO)")
     if fit.need[0]:
@@ -1110,7 +1143,7 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
     the answers ``learn_options`` offers (``levelup``'s module docstring). ``TraceError`` for
     an answer it masks (``_learn_refusal``), and for a move the engine does not support
     learned by an answer or into an empty slot (ruling D10)."""
-    if not bool(needs_learn(fit.state)):
+    if not fit.asked:
         _check_learned(tables, inference, fit.state, ())
         return fit
     after = inference.after
@@ -1127,7 +1160,7 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
     best: list = []
 
     def search(prefix: tuple[int, ...]) -> bool:
-        final, need, learned = run(prefix)
+        final, need, learned, _ = run(prefix)
         if bool(needs_learn(learned)):
             if len(prefix) == MAX_LEARNS:
                 raise inference.fail(f"more than {MAX_LEARNS} learn-move prompts")
@@ -1158,36 +1191,18 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
 
 def _learn_refusal(tables: Tables, inference: _Turn, state: BattleState, choice: int) -> None:
     """``TraceError`` when ``choice`` answers ``state``'s prompt with an option
-    ``levelup.learn_options`` masks. The converter fits it (it happened), but after a mid-turn
-    payout the engine does not replay it exactly (``levelup``'s module docstring), for the
-    active learner:
-
-    * the slot selected this turn (``learn_pin``, ruling U1): the game re-reads
-      ``moves[moveSlot]`` when the move runs (battle_controller_player.c:1891-1895), the engine
-      runs the move it selected;
-    * the disabled or the encored move (ruling D2): the end-of-turn checks end Disable and
-      Encore once the move is no longer known (battle_controller_player.c:1565-1576,
-      :1591-1602), the engine runs them before the resolve.
-
-    None of them once the battle is over: the payout that ended it runs no later turn end or
-    move (bcp.c:3965-3969), so ``learn_options`` offers them. The locked and the choice-locked
-    move are read by id and replay exactly (offered by
-    ``learn_options``); a move the AI has seen keeps its id in ``ai_seen_moves``
-    (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68). The
-    D10 mask (an unsupported offered move) is refused first, by ``_check_learned``."""
+    ``levelup.learn_options`` masks. Since E3-B2-21 the prompt is answered at the payout, where
+    the decomp answers it, so the engine replays every answer the game allows (the selected, the
+    disabled, the encored, the locked move included); what is left masked is an HM (the fit
+    offers none) and the D10 mask (an unsupported offered move, refused first by
+    ``_check_learned``)."""
     if choice == GIVE_UP or bool(learn_options(tables, state)[choice]):
         return
     slot = int(np.argmax(np.asarray(state.learn_level) > 0))
     move = int(state.moves[0, slot, choice])
-    if int(state.learn_pin) == choice + 1:
-        why = "the slot selected this turn, re-read when its move runs (bcp.c:1891-1895)"
-    elif move == int(state.disabled_move[0]):
-        why = "the disabled move, whose Disable the turn's end would end (bcp.c:1565-1576)"
-    else:  # the encored move: the converter fits no HM, and D10 is refused first
-        why = "the encored move, whose Encore the turn's end would end (bcp.c:1591-1602)"
     raise inference.fail(
         f"the player replaced move {move} (party slot {slot}, move slot {choice}) at a "
-        f"learn-move prompt: {why}"
+        "learn-move prompt that the engine's options mask (an unsupported offered move, D10)"
     )
 
 
@@ -1279,7 +1294,7 @@ def _redraw_quick_claw(tables: Tables, turn: Turn, after: dict, qc: tuple) -> Tu
     end-of-turn order reads the draw)."""
     outcome = turn.outcome._replace(quick_claw=jnp.asarray(qc, _I8))
     batch = jax.tree.map(lambda x: jnp.asarray(x)[None], outcome)
-    result, _, _ = _replay(
+    result, _, _, _ = _replay(
         tables,
         turn.state,
         jnp.asarray([np.asarray(turn.state.qc_roll)], _I8),

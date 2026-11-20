@@ -559,8 +559,8 @@ def learnable_moves(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec
     prompt-only moves the learn options mask (``learn_masked`` and not in
     ``forced_learn_moves``), which the player never takes in the engine. A masked move is
     then a legal game choice the search skips: plan values stay achievable lower bounds,
-    like ruling D2, except the mid-turn-prompt case (``STATE.md``, Experience). Moves refused for any other reason (the AI, terrain, a ROM change, a
-    halved Defense) are not masked and stay graded (refused)."""
+    (``STATE.md``, Experience). Moves refused for any other reason (the AI, terrain, a ROM change,
+    a halved Defense) are not masked and stay graded (refused)."""
     forced = forced_learn_moves(tables, spec, opp)
     return [
         m
