@@ -1047,7 +1047,7 @@ def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
     return jnp.where(hidden, 0, state.item[row, slot].astype(jnp.int32))
 
 
-def party_held_item(state: BattleState, party, slot) -> jnp.ndarray:
+def party_held_item(state: BattleState, party, slot=None) -> jnp.ndarray:
     """``int16``: the held item of party ``party`` slot ``slot`` (arrays broadcast), i.e. the
     party Pokemon's ``MON_DATA_HELD_ITEM`` that the exp payout reads (battle_script.c:2210, :9706,
     :10226; D9), which is not always the BattleMon's ``item``. Every battle item change reaches
@@ -1061,7 +1061,12 @@ def party_held_item(state: BattleState, party, slot) -> jnp.ndarray:
     ``k`` too. B = 2: a set bit is its own knocked Pokemon's, whose ``knocked_item`` is nonzero
     (Knock Off needs a held item); a drawn knocked-off user (tests/strategies.py) holds nothing
     and has no ``recycle_item``, and the mask stops every other way back to an item, so ``item``
-    is 0 too: the value is the old rule's (``knocked_item`` only where it is nonzero)."""
+    is 0 too: the value is the old rule's (``knocked_item`` only where it is nonzero).
+    ``slot=None`` with a Python int ``party``: the whole party row (``int16[SLOTS]``) by static
+    slices, no gather (the exp payout's read, kept small for ``test_pay_exp_stays_small``)."""
+    if slot is None:
+        side = party_sides(format_of(state))[party]
+        return jnp.where(state.knocked_off[side] != 0, state.knocked_item[party], state.item[party])
     sides = jnp.asarray(party_sides(format_of(state)))[party]
     return jnp.where(
         state.knocked_off[sides, slot] != 0,

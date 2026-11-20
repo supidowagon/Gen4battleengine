@@ -26,7 +26,7 @@ from hypothesis import strategies as st
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.format import DOUBLES, SINGLES
-from nuzline.engine.ids import TRICK_ROOM_TURNS, AbilityId, Stat
+from nuzline.engine.ids import TRICK_ROOM_TURNS, AbilityId, Stat, Type
 from nuzline.engine.order import effective_speed, metronome_candidates, resort_action_order
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.step import step, turn_events
@@ -255,11 +255,15 @@ def test_quick_claw_is_set_again_and_knock_off_on_the_holder_fails(tables, names
 
 def custap_line(tables, names, rival_moves):
     """Battler 1 holds a Custap Berry with Gluttony (the pinch is half its HP) and sits just above
-    it; battler 0 Tackles it into the pinch; battler 3 Plucks it. Battler 1's slot 0 is Metronome."""
+    it; battler 0 Tackles it into the pinch; battler 3 Plucks it. Battler 1's slot 0 is Metronome.
+    Battler 1 is Normal-typed so the Pluck (Flying) is neutral and it lives: Bulbasaur at 61 of 112
+    HP takes 17 from the Tackle and 28 from the Pluck (a super-effective Pluck, 56, faints it, and
+    the faint clears the flag, lib.c:2185-2188)."""
     moves = [["Tackle"], rival_moves, ["Swords Dance"], ["Pluck"]]
     s = lineup(tables, names, moves)
     s = item_of(with_ability(s, 1, AbilityId.GLUTTONY), 1, names.item("Custap Berry"))
     p, slot = party_of(s, 1), int(s.active[1])
+    s = s._replace(types=s.types.at[p, slot].set(jnp.asarray([Type.NORMAL] * 2, s.types.dtype)))
     return with_hp(s, 1, int(s.max_hp[p, slot]) // 2 + 5)
 
 

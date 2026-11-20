@@ -119,7 +119,7 @@ def _friendship(f0, k, bonus, soothe):
     return jnp.minimum(MAX_FRIENDSHIP, f2 + (k - n0 - n1) * d2)
 
 
-def _effort_values(tables: Tables, after: BattleState, paid, foe_row, hold):
+def _effort_values(tables: Tables, after: BattleState, paid, foe_row, item, hold):
     """``int32[6, 6]``: the player's EVs after ``BattleScript_CalcEffortValues`` (bs.c:
     10214-10306) for the ``paid`` slots (bs.c:9776-9779, before any level-up check). Yields
     of the fainted Pokemon's form row (``SpeciesData_FromMonForm``, :10224); the receiver's
@@ -129,7 +129,7 @@ def _effort_values(tables: Tables, after: BattleState, paid, foe_row, hold):
     510 (:10294-10296), then the stat to 255 (:10299-10301)."""
     evs = after.evs[0].astype(_I32)
     yields = tables.species_ev_yield[foe_row].astype(_I32)
-    power = tables.item_hold_param[party_held_item(after, 0, jnp.arange(SLOTS))].astype(_I32)
+    power = tables.item_hold_param[item].astype(_I32)
     pokerus = after.pokerus != 0
     macho = hold == HOLD_EFFECT_EVS_UP_SPEED_DOWN
     total = jnp.sum(evs, axis=1)
@@ -243,7 +243,8 @@ def pay_exp_leveled(
     entry = None if after.exp_mask.ndim == 0 else (battler >> 1) & 1
     mask = after.exp_mask if entry is None else after.exp_mask[entry]
     in_mask = (jnp.right_shift(mask.astype(_I32), slots) & 1) == 1
-    hold = tables.item_hold_effect[party_held_item(after, 0, jnp.arange(SLOTS))]
+    item = party_held_item(after, 0)  # the party row, read once (D3-8b)
+    hold = tables.item_hold_effect[item]
     share = hold == HOLD_EFFECT_EXP_SHARE
     n = jnp.sum((alive & in_mask).astype(_I32))
     s = jnp.sum((alive & share).astype(_I32))
@@ -263,7 +264,7 @@ def pay_exp_leveled(
     table = tables.exp_table[tables.species_exp_rate[species]]  # [6, 101], rate by species
     exp = after.exp.astype(_I32) + t
     exp = jnp.where(checked, jnp.minimum(exp, table[:, MAX_LEVEL]), exp)
-    evs = _effort_values(tables, after, paid, foe_row, hold)
+    evs = _effort_values(tables, after, paid, foe_row, item, hold)
 
     reached = jnp.sum((table[:, 1:] <= exp[:, None]).astype(_I32), axis=1)
     new_level = jnp.where(checked, jnp.maximum(level, reached), level)
