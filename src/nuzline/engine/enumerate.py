@@ -2832,8 +2832,14 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # (lib:5848; subscript_pluck_check.s skips RemoveItem while it is set): the attacker's own
     # Starf Berry triggers at AFTER_MOVE_EFFECT_ATTACKER_ITEM, kept (bcp:3684-3689), and again at
     # _HELD_ITEM_STATUS (bcp:3730-3761), two draws (``step`` ``info.pluck_flag``).
+    # Not with a plucked Starf Berry (``plucked``): its PLUCK_EFFECT_RANDOM_UP2 draws while one of
+    # the five stats is below +6, and its subscript_held_item_sharply_raise_stat.s:21 PLUCK_CHECK
+    # clears the flag (the own berry is eaten once after it); with all five at +6 neither berry
+    # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo (lib:5838-5841) its
+    # own berry does not act either. The plucked draw and a second own draw never meet: two
+    # draws, not three (G-28's bound needs a Roar newcomer for the third).
     foe_item = jnp.any((state.item[rows] != 0) & on_field, axis=1)
-    twice = held_eat & uses_move & (effect == _E.EAT_BERRY) & foes(foe_item)
+    twice = held_eat & uses_move & (effect == _E.EAT_BERRY) & foes(foe_item) & ~plucked
     newcomer = jnp.any(holds_b & (slots != state.active[:, None]) & reach, axis=1)
     entries = jnp.asarray(dragged, bool).astype(_I32)
     recycles = (
