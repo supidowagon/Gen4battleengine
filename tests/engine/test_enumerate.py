@@ -362,7 +362,8 @@ def test_shed_skin_marginal_is_three_tenths(tables, names):
 
 def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fraction]:
     """The law ``sample_outcome`` draws element ``name[index]`` from, transcribed from
-    outcome.py:143-193 (not from ``engine.enumerate``)."""
+    outcome.py:1726-1808 (``_move_draws``) and :1854-2086 (``sample_outcome``), not from
+    ``engine.enumerate``."""
     side = index[0] if index else 0
     move = int(used_move(tables, state, side, actions[side]))  # Nature Power: its call
 
@@ -451,6 +452,10 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         effect = int(tables.move_effect[move])
         if effect == EffectId.TAUNT:
             return {d: Fraction(1, 3) for d in (3, 4, 5)}
+        if effect == EffectId.ENCORE:
+            # effect_script_0090.s:5 -> subscript_encore_start.s:5 TryEncore -> BtlCmd_TryEncore
+            # (battle_script.c:4742): encoredTurns = RandNext() % 5 + 3, each of 3-7 at 1/5.
+            return {d: Fraction(1, 5) for d in range(3, 8)}
         # Random 3, 3: Bind, Disable's RandNext() % 4 + 3, Uproar (subscript_uproar.s:6).
         low = 3 if effect in (EffectId.TRAP, EffectId.DISABLE, EffectId.UPROAR) else 2
         return {d: Fraction(1, 4) for d in range(low, low + 4)}
