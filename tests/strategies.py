@@ -71,7 +71,7 @@ INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
 # The M1 species set: the sample team plus Roark's and the route-encounter species, a
 # holder of each weather ability (Swift Swim, Sand Veil, Snow Cloak), and of Rough Skin
 # (Carvanha), Flame Body (Magby), Limber (Glameow), Adaptability (Eevee) and Solid Rock
-# (Camerupt): their other slot is empty or unimplemented, so these are always drawn.
+# (Camerupt). Each species draws only its implemented ability slots (``supported_pokemon``).
 M1_SPECIES = (
     "Chatot",  # E1 trial batch (G-70): Chatter's only confuser
     "Monferno",

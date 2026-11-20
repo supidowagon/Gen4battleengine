@@ -2317,6 +2317,10 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   Snapshot (expected, confirm by print): seed 165 turn 3 `future_hit[0]` back to main's 0 and `rest` rows back to
   160; seed 22 turn 4 segment 0 `future_hit[0]` back to 1 (`rest` may still differ through `weather_free`); seed
   107 unchanged (G-S6, ruling 1); other seeds: G-S8.
+  Owed D6-D7 (E2): Future Sight hit law exact per post-Acid-Rain mask at B = 4, enumerating the post-mask
+  variants over the battlers acting before the chase (sheet _scratch/e1/h-next/sheets/acid-future-law.md
+  section 4.6). Until then B = 4 keeps `loose` wherever a pair is reachable (unreachable before D11 lifts the
+  format refusal).
 - H-2 Immunity (17), Own Tempo (20), Water Veil (41), Magma Armor (40), Oblivious (12): rule sheets
   ability-immunity.md, ability-own-tempo.md, ability-cure-veil-armor-oblivious.md; manager rulings of 19 Nov (Q3:
   the switch-out cure for every ability of Ability_ForbidsStatus; the hp > 0 guard removed; Q2, the STATUS_CURE
