@@ -7,9 +7,7 @@ from hypothesis import strategies as st
 from nuzline.engine.coverage import FOUR_TURN_CLAUSES, four_turn_refusals
 from tests.strategies import legal_action_pair, supported_state
 
-OWED = [
-    "D3-16",
-]
+OWED: list[str] = []
 
 
 @pytest.mark.fullset

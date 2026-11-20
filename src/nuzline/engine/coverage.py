@@ -287,11 +287,6 @@ def _present(state: BattleState, b: int) -> bool:
     return bool(np.asarray(state.hp)[fmt.party_of[b], int(np.asarray(state.active)[b])] > 0)
 
 
-def _four(state: BattleState) -> bool:
-    """Four battlers with battler 2 or 3 present: the turn is not the two-battler turn."""
-    return format_of(state).B == 4 and (_present(state, 2) or _present(state, 3))
-
-
 def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
     """A present battler whose move action selects a move whose effect is in ``effects`` or is a
     caller (``CALLERS``; ``order.selected_move``)."""
@@ -313,10 +308,7 @@ def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
 # D3-16 (tests/engine/test_coverage_four.py::OWED). Battlers 2 and 3 absent (0 HP, nothing left
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
-FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-16: D2 step rules owed four-actor tests (D2-17, -20, -21/-31, -25, -32); deleted by D3-16
-    TurnClause("D3-16", "D2 step rules owed four-actor tests", lambda t, s, a: _four(s)),
-)
+FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = ()  # D3-16 deleted the last clause
 
 
 def four_turn_refusals(tables: Tables, state: BattleState, actions) -> list[str]:
