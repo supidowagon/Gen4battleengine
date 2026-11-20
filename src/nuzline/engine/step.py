@@ -893,6 +893,7 @@ def _use_move(
     foe_enduring=False,
     speed_order=None,
     mover=None,
+    waiting=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -979,10 +980,13 @@ def _use_move(
         outcome.target_draw[side],
     )
     if mover is not None:
-        # E3-B2-6: the reflected pass's defender is the mover (``mover``): BtlCmd_MagicCoat
-        # (battle_script.c:6491-6507) makes the holder the attacker and the mover the defender (at
-        # B = 2 every branch there picks the mover), not the holder's own stored target.
-        resolved = _redefend(resolved, side, mover, reflected_pass)
+        # E3-B2-6: the reflected pass's defender: BtlCmd_MagicCoat (battle_script.c:6487-6507)
+        # makes the holder the attacker and the mover's side's living Follow Me user, else the
+        # mover (``mover``), the defender (``targets.magic_coat_defender``, review b2 #9), not
+        # the holder's own stored target.
+        resolved = _redefend(
+            resolved, side, targets.magic_coat_defender(state_in, mover), reflected_pass
+        )
     target_side = resolved.target_side
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[party(fmt, side), user] > 0)
@@ -1475,11 +1479,15 @@ def _use_move(
     # The mover's own script does not run in the first pass of a reflection (reflect above).
     failed = failed | reflect
     # Magic Coat (effect_script_0183.s:5, :10-12): TrySetMagicCoat jumps to MOVE_STATUS_FAILED when
-    # no other battler's action is pending (battle_script.c:6471, waitingBattlers == 1: in
-    # singles the user acts last, target_moved); else effects._magic_coat sets the flag
-    # (E3-B2-6).
+    # no other battler's action is pending (battle_script.c:6471, ``waitingBattlers == 1``, the
+    # count BranchActions takes over every battler, bcp.c:881-886: ``waiting``, from
+    # ``_execute_actions``; review b2 #9); else effects._magic_coat sets the flag (E3-B2-6).
+    # Without ``waiting`` (a caller outside the turn loop) the singles count: the user and its
+    # foe while the foe has not acted.
+    if waiting is None:
+        waiting = jnp.where(jnp.asarray(target_moved, bool), 1, 2)
     failed = failed | (
-        (tables.move_effect[used] == EffectId.MAGIC_COAT) & jnp.asarray(target_moved, bool)
+        (tables.move_effect[used] == EffectId.MAGIC_COAT) & (jnp.asarray(waiting, _I32) == 1)
     )
     # Ingrain and Aqua Ring (effect_script_0181.s:5, _0251.s:5) fail a user that has the effect
     # already: MOVE_STATUS_FAILED from the script, as Fake Out's (rulings B7-n).
@@ -2939,6 +2947,7 @@ def _act(
     pursuit_sync=None,
     foe_enduring=False,
     reselected=None,
+    waiting=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -3001,6 +3010,7 @@ def _act(
         pursuit_sync,
         foe_enduring,
         mover=foe,
+        waiting=waiting,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -3483,6 +3493,16 @@ def _execute_actions(
             choices[1].at[actor].set(choices[1][actor] & ~reflecting),
             choices[2].at[actor].set(choices[2][actor] | reflecting),
         )
+        # BattleContext.waitingBattlers (bcp.c:881-886) at this action's BranchActions: the
+        # battlers whose action is not MOVE_END, the actor's included: the ones after it in the
+        # order with HP (a faint sets MOVE_END, battle_script.c:1801) that no Roar dragged in
+        # (UpdateAfterSwitch, battle_lib.c:2053) and no Pursuit took (Magic Coat's test, review b2
+        # #9; section 5 rule 4: a count over every battler).
+        battlers = jnp.arange(fmt.B)
+        later = jnp.stack([jnp.any((order == b) & (battlers > position)) for b in range(fmt.B)])
+        living = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
+        pending = later & living & (read["dragged"] == 0) & (pursued != 1 + battlers)
+        waiting = 1 + jnp.sum(pending.astype(_I32))
         acted, own, foe_events, ctl = _act(
             tables,
             state,
@@ -3504,6 +3524,7 @@ def _execute_actions(
             pursuit_sync=pursuit_sync,
             foe_enduring=foe_enduring,
             reselected=reselected,
+            waiting=waiting,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         ran = (state.over == 0) & ((state.hp[party(fmt, side), state.active[side]] > 0) | ~start)

@@ -2087,12 +2087,13 @@ def _role_play(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 def _magic_coat(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Magic Coat (effect_script_0183.s:5, ``BtlCmd_TrySetMagicCoat``, battle_script.c:6459-6478):
-    unless its user acts last (``waitingBattlers == 1``: no other battler's action is pending, which
-    ``step._use_move`` fails as MOVE_STATUS_FAILED), ``turnFlags[user].magicCoat`` is set at script
-    time, before TryMove, so a Magic Coat that then went wrong still stands. The flag keeps ``1 +
-    the user's moveSlot`` (the Pressure drain of its reflection, bcp.c:3083). The :8 message is
+    unless its user acts last (``waitingBattlers == 1``: no other battler's action is pending, a
+    count over every battler, which ``step._use_move`` fails as MOVE_STATUS_FAILED, so such a
+    Magic Coat never lands; review b2 #9), ``turnFlags[user].magicCoat`` is set at script time,
+    before TryMove, so a Magic Coat that then went wrong still stands. The flag keeps ``1 + the
+    user's moveSlot`` (the Pressure drain of its reflection, bcp.c:3083). The :8 message is
     cosmetic. E3-B2-6."""
-    cond = (h.effect == _E.MAGIC_COAT) & h.landed & ~h.target_moved
+    cond = (h.effect == _E.MAGIC_COAT) & h.landed
     return _set(state, "magic_coat", h.side, 1 + h.coat_slot, cond)
 
 

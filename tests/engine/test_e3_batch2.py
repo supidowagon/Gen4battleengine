@@ -1390,6 +1390,41 @@ def test_magic_coat_reflects_the_effects_that_land_on_the_mover(tables, names):
     assert int(out.ability_suppressed[1]) == 1 and int(out.ability_suppressed[0]) == 0
 
 
+def test_magic_coats_doubles_paths_follow_the_decomp(tables, names):
+    """Review b2 #9. BtlCmd_MagicCoat (battle_script.c:6487-6507): the holder pass's defender is
+    the living Follow Me user of the MOVER's side (``target`` is read while the mover is the
+    attacker), else the mover; the range branch and the Lightning Rod / Storm Drain branch give
+    the mover (``targets.magic_coat_defender``; reference ``_follow_me_user``). At B = 2 it is the
+    mover. BtlCmd_TrySetMagicCoat fails on ``waitingBattlers == 1`` (bs.c:6470-6471), the count
+    over every battler of BranchActions (bcp.c:881-886): the reference's ``_waiting`` counts the
+    battlers whose action is not MOVE_END."""
+    from nuzline.engine.format import side_of
+    from nuzline.engine.targets import NO_DEFENDER, follow_me_user, magic_coat_defender
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _follow_me_user, _Turn, _waiting
+    from tests.engine.d2_states import four, with_hp
+
+    t, n = tables, names
+    s = four(t, n)
+    assert int(magic_coat_defender(s, 1)) == 1  # no Follow Me: the mover
+    fm = s._replace(ts_follow_me=s.ts_follow_me.at[side_of(1)].set(1 + 3))
+    assert int(follow_me_user(fm, side_of(1))) == 3
+    assert int(magic_coat_defender(fm, 1)) == 3  # the mover's partner draws it
+    assert int(magic_coat_defender(fm, 0)) == 0  # the other side's Follow Me does not
+    assert _follow_me_user(to_ref(fm), side_of(1)) == 3
+    gone = with_hp(fm, 3, 0)
+    assert int(follow_me_user(gone, side_of(1))) == NO_DEFENDER
+    assert int(magic_coat_defender(gone, 1)) == 1
+    assert _follow_me_user(to_ref(gone), side_of(1)) is None
+    single = roark_state(t, n, player_moves=["Magic Coat"], opp_moves=["Growl"])
+    assert int(magic_coat_defender(single, 1)) == 1 and int(magic_coat_defender(single, 0)) == 0
+    turn = _Turn(t, empty_outcome(), entry_turn=1, battler_count=4)
+    turn.done = [False, True, False, True]
+    assert _waiting(turn) == 2
+    turn.done = [True, True, False, True]
+    assert _waiting(turn) == 1
+
+
 def test_kaizos_reflectable_moves_are_reflected_too(kaizo_tables, kaizo_names):
     """Owed 1 (E3-1-3, E3-2-1) and E3-B2-4's ruling 1: Kaizo's Disable, Encore, Spite, Torment and
     the hazards carry CAN_MAGIC_COAT and meet the Magic Coat with the holder as attacker (the

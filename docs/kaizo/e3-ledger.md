@@ -792,7 +792,11 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   them) and the state `magic_coat` (per battler, int8, 1 + the user's move slot; STATE.md `turnFlags`
   row, `magicCoatMon` reworded). Manifest bumped to 36 (the flag array changed; both tables rebuilt).
   Script: `BtlCmd_TrySetMagicCoat` (battle_script.c:6459-6478) sets the flag and fails when
-  `waitingBattlers == 1` (the user acts last: `h.target_moved`); `effects._magic_coat`. A move aimed at
+  `waitingBattlers == 1` (bs.c:6470-6471; review b2 #9: the count BranchActions takes over every battler,
+  bcp.c:881-886, of the battlers whose action is not MOVE_END, the user's included: `step._execute_actions`
+  passes `waiting`, the battlers after the actor in the order with HP that no Roar dragged in and no Pursuit
+  took, plus the actor; `_use_move` fails Magic Coat on `waiting == 1`; reference `_waiting(turn)` over
+  `turn.done`); `effects._magic_coat` sets the flag on a landed Magic Coat. A move aimed at
   the holder with MOVE_FLAG_CAN_MAGIC_COAT is stolen in BEFORE_MOVE_STATE_CHECK_STOLEN
   (bcp.c:3196-3200, `MoveStolen` :3064-3085): the flag clears, `movePrev` / `movePrevByBattler` take
   the move, SYSCTL_REUSE_LAST_MOVE is set and `subscript_magic_coat` swaps attacker and defender
@@ -818,7 +822,16 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Owed 1 lines closed: CAN_MAGIC_COAT of Torment / Worry Seed / Thief-AI (E3-1-3, E3-2-2, E3-1-1),
   Mirror Move's REUSE_LAST_MOVE exemption (E3-B2-2), Conversion 2's (E3-B2-3), Spite's Kaizo
   reflection (E3-B2-4). Still owed: Snatch (REUSE_LAST_MOVE, bcp.c:3099).
-  Not built: doubles (the reflected move's target is the mover's side; the pass is per side).
+  Doubles (review b2 #9): `BtlCmd_MagicCoat` (bs.c:6487-6507) gives the holder pass the living Follow Me user of the
+  mover's side (`target` is read while the mover is the attacker, :6490), else the mover:
+  `targets.magic_coat_defender` (JAX, read by `_use_move`'s `_redefend`) and the reference's `_follow_me_user` in
+  `_fight(reflect_pass=True)`. The range branch (:6497-6498) gives the mover; so does the last branch: its
+  `BattleSystem_Defender` call reads the move's own range (lib.c:1604-1606: `inRange` only for move 0) and returns an
+  opponent of the holder, while the action's one Lightning Rod / Storm Drain flag (lib.c:1732-1790, cleared at each
+  action's end) sits on the redirect target, which is the holder itself (the reflection reads the defender's flag,
+  bcp.c:3069), so the flag test never passes. At B = 2 both are the mover. Test:
+  `test_magic_coats_doubles_paths_follow_the_decomp`. Not built: none (the pass itself is per side, the step skeleton's
+  accepted rework, doubles-state-design section 5).
   Tests: tests/engine/test_e3_batch2.py (`test_magic_coat_*`, `test_a_reflect*`, `test_the_metronome_count_follows_the_passes`),
   tests/ai/test_kaizo_policy.py (`test_magic_coat_*`, `test_expert_magic_coat`, the exact-equals-loose list),
   tests/engine/test_state.py (`test_magic_coat_flag_maps_to_magic_coat`),

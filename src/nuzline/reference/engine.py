@@ -3990,7 +3990,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             mon.ability, foe_mon.ability = foe_mon.ability, mon.ability
             if 0 in (side, target):
                 _know_ability(s, s.battlers[0].active)
-    elif effect == EffectId.MAGIC_COAT and landed and not target_moved:
+    elif effect == EffectId.MAGIC_COAT and landed and _waiting(turn) > 1:
         # TrySetMagicCoat (battle_script.c:6459-6478), E3-B2-6: 1 + the user's moveSlot.
         s.battlers[side].magic_coat = 1 + turn.move_slot
     elif effect == EffectId.ROLE_PLAY and landed:
@@ -5300,14 +5300,26 @@ def _pp_cost(tables, s: RefState, side: int, defender: int | None, move: int) ->
     return 1 + int(defender != side and _ability(s, _active(s, defender)) == AbilityId.PRESSURE)
 
 
-def _follow_me_target(s: RefState, attacker: int) -> int | None:
-    """The living Follow Me user on the other side of ``attacker`` (lib.c:1694-1697, :1714-1717):
-    ``followMe`` set on ``side ^ 1`` and the Pokemon in the user's battler slot with HP; else
-    None (D2-11 rule 4)."""
-    value = s.sides[side_of(attacker) ^ 1].ts_follow_me
+def _follow_me_user(s: RefState, side: int) -> int | None:
+    """``targets.follow_me_user``: the living Follow Me user of side index ``side``
+    (``followMe`` set and the Pokemon in the user's battler slot with HP); else None (D2-11
+    rule 4)."""
+    value = s.sides[side].ts_follow_me
     if value and _active(s, value - 1).hp > 0:
         return value - 1
     return None
+
+
+def _follow_me_target(s: RefState, attacker: int) -> int | None:
+    """The living Follow Me user on the other side of ``attacker`` (lib.c:1694-1697, :1714-1717)."""
+    return _follow_me_user(s, side_of(attacker) ^ 1)
+
+
+def _waiting(turn: _Turn) -> int:
+    """``BattleContext.waitingBattlers`` (bcp.c:881-886): the battlers whose action is not
+    MOVE_END (``turn.done``: the acting battler's included; a faint, a drag or a Pursuit set it),
+    review b2 #9."""
+    return sum(not done for done in turn.done)
 
 
 def _opponents(battler: int) -> tuple[int, int]:
@@ -5569,9 +5581,12 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     order = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
     if reflect_pass:
         # E3-B2-6, the holder's pass of a reflected move: BtlCmd_MagicCoat (battle_script.c:
-        # 6491-6507) makes the holder the attacker and the mover (``target``) the defender; at
-        # B = 2 every branch there picks the mover.
-        turn.defender, turn.target_side = target, target
+        # 6487-6507) makes the holder the attacker and the defender the living Follow Me user of
+        # the mover's (``target``'s) side, else the mover (``targets.magic_coat_defender``,
+        # review b2 #9).
+        fm = _follow_me_user(s, side_of(target))
+        defender = target if fm is None else fm
+        turn.defender, turn.target_side = defender, defender
     else:
         turn.defender, turn.target_side, _, _ = _resolve(
             tables, s, side, move, randomize, s.battlers[side].chosen_target, order,
@@ -6283,8 +6298,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         )
         full = full or (effect == EffectId.YAWN and _yawn_blocks(tables, s, side, tgt)[0])
         # BtlCmd_TrySetMagicCoat (effect_script_0183.s:5, :10-12): no other action pending
-        # (waitingBattlers == 1, the user acts last), MOVE_STATUS_FAILED, E3-B2-6.
-        full = full or (effect == EffectId.MAGIC_COAT and target_moved)
+        # (waitingBattlers == 1, ``_waiting``), MOVE_STATUS_FAILED, E3-B2-6, review b2 #9.
+        full = full or (effect == EffectId.MAGIC_COAT and _waiting(turn) == 1)
         full = full or (
             effect == EffectId.CURSE
             and _ghost(s, side)
