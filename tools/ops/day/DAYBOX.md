@@ -36,31 +36,18 @@ Trigger: a stream message with the line `MERGE CANDIDATE <tip> fullset`, or a st
 
 ## Snapshot compare
 
-Rules, pass rule and the `MAXP` cut while a job runs: `docs/process.md` section 5. Pod folders: `/work/snapmain-<short main sha>` (capture of a `main` tip; its `snap/` is what compares read) and `/work/snapcmp-<stream>-<short tip>` (compare of a merge candidate). Each holds `repo/`, a `git archive` checkout without `.git`, so `snap_compare.py` needs `--commit <full sha>`. No beacon: these are not pack.sh runs, and `status.sh` does not list them. A capture is never copied off the pod; one lost with a pod is re-made on the next pod (steps 1-3).
+Rules, pass rule and the `MAXP` cut while a job runs: `docs/process.md` section 5. Script: `tools/ops/day/snap.sh` (PC, Git Bash; its header lists every check). Pod folders, short = the 7-char sha: `/work/snapmain-<short main>` (capture of a `main` tip; its `snap/` is what compares read), `/work/snapcmp-<stream>-<short tip>` (compare of a merge candidate), `/work/snap2-<short tip>` (re-capture, step 5). Each holds `repo/`, a `git archive` checkout without `.git`. No beacon: these are not pack.sh runs, and `status.sh` does not list them. A capture is never copied off the pod; one lost with a pod is re-made on the next pod.
 
-1. Payload (PC, Git Bash, main checkout), for commit `<sha>` and folder `<F>`. Tables per Send a run step 1, then run these lines one by one; every line marked `# must print nothing` that prints anything stops here:
-   ```
-   . tools/ops/common.sh; O="$RENT/out/<F>"; mkdir -p "$O"
-   FORBID='\.(nds|sav|dsv|ds[0-9]|zip|xlsx|ods)$|(^|/)\.cache/|(^|/)backups?/|desktop|local\.toml'
-   git -c core.autocrlf=false archive --format=tar -o "$O/code.tar" <sha>
-   tar -tf "$O/code.tar" | grep -iE "$FORBID|$TABLE_DENY"                  # must print nothing
-   cp "$RENT/tables_<short>.tar.xz" "$O/tables.tar.xz"
-   tar -tJf "$O/tables.tar.xz" | grep -v '/$' | grep -vE "$TABLE_ALLOW"   # must print nothing
-   tar -tJf "$O/tables.tar.xz" | grep -iE "$FORBID|$TABLE_DENY|\.\.|^/"   # must print nothing
-   tar -cf "$O/payload.tar" -C "$O" code.tar tables.tar.xz
-   (cd "$O" && HOME="$RENT/home" USERPROFILE="$RENT/home" nohup "$RPC" send payload.tar > send.log 2>&1 < /dev/null &)
-   for i in $(seq 60); do grep -q 'code is' "$O/send.log" 2>/dev/null && break; sleep 0.5; done
-   grep -o 'code is: [^ ]*' "$O/send.log"; git -C external/pokeplatinum rev-parse HEAD
-   ```
-   The last line prints `<code>` and `<decomp>`. On a fresh pod where `/work/_decomp/<decomp>` is missing (exec `ls -d /work/_decomp/<decomp>`), send any pack.sh run first: its `setup.sh` creates it.
-2. exec-pod `{"command":["sh","-c","<prep>"],"timeoutSeconds":25}` with `<prep>` (quotes escaped for JSON):
-   ```
-   mkdir -p /work/<F> && cd /work/<F> && nohup sh -c 'export PATH=/root/.local/bin:/work/_bin:$PATH UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python; /work/_bin/runpodctl receive <code> && tar --no-same-owner -xf payload.tar && mkdir repo && tar --no-same-owner -xf code.tar -C repo && tar --no-same-owner -xJf tables.tar.xz -C repo && mkdir -p repo/external && ln -sfn /work/_decomp/<decomp> repo/external/pokeplatinum && cd repo && uv sync --frozen -q && echo PREP_OK && while [ $(( $(cat /sys/fs/cgroup/memory.current) / 1000000000 )) -ge 88 ]; do sleep 30; done && <job>; echo "RC=$?"' > job.log 2>&1 < /dev/null & sleep 15; tail -3 /work/<F>/job.log
-   ```
-3. `<job>` for a capture (`<F>` = `snapmain-<short>`): `uv run --frozen python tools/snap_compare.py capture /work/<F>/snap 0-199 --repo /work/<F>/repo --commit <full sha> -v`. About 90 minutes.
-4. `<job>` for a merge candidate (`<F>` = `snapcmp-<stream>-<short tip>`): `uv run --frozen python tools/snap_compare.py compare /work/snapmain-<short main>/snap 0-199 --repo /work/<F>/repo --commit <full tip sha> --allow-new <the stream's list> -v`; leave out `--allow-new` when the list is empty. About 85 minutes. `<short main>` is the `main` tip the candidate's branch contains (`git merge-base <tip> main`). When compare refuses the capture as written by an older `snap_compare` (another `format`), re-capture that `main` tip with the candidate's script, from `/work/<F>/repo`: `uv run --frozen python tools/snap_compare.py capture /work/snapmain-<short main>/snap2-<short tip> 0-199 --repo /work/snapmain-<short main>/repo --commit <full main sha> -v`, and compare against `snap2-<short tip>`.
-5. Result: read exec `{"command":["sh","-c","tail -5 /work/<F>/job.log"],"timeoutSeconds":25}` once after the time above, again only while it has no `RC=` line. A capture passes with `capture: ok` and `RC=0`. A compare result, with its diverged parts, goes to the stream; pass rule: `docs/process.md` section 5, "Snapshot pass rule".
-6. Keep and delete: the newest two `snapmain-*` folders stay; `rm -rf` an older one only when no compare reads it (exec `pgrep -af '[s]nap_compare'` names no path in it). Delete a `snapcmp-*` folder once its result is sent.
+1. Tables: `<scratch>/rent/tables_<A>.tar.xz` is valid for commit `<B>` when Send a run step 1's diff rule holds, or when the trees are equal (`git diff --stat <A> <B>` prints nothing); otherwise `bash tools/ops/day/build_tables.sh <B>`.
+2. Memory gate: `snap.sh` writes `SNAP_GATE_GB` (default 88) into `run.sh`, which starts the job only while container memory is under it. Pass the pod's `GATE_GB` (`SNAP_GATE_GB=176` on a 256 GB pod).
+3. Commands (PC, any checkout). Each refuses a name that exists under `<scratch>/rent/out/`, refuses forbidden files, writes `<scratch>/rent/out/<name>/body.json`, starts the send (`send.log` ends with `SEND_RC=<n>`) and prints the exec-pod body. Send that body with exec-pod at once. `--dry-run` runs every check and writes `run.sh` and `body.json` without sending; delete its folder afterwards.
+   - Capture of a pushed `main` tip: `bash tools/ops/day/snap.sh capture <main sha> <tables>` (folder `snapmain-<short>`). About 90 minutes.
+   - Compare of a merge candidate: `bash tools/ops/day/snap.sh compare <tip> <tables> /work/snapmain-<short main>/snap snapcmp-<stream>-<short tip> [--allow-new a,b,c]`. `<short main>` is the `main` tip the branch contains (`git merge-base <tip> main`). Leave out `--allow-new` when the stream's list is empty. The candidate's own `tools/snap_compare.py` compares. About 85 minutes.
+   - Fetch logs or capture files: exec `{"command":["sh","-c","cd /work/<name> && tar -czf fetch.tgz times.txt *.log <more paths> && nohup /work/_bin/runpodctl send fetch.tgz > fetch.log 2>&1 < /dev/null & sleep 10; grep -o 'code is: [^ ]*' /work/<name>/fetch.log"],"timeoutSeconds":25}`, then PC `bash tools/ops/day/snap.sh fetch <name> <code>` (into `<scratch>/rent/out/<name>/fetch-<epoch>/`).
+4. Body output: `PREP_OK` is ready. `RECEIVE_FAILED` or `UNPACK_FAILED`: run `snap.sh` again under a new name. `DECOMP_MISSING`: the pod has no `/work/_decomp/<decomp sha>`; send any pack.sh run first (its `setup.sh` creates it), then run `snap.sh` again under a new name.
+5. Re-capture: when compare refuses the capture as written by an older `snap_compare` (another `format`), capture that `main` tip with the candidate's script: `bash tools/ops/day/snap.sh capture <main sha> <tables> snap2-<short tip> --tool <tip>`, then compare against `/work/snap2-<short tip>/snap`.
+6. Finished: exec `{"command":["sh","-c","tail -3 /work/<name>/times.txt"],"timeoutSeconds":25}` once after the time above, again only while it does not end with `ALL_DONE`. A capture passes with `CAPTURE_RC=0` then `ALL_DONE`. A compare ends `COMPARE_RC=<n>` then `ALL_DONE`; `0` is `compare: ok`. Fetch `compare.log` (step 3) and send it to the stream; pass rule: `docs/process.md` section 5, "Snapshot pass rule".
+7. Keep and delete: the newest two `snapmain-*` folders stay; `rm -rf` an older one only when no compare reads it (exec `pgrep -af '[s]nap_compare'` names no path in it). Delete a `snapcmp-*` or `snap2-*` folder once its result is sent.
 
 ## Wait
 
@@ -86,4 +73,4 @@ When nothing is queued and `status.sh` of the last run prints `DONE=y` (or shows
 
 ## Never upload
 
-Only the `git archive` of a commit and the tables `TABLE_ALLOW` lists travel. Never the ROM (`*.nds`), saves (`*.sav`, `*.dsv`), `.cache/`, the PKCalc zip or its extraction (`data/intermediate_kaizo/pkcalc/`), the docs sheet or its extraction (`data/intermediate_kaizo/docs/`), `data/local.toml`, any file from the Desktop, anything in a `backup` folder. Never add files to a payload by hand. One exception to pack.sh payloads: the snapshot payload (Snapshot compare, step 1) = the `git archive` of the commit plus its `TABLE_ALLOW` tables, built only by that step with its checks. Never push from the pod.
+Only the `git archive` of a commit and the tables `TABLE_ALLOW` lists travel. Never the ROM (`*.nds`), saves (`*.sav`, `*.dsv`), `.cache/`, the PKCalc zip or its extraction (`data/intermediate_kaizo/pkcalc/`), the docs sheet or its extraction (`data/intermediate_kaizo/docs/`), `data/local.toml`, any file from the Desktop, anything in a `backup` folder. Never add files to a payload by hand. One exception to pack.sh payloads: the snapshot payload = the `git archive` of the commit plus its `TABLE_ALLOW` tables (and, for a re-capture, `tools/snap_compare.py` from the `--tool` commit's archive), built only by `tools/ops/day/snap.sh` with its checks. Never push from the pod.

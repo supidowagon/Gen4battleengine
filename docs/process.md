@@ -117,7 +117,7 @@ per day is the rate used for estimates.
   on the pod.
 - **Snapshot capture of `main`.** After every push of `main` the managing session starts
   one capture of the new tip on a test pod, in `/work/snapmain-<short sha>` (seeds 0-199,
-  about 90 minutes; steps: DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
+  about 90 minutes; commands: `tools/ops/day/snap.sh`, DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
   delete an older one only when no compare reads it. A capture is never copied off the pod:
   one lost with a pod is re-made on the next pod.
 - **Snapshot compare of a merge candidate.** Compare only (about 85 minutes), against the
@@ -131,7 +131,7 @@ per day is the rate used for estimates.
 - **Rebuilding a diverged state.** The snapshot generator has drawn different states on the
   PC (Windows) than on the pod (Linux) from the same seed and content hash. A stream rebuilds
   a diverged part only from the capture's `<part>.inputs.pkl.gz`: it asks the managing
-  session, which copies those files from the pod into `<scratch>/rent/<snapshot folder>/`.
+  session, which copies those files from the pod with `snap.sh fetch` (DAYBOX.md) into `<scratch>/rent/out/<snapshot folder>/fetch-<epoch>/`.
 - **Snapshot jobs and the runner.** A capture or compare runs outside the runner's `MAXP`,
   `GATE_GB` and `KILL_GB` accounting. While one runs, the managing session sends new pack
   runs with `MAXP` lowered by 2.
