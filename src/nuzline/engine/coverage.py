@@ -271,11 +271,13 @@ START_CONDITIONS = {
 @dataclass
 class CoverageReport:
     """``missing``: one human-readable line per unsupported mechanic the fight uses;
-    ``sampling_only``: the same for ``SAMPLING_ONLY`` ones; ``level``: the lowest support
-    over everything present."""
+    ``sampling_only``: the same for ``SAMPLING_ONLY`` ones; ``runtime``: lines that refuse only
+    the play lines that reach them, ``level`` unchanged; ``level``: the lowest support over
+    everything present."""
 
     missing: list[str] = field(default_factory=list)
     sampling_only: list[str] = field(default_factory=list)
+    runtime: list[str] = field(default_factory=list)
     level: Support = Support.EXACT
 
 
@@ -287,6 +289,28 @@ class UnsupportedMechanics(ValueError):
         super().__init__(
             f"{len(report.missing)} unsupported mechanic(s): " + "; ".join(report.missing)
         )
+
+
+def acid_rain_reason(state) -> str | None:
+    """The refusal message of a concrete state's ``acid_rain`` (a Pursuit KO subtracted that
+    battler from ``fieldConditionsMask`` while a field condition was up: the engine cannot hold
+    the result), or ``None``."""
+    fm = int(state.acid_rain)
+    if not fm:
+        return None
+    return (
+        f"Acid Rain: a Pursuit KO subtracted battler {fm} from fieldConditionsMask "
+        "(subscript_pursuit.s:100, :115; script.c:3282-3287); field conditions as the mask "
+        "are not modelled"
+    )
+
+
+def check_acid_rain(state) -> None:
+    """Raise ``UnsupportedMechanics`` when ``state`` holds an Acid Rain (``acid_rain != 0``).
+    Host entry points call it; a state with no Acid Rain passes."""
+    reason = acid_rain_reason(state)
+    if reason is not None:
+        raise UnsupportedMechanics(CoverageReport(missing=[reason]))
 
 
 def start_gravity(trainer: Trainer) -> int:
@@ -1044,6 +1068,14 @@ def check_opponent(
     them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp)
+    # BATTLE_EFFECT_HIT_BEFORE_SWITCH (Pursuit): a KO of the switcher subtracts from
+    # fieldConditionsMask (subscript_pursuit.s:115); only those play lines are refused. Either
+    # side's Pursuit chases a switch (battle_script.c:6884-6935): the opponent's, the player's
+    # party's and the player's learnable moves (a report line only).
+    move_effect = np.asarray(tables.move_effect)
+    pool = [m for mon in (*opp, *player) for m in mon.moves if m] + [m for m in extra_moves if m]
+    if any(int(move_effect[m]) == EffectId.PURSUIT for m in pool):
+        c.report.runtime.append("field condition: Acid Rain (runtime refusal)")
     _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
     for line in transform_sky_refusals(tables, names, player, opp, extra_moves):
         c.add(Support.NONE, f"{display_name(trainer)}: {line}", "form change")
@@ -1139,6 +1171,7 @@ def check_coverage(
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
+    c.report.runtime.extend(theirs.runtime)
     c.report.level = min(c.report.level, theirs.level)
     fight_moves = [m for mon in (*player, *opp) for m in mon.moves if m] + extra
     for slot, mon in enumerate(player):

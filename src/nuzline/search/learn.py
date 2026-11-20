@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.coverage import acid_rain_reason
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, needs_learn
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import EXP_REFUSED_WINDOW_C, needs_replacement
@@ -74,7 +75,7 @@ def settle_learns(tables: Tables, state: BattleState, send, carried_mul):
         return sent, refused | bad, n + 1
 
     state, refused, _ = jax.lax.while_loop(cond, body, (state, jnp.bool_(False), jnp.int32(0)))
-    return state, refused | (state.exp_refused != 0)
+    return state, refused | (state.exp_refused != 0) | (state.acid_rain != 0)
 
 
 _resolve_jit = jax.jit(resolve_learns)
@@ -101,7 +102,7 @@ def learn_reason(state: BattleState) -> str | None:
     """The refusal message for a concrete state's ``exp_refused``, or ``None``."""
     code = int(state.exp_refused)
     if code == 0:
-        return None
+        return acid_rain_reason(state)
     if code == EXP_REFUSED_WINDOW_C:
         return (
             "a level-up from an opponent replacement fainting on entry (entry hazards) "

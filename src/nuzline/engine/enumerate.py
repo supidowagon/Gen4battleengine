@@ -310,7 +310,10 @@ from nuzline.engine.outcome import (
     empty_outcome,
     future_thresholds,
     hit_threshold_pair,
+    moved_mask,
     pivot_view,
+    pursuit_armored,
+    pursuit_chase,
     read_chance,
     roar_inputs,
     roar_levels,
@@ -2656,8 +2659,14 @@ def outcome_laws(
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored); not for a
         # lock aimed at its user, whose step reads both on the hit's defender (effects.crit_blocked).
-        no_crit=((state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
-        | armored(tables, state, actions, moves))
+        no_crit=(
+            (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
+            | jnp.where(
+                pursuit_chase(tables, state, actions)[0],
+                pursuit_armored(tables, state),
+                armored(tables, state, actions, moves),
+            )
+        )
         & ~lock,
         secondary_chance=secondary_chance(tables, state, moves),
         duration_kind=kind.astype(_I32),
@@ -3761,14 +3770,16 @@ CALL_SEALED = 3 * SLEEP_TALK_VALUES
 def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool[B]``: the paused action's King's Rock read (``flinch_item[pivot, 0]``) is possible:
     a paused U-turn whose hit damaged its target (``ts_damaged``), with
-    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before its target moved (``ts_acted``); whether the
+    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before its target moved (``moved_mask``: also a 0-HP target, whose KO'd action never runs and whose
+    King's Rock flinch needs its ``curHP``: battle_controller_player.c:4642, :3820-3826, :4430-4431;
+    subscript_flinch_mon.s:5; SF2 (j)); whether the
     newcomer holds one is the law's (``flinch_item_chance``, its item through ``pivot_view``)."""
     fmt = format_of(state)
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, fmt.B - 1)
     flag = (tables.move_flags[state.ts_used] & MoveFlag.KINGS_ROCK) != 0
     on = (state.pivot_battler != 0) & (state.ts_damaged != 0) & flag
     # The target: the other battler (singles), not yet acted.
-    target_free = foes(state.ts_acted) == 0
+    target_free = foes(moved_mask(state)) == 0
     return on & (jnp.arange(fmt.B) == pivot) & target_free
 
 
@@ -4185,6 +4196,9 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
     row its variant's value. Raises ``SamplingOnly`` above ``WIDTH_CAP`` rows in all. Split Sleep
     Talk variants (ruling B5-13) and takeover variants (B11-1) are played (``step.turn_events``)
     and each row is kept only where ``call_consistent``."""
+    from nuzline.engine.coverage import check_acid_rain  # coverage imports the engine
+
+    check_acid_rain(state)  # a refused state is never played on (docs/kaizo FCM.md section 5)
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     parts, tags = [], []

@@ -94,7 +94,7 @@ Do this first, on the unchanged code.
     - `@dataclass(frozen=True) DeathDistribution: probs: tuple[float, ...]` (8, `BUCKETS` order), `n: int | None`; `rung(k: int) -> float` (sum of `probs[: k + 1]`, `ValueError` for `k > MAX_DEATH_BUDGET`); property `p_win` (first 6); `as_dict() -> dict` (`BUCKETS` names plus `"n"`); `classmethod from_counts(counts) -> DeathDistribution` (`ValueError` on zero total).
 
 - [ ] **Step 1: Write the failing tests**:
-  - `tests/engine/test_faints.py::test_new_fields_default_to_zero`: `make_state` gives all-zero new fields; `LAYOUT` has `deaths ((6,), int8)`, `faint_budget ((), int8)`, `protected ((6,), int8)`, `replace_mul ((), int8)`.
+  - `tests/engine/test_faints.py::test_new_fields_default_to_zero` (renamed test_new_fields_start_values, D2-38): `make_state` gives all-zero new fields; `LAYOUT` has `deaths ((6,), int8)`, `faint_budget ((), int8)`, `protected ((6,), int8)`, `replace_mul ((), int8)`.
   - `test_with_budget`: `roark_state(...).with_budget(k=2, protected=[1, 3])` gives `faint_budget == 2`, `protected == [0, 1, 0, 1, 0, 0]`; `ValueError` for `k=4`, `k=-1`, slot 6, an empty slot (`player_count=2`, slot 3) and a fainted slot (`replace_hp(0, 2, 0)`).
   - `test_faint_records_the_slot`: `roark_state(player_count=1).replace_hp(0, 0, 1)` stepped with the opponent's Tackle (`empty_outcome()`, hits): `deaths == [1, 0, 0, 0, 0, 0]`, `player_faints == 1`; an opponent faint (`replace_hp(1, 0, 1)`) leaves `deaths` zero; `ref_step` (via `to_ref`/`from_ref`) gives the same state.
   - `test_decision_actions`: equals `legal_actions(tables, s, 0)` on `roark_real_state`; on that state with `hp[0, 0] = 0` (over 0) and `trapped[0] = 3`: exactly the switches to the living slots 1-5.
