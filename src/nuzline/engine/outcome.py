@@ -45,10 +45,11 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import (
+    CONV2_DRAWS,
     NUM_TYPES,
     PRESENT_HEAL,
     ability_weather,
-    conv2_probs,
+    conv2_pick,
     entry_ability,
     entry_weather,
     hazards_loss,
@@ -188,8 +189,9 @@ class Outcome(NamedTuple):
     # int8[B, NUM_TYPES], Conversion 2's pick (BtlCmd_TryConversion2, battle_script.c:4783-4817):
     # ``[b, t]`` the defending type battler ``b`` becomes when the type it resists is ``t`` (the
     # recorded move's type, ``BattleState.conv2_type``): the first eligible row of a
-    # ``RandNext() % 112`` retry loop. Its law depends on ``t`` and ``b``'s types
-    # (``damage.conv2_probs``), so every ``t`` the move can meet is its own element (E3-B2-3).
+    # ``RandNext() % 112`` retry loop, uniform over the eligible types by the ``% n`` convention
+    # (``damage.conv2_pick``). Its law depends on ``t`` and ``b``'s types, so every ``t`` the move
+    # can meet is its own element (E3-B2-3, review b2 #3).
     conv2: jnp.ndarray
     # int8[B, 2], a Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866,
     # :5286-5288): a value in [0, ids.STARF_DRAWS), the stat is rank ``value % eligible`` among
@@ -1921,18 +1923,18 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
 
 
 def _conv2_draw(key, tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int32[B, NUM_TYPES]``: ``Outcome.conv2`` drawn from ``damage.conv2_probs`` of each battler
-    and recorded type (0 where no row is eligible: the move then fails)."""
+    """``int32[B, NUM_TYPES]``: ``Outcome.conv2``, for each battler and recorded type one integer
+    in ``[0, damage.CONV2_DRAWS)`` turned into the eligible type of rank ``value % count``
+    (``damage.conv2_pick``; 0 where no row is eligible: the move then fails). Integer arithmetic
+    only: the pick is exactly uniform over the eligible types (review b2 #3)."""
     fmt = format_of(state)
     kinds = jnp.arange(NUM_TYPES, dtype=_I32)
+    values = jax.random.randint(key, (fmt.B, NUM_TYPES), 0, CONV2_DRAWS, dtype=_I32)
 
-    def law(b, t):
-        return conv2_probs(tables, state, b, t)
+    def pick(b, t):
+        return conv2_pick(tables, state, b, t, values[b, t])
 
-    probs = jax.vmap(lambda b: jax.vmap(lambda t: law(b, t))(kinds))(jnp.arange(fmt.B))
-    logits = jnp.where(probs > 0, jnp.log(jnp.maximum(probs, 1e-30)), -jnp.inf)
-    pick = jax.random.categorical(key, logits, axis=-1)
-    return jnp.where(jnp.any(probs > 0, axis=-1), pick, 0).astype(_I32)
+    return jax.vmap(lambda b: jax.vmap(lambda t: pick(b, t))(kinds))(jnp.arange(fmt.B))
 
 
 def replacement_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
@@ -2145,7 +2147,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
             jax.random.fold_in(key, 48), (fmt.B, 2), 0, STARF_DRAWS, dtype=_I32
         ),
         # Conversion 2's pick (battle_script.c:4783-4817): for each battler and recorded type the
-        # first eligible row of the ``% 112`` retry loop, its law ``damage.conv2_probs`` read at the
+        # first eligible row of the ``% 112`` retry loop (``damage.conv2_pick``) read at the
         # turn-start types (a battler's types change only by its own action: E3-B2-3). Key 49
         # (main's D2 and Starf draws hold 44-48).
         conv2=_conv2_draw(jax.random.fold_in(key, 49), tables, state),

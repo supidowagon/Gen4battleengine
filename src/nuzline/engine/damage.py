@@ -2128,6 +2128,12 @@ def confusion_damage(tables: Tables, state: BattleState, side, roll) -> jnp.ndar
 # attacking type is the recorded move's, whose multiplier is at most TYPE_MULTI_NOT_VERY_EFF (0 or
 # 5) and whose defending type is neither of the user's; then, with none after 1000 tries, scans the
 # table from row 0 (the call at index 112 draws once more and ends the scan).
+# By the project's ``% n`` convention (``RandNext() % n`` uniform, E1 F-10, E2 B12-9) every try
+# picks each row alike, so the loop's pick is uniform over the eligible rows (one per defending
+# type): ``CONV2_DRAWS`` values read modulo their count (``conv2_pick``). The exact u16 law differs
+# by the 586 / 585 row weights (65536 = 112 * 585 + 16) and by the linear scan's mass
+# ``(1 - W / 65536) ** 1000`` (below 2e-8 with two eligible rows; one row is picked either way),
+# review b2 #3.
 CONV2_ROWS = (
     112  # NELEMS(sTypeMatchupMultipliers): 108 rows, the 0xFE separator, 2 Foresight rows, 0xFF
 )
@@ -2135,6 +2141,9 @@ CONV2_RAND = 65536  # BattleSystem_RandNext() is a u16
 CONV2_TRIES = 1000
 CONV2_NOT_VERY_EFFECTIVE = 5  # TYPE_MULTI_NOT_VERY_EFF (include/constants/battle.h:145)
 NUM_TYPES = 18  # the axes of tables.type_chart (Type.NORMAL .. Type.DARK, MYSTERY included)
+# lcm(1..NUM_TYPES): one value in [0, CONV2_DRAWS) read modulo any count of eligible types is
+# exactly uniform (as ids.STARF_DRAWS for the Starf Berry's five stats).
+CONV2_DRAWS = 12252240
 
 
 def conv2_pairs(tables: Tables) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -2163,20 +2172,17 @@ def conv2_eligible(tables: Tables, state: BattleState, side, atk_type) -> jnp.nd
     return (weight[_i32(atk_type)] > 0) & (kinds != _i32(own[0])) & (kinds != _i32(own[1]))
 
 
-def conv2_probs(tables: Tables, state: BattleState, side, atk_type) -> jnp.ndarray:
-    """``float32[T]``: the law of the type ``BtlCmd_TryConversion2`` picks for ``side``'s battler
-    against ``atk_type``. With ``W`` the weights of the eligible rows and ``p0 = (1 - W / 65536) **
-    1000`` the chance that every try misses: ``P(type) = (1 - p0) * w / W``, plus ``p0`` for the
-    first eligible row of the linear scan. Zeros when no row is eligible (the move fails). The
-    exact form is ``enumerate._conv2``'s."""
-    weight, row = conv2_pairs(tables)
+def conv2_pick(tables: Tables, state: BattleState, side, atk_type, value) -> jnp.ndarray:
+    """``int32``: the defending type ``BtlCmd_TryConversion2`` picks for ``side``'s battler against
+    ``atk_type`` (battle_script.c:4783-4817), uniform over the eligible types by the ``% n``
+    convention: the eligible type of rank ``value % count`` in type order, ``value`` in
+    ``[0, CONV2_DRAWS)``. Integer arithmetic only, so exact. 0 when no row is eligible (the move
+    fails). The enumeration's law is ``enumerate._conv2``."""
     elig = conv2_eligible(tables, state, side, atk_type)
-    w = jnp.where(elig, weight[_i32(atk_type)], 0).astype(jnp.float32)
-    total = jnp.sum(w)
-    p0 = jnp.exp(CONV2_TRIES * jnp.log1p(-total / CONV2_RAND))
-    first = jnp.argmin(jnp.where(elig, row[_i32(atk_type)], CONV2_ROWS + 1))
-    probs = (1 - p0) * w / jnp.maximum(total, 1.0) + p0 * (jnp.arange(NUM_TYPES) == first)
-    return jnp.where(total > 0, probs, 0.0)
+    count = jnp.sum(elig.astype(jnp.int32))
+    rank = jnp.cumsum(elig.astype(jnp.int32)) - 1
+    pick = elig & (rank == _i32(value) % jnp.maximum(count, 1))
+    return jnp.sum(jnp.where(pick, jnp.arange(NUM_TYPES, dtype=jnp.int32), 0)).astype(jnp.int32)
 
 
 def conv2_choice(tables: Tables, state: BattleState, side, atk_type, draw):

@@ -579,7 +579,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   difference). `BtlCmd_SetMirrorMove` (bs.c:3483-3525): `order.mirror_copied` (moveCopied, else in a
   doubles battle, `fmt.B > 2`, the `call % count`-th nonzero `move_copied_hit` entry: the decomp's
   `RandNext() % 4` until nonzero is uniform over the nonzero entries; `outcome._draw_calls` draws it,
-  fold 44; singles never reads moveCopiedHit: it is moveCopied's twin there), then `order.mirror_call`:
+  fold 50 (44-49 are the D2 target draws, Starf and Conversion 2; review b2 #11); singles never reads moveCopiedHit: it is moveCopied's twin there), then `order.mirror_call`:
   0 for MOVE_NONE or a move whose battle effect (`tables.move_ai_effect`) is that of a
   `CANNOT_ENCORE_MOVES` move (`Move_CanBeEncored`, lib.c:7221-7231: Transform, Mimic, Sketch, Mirror
   Move, Encore, Struggle); no Gravity or Metronome ban (no invoker has the flag, so none is ever
@@ -641,7 +641,9 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `int8[B, 18]`. No manifest bump: no array or key changed. The 112 rows of
   `sTypeMatchupMultipliers` come from `type_chart_order` / `type_chart_foresight` (decomp row =
   order, +1 for the Foresight rows after the 0xFE separator at 108); `damage.conv2_pairs`, checked
-  against the decomp source by `test_the_row_table_is_the_decomps`.
+  against the decomp source by `test_the_row_table_is_the_decomps`. `tools.build_tables.check_conv2_rows` refuses
+  at build time a chart (either game) other than 108 rows, the separator, 2 Foresight rows and the end:
+  the `% 112` is a compiled immediate (BattleSystem_TypeMatchup, lib.c:2994-3007; review b2 #12).
   Script: effect_script_0093.s:5 direct ON_HIT (lib.c:1485-1491), subscript_conversion_2.s:5
   TryConversion2, failure -> :12-14 MOVE_STATUS_FAILED, past the subscript's own attack message only:
   CheckMoveFailure (bcp.c:3311-3327) then runs subscript_missed.s, whose PrintAttackMessage (:5) sets
@@ -652,11 +654,17 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Eligible row: pair listed, multiplier 0 or 5, defending type not the user's type 1 or 2
   (`damage.conv2_eligible`). Draw law (lib.c:2994-3007; `RandNext` is a u16): up to 1000 tries of
   `% 112`, rows 0-15 weigh 586 and the rest 585 of 65536; first eligible try wins; after 1000 misses the
-  linear scan takes the first eligible row. So `P(d) = (1 - p0) w_d / W + p0 [d is the first row]`,
-  `p0 = (1 - W/65536)^1000`. `enumerate._conv2` computes it with fractions and writes it on a 2^-52
-  grid (the largest weight takes the rounding residue): the exact denominator `65536^1000 * W` does
-  not fit int64 weights; the error is below float64's resolution. `outcome._conv2_draw` samples
-  `damage.conv2_probs` (float32). The value is the picked defending type, one element per (battler,
+  linear scan takes the first eligible row. So exactly `P(d) = (1 - p0) w_d / W + p0 [d is the first
+  row]`, `p0 = (1 - W/65536)^1000`. Ruling (review b2 #3, the managing session's ruling of 19 Nov):
+  by the project's `% n` convention (E1 F-10, E2 B12-9: `RandNext() % n` is uniform) every try picks
+  each row alike, so the pick is uniform over the eligible types (one row per defending type): the
+  586 / 585 split and the linear scan's mass `p0` (below 2e-8 with two or more eligible rows; with one
+  row it is picked either way) are not modelled. The draw is an exact integer pick: `outcome._conv2_draw`
+  draws one value in `[0, damage.CONV2_DRAWS)` (lcm(1..18) = 12252240) per (battler, recorded type) and
+  `damage.conv2_pick` takes the eligible type of rank `value % count`; `enumerate._conv2` is weight 1
+  each over the count (the earlier float32 categorical and 2^-52 grid are gone; `OutcomeLaws.conv2_eligible`
+  replaces `conv2_weight` / `conv2_first`). Test: `test_the_pick_law_is_uniform_over_the_eligible_types`,
+  `test_the_draw_is_an_exact_integer_pick_of_the_law`. The value is the picked defending type, one element per (battler,
   recorded type) because the law depends on both; the handler reads `conv2[user, conv2_type]`; a
   draw not eligible in the live state (an outcome built for another state) takes the first row.
   Relevance (`outcome_laws`, `_branch_masks`): with the user first, the turn-start record's type; with
@@ -687,10 +695,11 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   changes its types, so the law reads the turn-start types.
   Not built: doubles (the partner as `conv2_battler` is stored as a battler, the MOVE_LOCKED test
   reads it, but no doubles format runs the enumeration yet). Tests: tests/engine/test_e3_batch2.py
-  (`test_conversion_2_*`, `test_the_*`, `test_a_*` of the Conversion 2 section), tests/ai/
+  (`test_conversion_2_*`, `test_the_*`, `test_a_*` of the Conversion 2 section; review b2 #12:
+  `test_the_build_checks_both_games_chart_against_the_row_modulus`), tests/ai/
   test_kaizo_policy.py (`test_conversion_2_has_no_basic_or_expert_label`), tests/engine/test_state.py
   (`test_conversion_2_record_maps_to_conv2_fields`); `fullset`-free; pod: test_enumerate's marginals
-  need a `conv2` oracle clause (not added: the law is checked by the retry-loop test).
+  need a `conv2` oracle clause (not added: the law is checked by the uniform-law test).
 
 - E3-B2-4 Spite (#100, BATTLE_EFFECT_DECREASE_LAST_MOVE_PP; move 180, the only move with effect 100 in
   either game): new `EffectId.SPITE` (133). No new state, no `Outcome` field and no draw (BtlCmd_

@@ -573,37 +573,55 @@ def test_the_row_table_is_the_decomps(tables):
         assert int(weight[a, d]) == (586 if index < 16 else 585), (a, d)
 
 
-def test_the_pick_law_is_the_retry_loop(tables, names):
-    """``enumerate._conv2`` (the law the enumeration draws) is the 1000-try loop of
-    BtlCmd_TryConversion2 followed by the linear scan, computed here try by try with fractions:
-    a Rock / Ground user against a recorded Normal move has Steel and Ghost left, a Fire / Fighting
-    one the Fire rows (Fire, Water, Rock, Dragon). The values are on the 2**-52 grid."""
-    from fractions import Fraction
+def test_the_build_checks_both_games_chart_against_the_row_modulus():
+    """Review b2 #12: ``tools.build_tables.check_conv2_rows`` holds both games' charts (108 rows,
+    the 0xFE separator, the two Foresight rows, the 0xFF end: ``damage.CONV2_ROWS`` = 112, the
+    compiled ``% NELEMS(sTypeMatchupMultipliers)`` of battle_lib.c:2994-3007) and refuses a chart
+    with a row more or a Foresight row moved."""
+    import copy
+    import json
 
+    from tools.build_tables import BuildError, check_conv2_rows
+
+    root = Path(__file__).resolve().parents[2] / "data"
+    for game in ("intermediate", "intermediate_kaizo"):
+        path = root / game / "types.json"
+        if not path.exists():
+            pytest.skip(f"{path} not built")
+        types = json.loads(path.read_text(encoding="utf-8"))
+        check_conv2_rows(types["chart_order"], types["foresight_immunities"])
+    order, fore = types["chart_order"], types["foresight_immunities"]
+    extra = copy.deepcopy(order)
+    a, d = next((a, d) for a, row in enumerate(extra) for d, v in enumerate(row) if v < 0)
+    extra[a][d] = max(v for row in extra for v in row) + 1
+    with pytest.raises(BuildError):
+        check_conv2_rows(extra, fore)
+    with pytest.raises(BuildError):
+        check_conv2_rows(order, fore[:1])
+
+
+def test_the_pick_law_is_uniform_over_the_eligible_types(tables, names):
+    """Review b2 #3: BtlCmd_TryConversion2's 1000 tries of ``RandNext() % 112`` (battle_lib.c:
+    2994-3007, battle_script.c:4783-4817) are uniform per row by the ``% n`` convention (E1 F-10),
+    so ``enumerate._conv2`` is uniform over the eligible types, integer weights 1 over their
+    count: a Rock / Ground user against a recorded Normal move has Steel and Ghost (the Foresight
+    row) left, a Fire / Fighting one Water, Rock and Dragon (not its own Fire). The eligible set is
+    read here from the decomp's rows (``damage.conv2_pairs``) and the user's types."""
     from nuzline.engine.damage import conv2_pairs
-    from nuzline.engine.enumerate import CONV2_DENOMINATOR, _conv2, outcome_laws
+    from nuzline.engine.enumerate import _conv2, outcome_laws
 
-    weight, row = (np.asarray(x) for x in conv2_pairs(tables))
+    weight, _ = (np.asarray(x) for x in conv2_pairs(tables))
+    expected = {(NORMAL, "Geodude"): [STEEL, GHOST], (FIRE, "Monferno"): [ROCK, WATER, 16]}
     for user, kind, foe in (("Geodude", NORMAL, "Tackle"), ("Monferno", FIRE, "Ember")):
         s = _c2_fight(tables, names, foe=(foe,), user=user)
         s = _record(s, 0, names.move(foe), 1, kind)
         acts = A("Conversion 2", foe, s, names)
         laws = jax.tree.map(np.asarray, jax.jit(outcome_laws)(tables, s, acts))
         values, weights, den = _conv2(laws, 0, kind)
-        assert den == CONV2_DENOMINATOR and sum(weights) == den
         own = {int(x) for x in np.asarray(s.types[0, 0])}
-        rows = sorted((int(row[kind, d]), d) for d in range(18) if weight[kind, d] and d not in own)
-        w = {d: int(weight[kind, d]) for _, d in rows}
-        # The loop, 1000 times: a try wins with its row's weight, else the next try; then the scan.
-        mass, left = {d: Fraction(0) for d in w}, Fraction(1)
-        for _ in range(1000):
-            for d, x in w.items():
-                mass[d] += left * Fraction(x, 65536)
-            left *= 1 - Fraction(sum(w.values()), 65536)
-        mass[rows[0][1]] += left
-        for d, x in zip(values, weights, strict=True):
-            assert abs(Fraction(x, den) - mass[d]) < Fraction(1, 2**50), (user, d)
-        assert set(values) == set(w)
+        rows = sorted(d for d in range(18) if weight[kind, d] and d not in own)
+        assert values == rows == sorted(expected[(kind, user)]), user
+        assert weights == [1] * len(rows) and den == len(rows)
     # The ??? type has no rows at all: one value, the move fails.
     assert _conv2(laws, 0, 9) == ([0], [1], 1)
 
@@ -791,23 +809,32 @@ def test_a_faster_user_reads_the_turn_start_record_and_a_slower_one_the_foes_mov
             assert abs(got[v] - w / den) < 1e-9
 
 
-def test_the_draw_is_sampled_from_the_law(tables, names):
-    """``outcome.sample_outcome`` draws ``conv2`` from ``damage.conv2_probs`` per battler and type:
-    over many keys the Rock user's picks are Steel (row 1, 586 u16 values) and Ghost (the Foresight
-    row 110, 585) only, in the law's proportion."""
-    from nuzline.engine.damage import conv2_probs
-    from nuzline.engine.outcome import sample_outcome
+def test_the_draw_is_an_exact_integer_pick_of_the_law(tables, names):
+    """Review b2 #3: the sampler (``outcome._conv2_draw``) draws one integer in
+    ``[0, CONV2_DRAWS)`` per battler and recorded type and ``damage.conv2_pick`` takes the eligible
+    type of rank ``value % count``. ``CONV2_DRAWS`` is a multiple of every count 1-18, so each
+    eligible type gets exactly ``CONV2_DRAWS / count`` values: the enumeration's law
+    (``_conv2``) exactly. Every sampled pick is one of the law's values."""
+    import math
 
+    from nuzline.engine.damage import CONV2_DRAWS, conv2_pick
+    from nuzline.engine.outcome import _conv2_draw
+
+    assert all(CONV2_DRAWS % k == 0 for k in range(1, 19)) and CONV2_DRAWS == math.lcm(
+        *range(1, 19)
+    )
     t, n = tables, names
     s = _c2_fight(t, n, user="Geodude", foe_species="Monferno")
-    law = np.asarray(conv2_probs(t, s, 0, NORMAL))
-    assert set(np.flatnonzero(law)) == {STEEL, GHOST}
-    assert abs(law.sum() - 1) < 1e-6 and law[STEEL] > law[GHOST]
-    acts = A("Conversion 2", "Tackle", s, n)
-    draw = jax.jit(jax.vmap(lambda k: sample_outcome(k, t, s, acts, False).conv2[0, NORMAL]))
-    picks = np.asarray(draw(jax.random.split(jax.random.PRNGKey(0), 4000)))
-    assert set(np.unique(picks)) == {STEEL, GHOST}
-    assert abs((picks == STEEL).mean() - law[STEEL]) < 0.04
+    pick = jax.jit(jax.vmap(lambda v: conv2_pick(t, s, 0, NORMAL, v)))
+    first = np.asarray(pick(jnp.arange(4, dtype=jnp.int32))).tolist()
+    assert first == [GHOST, STEEL, GHOST, STEEL]  # rank value % 2 in type order
+    top = np.asarray(pick(jnp.asarray([CONV2_DRAWS - 2, CONV2_DRAWS - 1], jnp.int32))).tolist()
+    assert top == [GHOST, STEEL]
+    # No eligible row (the ??? type): 0, the move fails.
+    assert int(conv2_pick(t, s, 0, 9, 7)) == 0
+    drawn = np.asarray(jax.jit(_conv2_draw)(jax.random.PRNGKey(0), t, s))
+    assert int(drawn[0, NORMAL]) in (STEEL, GHOST)
+    assert int(drawn[0, 9]) == 0
 
 
 # --- #100 Spite (E3-B2-4) ---------------------------------------------------------------------

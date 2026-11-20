@@ -438,6 +438,26 @@ def _item_party_params(items: list[dict]) -> list[list[int]]:
     return out
 
 
+def check_conv2_rows(chart_order, foresight) -> None:
+    """Raise unless the type chart is 108 rows, the 0xFE separator, 2 Foresight rows and the 0xFF
+    end. Conversion 2 draws ``BattleSystem_RandNext() % NELEMS(sTypeMatchupMultipliers)``
+    (battle_lib.c:2994-3007), a compiled immediate the engine holds as ``damage.CONV2_ROWS`` (112)
+    and ``damage.conv2_pairs`` places the Foresight rows one past the separator: a game whose chart
+    has other rows would need both changed (Kaizo reuses the decomp's chart,
+    ``extract_rom.REUSE_SYMBOLS``; review b2 #12)."""
+    from nuzline.engine.damage import CONV2_ROWS
+
+    listed = sorted(int(v) for row in chart_order for v in row if int(v) >= 0)
+    after = sorted(int(chart_order[a][d]) for a, d in foresight)
+    main = CONV2_ROWS - 4  # the rows before the separator: all but it, 2 Foresight rows, the end
+    if listed != list(range(main + 2)) or after != [main, main + 1]:
+        raise BuildError(
+            f"type chart: {len(listed)} rows with Foresight rows at {after}; Conversion 2's "
+            f"% {CONV2_ROWS} (damage.CONV2_ROWS) needs {main} rows, the separator, 2 Foresight "
+            "rows and the end"
+        )
+
+
 def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozenset[int], int]:
     """(effect ids whose ``be_seq`` member changed and is not ``modelled``, the count of
     ``unknown`` changed code keys and script members). Both are counted against what the ROM
@@ -663,6 +683,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     chart_foresight = np.zeros((n_types, n_types), dtype=np.int64)
     for a, d in types["foresight_immunities"]:
         chart_foresight[a, d] = 1
+    check_conv2_rows(chart_order, types["foresight_immunities"])
 
     nature_mods = np.zeros((len(natures), 6), dtype=np.int64)
     for i, n in enumerate(natures):

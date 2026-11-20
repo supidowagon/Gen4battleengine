@@ -194,7 +194,6 @@ force never compresses.
 from __future__ import annotations
 
 import collections
-import fractions
 import itertools
 import math
 from collections.abc import Callable
@@ -209,9 +208,6 @@ from nuzline.data.tables import Tables
 from nuzline.engine import targets
 from nuzline.engine.actions import imprisoning_foe
 from nuzline.engine.damage import (
-    CONV2_RAND,
-    CONV2_ROWS,
-    CONV2_TRIES,
     NUM_TYPES,
     PHYSICAL,
     ROLLS,
@@ -220,7 +216,6 @@ from nuzline.engine.damage import (
     beat_up_damage,
     beat_up_slots,
     conv2_eligible,
-    conv2_pairs,
     decomp_abilities,
     entry_ability,
     hit_damage_table,
@@ -449,11 +444,9 @@ class OutcomeLaws(NamedTuple):
     acupressure_loose: jnp.ndarray  # bool[B]
     # int32[B]: ids.CHATTER_CHANCES of each battler's party's Chatot cry (G-70)
     chatter_chance: jnp.ndarray
-    # E3-B2-3, Conversion 2's pick (``_conv2``): ``conv2_weight[b, t, d]`` the u16 weight of the row
-    # (t, d) when it is eligible for battler b's types (``damage.conv2_eligible``), else 0, and
-    # ``conv2_first[b, t]`` the defending type of the first eligible row of the linear scan (-1: none).
-    conv2_weight: jnp.ndarray  # int32[B, NUM_TYPES, NUM_TYPES]
-    conv2_first: jnp.ndarray  # int32[B, NUM_TYPES]
+    # E3-B2-3, Conversion 2's pick (``_conv2``): ``conv2_eligible[b, t, d]`` the row (t, d) is
+    # eligible for battler b's types (``damage.conv2_eligible``).
+    conv2_eligible: jnp.ndarray  # bool[B, NUM_TYPES, NUM_TYPES]
     # bool[B, 2]: F-10, the Starf Berry draw (``_starf_reads``) is read modulo a count that can
     # change before the eating: all STARF_DRAWS values; else the five of a fixed count of 5.
     starf_loose: jnp.ndarray
@@ -2136,19 +2129,12 @@ def outcome_laws(
         conv2_own = conv2_foe = jnp.ones((fmt.B, NUM_TYPES), bool)
     # The law's inputs (``_conv2``): each battler's eligible rows per recorded type, at the
     # turn-start types (only a battler's own action changes its types).
-    pair_weight, pair_row = conv2_pairs(tables)
     eligible = jnp.stack(
         [
             jax.vmap(lambda t, b=b: conv2_eligible(tables, state, b, t))(jnp.arange(NUM_TYPES))
             for b in range(fmt.B)
         ]
     )
-    conv2_weight = jnp.where(eligible, pair_weight[None], 0).astype(_I32)
-    conv2_first = jnp.where(
-        jnp.any(eligible, axis=-1),
-        jnp.argmin(jnp.where(eligible, pair_row[None], CONV2_ROWS + 1), axis=-1),
-        -1,
-    ).astype(_I32)
     base = {
         "conv2_use": conv2_use,
         "conv2_own": conv2_own,
@@ -2856,8 +2842,7 @@ def outcome_laws(
         chatter_chance=jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
-        conv2_weight=conv2_weight,
-        conv2_first=conv2_first,
+        conv2_eligible=eligible,
         starf_loose=starf_loose,
     )
 
@@ -3141,35 +3126,17 @@ def _chatter(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [99 - chance, chance + 1], 100
 
 
-CONV2_DENOMINATOR = 2**52  # the exact law's rounding grid (below)
-
-
 def _conv2(laws: OutcomeLaws, side: int, kind: int) -> _Law:
     """BtlCmd_TryConversion2 (battle_script.c:4783-4817) for battler ``side`` against the recorded
-    type ``kind``: the value is the defending type picked. Each of up to 1000 tries draws a u16
-    ``% 112`` rows (``damage.conv2_pairs``: rows 0-15 weigh 586, the others 585 of 65536) and the
-    first eligible row wins; with none in 1000 tries the linear scan takes the first eligible
-    row. With ``W`` the eligible weights and ``p0 = (1 - W / 65536) ** 1000``:
-    ``P(type) = (1 - p0) * w / W + p0 * [it is the first eligible row]``, computed exactly with
-    fractions and written on a 2**-52 grid (the largest weight takes the rounding residue), which
-    is float64's own resolution: the weights do not fit an int64 over their exact denominator
-    (``65536 ** 1000 * W``). No eligible row: the move fails, one value."""
-    weights = [int(w) for w in np.asarray(laws.conv2_weight[side, kind])]
-    total = sum(weights)
-    first = int(laws.conv2_first[side, kind])
-    if total == 0 or first < 0:
+    type ``kind``: the value is the defending type picked. Each of up to 1000 tries draws
+    ``RandNext() % 112`` rows and the first eligible row wins (else the linear scan's first);
+    by the ``% n`` convention every row is alike, so the pick is uniform over the eligible types
+    (``damage.conv2_pick``; review b2 #3, ledger E3-B2-3): weight 1 each over their count, exact.
+    No eligible row: the move fails, one value."""
+    values = [int(d) for d in np.flatnonzero(np.asarray(laws.conv2_eligible[side, kind]))]
+    if not values:
         return [0], [1], 1
-    p0 = fractions.Fraction(CONV2_RAND - total, CONV2_RAND) ** CONV2_TRIES
-    probs = {
-        d: (1 - p0) * fractions.Fraction(w, total) + (p0 if d == first else 0)
-        for d, w in enumerate(weights)
-        if w > 0
-    }
-    scaled = {d: round(p * CONV2_DENOMINATOR) for d, p in probs.items()}
-    biggest = max(scaled, key=lambda d: scaled[d])
-    scaled[biggest] += CONV2_DENOMINATOR - sum(scaled.values())
-    values = sorted(scaled)
-    return values, [scaled[d] for d in values], CONV2_DENOMINATOR
+    return values, [1] * len(values), len(values)
 
 
 def _flinch_item(laws: OutcomeLaws, side: int) -> _Law:
