@@ -7,14 +7,15 @@ the MoveEnd has run only the first two calls (CheckBattleOver, :3969, returns be
 ``ClearFlags`` clears the attacker's ``moveHit`` (:4389); the defender's, written by
 ``UpdateFlagsWhenHit`` after the faint loop, stays (:4499-4508).
 
-Each case is the action phase of a turn (``play``: engine equal to reference, every field). The
-switch case (battler 0 switches, battler 3 cured at the switch's MoveEnd) is D3-13's.
+Each case is the action phase of a turn (``play``: engine equal to reference, every field), the
+switch case included (battler 0 switches, battler 3 cured at the switch's MoveEnd, D3-13).
 """
 
 from __future__ import annotations
 
 import jax.numpy as jnp
 
+from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import confusion_damage, damage_for_roll
 from nuzline.engine.format import DOUBLES, MULTI, SINGLES, TWO_TRAINERS
 from nuzline.engine.ids import AbilityId, Stat, Status
@@ -218,3 +219,23 @@ def test_confusion_self_hit_eats_liechi_at_its_move_end(tables, names):
     assert int(out.stages[0, Stat.ATK]) == 1
     assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == names.item("Liechi Berry")
     assert int(out.item[1, 0]) == 0  # Trick moved nothing
+
+
+# ---------------------------------------------------------------- a switch's MoveEnd (D3-13)
+
+
+def test_a_switch_action_cures_a_sleeping_insomnia_battler_at_its_move_end(tables, names):
+    """Battler 0 switches to slot 2 (order 0, 1, 3, 2); battler 3 (Insomnia) is asleep with 3 turns
+    left. The switch's MoveEnd runs TriggerEffectOnSwitch (bcp.c:3973) whose forbidden-status
+    state cures every battler (lib.c:4135-4148), so battler 3 acts later in the turn; without
+    Insomnia it stays asleep and its Swords Dance does not run."""
+    switch = MOVE_ACTIONS + 2
+    for ability, cured in ((AbilityId.INSOMNIA, True), (AbilityId.OVERGROW, False)):
+        s = _all_moves(four(tables, names, DOUBLES), names, SWORDS)
+        s = with_ability(s, 3, ability)
+        s = _set_status(s, 3, Status.SLEEP)
+        p, slot = party_of(s, 3), int(s.active[3])
+        s = s._replace(status_counter=s.status_counter.at[p, slot].set(3))
+        out, _ = play(tables, s, [switch, 0, 0, 0], (0, 1, 3, 2))
+        assert (status(out, 3) == Status.NONE) == cured
+        assert int(out.stages[3, Stat.ATK]) == (2 if cured else 0)

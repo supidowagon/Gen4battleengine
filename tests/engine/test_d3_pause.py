@@ -21,7 +21,7 @@ import numpy as np
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import MOVE_ACTIONS, legal_replacements
 from nuzline.engine.format import DOUBLES, MULTI, SINGLES, TWO_TRAINERS
-from nuzline.engine.ids import Stat
+from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.outcome import empty_outcome, moved_mask, outcome_to_py, pivot_view
 from nuzline.engine.step import _action_phase, _has_bench
 from nuzline.reference.convert import from_ref, to_ref
@@ -178,6 +178,23 @@ def test_the_broken_substitute_flag_crosses_the_pause(tables, names):
     assert int(paused.pivot_battler) == 1
     assert np.asarray(paused.ts_sub_hit).tolist() == [0, 1, 0, 0]
     out = resume(tables, paused)
+    assert np.asarray(out.ts_sub_hit).tolist() == [0, 0, 0, 0]
+
+
+def test_the_intimidate_newcomer_skips_the_flagged_foe_through_the_pause(tables, names):
+    """D3-13 (``switch_in.run_states``): the party 0 slot 2 newcomer has Intimidate. Battler 0's
+    U-turn breaks battler 1's Substitute: the bit is set at the pause, the newcomer's Intimidate
+    skips battler 1 and lowers battler 3 (each +2 from its own Swords Dance after), and every
+    entry is 0 after the turn."""
+    s = pivoting(tables, names)
+    s = s._replace(
+        substitute_hp=s.substitute_hp.at[1].set(1),
+        ability=s.ability.at[0, 2].set(int(AbilityId.INTIMIDATE)),
+    )
+    paused, _ = play(tables, s, [0, 0, 0, 0], ORDER, targets=(1, 0, 0, 0))
+    assert np.asarray(paused.ts_sub_hit).tolist() == [0, 1, 0, 0]
+    out = resume(tables, paused)
+    assert int(out.stages[1, ATK]) == 2 and int(out.stages[3, ATK]) == 1
     assert np.asarray(out.ts_sub_hit).tolist() == [0, 0, 0, 0]
 
 

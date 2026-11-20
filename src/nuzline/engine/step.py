@@ -288,6 +288,7 @@ from nuzline.engine.state import (
     held_item,
     record_seen_move,
 )
+from nuzline.engine.switch_in import run_states, show_battle_mon4
 
 _I32 = jnp.int32
 _unlock = unlock_move  # Battler_UnlockMoveChoice (battle_lib.c:1834): (state, side, cond)
@@ -768,8 +769,24 @@ def _flag_exp(state: BattleState, side) -> BattleState:
     return state._replace(exp_mask=jnp.stack(entries).astype(state.exp_mask.dtype))
 
 
+def _entry_states(
+    tables: Tables, state: BattleState, side, speed_order, sub_hit=None, trace_pick=None
+) -> BattleState:
+    """B = 4: ``switch_in.run_states`` for the newcomer ``side`` over the running action's
+    ``monSpeedOrder`` (D3-13; ``sub_hit``: ``bool[B]`` or None)."""
+    fresh = jnp.arange(format_of(state).B) == jnp.asarray(side, _I32)
+    return run_states(tables, state, speed_order, fresh, sub_hit, trace_pick)
+
+
 def _send_out(
-    tables: Tables, state: BattleState, side, slot, effects=True, baton=False, trace_pick=None
+    tables: Tables,
+    state: BattleState,
+    side,
+    slot,
+    effects=True,
+    baton=False,
+    trace_pick=None,
+    speed_order=None,
 ) -> BattleState:
     """A switch action, or Roar's drag (``_use_move``): ``_switch_out``, ``_switch_in``, the
     entry hazards, then (``effects``, static ``False`` or a traced flag) the rest of
@@ -780,6 +797,11 @@ def _send_out(
     hazards = entry_hazards(tables, entered, side)
     if effects is False:
         return hazards
+    if format_of(state).B == 4:  # D3-13: the states over the action's order
+        order = jnp.arange(4) if speed_order is None else speed_order
+        return _where(
+            effects, _entry_states(tables, hazards, side, order, None, trace_pick), hazards
+        )
     return _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
 
 
@@ -2186,11 +2208,15 @@ def _use_move(
     # action reads it: BattleContext_Init clears selfTurnFlags at its end (battle_lib.c:2013-
     # 2015, bcp.c:3998), so a later drag's newcomer in the same turn finds it clear.
     entry_sub_hit = resumed & (state_in.ts_sub_hit != 0)
-    state = _where(
-        entering,
-        switch_in_effects(tables, state, fx_side, outcome.trace_pick, sub_hit=entry_sub_hit),
-        state,
-    )
+    if fmt.B == 4:  # D3-13: the states over this action's monSpeedOrder (a resumed one: kept)
+        entered_states = _entry_states(
+            tables, state, fx_side, speed_order, entry_sub_hit, outcome.trace_pick
+        )
+    else:
+        entered_states = switch_in_effects(
+            tables, state, fx_side, outcome.trace_pick, sub_hit=entry_sub_hit
+        )
+    state = _where(entering, entered_states, state)
     state = state._replace(
         ts_sub_hit=jnp.where(resumed, 0, state.ts_sub_hit).astype(state.ts_sub_hit.dtype)
     )
@@ -2560,7 +2586,18 @@ def _use_move(
             state.pivot_battler.dtype
         ),
     )
-    state = _where(transform_ok, switch_in_effects(tables, state, side, outcome.trace_pick), state)
+    if fmt.B == 4:  # D3-13: the copied ability's states over this action's order
+        transformed = _entry_states(
+            tables,
+            state,
+            side,
+            speed_order,
+            (jnp.arange(fmt.B) == target_side) & sub_hit_now,
+            outcome.trace_pick,
+        )
+    else:
+        transformed = switch_in_effects(tables, state, side, outcome.trace_pick)
+    state = _where(transform_ok, transformed, state)
     # The roosting chart ends with the move: the target's own types again (if it is still the
     # active battler: a drag restored the outgoing one's from its personal row).
     # A move that changed them (Shaymin-Sky's revert, F-16) leaves its own.
@@ -2887,11 +2924,18 @@ def _act(
     # that leaves a side out runs no switch-in effects (SF2 (a2) R2). The party list's run in
     # the resumed tail (R4).
     decided = jnp.logical_or(*_sides_out(entered))
-    switched = _where(
-        ~resumed & ~decided,
-        switch_in_effects(tables, entered, side, outcome.trace_pick),
-        entered,
-    )
+    if fmt.B == 4:  # D3-13: the action's sort (BranchActions, bcp.c:888) orders the states
+        arrived = _entry_states(
+            tables,
+            entered,
+            side,
+            jnp.arange(fmt.B) if speed_order is None else speed_order,
+            None,
+            outcome.trace_pick,
+        )
+    else:
+        arrived = switch_in_effects(tables, entered, side, outcome.trace_pick)
+    switched = _where(~resumed & ~decided, arrived, entered)
     base = _alive_mask(state) if base is None else base
     # subscript_show_party_list.s:23-24: the faint alone, no CheckBattleOver (R1).
     listed = _faint_check(tables, _with_alive(state, base), switched, decide=False)
@@ -4949,6 +4993,14 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     # A lead's battle-start Starf Berry (``starf_open``): its RandNext() % 5 (battle_lib.c:
     # 5273-5294), uniform over the eligible stats (F-10).
     starf = jax.random.randint(jax.random.fold_in(key, 2), (format_of(state).B,), 0, STARF_DRAWS)
+    if format_of(state).B == 4:
+        # D3-13: the four-battler start has not run ShowBattleMon (``entry_pending``): its sort's
+        # tie bits (the six position pairs, ``fold_in(key, 3)``; key 2 is the Starf draw) are drawn
+        # here, then the states run once, then the open Starf Berries draw. ``war_swaps`` is 0.
+        ties = jax.random.randint(jax.random.fold_in(key, 3), (6,), 0, 2)
+        shown = show_battle_mon4(tables, state, ties, battle_start=state.turn == 0)
+        state = _where(jnp.any(state.entry_pending != 0), shown, state)
+        return resolve_starf(state, starf)
     state = resolve_starf(state, starf)
     return sample_war(jax.random.fold_in(key, 1), state)
 
@@ -4970,12 +5022,7 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
     state = jax.tree.map(jnp.asarray, state)
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
-    # A lead's battle-start Starf Berry (``starf_open``): one value per eligible stat, uniform
-    # (``hooks.resolve_starf``, F-10); visible, so its outcomes are separate groups.
-    counts = [
-        int(jax.device_get(starf_count(state, b))) if int(state.starf_open[b]) else 1
-        for b in range(len(kept))
-    ]
+    four = format_of(state).B == 4
     out = []
     for bits in itertools.product(*((0, 1) if k else (0,) for k in kept)):
         prob = 1.0
@@ -4983,14 +5030,67 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
             if k:
                 prob *= 1 / n if b else (n - 1) / n
         drawn = state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype))
-        for picks in itertools.product(*(range(max(c, 1)) for c in counts)):
-            p = prob / math.prod(max(c, 1) for c in counts)
-            picked = resolve_starf(drawn, jnp.asarray(picks, jnp.int32))
-            if bool(war_split(picked)):
-                out.extend((resolve_war(picked, tie), p / 2) for tie in (0, 1))
-            else:
-                out.append((resolve_war(picked, 0), p))
+        # B = 4: the start's ShowBattleMon runs per tie vector the sort reads (D3-13).
+        shown = _four_shown(tables, drawn) if four else [(drawn, 1.0)]
+        for after, weight in shown:
+            # A lead's battle-start Starf Berry (``starf_open``): one value per eligible stat,
+            # uniform (``hooks.resolve_starf``, F-10); visible, so its outcomes are separate groups.
+            counts = [
+                int(jax.device_get(starf_count(after, b))) if int(after.starf_open[b]) else 1
+                for b in range(len(kept))
+            ]
+            for picks in itertools.product(*(range(max(c, 1)) for c in counts)):
+                p = prob * weight / math.prod(max(c, 1) for c in counts)
+                picked = resolve_starf(after, jnp.asarray(picks, jnp.int32))
+                if four:  # war_swaps is 0 at B = 4: nothing is left open
+                    out.append((picked, p))
+                elif bool(war_split(picked)):
+                    out.extend((resolve_war(picked, tie), p / 2) for tie in (0, 1))
+                else:
+                    out.append((resolve_war(picked, 0), p))
     return out
+
+
+@jax.jit
+def _four_sorts(tables: Tables, state: BattleState, ties) -> jnp.ndarray:
+    """``int32[T, 4]``: ``sort_mon_speed``'s order for each tie vector of ``ties`` (``[T, 6]``)."""
+    return jax.vmap(lambda t: sort_mon_speed(tables, state, state.qc_roll, t)[0])(ties)
+
+
+@jax.jit
+def _four_show(tables: Tables, state: BattleState, ties, start) -> BattleState:
+    return show_battle_mon4(tables, state, ties, battle_start=start)
+
+
+def _four_shown(tables: Tables, state: BattleState) -> list[tuple[BattleState, float]]:
+    """Host: ``(state, probability)`` of ``show_battle_mon4`` over the sort's tie bits at B = 4 (each
+    of the 64 vectors of the six position pairs, 1/64: ``RandNext() & 1`` each). A bit the sort does
+    not read changes nothing, so the vectors are grouped by the order they give (the read mask:
+    equal orders are equal runs) and equal results are merged, summing the probabilities
+    (ruling G-34: each distinct visible result is a chance child). A state with no
+    ``entry_pending`` runs nothing: ``[(state, 1.0)]``."""
+    if not bool(jnp.any(state.entry_pending != 0)):
+        return [(state, 1.0)]
+    ties = np.asarray(list(itertools.product((0, 1), repeat=6)), np.int32)
+    orders = np.asarray(jax.device_get(_four_sorts(tables, state, jnp.asarray(ties))))
+    groups: dict[tuple, list] = {}
+    for row, order in zip(ties, orders, strict=True):
+        groups.setdefault(tuple(int(b) for b in order), [row, 0])[1] += 1
+    start = jnp.asarray(int(state.turn) == 0)
+    merged: list[list] = []
+    for row, count in groups.values():
+        result = _four_show(tables, state, jnp.asarray(row), start)
+        weight = count / len(ties)
+        for entry in merged:
+            if all(
+                np.array_equal(np.asarray(x), np.asarray(y))
+                for x, y in zip(entry[0], result, strict=True)
+            ):
+                entry[1] += weight
+                break
+        else:
+            merged.append([result, weight])
+    return [(s, w) for s, w in merged]
 
 
 def war_split(state: BattleState) -> jnp.ndarray:

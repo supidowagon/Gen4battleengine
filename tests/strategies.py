@@ -2558,6 +2558,7 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     arrays = initial_arrays(fmt, tables, parties, leads=tuple(leads), opp2_items=())
     s = battle_start(tables, BattleState(**{k: jnp.asarray(v) for k, v in arrays.items()}))
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
+    a["entry_pending"][...] = 0  # the leads' checks ran (hooks.battle_start): nothing waits (D3-13)
     for b in absent:  # 0 HP after the lead's switch-in checks ran: nothing is left to send
         a["hp"][fmt.party_of[b], leads[b]] = 0
         a["status"][fmt.party_of[b], leads[b]] = Status.NONE

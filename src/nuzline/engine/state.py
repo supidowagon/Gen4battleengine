@@ -211,7 +211,9 @@ Encodings:
   replacement), ``war_swaps`` holds its bits: bit ``tie + 2 * qc[0] + 4 * qc[1]`` set where the
   sort puts the player second, so its weather stays (``hooks.order_swaps``). The draw that
   settles it (``step.resolve_war``: the root chance node, a playout's next turn, the tree's
-  replacement children) then clears it; 0 otherwise, so states merge.
+  replacement children) then clears it; 0 otherwise, so states merge. A B = 2 field: 0 and unread
+  at B = 4 (the B = 4 entry points take the sort's draws as inputs, ``switch_in.show_battle_mon4``
+  with its ``ties``, D3-13; no fixed-width field holds a four-battler sort's 1024 draws).
 * ``entry_pending`` (E1 Gardenia review, ruling G-32): per battler, 1 while a battler that a
   replacement's party list sent in (subscript_show_party_list.s:22-24: the hazards and a faint
   check only) still waits for ``ShowBattleMon``'s switch-in states (battle_controller_player.c:
@@ -219,7 +221,9 @@ Encodings:
   ``weatherAbilityAnnounced``, ``intimidateAnnounced``, ``downloadAnnounced`` all clear) while
   the player sends in another Pokemon first: at a double KO whose player newcomer fainted on the
   entry hazards (``search.playout.replacement_pass``). At B = 4 ``step.replace_round`` sets it for
-  every living newcomer of the round until ShowBattleMon (D3-13). Else 0, so states merge.
+  every living newcomer of the round until ShowBattleMon (``switch_in.show_battle_mon4``, D3-13),
+  and ``initial_arrays`` for every living lead of a four-battler start state. Else 0, so states
+  merge.
 * Experience (K3d-exp; ``STATE.md`` "Experience"): ``exp`` is the player party's
   ``MON_DATA_EXPERIENCE``; ``evs`` (``ids.Stat`` order, like ``ivs``) and ``nature`` feed the
   level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
@@ -1257,6 +1261,12 @@ def initial_arrays(
             raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
         a["trainer_items"][b, : len(bag)] = bag
         a["trainer_item_count"][b] = len(bag)
+    if fmt.B == 4:
+        # D3-13: a four-battler start state has not run ShowBattleMon: every living lead waits for
+        # its switch-in states (``switch_in.show_battle_mon4``; ``step.sample_root`` runs them).
+        # (B = 2: ``make_state`` runs ``hooks.battle_start`` at once.)
+        for b in range(fmt.B):
+            a["entry_pending"][b] = int(a["hp"][fmt.party_of[b], leads[b]] > 0)
     a["weather"][...] = Weather(start_condition)
     if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
         raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")

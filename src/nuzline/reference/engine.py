@@ -3079,7 +3079,100 @@ def _download(s: RefState, side: int) -> None:
         _change_stage(s, side, Stat.SPA if sum_def >= sum_spd else Stat.ATK, 1)
 
 
-def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
+def _sub_hit_flags(turn: _Turn, s: RefState) -> list[bool]:
+    """Each battler's SELF_TURN_FLAG_SUBSTITUTE_HIT of the running action (``turn.sub_hit``: the
+    battler it is set on, ``sub_hit_mon``)."""
+    return [bool(turn.sub_hit) and turn.sub_hit_mon == b for b in range(_fmt(s).B)]
+
+
+def _run_states(
+    turn: _Turn, s: RefState, order: list[int], fresh: list[bool], sub_hit: list[bool] | None = None
+) -> None:
+    """``BattleSystem_TriggerEffectOnSwitch``'s states over four battlers and one ``monSpeedOrder``
+    (lib.c:3712-4165; ``engine.switch_in.run_states``): Trace (the first battler in ``order`` with
+    a target fires, and the loop restarts: up to three fires), the weather abilities, Intimidate,
+    Download, the announcements, the form change, the forbidden-status check and the held-item
+    check, each over ``order``. ``fresh``: the battlers whose flags are clear; one that traced
+    acts in the later states too. ``sub_hit``: per battler (None: none). ``entry_pending`` is
+    cleared for ``fresh``."""
+    tables, n = turn.tables, _fmt(s).B
+    traced = [False] * n
+    for _ in range(3):  # lib.c:3715-3737 restarts at i = 0 after each fire
+        for b in order:
+            if s.battlers[b].trace_announced:
+                continue
+            coin, _ = _trace_coin(turn, b)
+            if trace_target(tables, s, b, coin) is not None:
+                _trace(tables, s, b, *_trace_coin(turn, b), turn=turn)
+                traced[b] = True
+                break
+    act = [f or t for f, t in zip(fresh, traced, strict=True)]
+    for b in order:  # SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES (lib.c:3740-3790)
+        mon = _active(s, b)
+        weather = WEATHER_ABILITIES.get(_ability(s, mon))
+        if act[b] and weather is not None and mon.hp:
+            if not (s.weather == weather and s.weather_timer == 0):
+                _know_ability(s, b)
+            s.weather, s.weather_timer = weather, 0
+            s.battlers[b].weather_announced = 1
+    for b in order:  # SWITCH_IN_CHECK_STATE_INTIMIDATE (lib.c:3795-3813)
+        if act[b]:
+            for target_battler in opposing(s, b):
+                flagged = target_battler if sub_hit and sub_hit[target_battler] else -1
+                _intimidate(s, b, target_battler, flagged)
+    for b in order:  # SWITCH_IN_CHECK_STATE_DOWNLOAD (lib.c:3815-3859)
+        if act[b]:
+            _download(s, b)
+    for b in order:  # SWITCH_IN_CHECK_STATE_MOLD_BREAKER / _PRESSURE (lib.c:4075-4110)
+        if (
+            act[b]
+            and _active(s, b).hp
+            and _ability(s, _active(s, b))
+            in (
+                AbilityId.MOLD_BREAKER,
+                AbilityId.PRESSURE,
+            )
+        ):
+            _know_ability(s, b)
+    _forecast(tables, s)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (lib.c:4115)
+    for b in order:  # SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS (lib.c:4135-4149)
+        _recover_status_by_ability(s, b)
+    for b in order:  # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (lib.c:4151-4165)
+        _held_item_hp(turn, s, b)
+    for b in range(n):
+        if fresh[b]:
+            s.battlers[b].entry_pending = 0
+
+
+def ref_show_battle_mon4(
+    tables, state: RefState, ties, trace_pick=None, battle_start: bool = False
+) -> RefState:
+    """``engine.switch_in.show_battle_mon4``: the TrainerMessage sort (``_speed_sort`` on
+    ``qc_roll`` and ``ties``; at ``battle_start`` without the field weather) then ``_run_states``
+    for the battlers with ``entry_pending``. ``battle_start`` first arms ``canUnburden`` for every
+    lead holding an item and leaves a lead's Starf Berry stat open (``starf_roll`` undrawn)."""
+    s = copy.deepcopy(state)
+    if _fmt(s).B != 4:
+        raise ValueError("ref_show_battle_mon4 is the B = 4 entry point")
+    turn = _Turn(tables, None, entry_turn=s.turn, battler_count=4)
+    turn.trace_pick = trace_pick
+    if battle_start:
+        for b in range(4):
+            if _active(s, b).item:
+                s.battlers[b].can_unburden = 1
+            s.battlers[b].starf_roll = STARF_UNDRAWN
+    sorted_on = copy.deepcopy(s)
+    if battle_start:
+        sorted_on.weather = sorted_on.weather_timer = 0
+    order = _speed_sort(tables, sorted_on, _qc_rolls(s), ties)
+    _run_states(turn, s, order, [bool(sd.entry_pending) for sd in s.battlers])
+    if battle_start:
+        for sd in s.battlers:
+            sd.starf_roll = 0
+    return s
+
+
+def _switch_in_effects(turn: _Turn, s: RefState, side: int, flags=None) -> None:
     """``BattleSystem_TriggerEffectOnSwitch`` (lib.c:3649) after ``side``'s battler
     entered: ``SWITCH_IN_CHECK_STATE_INTIMIDATE`` (lib.c:3795; only the newcomer has
     not announced its Intimidate) then ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
@@ -3088,6 +3181,13 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     newcomer enters against a fainted foe and announces nothing here;
     ``playout.replacement_pass`` fires its Intimidate once the opponent's newcomer is in.)"""
     tables = turn.tables
+    if _fmt(s).B == 4:  # D3-13: the states over the running action's monSpeedOrder
+        order = turn.speed_order if turn.speed_order is not None else [0, 1, 2, 3]
+        _run_states(
+            turn, s, order, [b == side for b in range(4)],
+            _sub_hit_flags(turn, s) if flags is None else flags,
+        )  # fmt: skip
+        return
     other = _foe(side)
     mon, foe = _active(s, side), _active(s, other)
     # SWITCH_IN_CHECK_STATE_TRACE (lib.c:3718-3737): the newcomer, then the battler facing it,
@@ -6395,7 +6495,8 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     # MoveEnd's CheckBattleOver returns before TriggerEffectOnSwitch (bcp.c:3969, :3973): a switch
     # that leaves a side out runs no switch-in effects (R2).
     if not any(_sides_out(s)):
-        _switch_in_effects(turn, s, side)
+        # The running action sets no substitute-hit flag the newcomer reads (B = 4, D3-13).
+        _switch_in_effects(turn, s, side, [False] * _fmt(s).B)
 
 
 def _owed_pursuer(turn: _Turn, s: RefState, pursuer: int, fell: bool) -> list[tuple[int, int]]:

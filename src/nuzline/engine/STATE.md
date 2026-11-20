@@ -250,7 +250,8 @@ three structs has a row.
   different switch-in weather abilities entering together: the slower one's stays). Where
   that order hangs on a draw still to come (the battle-start `speedRand`, a speed tie's
   `RandNext() & 1`), `war_swaps` holds the swap bit of each draw (`hooks.order_swaps`) until
-  `step.resolve_war` makes it; else 0.
+  `step.resolve_war` makes it; else 0. A B = 2 field: 0 and unread at B = 4 (D3-13: the B = 4 entry
+  points take the sort's draws as inputs, `switch_in.show_battle_mon4(ties)`).
 - **The announced flags while a list newcomer waits -> `entry_pending`** (E1 Gardenia review,
   ruling G-32): `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and
   `downloadAnnounced` are fields since E3-2-5, but one span needs their
@@ -260,8 +261,9 @@ three structs has a row.
   before `ShowBattleMon` (:256) runs its switch-in states. `entry_pending[battler]` is 1 then
   (`step.replace(..., effects=False)`), until `search.playout.replacement_pass` runs both
   newcomers' states (`hooks.show_battle_mon`); else 0.
-  At B = 4 `step.replace_round` (D3-12) sets it for every living newcomer of the round, until
-  D3-13's ShowBattleMon.
+  At B = 4 `step.replace_round` (D3-12) sets it for every living newcomer of the round, and
+  `initial_arrays` for every living lead of a four-battler start state, until
+  `switch_in.show_battle_mon4` (D3-13; `step.sample_root` runs it at the start) clears it.
 - **No empty-slot field** (battlersSwitchingMask, bcp.c:330-333, :4109-4111): `absent_now` (active
   at 0 HP and no `replacement_bench`) equals the mask because no slot is refilled in battle.
   Premise, a design rule: the player uses no bag item in battle (docs/design.md:19); the only
