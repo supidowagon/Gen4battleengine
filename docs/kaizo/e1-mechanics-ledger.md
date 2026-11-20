@@ -2200,6 +2200,12 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `CalcTerrain` (field_battle_data_transfer.c:470-504) always gives a terrain and `BattleSystem_GetTerrain`
   (battle_system.c:375-381) maps an out-of-range value to TERRAIN_MAX, read as `min(terrain, TERRAIN_SPECIAL)`
   (battle_script.c:8007-8010). No engine change.
+  Same class, called move (snapshot rest seed 120 turn 2, one more element `secondary(1, 0)`: 262144 -> 524288 rows):
+  when the Copycat user moves first it calls `move_prev` (battle_script.c:7328-7341), here Secret Power (290); 5da2dd49
+  (G-20..G-22) dropped `terrain_known` from `order.move_effects` / `called_move`, so terrain -1 clips to row 0 and its
+  30% secondary is read where main read none. The game takes Secret Power's effect from
+  `BtlCmd_GetTerrainSecondaryEffect` (battle_script.c:8063-8075) and never holds terrain -1; a fight with a terrain
+  move on -1 is refused (G-21). Called move and chance are the same on both sides. No engine change.
 - G-46 `enumerate._starf_reads` counted a plucked Starf Berry and the Pluck flag's second own eat as two
   sources (`twice` & `plucked`): with the attacker's own Starf that read `starf[d, 3]` with no Roar newcomer, a
   third eat G-28 shows unreachable. A plucked Starf draws while a stat of the five is below +6 and its
@@ -2213,6 +2219,18 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   read found in `_starf_reads`. Batch G's other enumerator changes: `weather_free` also on `acid`
   (`outcome.acid_rain_reachable`, G-12, singles only with a nonzero mask), Shaymin and band reads narrowed.
   The pod checks `test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer`.
+- G-S5 (snapshot entry 5; explains a compare divergence of mechanic G-12) Future Sight's stored roll on a Pursuit
+  meeting (pod compare e3-snap2-093367d vs main; seed 22 turn 4 segment 0, and seed 165 turn 3: `future_hit[0]` 0 -> 88,
+  rest rows 160 -> 16000 = x100; both PURSUIT vs U_TURN with `acid` set):
+  `sample` part `.sample_outcome.future_hit[0]` 1 -> 11, and the `rest` part's `enumerate_turn` SamplingOnly width-cap
+  text with a different count. G-12: a switch (subscript_switch_pokemon.s:11) or U-turn (subscript_attack_then_switch_out.s:54)
+  that meets the other side's Pursuit (subscript_pursuit.s:100, :115; battle_script.c:6899-6916) with a nonzero
+  `field_mask` sets `future_loose` (`acid = outcome.acid_rain_reachable`, outcome.py:526-552, :722), so `sample_outcome`
+  stores the raw 1-100 roll (`randint(fold_in(key, 28), (B,), 1, 101)`, outcome.py:1973; the game's roll, bcp.c:2976,
+  via subscript_future_sight_damage.s:8; battle_script.c:3282-3287) where main stored its hit class (1 for u = 11).
+  The enumerator's `future_hit` law grows to the 100 values and `weather_free` frees the end-speed weather points
+  (enumerate.py:2365-2369, :3083-3093), which changes the width count. Same key, shape and bounds: not sampler drift,
+  no UPGRADES row (encoding unchanged). The E1-only compare (56cd9f4) already diverged on rest at this seed and turn.
 - G-S6 Snapshot seeds 64 turn 4 / 107 turn 3: `_starf_reads` over-read `starf(0, 2)` through `twice` (the Pluck
   flag's second own Starf eat) whenever the Pluck / Bug Bite target held any item (Grip Claw, Micle Berry).
   `BattleSystem_PluckBerry` (battle_lib.c:5539-5850) sets SELF_TURN_FLAG_PLUCK_BERRY only for an eaten berry
