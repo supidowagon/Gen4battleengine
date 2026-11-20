@@ -538,7 +538,7 @@ def test_a_battle_start_berry_takes_entry_zero_and_a_recycled_one_the_next(table
 
 @pytest.mark.slow
 def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
-    """``enumerate._starf_reads`` (G-29): ``starf[d, 2]`` where two eats can meet on battler
+    """``enumerate._starf_reads`` (G-29, G-46): ``starf[d, 2]`` where two eats can meet on battler
     ``d``, ``[d, 3]`` where three can; five values for a fresh Roar newcomer, all 60 for the same
     battler's Recycle (``_STARF_STAGE_JUMPS``); none with one eat source."""
     from nuzline.engine.enumerate import _starf, outcome_laws
@@ -560,6 +560,58 @@ def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
         names, tables, ["Bug Bite"], ["Roar"], foe_item="Starf Berry", bench=True, foe_level=60
     )
     assert laws(bite, "Bug Bite", "Roar").relevant.starf[0].tolist() == [True] * 4
+    # Without the Roar: the Bug Bite draw and the own berry, two eats; the Pluck flag's second
+    # own eat never meets a plucked Starf Berry's draw (the flag is cleared or neither draws).
+    bite = _starf_fight(names, tables, ["Bug Bite"], ["Tackle"], foe_item="Starf Berry")
+    assert laws(bite, "Bug Bite", "Tackle").relevant.starf[0].tolist() == [True, False, True, False]
+
+
+def _snap_segment(tables, names, seed_value, turn):
+    """``(state, actions)`` of "seed S turn T segment 0" exactly as tools/snap_compare.py's
+    ``draw_inputs`` draws it (tests.strategies, Hypothesis @seed), its pauses resumed by the
+    reference engine in place of jit(step_events) (the differential holds them equal)."""
+    from types import SimpleNamespace
+
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.outcome import outcome_to_py
+    from nuzline.reference.convert import from_ref, to_ref
+    from nuzline.reference.engine import ref_step
+    from tools import snap_compare as sc
+
+    np_tables = to_numpy(tables)
+
+    def events(t, s, acts, o):
+        py = tuple(int(x) for x in jax.device_get(acts))
+        return (from_ref(ref_step(np_tables, to_ref(s), py, outcome_to_py(o))),)
+
+    ctx = SimpleNamespace(tables=tables, names=names, jit=lambda f: events)
+    inp = dict(sc.draw_inputs(ctx, seed_value))[f"seed {seed_value} turn {turn} segment 0"]
+    return sc.rebuild_state(inp["in_state"], tables), jnp.asarray(inp["in_actions"], jnp.int32)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("seed_value, turn", [(165, 3), (107, 3), (22, 4), (64, 4), (120, 2)])
+def test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer(
+    tables, names, seed_value, turn
+):
+    """G-46: the snapshot "rest" states whose enumeration batch G widened (pod compare of
+    56cd9f4 against main 08a57000). A battler's third eat (``starf[d, 3]``) is read only where a
+    foe's Roar can drag in a bench holder (G-28: the third needs one); the plucked Starf draw
+    and the Pluck flag's second own eat never both draw. Seed 107 enumerates (main did)."""
+    from nuzline.engine.enumerate import enumerate_turn, outcome_laws
+
+    s, acts = _snap_segment(tables, names, seed_value, turn)
+    laws = jax.tree.map(np.asarray, outcome_laws(tables, s, acts))
+    from nuzline.engine.ids import EffectId
+
+    for d in range(2):
+        if laws.relevant.starf[d, 3]:
+            foe, slot = 1 - d, int(acts[1 - d])
+            assert slot < MOVE_ACTIONS, (seed_value, d)  # the foe uses a move: Roar
+            move = int(s.moves[foe, int(s.active[foe]), slot])
+            assert int(tables.move_effect[move]) == EffectId.ROAR, (seed_value, d)
+    if seed_value == 107:
+        enumerate_turn(tables, s, acts)
 
 
 # --- Nightmare (F-O5, G-31..G-34) -----------------------------------------------------------

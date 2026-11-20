@@ -135,7 +135,16 @@ byte (dtype, shape and bytes) and lists, per part, the entries present on one si
 (indices folded to []; the entries under a path that raised on either side are left out: the
 raise is the divergence). Columns a row invents (``new_columns``: ``Outcome.starf``'s 2-3, for
 which the capture has no draw) are taken from the rerun before the compare and counted per part
-as "sampler drift (new columns)", not a divergence; columns 0-1 compare strictly.
+as "sampler drift (new columns)", not a divergence; in a saved Outcome (``in_outcome``, an
+Outcome step or enumerate_turn is given) columns 0-1 compare strictly. In a fresh sampler draw
+(``SAMPLED``: ``.sample_outcome``) every column of a reshaped field is sampler drift: main drew
+``starf`` as ``randint(fold_in(key, 48), (B, 2))`` and this checkout draws ``(B, 4)`` from that
+key, which changes every entry, columns 0-1 too (outcome.py ``sample_outcome``).
+
+An entry stores a 0-d array as shape (1,) (``canon``: ``np.ascontiguousarray`` has ndim >= 1).
+A row reading an old 0-d field (``weather``, ``gravity``, ...) of a captured output takes such a
+(1,) read as that 0-d field or a batch of one, whichever the row's other reads give
+(``Upgrade.lead``, ``flat``), and hands the fill the 0-d value; the saved inputs keep 0-d.
 
 Generator drift (decided): a "gen" divergence is informational ("generator drift: first at seed
 S turn T", counted, not a failure) only when every differing entry of the part is an input
@@ -487,12 +496,16 @@ class Upgrade:
     def name(self) -> str:
         return f"{self.kind}.{self.label}"
 
-    def lead(self, saved: dict, batched: bool = True) -> tuple | None:
+    def lead(self, saved: dict, batched: bool = True, flat: bool = False) -> tuple | None:
         """The leading axes this row runs with on ``saved`` (a field dict), or None; none
-        unless ``batched`` (a saved input is one state)."""
+        unless ``batched`` (a saved input is one state). ``flat``: ``saved`` was read back from
+        ``canon`` entries, which store a 0-d array as shape (1,) (``np.ascontiguousarray`` has
+        ndim >= 1), so a read of old shape () found as (1,) is that 0-d field (lead ()) or a
+        batch of one (lead (1,)): the row's other reads decide, and a row of only such reads
+        runs with lead ()."""
         import numpy as np
 
-        leads = set()
+        leads, scalar = set(), False
         for field, dtype, old in self.reads:
             if field not in saved:
                 return None
@@ -500,12 +513,19 @@ class Upgrade:
             n = a.ndim - len(old)
             if a.dtype.str != dtype or n < 0:
                 return None
+            if flat and old == () and a.shape == (1,):
+                scalar = True
+                continue
             if not all(d == m or m in DIMS.get(d, ()) for d, m in zip(old, a.shape[n:])):
                 return None
             leads.add(a.shape[:n])
+        if scalar and not leads:
+            leads.add(())
         if len(leads) != 1 or any(w in saved for w in self.writes if w not in self.fields):
             return None
         lead = leads.pop()
+        if scalar and lead not in ((), (1,)):
+            return None
         return lead if batched or not lead else None
 
     @property
@@ -666,25 +686,39 @@ UPGRADES = (
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}
+# Outputs that are a fresh sampler draw (jit(sample_outcome)): a reshaped field's every column
+# is drawn anew (another shape of one key's randint), so all of them are sampler drift; a saved
+# Outcome (``in_outcome``, any Outcome a part passes on) keeps its old columns strict.
+SAMPLED = ("sample_outcome",)
 
 
 def upgrade_fields(
-    kind: str, saved: dict, invented: dict | None = None, batched: bool = False, tables=None
+    kind: str,
+    saved: dict,
+    invented: dict | None = None,
+    batched: bool = False,
+    tables=None,
+    flat: bool = False,
 ) -> dict:
     """``saved`` (a field dict of ``kind``; with ``batched``, leading axes allowed) through
     every ``UPGRADES`` row of ``kind`` that runs on it (``Upgrade.lead``), in table order; every
     other field as it was. ``invented``, when given, gets ``{field: columns}`` of each row's
     ``new_columns`` that ran. ``tables``: the tables of the game ``saved`` belongs to
-    (``Ctx.tables_for``); a row that reads them (camouflage) raises without them."""
+    (``Ctx.tables_for``); a row that reads them (camouflage) raises without them. ``flat``:
+    ``saved`` came from ``canon`` entries (``Upgrade.lead``); a read of old shape () reaches the
+    fill reshaped to the lead."""
     import numpy as np
 
     out = dict(saved)
     for u in UPGRADES:
-        lead = u.lead(out, batched) if u.kind == kind else None
+        lead = u.lead(out, batched, flat) if u.kind == kind else None
         if lead is None:
             continue
         UPGRADED[u.name] = UPGRADED.get(u.name, 0) + 1
-        made = u.fill({f: np.asarray(out[f]) for f in u.fields}, lead, tables) if u.fill else {}
+        reads = {f: np.asarray(out[f]) for f in u.fields}
+        if flat:  # canon's (1,) of a 0-d read back to the lead's shape
+            reads.update({f: reads[f].reshape(lead) for f, _, old in u.reads if old == ()})
+        made = u.fill(reads, lead, tables) if u.fill else {}
         for f in u.fields:
             if f not in u.keeps and f not in made:
                 del out[f]
@@ -709,7 +743,9 @@ def upgrade_entries(entries: dict, tables, invented: dict | None = None) -> dict
     under one path prefix that hold the kind's ``MARKS``; a batch of them too) upgraded by
     ``upgrade_fields`` on ``tables`` (the part's game, ``Ctx.tables_for``): dropped reads
     leave, writes join. ``invented`` gets ``{path: columns}``
-    of each upgraded entry whose last-axis ``columns`` the upgrade invented."""
+    of each upgraded entry whose last-axis ``columns`` the upgrade invented: the row's
+    ``new_columns``, or every column of the field in a ``SAMPLED`` output (a fresh draw whose
+    shape changed draws every column anew)."""
     import numpy as np
 
     groups: dict[str, dict[str, str]] = {}
@@ -727,7 +763,7 @@ def upgrade_entries(entries: dict, tables, invented: dict | None = None) -> dict
             e = entries[path]
             saved[name] = np.frombuffer(e[3], np.dtype(e[1])).reshape(ast.literal_eval(e[2]))
         cols: dict = {}
-        new = upgrade_fields(kind, saved, cols, batched=True, tables=tables)
+        new = upgrade_fields(kind, saved, cols, batched=True, tables=tables, flat=True)
         for name in set(saved) - set(new):
             del out[names[name]]
         for name, a in new.items():
@@ -736,6 +772,9 @@ def upgrade_entries(entries: dict, tables, invented: dict | None = None) -> dict
             a = np.ascontiguousarray(a)
             out[f"{prefix}.{name}"] = ("arr", a.dtype.str, str(a.shape), a.tobytes())
         if invented is not None:
+            drawn = re.match(r"\.([^.\[#]+)", prefix)
+            if drawn and drawn.group(1) in SAMPLED:
+                cols = {f: tuple(range(np.shape(new[f])[-1])) for f in cols}
             invented.update({f"{prefix}.{f}": c for f, c in cols.items()})
     return out
 

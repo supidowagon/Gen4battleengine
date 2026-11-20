@@ -2185,6 +2185,34 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   do not move there: they start `none` (data/kaizo/start_conditions.json; weather 16 has no battle effect,
   battle_lib.c:3700, manager ruling 4) and hold no weather refusal; any refusal of theirs is their own other
   source's.
+- G-44 Snapshot sampler drift (pod compare of 56cd9f4 vs main 08a57000): `sample_outcome` drew `starf` as
+  `randint(fold_in(key, 48), (B, 2))` (08a57000 outcome.py:2076) and now `(B, 4)` from the same key
+  (outcome.py:2139), which changes every entry, columns 0-1 too: all four columns of a fresh draw are sampler drift
+  (`snap_compare.SAMPLED`); a saved `in_outcome` keeps columns 0-1 strict. No other draw's key, shape or bounds
+  changed in `sample_outcome` (body diff: the starf line only); its state reads moved to `field_mask` (FCM).
+- G-45 Camouflage on `TERRAIN_UNKNOWN` (snapshot step / jitstep first diff `.camouflage[0]` 0 -> 1): batch G
+  dropped `terrain_known` from `effects._camouflage` (08a57000 effects.py:618-633), so terrain -1 reads row 0
+  (`order.terrain_index` clip) and succeeds where main wrote nothing; the reference (`_terrain_row`) does the
+  same. In a fight -1 never reaches it: `coverage.terrain_refusal` runs over the known moves plus
+  `fight_calls` (Metronome's calls) and the invokers' sources are known moves. The drawn states reach it:
+  `tests.strategies._draw_terrain` draws a terrain only when a Pokemon knows a reader, not when a Metronome (or a
+  drawn last move a caller copies) can call one (E2 owns the strategies). The game never holds an unknown:
+  `CalcTerrain` (field_battle_data_transfer.c:470-504) always gives a terrain and `BattleSystem_GetTerrain`
+  (battle_system.c:375-381) maps an out-of-range value to TERRAIN_MAX, read as `min(terrain, TERRAIN_SPECIAL)`
+  (battle_script.c:8007-8010). No engine change.
+- G-46 `enumerate._starf_reads` counted a plucked Starf Berry and the Pluck flag's second own eat as two
+  sources (`twice` & `plucked`): with the attacker's own Starf that read `starf[d, 3]` with no Roar newcomer, a
+  third eat G-28 shows unreachable. A plucked Starf draws while a stat of the five is below +6 and its
+  `subscript_held_item_sharply_raise_stat.s:21` PLUCK_CHECK clears the flag; with all five at +6 neither berry
+  draws (lib:5798-5817, :4850-4872); under Klutz / Embargo (lib:5838-5841) no own eat. `twice` now excludes
+  `plucked`. The engine's step and the reference are unchanged (they already draw twice there:
+  `test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer[Tackle]`).
+- G-47 The widened snapshot "rest" states (seed 165 turn 3: 160 -> 16000 rows, 2^2 * 5^2; seeds 22 / 64 / 120: the
+  width-cap text; seed 107 turn 3: SamplingOnly where main enumerated) come from batch G's later Starf reads
+  (G-29): factor 5 per read eat. Not reproduced locally (RAM gate); G-46's over-read is the only unreachable
+  read found in `_starf_reads`. Batch G's other enumerator changes: `weather_free` also on `acid`
+  (`outcome.acid_rain_reachable`, G-12, singles only with a nonzero mask), Shaymin and band reads narrowed.
+  The pod checks `test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer`.
 
 ## Stream state (restart point, 2026-11-19)
 
