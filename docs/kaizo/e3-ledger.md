@@ -1616,3 +1616,24 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/engine/test_e3_batch2.py (powerMul after a learn resume, the kept Quick Claw draw, each turn-end counter
   drops once over a pause at each learn site). Snapshot: states captured at a pause carry `ts_qc` and the turn-end
   countdowns; no other class.
+
+## Batch 3 (rulings E3-B3-n)
+
+- E3-B3-0 Batch 2 review carry-over. No rule change.
+  (1) 0e368127: `step._use_move`'s hit loop carries a NamedTuple (`_HitCarry`) read and built by field name, not a
+  positional 22-tuple read at fixed indices (the shift behind E3-B2-29 (a), cf8bf157). Same leaves in the same order:
+  the jaxpr of `step_events` (Roark state) is identical before and after. The reference's hit loop is a Python loop:
+  unchanged.
+  (2) d5bb6839: `test_replacement_follows_the_resumed_learn_pause` holds a Light Screen, a sandstorm with
+  `weather_turns` and a pending Wish, so a skipped field pass (E3-B2-29 (d), 093367d6) fails it; the test_e3_batch2
+  MoveEnd comment names Geodude's Selfdestruct action (bcp.c:3968); `ref_apply_turn` answers the input state's pending
+  prompts before its first `ref_step`, as `_apply_turn` does; `_exp_party` with markers draws only reachable starts
+  (learn_level in [2, level], cursor 0; none below level 2); the reference `_grant_exp` comment says the learnset scan
+  runs at the payout site.
+  (3) f0fbd29f: `tools/snap_compare.py` UPGRADES row `resume.quick_claw -> ts_qc` (E3-B2-29 (c)): in compare, a
+  resumed segment's saved state without `ts_qc` takes segment k - 1's `in_outcome.quick_claw != 0`, so the compare
+  checks the turn's real draw, not 0.
+  The E3-B2-21 differential failures surfaced when main's fixed Hypothesis seeds (1008706a) changed the drawn examples.
+  Batch 2's earlier review nits are on this branch in 8f7db8ff: the Fling cite (BattleSystem_FlingItem,
+  battle_lib.c:5854), the departure wording (the move table's placeholder power, discrepancies.md section 13) and the
+  refusal reason asserted in the learn resume test.
