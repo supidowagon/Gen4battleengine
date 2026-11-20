@@ -809,6 +809,24 @@ def test_camouflage_is_the_old_inference_but_not_on_a_transformed_battler(rows):
     assert sc.upgrade_fields("state", s)["camouflage"].tolist() == [1, 0]
 
 
+def test_leech_seed_recipient_is_the_opposite_battler_where_seeded(rows):
+    """D3-11b: an older capture has no ``leech_seed_recipient``; every older Leech Seed was set
+    by the opposite battler (1 + (b ^ 1)), 0 where not seeded; ``leech_seed`` stays; a newer
+    state (the field present) runs no row; batched states upgrade per row."""
+    s = {"leech_seed": np.array([0, 1], np.int8)}
+    new = sc.upgrade_fields("state", s)
+    assert new["leech_seed_recipient"].tolist() == [0, 1] and new["leech_seed"].tolist() == [0, 1]
+    assert new["leech_seed_recipient"].dtype == np.int8
+    both = sc.upgrade_fields("state", {"leech_seed": np.array([1, 1], np.int8)})
+    assert both["leech_seed_recipient"].tolist() == [2, 1]
+    assert sc.upgrade_fields("state", new) == new
+    batch = sc.upgrade_fields(
+        "state", {"leech_seed": np.array([[1, 0], [0, 1]], np.int8)}, batched=True
+    )
+    assert batch["leech_seed_recipient"].tolist() == [[2, 0], [0, 1]]
+    assert any("leech_seed_recipient" in name for name in sc.UPGRADED)
+
+
 def test_camouflage_reads_the_tables_of_the_states_game(monkeypatch):
     """Review G MUST: the camouflage row compares a battler's types with the personal row of
     the game its state belongs to: a species whose types a game changed (here Kaizo's Pikachu
