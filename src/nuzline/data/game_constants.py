@@ -771,6 +771,8 @@ EXEMPT: dict[str, str] = {
     + _ENGINE_ENCODING,
     "nuzline.engine.ids.WEATHER_PERM_BIT": "the FieldCondition PERM bit by Weather; "
     + _ENGINE_ENCODING,
+    "nuzline.engine.ids.STARF_QUEUE": "the Outcome.starf columns of a battler's eats in a turn "
+    "(F-O3); " + _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemId": _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemParam": "columns of tables.item_party_param; " + _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemAiCategory": _ENGINE_ENCODING,
