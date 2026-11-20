@@ -6283,7 +6283,7 @@ def _pursuit_hit(turn: _Turn, s: RefState, side: int, pursuer: int, actions, cho
     # SetupLoop zeroes moveStatusFlags (lib.c:3359) and the Pursuit's ApplyTypeEffectiveness sets
     # the bit (subscript_pursuit.s:12, script.c:6964-6973): the tail's Enigma Berry reads the
     # last Pursuit's flag (SF2 (i)).
-    turn.move_se = _super_effective(turn, s, pursuer, move)
+    turn.move_se = _super_effective(turn, s, pursuer, move, side)
     # script.c:6930: movePrevByBattler[pursuer] = Pursuit; :6943-6950: a Choice holder's
     # choiceLockedMove = Pursuit.
     s.battlers[pursuer].last_move = move
@@ -6299,7 +6299,7 @@ def _pursuit_hit(turn: _Turn, s: RefState, side: int, pursuer: int, actions, cho
         s, pursuer, side
     )
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
-                          PURSUIT_POWER_MUL)  # fmt: skip
+                          PURSUIT_POWER_MUL, defender=side)  # fmt: skip
     target_sd = s.battlers[side]
     if damage > 0 and target_sd.substitute_hp:
         # subscript_pursuit.s:20, :56-73 (B10-4): the substitute breaks when substituteHP <=
@@ -6314,7 +6314,7 @@ def _pursuit_hit(turn: _Turn, s: RefState, side: int, pursuer: int, actions, cho
     _hung_on(turn, s, side, damage, armed)
     taken = _focus_sash(turn, s, side, damage, armed)
     # Its UPDATE_HP runs the resist-berry check on the target (subscript_update_hp.s:9).
-    if damage > 0 and _hit_resist_berry(turn, s, pursuer, move):
+    if damage > 0 and _hit_resist_berry(turn, s, pursuer, move, side):
         taken = _divide(taken, 2)
     target_hp = _active(s, side).hp
     dealt = _lose_hp(turn, s, side, taken)
@@ -6331,7 +6331,7 @@ def _pursuit_hit(turn: _Turn, s: RefState, side: int, pursuer: int, actions, cho
     )
     if took:
         _lose_hp(turn, s, pursuer, mon.hp)
-    _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
+    _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt, side)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
     # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the
     # script's shellBellDamageDealt (:21-29: the damage before CheckHoldOnWith1HP, capped at

@@ -128,12 +128,13 @@ def test_pursuit_fires_reads_the_turn_start_state(tables, names):
 def test_both_foes_pursue_and_the_lower_battler_hits_first(tables, names):
     """Battler 0 (Rough Skin) switches; battlers 1 (1 HP) and 3 chose Pursuit, targets anywhere,
     battler 3 the faster: battler 1 hits first (index order) and falls to the Rough Skin, then
-    battler 3 hits as well (the switcher lived). Each spent one PP; both are MOVE_END, so neither
+    battler 3 hits as well (the switcher lived) and takes the Rough Skin too. Each spent one PP; both are MOVE_END, so neither
     acts at its own turn (battler 2, their chosen target, is untouched); the switch completes."""
     s = with_hp(pursuers(tables, names, 1, 3), 1, 1)
     s = with_ability(s, 0, AbilityId.ROUGH_SKIN)
     out, shown = play(tables, s, [SWITCH_2, 0, 0, 0], (0, 3, 1, 2), targets=(0, 2, 0, 2))
-    assert hp(out, 1) == 0 and hp(out, 3) == hp(s, 3)  # battler 1 took the Rough Skin
+    assert hp(out, 1) == 0  # battler 1 (1 HP) fell to the Rough Skin
+    assert hp(out, 3) == hp(s, 3) - hp(s, 3) // 8 == 98  # battler 3 took it too (lib.c:4257-4268)
     assert pp(out, 1, 0) == pp(s, 1, 0) - 1 and pp(out, 3, 0) == pp(s, 3, 0) - 1
     assert hp(out, 2) == hp(s, 2)  # no Pursuit reached its own target
     assert int(out.hp[0, 0]) < int(s.hp[0, 0])  # the recalled switcher took both hits
@@ -142,6 +143,16 @@ def test_both_foes_pursue_and_the_lower_battler_hits_first(tables, names):
     for b in (1, 3):
         assert int(shown["act_kind"][b]) == ACT_MOVE and int(shown["hits"][b]) == 1
     assert int(out.acid_rain) == 0
+
+
+def test_the_second_pursuer_meets_the_switchers_ability_not_its_partners(tables, names):
+    """As the both-foes case, but the Rough Skin is on battler 2 (the switcher's partner): neither
+    pursuer reads it, the defender is the switcher (battle_script.c:6926-6928)."""
+    s = with_ability(pursuers(tables, names, 1, 3), 2, AbilityId.ROUGH_SKIN)
+    out, _ = play(tables, s, [SWITCH_2, 0, 0, 0], (0, 3, 1, 2), targets=(0, 2, 0, 2))
+    assert hp(out, 1) == hp(s, 1) and hp(out, 3) == hp(s, 3)
+    assert hp(out, 2) == hp(s, 2)
+    assert int(out.active[0]) == 2
 
 
 def test_the_first_ko_ends_the_chain(tables, names):
@@ -227,9 +238,12 @@ def test_the_switchers_partner_uses_pursuit_at_its_own_turn(tables, names):
     s = with_ability(s, 1, AbilityId.ROUGH_SKIN)
     s = with_hp(s, 0, 1)
     out, _ = play(tables, s, [0, SWITCH_2, 0, 0], (1, 0, 2, 3), targets=(3, 0, 3, 2))
-    assert hp(out, 0) == 0 and hp(out, 2) == hp(s, 2)  # battler 0 hit first and fell
+    assert hp(out, 0) == 0  # battler 0 (1 HP) hit first and fell to the Rough Skin
     assert pp(out, 0, 0) == pp(s, 0, 0) - 1 and pp(out, 2, 0) == pp(s, 2, 0) - 1
-    assert pp(out, 3, 0) == pp(s, 3, 0) - 1 and hp(out, 2) == hp(s, 2)  # 3 acts at its own turn
+    assert pp(out, 3, 0) == pp(s, 3, 0) - 1  # 3 acts at its own turn
+    # battler 2: the Rough Skin as the second pursuer, then battler 3's own-turn Pursuit
+    assert hp(out, 2) < hp(s, 2) - hp(s, 2) // 8
+    assert hp(out, 2) == 79
 
 
 def test_u_turn_is_met_by_both_foes_before_the_list(tables, names):
