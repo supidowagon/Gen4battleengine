@@ -1993,8 +1993,9 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `status.status_conditions` names them) instead of being silently cut to one; prep heals (`level_to_cap`,
   `healed=True`). The full-word model is left for its own batch. Floaroma's (scr_seq 278) and the beds'
   0x3F write 1 (sleep 1), one condition, read from the save as any status.
-- G-26 gFieldScriptCommands is `modelled` in rom_diff.toml / rom_diff.md (its `when` dropped): the weather by
-  G-23 / G-24, the status and exp (0x1CE) through the save's party, a multi-condition word refused (G-25).
+- G-26 gFieldScriptCommands in rom_diff.toml / rom_diff.md: the weather by G-23 / G-24 and the status and exp
+  (0x1CE) through the save's party are modelled; the multi-condition word is the `not_reached` remainder with
+  `when = { map_header = [321] }` (G-39; amended from `modelled` by review G 6).
 - G-27 Every Starf Berry eat on one battler in one turn draws its own (F-O3, F-10's Recycle repeat): each
   site runs its own `RandNext() % 5` loop: `BattleSystem_TriggerHeldItem` (battle_lib.c:4576, Starf
   :4850-4872, draw :4865), `BattleSystem_TriggerHeldItemOnStatus` (:4967, Starf :5273-5294, draw :5288; the
@@ -2116,6 +2117,22 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   the sampler, Water / Volt / Ice / mismatched holder, own ability, Weather Ball in rain); the Kaizo loose oracle
   (tests/ai/test_kaizo_switching.py `_loose_reads`) walks the gate with a skip of the bench reads, and its
   hypothesis states now draw absorb holders.
+- G-39 Manager ruling 2026-11-19 (supersedes ruling 2 for batch G; review G 5): the Newmoon multi-condition status
+  word (G-25) is its own batch after G, family "status word"; batch G keeps the interim named refusal at the save
+  (`SaveMon.to_spec`, `status.status_conditions`) and the backlog row (G-35). rom_diff.toml's gFieldScriptCommands
+  is `not_reached` with `when = { map_header = [321] }`: file 363 (scr_seq 363 entry 4, an init script of header
+  321) writes 0x7B to party[0] after any save and before StartFirstBattle 674, so the fight on that header is
+  refused at the build's rom-change condition; a later fight gets the word only through a save, refused there.
+  The other 0x3F writes (scr_seq 278 entry 1, common script 9019) are one condition (sleep 1), read from the save
+  as any status, so the earlier 20-header `when` is not restored. MANIFEST_VERSION 41. Lady Emi 674's split is
+  open (CLAUDE.md: every real battle belongs to a split): the ROM has no split field; PKCalc lists "Lady Emi" in
+  `FLAGS_PK.json`'s hidden list beside "Maid Yoki", and `PARTY_ORDER_PK.json` orders her after Aroma Lady Taylor
+  (Gardenia Split:79) and before Galactic Mercury #1 (Gardenia Split:91), an order, not a split; no split sheet
+  of the docs lists her. The ROM gate: flags 882 and 823 come from scr_seq 278 (header 257, Floaroma Meadow house:
+  entry 1 sets 882 at 0x011d, entry 3 StartTrainerBattle 823 at 0x0155, no badge check); the bed script (scr_seq
+  213 entry 20) needs 882 (0x0171) and with 823 always warps (0x0199 -> 0x0b18 -> Warp 320 at 0x09dc), without it
+  checks badge 2 (0x01a4, Cobble, generated/badges.txt:3). The window this points to (from the meadow on) is the
+  manager's call; until then 674 counts in no split total.
 
 ## Stream state (restart point, 2026-11-19)
 

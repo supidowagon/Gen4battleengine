@@ -23,12 +23,12 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-# 40: vanilla Nightmare (effect 107) is EffectId.NIGHTMARE (G-31); 39: Kaizo script weather (G-23, G-24): 835/836 start in rain, trainers carry script_weather /
+# 41: gFieldScriptCommands is not_reached on header 321 (the multi-condition status word, G-39); 40: vanilla Nightmare (effect 107) is EffectId.NIGHTMARE (G-31); 39: Kaizo script weather (G-23, G-24): 835/836 start in rain, trainers carry script_weather /
 # script_window; 38: a mixed-terrain trainer's terrain source names the three sources (G-18); 37:
 # trainers carry fog_headers (field Defog, G-15); 36: Air Lock = ability id 96; 35: batch F's
 # abilities at ids 91-95; 34: E3's trick_room_rearm; 33: gravity_rearm with E2 batch 13's fling /
 # Natural Gift.
-MANIFEST_VERSION = 40
+MANIFEST_VERSION = 41
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:
