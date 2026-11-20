@@ -146,6 +146,7 @@ def test_a_new_transform_copies_over_the_override_and_ending_it_restores_the_ove
     assert int(s.ability[0, 0]) == AbilityId.NATURAL_CURE
 
 
+@pytest.mark.fullset
 def test_the_ais_bench_ditto_with_the_override_is_seen_as_natural_cure(tables, names):
     """trainer_ai.c:3451-3528 read the AI's own party abilities: ``decomp_abilities`` gives the
     override, and ``switching_refusals`` names AI_IsAsleepWithNaturalCure."""
@@ -362,6 +363,7 @@ def test_route_213_script_rain_is_a_run_input(kaizo_trainers, kaizo_names):
         start(kaizo_trainers[466], flag=True)
 
 
+@pytest.mark.fullset
 def test_a_status_word_with_several_conditions_is_refused():
     """0x3F (rom_diff.md:292; G-25): scr_seq 363 writes 0x7B to party slot 0 before the Lady
     Emi battle (sleep 3 | poison | burn | freeze | paralysis, condition.h:7-13); the battle
