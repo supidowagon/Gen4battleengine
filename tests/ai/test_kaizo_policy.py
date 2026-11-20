@@ -4507,7 +4507,8 @@ def test_nightmare_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case, bas
     if case == "magic guard":
         mg = c.ABILITY_IDS["Magic Guard"]
         t = _with_abilities(t, int(s.species[0, 0]), [mg, mg])
-    assert policy.ai_refusals(t, s, n) == []
+    # The fight's own layout (E1 R7): built from this state's moves, so the synthetic effect is in it.
+    assert policy.ai_refusals(t, s, n, layout_for(t, 0x3, s)) == []
     assert _delta(t, s, 0x2, 0x3)[0] == basic
 
 
