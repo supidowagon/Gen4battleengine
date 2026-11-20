@@ -2796,23 +2796,21 @@ def _pursuer_ready(tables: Tables, state: BattleState, pursuer, action, move, st
 
 
 def first_pursuer(
-    tables: Tables, state: BattleState, switcher, actions, choices, waiting=None
+    tables: Tables, state: BattleState, switcher, actions, choices
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(int32, bool)``: the battler ``BtlCmd_TryPursuit`` takes against ``switcher``
     (``switchedMon``) and whether there is one. It loops the battlers in index order
-    (battle_script.c:6899) and takes the first (``break``, :6934) that has not acted
-    (``waiting``, ``bool[B]``, :6900; default every battler), is on the other side (:6904)
-    and is ``_pursuer_ready`` (:6901-6916), not the fastest (fcm-verify (d)). None: the
-    battler across from ``switcher``, so the caller's hit is computed on a real foe and
-    masked. Singles: the foe or none."""
+    (battle_script.c:6899) and takes the first (``break``, :6934) on the other side (:6904)
+    that is ``_pursuer_ready`` (:6901-6916), not the fastest (fcm-verify (d)). The not-acted
+    test (:6900) is the caller's: both singles sites run before the other side acts (a first
+    actor's switch; U-turn's chase, ``~tgt_moved``). None: the battler across from
+    ``switcher``, so the caller's hit is computed on a real foe and masked. Singles: the foe
+    or none."""
     fmt = format_of(state)
-    waiting = jnp.ones((fmt.B,), bool) if waiting is None else jnp.asarray(waiting, bool)
     who, found = _foe(jnp.asarray(switcher, _I32)), jnp.asarray(False)
     for b in range(fmt.B):
-        ready = (
-            waiting[b]
-            & (side_of(b) != side_of(switcher))
-            & _pursuer_ready(tables, state, b, actions[b], choices[0][b], choices[1][b])
+        ready = (side_of(b) != side_of(switcher)) & _pursuer_ready(
+            tables, state, b, actions[b], choices[0][b], choices[1][b]
         )
         who = jnp.where(ready & ~found, b, who)
         found = found | ready
@@ -3130,11 +3128,11 @@ def _execute_actions(
         # the Pursuit (:11).
         first_switch = start & (position == 0) & is_switch(acts[side]) & (state.over == 0)
         state = _natural_cure(state, side, first_switch)
-        # The one Pursuit site: the hit before a first actor's switch (the first ready battler
-        # of the other side, ``first_pursuer``), or the one U-turn's head stopped for (``ap``,
-        # its foe); the pursuer has not acted yet.
-        first, ready = first_pursuer(tables, state, side, acts, choices)
-        pursuer = jnp.where(ap, _foe(side), first)
+        # The one Pursuit site: the hit before a first actor's switch or the one U-turn's head
+        # stopped for (``ap``): the first ready battler of the other side (``first_pursuer``;
+        # with none it names the foe, so in singles the chase's pursuer is the foe either way);
+        # the pursuer has not acted yet.
+        pursuer, ready = first_pursuer(tables, state, side, acts, choices)
         fire = (start & (position == 0) & is_switch(acts[side]) & ready) | ap
         pre = state
         hit = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)

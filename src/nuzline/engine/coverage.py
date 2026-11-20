@@ -333,6 +333,9 @@ def start_weather(
                 f"trainer {trainer.id}: no map script sets the weather where this fight is met "
                 "(rom_script_weather.json)"
             )
+        # False is the header's own weather; the one script window's header, 373 (Route 213),
+        # holds 0 (rom/rom_map_weather.json[373]; field_map_change.c:273-280). A window on a
+        # header with its own weather must read it here.
         return START_CONDITIONS[area.script_weather] if script_weather else Weather.NONE
     if field_defog:
         if not trainer.area_condition.fog_clearable:

@@ -527,7 +527,6 @@ class _Layout(NamedTuple):
     weather_ball: jnp.ndarray  # bool, weather_ball_refused
     refused: jnp.ndarray  # bool
     perish: jnp.ndarray  # bool, AI_PerishSongKO (step 3) switches the AI's active out
-    absorb_gated: jnp.ndarray  # bool, absorb sites behind AI_HasAbsorbAbilityInParty's gate
 
 
 @partial(jax.jit, static_argnames="sites")
@@ -649,7 +648,6 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         & (battler_decomp_ability(tables, state, 1) != check)
         & (ability[1] == check)
     )
-    absorb_gated = ~gate & ~perish & jnp.any(keep) & jnp.any(absorb_bench)
     exists = (
         jnp.concatenate([guard_draws, absorb_bench, keep, *passes]) & ~gate & ~perish
     )  # [_CANDIDATES]
@@ -684,7 +682,6 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         weather_ball,
         refused,
         perish,
-        absorb_gated,
     )
 
 

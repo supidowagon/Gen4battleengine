@@ -482,8 +482,7 @@ def test_pursuit_chasing_a_u_turn_subtracts_too(tables, names):
 def test_the_first_pursuer_is_the_first_ready_battler_by_index(tables, names):
     """fcm-verify (d): BtlCmd_TryPursuit loops the battlers in index order (battle_script.c:6899)
     and breaks at the first that is ready (:6934), whatever the speeds: battler 0 switches and
-    battlers 1 and 3 (battler 3 the faster) both chose Pursuit; battler 1 is taken, and battler 3
-    once battler 1 has acted (:6900)."""
+    battlers 1 and 3 (battler 3 the faster) both chose Pursuit; battler 1 is taken."""
     s = four(tables, names)
     for b in (1, 3):
         s = with_moves(s, names, b, ("Pursuit",))
@@ -493,9 +492,6 @@ def test_the_first_pursuer_is_the_first_ready_battler_by_index(tables, names):
     choices = (moves, jnp.zeros(4, bool), jnp.zeros(4, bool))
     who, found = first_pursuer(tables, s, 0, acts, choices)
     assert (int(who), bool(found)) == (1, True)
-    waiting = jnp.asarray([True, False, True, True])
-    who, found = first_pursuer(tables, s, 0, acts, choices, waiting)
-    assert (int(who), bool(found)) == (3, True)
     assert not bool(first_pursuer(tables, s, 1, acts, choices)[1])  # battlers 0, 2: none ready
 
 

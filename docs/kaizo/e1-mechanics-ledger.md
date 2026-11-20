@@ -1778,10 +1778,13 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   pursuer's (:16 PlayFaintAnimation -> battle_script.c:1803 -> battle_lib.c:2213); a recoil-fainted pursuer's
   bit is still set (TryFaintMon only, battle_script.c:1769-1772) and cleared after the subtraction by its own
   cleanup (`kept`). fcm-verify (d): `step.first_pursuer` (reference `_pursuit`) takes the first ready battler
-  of the other side in index order (battle_script.c:6899, `break` :6934; not acted, :6900, a `waiting` input),
+  of the other side in index order (battle_script.c:6899, `break` :6934; not acted, :6900, the caller's test: both singles sites run before the
+  other side acts),
   not the fastest; `pursuit_fires` reads it; in singles it is the foe as before. Battlers are passed in
-  (doubles-state-design section 5): the B = 4 Pursuit site calls `first_pursuer` with its `waiting` battlers
-  and `_acid_rain` with the pursuer it found. G-6's owed item: `outcome.future_thresholds`' weathers are none,
+  (doubles-state-design section 5): the site's pursuer is `first_pursuer`'s for the switch and for U-turn's chase
+  (no `_foe(side)` left there; in singles the foe either way, review G 11). E2's B = 4 Pursuit site (G-13, not on
+  this branch) must call `first_pursuer` with its own not-acted test (:6900) and `_acid_rain` with the pursuer it
+  found; `_use_move`'s `chases` still tests U-turn's target, the foe in singles (review G 8). G-6's owed item: `outcome.future_thresholds`' weathers are none,
   sandstorm, hail, each with and without the start's deep fog bit (`_rate` reads sand for Sand Veil, hail for
   Snow Cloak and fog; a defender holds one ability): every mask at the hit, a corrupted start that loses a TEMP
   group included (0x8044 -> 0x8040), since weather moves and abilities clear fog (effect_script_0115.s etc. :8,
