@@ -346,8 +346,6 @@ def _replacement_point(state: BattleState) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-2: absent / non-choosing battlers; ref_step four actions in _actions; deleted by D3-2
-    TurnClause("D3-2", "absent and non-choosing battlers", lambda t, s, a: _four(s)),
     # D3-6: moved-this-turn per battler (second = position == 1); deleted by D3-6
     TurnClause("D3-6", "moved-this-turn per battler", lambda t, s, a: _four(s)),
     # D3-5: four-position action loop (step.py `position < 2`); deleted by D3-5

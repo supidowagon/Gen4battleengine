@@ -8,7 +8,6 @@ from nuzline.engine.coverage import FOUR_TURN_CLAUSES, four_turn_refusals
 from tests.strategies import legal_action_pair, supported_state
 
 OWED = [
-    "D3-2",
     "D3-6",
     "D3-5",
     "D3-3",

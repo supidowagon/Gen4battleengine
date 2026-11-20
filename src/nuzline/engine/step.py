@@ -3328,7 +3328,14 @@ def _execute_actions(
         # act this turn (UpdateAfterSwitch, battle_lib.c:2053: its action is MOVE_END, so
         # BranchActions runs only MoveEnd for it, bcp.c:893, whose checks repeat the first
         # actor's and change nothing).
-        skip = second & start & ((((pursued >> side) & 1) != 0) | (read["dragged"][side] != 0))
+        # An actor fainted before its turn is MOVE_END too (AnyFainted, bcp.c:4430; absent
+        # battlers: bcp.c:330-333): its action never runs (D3-2 rules 3, 5).
+        # ``pre`` is the carry before the Pursuit hit and ``_act`` (a switcher the Pursuit
+        # KO'd still runs its switch's MoveEnd, as ``ran`` above).
+        alive_at_start = pre.hp[party(fmt, side), pre.active[side]] > 0
+        skip = start & (
+            (((pursued >> side) & 1) != 0) | (read["dragged"][side] != 0) | ~alive_at_start
+        )
         acted = _where(skip, state, acted)
         ran = ran & ~skip
         # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.

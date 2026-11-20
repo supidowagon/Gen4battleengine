@@ -291,9 +291,45 @@ def decision_actions(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 def _present(state: BattleState, b) -> jnp.ndarray:
     """``bool``: battler ``b``'s active Pokemon has HP (the engine's form of "not in
-    ``battlersSwitchingMask``" at a command point, bcp.c:4108-4111, :4132-4135; D2-1 rule 5)."""
+    ``battlersSwitchingMask``" at a command point, bcp.c:4108-4111, :4132-4135; D2-1 rule 5).
+    Equals ``~absent_now`` at a command point (D3-2 rule 2); it is also read at a singles
+    replacement point, where a fainted battler with a bench is not absent, so it is not
+    replaced by ``absent_now``."""
     fmt = format_of(state)
     return state.hp[party(fmt, b), state.active[b]] > 0
+
+
+def replacement_bench(state: BattleState, b) -> jnp.ndarray:
+    """``bool[SLOTS]``: the party slots battler ``b`` could send in at a replacement
+    (ReplaceFainted, bcp.c:4081-4140; party menu display.c:4481-4492): a Pokemon with HP
+    (``species != 0``, ``hp > 0``) that is not ``b``'s own active slot and, where the partner
+    draws from the same party (DOUBLES, and TWO_TRAINERS' player side), not the partner's
+    active slot either (bcp.c:4096-4107). The shared-party test is static on the format
+    (D3-12 build item 1)."""
+    fmt = format_of(state)
+    p = party(fmt, b)
+    slots = jnp.arange(SLOTS)
+    bench = (state.species[p] != 0) & (state.hp[p] > 0) & (slots != state.active[b])
+    if fmt.B == 4:
+        shared = party(fmt, b ^ 2) == p
+        bench = bench & ~(shared & (slots == state.active[b ^ 2]))
+    return bench
+
+
+def absent_now(state: BattleState, b) -> jnp.ndarray:
+    """``bool``: battler ``b`` is absent: its active Pokemon has 0 HP and ``replacement_bench``
+    is empty. The one absence test of D3 (D3-2, D3-10, D3-11, D3-12, the payout).
+
+    No empty-slot field (battlersSwitchingMask, bcp.c:330-333, :4109-4111): this predicate
+    equals the mask because no slot is refilled in battle. Premise, a design rule: the player
+    uses no bag item in battle (docs/design.md:19); the only in-battle party-HP raise is a bag
+    revive (src/battle/battle_system.c:665-710). Trainers never revive: the AI's item tests need
+    its own active's curHP (trainer_ai.c:4100-4101, :4111-4113), the AI partner uses none
+    (trainer_ai.c:4069-4073), and no vanilla or Kaizo trainer bag holds item 28, 29 or 37. If
+    design.md:19 changes, the engine needs the decomp's mask as a field."""
+    fmt = format_of(state)
+    down = state.hp[party(fmt, b), state.active[b]] == 0
+    return down & ~jnp.any(replacement_bench(state, b))
 
 
 def selection_range(tables: Tables, state: BattleState, b, slot) -> jnp.ndarray:

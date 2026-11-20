@@ -7561,6 +7561,24 @@ def _awaits_replacement(s: RefState, b: int) -> bool:
     )
 
 
+def _replacement_bench(s: RefState, b: int) -> list[bool]:
+    """``engine.actions.replacement_bench``: per slot of battler ``b``'s party, a Pokemon with
+    HP that is not ``b``'s active slot and, where the partner draws from the same party, not the
+    partner's active slot (ReplaceFainted, bcp.c:4081-4140; display.c:4481-4492)."""
+    mons = _party_of(s, b).mons
+    fmt = _fmt(s)
+    out = [bool(m.species and m.hp) and i != s.battlers[b].active for i, m in enumerate(mons)]
+    if fmt.B == 4 and _party(fmt, b ^ 2) == _party(fmt, b):
+        out = [ok and i != s.battlers[b ^ 2].active for i, ok in enumerate(out)]
+    return out
+
+
+def _absent_now(s: RefState, b: int) -> bool:
+    """``engine.actions.absent_now``: battler ``b``'s active Pokemon has 0 HP and its
+    ``_replacement_bench`` is empty (battlersSwitchingMask, bcp.c:330-333, :4109-4111)."""
+    return _active(s, b).hp == 0 and not any(_replacement_bench(s, b))
+
+
 def _set_roosting(s: RefState, flags: list[int]) -> None:
     for sd, flag in zip(s.battlers, flags, strict=True):
         sd.roosting = flag
