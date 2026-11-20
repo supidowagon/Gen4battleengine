@@ -1,4 +1,4 @@
-# Gauntlet chaining and growth decisions: design v5
+# Gauntlet chaining and growth decisions: design v5.1
 
 Decomp paths are relative to `external/pokeplatinum`. `bs.c` = `src/battle/battle_script.c`, `bcp.c` = `src/battle/battle_controller_player.c`. Repo cites are at 8b89ca3c. "rom:" cites read the Kaizo ROM (`tools/rom/readers/maps.py`; "scr N @X" = `scr_seq.narc` member N, byte X; "header N" = Kaizo map header N, `debug/cb_edit/d_test.narc`).
 
@@ -22,7 +22,7 @@ Stored in `overrides.toml` per `[[gauntlet]]` and resolved into the tables. Only
 - `source`: the citation, checked by `_SOURCE` as today (`tools/kaizo/overrides.py:93-98`; `_source` `:163-170`). E4 + Champion: `source = "rom:scr 188/190/192/194/196"`. No separate cite or kind field: `check_gauntlet_members` already skips every non-sheet source (`overrides.py:630`, `_SHEET.fullmatch`).
 - `forced`: a list of `{ gap = <k | "all">, <option> = <value>, ..., source = "<cite>" }`, only where the game decides. A user setting that contradicts a `forced` value is refused, with that entry's source in the message.
 - `orders`: the fight orders the map allows (a list of trainer-id lists), with `orders_source`. One order means the game fixes it.
-- `leave_gaps`: gaps after which the player can leave the group's map without entering an undefeated member's sight line. `escape`: whether Escape Rope and Dig work on the map. `pc_gaps`: gaps with a reachable PC. `heal_gaps`: gaps with a reachable free full heal. Each with its source.
+- `leave_gaps`: gaps after which the player can leave the group's map without entering an undefeated member's sight line; one list per order where they differ by order (Building #1). `escape`: whether Escape Rope and Dig work on the map. `pc_gaps`: gaps with a reachable PC. `heal_gaps`: gaps with a reachable free full heal. Each with its source.
 - `rules = {}` and `RULE_KEYS` (`overrides.py:71`) are removed. `resolve.py` copies only these facts (today `:527` copies `g.rules` and `:594` writes `gauntlet_rules` into every trainer row). `trainers.json` gains `gauntlet_facts` in place of `gauntlet_rules`.
 - The map facts (`orders`, `leave_gaps`, `pc_gaps`, `heal_gaps`) come from a read-only ROM tool added in GT-2 (`tools/kaizo/gauntlet_map.py`), so they can be re-derived. The values below are its first results.
 
@@ -38,35 +38,52 @@ Stored in `overrides.toml` per `[[gauntlet]]` and resolved into the tables. Only
 
 ### Map reads
 
-Method: Kaizo ROM, per group map: terrain collision bit, object events (item balls and Rock Smash rocks treated as removable), warps (intra-map warp panels followed), each undefeated member's sight line over every direction its movement type can face (F7), Surf allowed. Not modelled: one-way ledges (none appears on the tiles read for Route 204 North and Route 213), elevation, dynamic map features. An order is allowed when each next member's sight line or a tile next to it is reachable, from the group's arrival tile or from the last opponent, without entering another undefeated member's sight line.
+Method: Kaizo ROM, per group map: terrain collision bit, object events (item balls and Rock Smash rocks treated as removable), warps (intra-map warp panels followed), each undefeated member's sight line over every direction its movement type can face (F7), Surf allowed. Sight tiles: the player is spotted at distance d <= range on the facing line (`GetDistanceNorth` etc., `src/trainer_encounter.c:245-306`) when no tile before the player's has terrain or object collision (`IsPathInterrupted`, `:310-344`). Dynamic map features: the Eterna Gym clock is modelled per state (Eterna Gym facts). Not modelled: one-way ledges (none appears on the tiles read for Route 204 North and Route 213), elevation. An order is allowed when each next member's sight line or a tile next to it is reachable, from any entry warp of the group's map or from the last opponent, without entering another undefeated member's sight line.
 
 | Group (header) | Map-allowed orders | Leave on foot | Escape Rope / Dig (F6) | Heal or PC mid-group |
 |---|---|---|---|---|
-| Oreburgh Mine (199) | 195 then 196 only. From the stairs arrival (15,2) the only way to Worker Mason (2,24) passes (10,29), in Worker Colin's sight (LOOK_SOUTH, range 3, at (10,28)). The sheet order 196, 195 is not possible. | after 195: yes, stairs (15,1) -> B1F | yes: map type 3 (cave), escape bit set (rom header 199; vanilla `include/data/map_headers.h:4437`, `:4441`) | not read past leaving |
+| Oreburgh Mine (199) | 195 then 196 only. Events 197: 195 = obj 5 (scr 3194) at (10,28), LOOK_SOUTH, range 3, sight (10,29) only ((10,30) has terrain collision); 196 = obj 6 (scr 3195) at (2,24), LOOK_EAST, range 5, sight (3,24)-(5,24). From the stairs warp (15,1), rows 28-29 west of x = 19 are entered only through x = 19 (Rock Smash rocks objs 1 and 2, or Roark's script: scr 215 `RemoveObject 0` @70, `RemoveObject 1` @197), and x = 10 is crossed only at (10,29), 195's sight tile. 196's area joins the rest only at (4,27)-(5,27) -> row 28. With neither removal no member is reachable. | after 195: yes, stairs (15,1) -> B1F | yes: map type 3 (cave), escape bit set (rom header 199; vanilla `include/data/map_headers.h:4437`, `:4441`) | not read past leaving |
 | Route 204 North (346) | 15, 13, 14 only, from the Ravaged Path arrival (180,699) | after 15 and after 13: yes, Ravaged Path warp (180,698) and the south edge | no: map type 2 | not read past leaving |
 | Route 204 North B2B (256) | 296, 297, scripted | no: no field control | n/a | no |
-| Eterna Gym trainers (67) | not settled: the gym trainers have trainer type NONE and start from coord events (19,13), (3,13) and talk entries; the clock layout is a dynamic map feature (`InitPersistedMapFeaturesForEternaGym`, rom: scr 73 entry 1 @46) the read does not model | not settled | no: map type 4 | no |
-| Eterna Building #1 (73) | 831 then 421 only. From the 1F stairs arrival (13,4) every path to Galactic Amalthia (8,6) crosses row 9, x 13-15, in Scientist Galileo's sight (facing W, range 4, at (16,9)). The sheet order 421, 831 is not possible. | after 831: yes, 1F stairs (13,3) | no: map type 4 | not read |
+| Eterna Gym trainers (67) | the guide talk, then 324, 259, 260 only (Eterna Gym facts) | no: the door is reachable only in clock state 3, which only the win over 260 sets | no: map type 4, escape bit 0 | no |
+| Eterna Building #1 (73) | both: 421, 831 and 831, 421. Events 72: 421 = obj 0 (scr 3420) at (8,6), LOOK_NORTH, range 3, sight (8,5)-(8,3); 831 = obj 2 (scr 3830) at (16,9), facing west, range 4, sight (15,9)-(13,9). 1F (header 72, events 71) has two stairs: warp 1 (14,6) -> 2F (8,3), inside 421's sight, so 421 is fought first; warp 3 (20,6) -> 2F (13,3), from where the only way south crosses 831's row-9 sight, so 831 is fought first. The 1F walk from the door (11,15) to either stair enters no sight line (no 1F object is a trainer). | order 831, 421: after 831, yes: (13,3) -> 1F (20,6) -> door (11,15) -> Eterna City (header 65). Order 421, 831: no: after 421 the reachable 2F area leads only to header 74 via (22,3) and to the self-loop warp (8,3); 1F needs row 9 x 13-15 (831's sight) | no: map type 4, escape bit 0, fly bit 0 | not read |
 | Eterna Building #2 (74) | 410, 423 only | after 410: yes, stairs (9,11) -> 2F | no | not read |
 | Eterna Building #3 (74) | free: 412, 422 or 422, 412 | after 422 first: yes (warp panels, then 1F warp (23,12)); after 412 first: no | no | not read |
 | Route 213 (373) | free: all 120 orders | after every fight: yes, lobby door (706,818) -> header 376. After a swimmer (106, 103, 105) the player is surfing. | no: escape bit clear | after every fight: the lobby healer, header 376 obj 1 at (11,4), scr 462 entry 2 `HealParty` @74, no payment check |
-| Wayward Cave (284) | not read (multi pairs; E2-blocked) | not read | not read | partner heal after every won fight |
+| Wayward Cave (284) | 383+443, 380+458, 450+496, 459+460, 454+455, 749+750 only (Wayward Cave facts) | no | no while the partner is set (Wayward Cave facts) | partner heal after every won fight; no PC tile |
 | Elite Four + Champion (175-185) | fixed by the game | no: doors | n/a | PC in every lift; no healer |
 
 Tracked facts that follow:
 
 | Group | `forced` | Other facts | Cite |
 |---|---|---|---|
-| Oreburgh Mine | order 195, 196 | `leave_gaps = [1]`, `escape = true` | rom header 199 ev 197 objs 5/6, stairs warp (15,1) |
+| Oreburgh Mine | order 195, 196 | `leave_gaps = [1]`, `escape = true` | rom header 199 ev 197 objs 5/6, stairs warp (15,1); sight `src/trainer_encounter.c:182-229`, `:245-306`, `:310-344`; escape: map type 3, escape bit 1 (`CanUseEscapeRope`, `src/item_use_functions.c:941-947`) |
 | Route 204 North | order 15, 13, 14 | `leave_gaps = [1, 2]` | rom header 346 ev 332, warp (180,698) |
 | Route 204 North B2B | gap 1: heal none, pc_heal off, team none, swap none, bag none, growth items none; order 296, 297 | | rom:scr 277 entry 2 `LockAll` @36, battle 296 @44, battle 297 @73, `ReleaseAll` @106 |
-| Eterna Gym trainers | none | none settled | rom:scr 73 entries 5-9, each ending in `ReleaseAll` (@359, @471, @593, @702, @815) |
-| Eterna Building #1 | order 831, 421 | `leave_gaps = [1]` | rom header 73 ev 72 |
+| Eterna Gym trainers | order 324, 259, 260 | `leave_gaps = []`, `escape = false` | Eterna Gym facts |
+| Eterna Building #1 | none | `orders` both; `leave_gaps`: 831, 421 -> [1]; 421, 831 -> []; `escape = false` | rom header 73 ev 72; header 72 ev 71 warps 1 (14,6) and 3 (20,6) |
 | Eterna Building #2 | order 410, 423 | `leave_gaps = [1]` | rom header 74 ev 73 |
 | Eterna Building #3 | none | `orders` both; `leave_gaps` after 422 first only | rom header 74 ev 73 |
 | Route 213 | none | `orders` all; `leave_gaps` all; `heal_gaps` all | rom header 373 ev 359; warps (706,818), (706,813) -> header 376; scr 462 @74 |
-| Wayward Cave | gap all: partner heal. After every won battle while the partner flag is set, the game heals the player's party: HP to max for every member, fainted ones included, status cleared, PP restored. | | rom:scr 318 entry 2 `SetHasPartner` @171; `src/encounter.c:197-199`; `Party_HealAllMembers`, `src/item_use_pokemon.c:603-628` |
+| Wayward Cave | order 443, 380, 450, 459, 454, 749 (first id of each fight); gap all: partner heal. After every won battle while the partner flag is set, the game heals the player's party: HP to max for every member, fainted ones included, status cleared, PP restored. | `leave_gaps = []`, `escape = false`, `heal_gaps = [1, 2, 3, 4, 5]`, `pc_gaps = []`; `partner_from` (Wayward Cave facts) | rom:scr 318 entry 2 `SetHasPartner` @171; `src/encounter.c:197-199`; `Party_HealAllMembers`, `src/item_use_pokemon.c:603-628`; Wayward Cave facts |
 | Elite Four + Champion | order 866, 867, 868, 869, 870 | `pc_gaps = [1, 2, 3, 4]`; no heal, tutor or relearner | below |
+
+Eterna Gym facts (rom header 67, events 66; scr 73):
+- No member is a sight trainer: objects 2 (19,12), 3 (3,12), 4 (2,8) have trainer type NONE. Fights start from scripts: coord (19,13) -> entry 7 (324); coord (3,13) or talking to obj 3 -> entry 8 (259); talking to obj 4 -> entry 5 (260). The coord events use var 0, which always matches (`sub_0203CC14`, `src/unk_0203C954.c:218`; `FieldSystem_TryGetVar`, `src/script_manager.c:432-433`, `:447-448`).
+- Two vars. 0x40AE `VAR_ETERNA_GYM_TRAINERS_BEATEN` (`generated/vars_flags.txt:4285`) gates the fights: entry 7 runs while it is <= 1 (@475), entry 8 while <= 2 (@597), entry 5 while < 5 (@301). 0x404B `VAR_ETERNA_GYM_FLOWER_CLOCK_STATE` (`:4186`) is the clock state.
+- The clock has 5 states, 0-4 (`enum EternaClockState`, `include/overlay008/gym_features.h:15-22`), read at map load (`EternaGym_DynamicMapFeaturesInit`, `src/overlay008/gym_features.c:2513`) and raised by one per `AdvanceEternaGymClock` (`EternaGym_AdvanceClockState`, `:2903-2914`). Collision per state: `sEternaGymClockCollision` (`:2333-2410`), `sEternaGymFountainCollision` (`:2412-2418`), applied by `EternaGym_DynamicMapFeaturesCheckCollision` (`:2534-2559`); hour-hand jump tiles per state `sEternaGymHourHandJumpTiles` (`:2308-2331`). Kaizo leaves overlay 8 unchanged (`data/kaizo/rom_diff.toml` has no overlay-8 entry).
+- Clock advances: the gym guide's first talk (obj 0, entry 2 `AdvanceEternaGymClock` @105, once, gated by var 0x40AB @77); the first win over 324 (entry 7 @586 -> @1177); the win over 260 (entry 5 @361); the leader (@1065).
+- Walk per state, from the door (11,26): state 0: only the guide is reachable. State 1: only coord (19,13) -> 324. State 2 (after 324, player on (19,13)): only coord (3,13) or obj 3 -> 259; the door is not reachable. 259's win keeps state 2 (entry 8 has no clock advance): obj 4 -> 260 is reachable, the door is not. State 3 (after 260): the door and the leader are reachable.
+- So the order is forced: the guide talk (no fight), then 324, 259, 260. No walk-out at gap 1 or 2. Escape: map type 4, escape bit 0, fly bit 0.
+- Out of the model: the Sudowoodo (obj 7 at (19,20)), talked to from the south while 0x40AE is 2-4, resets 0x40AE to 1 (entry 10 @1238-1314), which re-opens entry 7 and forces a second fight with 324. The player stands south of it only after leaving the gym, and no gap allows leaving (a lost fight ends the chain). Nothing is stored for it.
+
+Wayward Cave facts (rom header 284, events 273; scr 318):
+- Partner: talking to Mira (obj 4 at (72,13), entry 2) sets 0x4091 `VAR_WAYWARD_CAVE_1F_FOLLOWER_MIRA_STATE` = 1 (@152; `generated/vars_flags.txt:4256`) and 0x403F `VAR_PARTNER_TRAINER_ID` = 612 (@165; `:4174`), and runs `SetHasPartner` (@171). The main entrance leads into coord row 48 (x 39-42, 0x4091 == 0): entry 5 warps the player to (84,9) (@232), Mira's area.
+- With the partner set the field treats the party as able to fight two (`src/overlay005/field_control.c:182-186`), so a tile both members of a pair see starts one battle with both (`FieldSystem_CheckForTrainersWantingBattle`, `src/trainer_encounter.c:84-103`), a multi with the partner (`Encounter_NewVsTrainer`, `src/encounter.c:729-734`; `ScrCmd_StartTrainerBattle`, `src/scrcmd_trainer.c:124-142`). Every pair's first reachable tile is seen by both members.
+- Order, forced: 383+443, 380+458, 450+496, 459+460, 454+455, then 749+750, a scripted tag battle at the exit (coord row 47, x 39-42, 0x4091 == 1 -> entry 4 -> @369 -> @470, `StartTagBattle 612, 750, 749` @667). 459+460 is reachable only past the Strength boulders at (26,16) and (28,16) (`FieldMoves_CheckStrength` needs `BADGE_ID_MINE`, `src/field_move_tasks.c:457-470`). No pair can be skipped: the exit coord is reachable only after 454+455.
+- No walk-out: the only way out of the walked area is the row-47 coord, which starts 749+750. While the partner is set, Escape Rope (`CanUseEscapeRope`, `src/item_use_functions.c:943-945`), Dig (`src/field_move_tasks.c:764`) and Teleport (`:717`) are refused.
+- Heal: after every won battle while the partner flag is set, `Party_HealAllMembers` on the save party (`src/encounter.c:197-199`; `src/item_use_pokemon.c:603-628`). This is forced game behaviour; `partner_heal = stricter` (answer 7) applies a stricter user rule on top. No PC tile (behaviour 0x83) in header 284.
+- Partnerless first pair (group fact `partner_from`): 383+443 can also be met from (84,9) before talking to Mira. Then fight 1 is a two-trainer double without partner (with two able members: `src/overlay005/field_control.c:182`, `src/trainer_encounter.c:84-103`) and gap 1 has no partner heal. Without the partner the escape checks pass on header 284 (map type 3, escape bit 1; `src/item_use_functions.c:947`). The fact holds both cases: Mira joins before fight 1 or after it; the user picks one with `partner_from = 1 | 2`.
 
 Elite Four facts:
 - Order and doors. After a win the room script removes the exit door (`res/field/scripts/scripts_pokemon_league_aaron_room.s:24`) and returns control (`:30`). The exit warp leads to the next lift (`res/field/events/events_pokemon_league_aaron_room.json`: (8,2) -> `ELEVATOR_TO_BERTHA_ROOM`), and the lift's warp to the next room (`events_pokemon_league_elevator_to_bertha_room.json`: (4,2) -> `BERTHA_ROOM`). Entering a room adds the entrance door behind the player (`scripts_pokemon_league_aaron_room.s:62-69`). The Kaizo files have the same structure (rom: scr 188-196, init entry 2 `AddObject` @142, @180). The order is fixed and the player cannot walk back.
@@ -80,7 +97,7 @@ Elite Four facts:
 - Gauntlet options are entered per run: flags, or `--rules FILE` naming a file the user keeps outside the tracked tree. No gauntlet choice is stored by default (answer 1).
 - Standing Nuzlocke settings may sit in `[run]` of `data/local.toml`, the existing git-ignored local inputs file (`.gitignore:15`; `docs/kaizo/pipeline.md:10`). `data/local.example.toml` gets no gauntlet or run entries; this section is the schema.
 - Precedence per value: `forced` > flag > `--rules FILE` > `data/local.toml` > default (section 13). The report prints every value with its origin and says when a default was used.
-- Input errors: unknown key, field or value; gap outside 1..n-1; an order not in the group's `orders`; a value that contradicts `forced`. Where the map read settles a gap: `pc_heal = on` outside `pc_gaps`, or a walk-out heal (`heal = full` outside `heal_gaps` and outside `leave_gaps`). Nothing else is rejected.
+- Input errors: unknown key, field or value; gap outside 1..n-1; an order not in the group's `orders`; a value that contradicts `forced`. Where the map read settles a gap: `pc_heal = on` outside `pc_gaps`, or a walk-out heal (`heal = full` outside `heal_gaps` and outside the chosen order's `leave_gaps`). Nothing else is rejected.
 
 Schema; choices are listed strictest first.
 
@@ -103,6 +120,7 @@ move_sources = ["bag"] | ["bag", "tutor", "relearner"]
 swap = { bench = <int >= 0 | -1>, budget = <int >= 0 | -1> }
 order = "sheet" | [<first trainer id of each fight>, ...]   # one of the group's `orders`
 partner_heal = "game" | "stricter"
+partner_from = 1 | 2                                       # Wayward Cave only
 time = "day" | "night"
 
 [gauntlet."<group name>".gap.<k>]                          # overrides the group value at gap k
@@ -114,14 +132,15 @@ Option kinds (`src/nuzline/data/gauntlet.py`, `OPTIONS` registry; loader, CLI, c
 - Level (ordered, per gap): `heal`, `pc_heal`, `team`, `growth_items`.
 - Counted (whole remaining chain, spent at gaps, optional per-gap cap): `swap` (`bench`, `budget`), `bag_uses`.
 - Set (whole chain): `order`, `move_sources`.
-- Plain choice: the `[run]` keys, `partner_heal`, `time`.
+- Plain choice: the `[run]` keys, `partner_heal`, `partner_from`, `time`.
 - Adding an option: its `OPTIONS` entry and its transition in `prep/gauntlet.py`.
 
 Meaning:
 - `heal = bag`: bag medicine and PP items may be used (F2); each use is charged to `Cost` and to `bag_uses`. Ethers and Elixirs count like any other bag item. `full`: HP, PP and status reset on living members.
-- `pc_heal = on`: at a gap, a member may be deposited and withdrawn: PP restored at deposit (`src/pc_boxes.c:82`; `BoxPokemon_RestorePP`, `src/pokemon.c:5109-5122`), HP to max and status cleared at withdraw (`Pokemon_FromBoxPokemon`, `src/pokemon.c:4031-4055`; `:633-645`). The withdrawn member goes to the end of the party (`Party_AddPokemon`, `src/party.c:50-59`; `src/applications/pc_boxes/box_app_manager.c:3963`). Under `team = none` the order is kept by withdrawing in party order.
-- `swap`: `bench` = box members chosen before fight 1; `budget` = members swapped in over the chain; `-1` = unlimited. A swapped-in member arrives with full HP, PP and status, at the end of the party.
-- `order = "sheet"`: the sheet order when it is in `orders`, else the single map order (Oreburgh Mine, Building #1); the report says which. A list picks one of `orders`.
+- `pc_heal = on`: at a gap, a member may be deposited and withdrawn: PP restored at deposit (`src/pc_boxes.c:82`; `BoxPokemon_RestorePP`, `src/pokemon.c:5109-5122`), Shaymin set to Land form at deposit (`src/pc_boxes.c:83`), HP to max and status cleared at withdraw (`Pokemon_FromBoxPokemon`, `src/pokemon.c:4031-4055`; `:633-645`). The withdrawn member goes to the end of the party (`Party_AddPokemon`, `src/party.c:50-59`; `src/applications/pc_boxes/box_app_manager.c:3963`). Under `team = none` the order is kept by withdrawing in party order.
+- `swap`: `bench` = box members chosen before fight 1; `budget` = members swapped in over the chain; `-1` = unlimited. A swapped-in member arrives with full HP, PP and status, at the end of the party. A deposited Shaymin is in Land form (`src/pc_boxes.c:83`).
+- `order = "sheet"`: the sheet order when it is in `orders`, else the single map order (Oreburgh Mine, Wayward Cave; section 14); the report says which. A list picks one of `orders`.
+- `partner_from` (Wayward Cave): the fight before which Mira joins, 1 or 2 (Wayward Cave facts). Unset: 1, the case the sheet records (multis); the report names the other case.
 - `partner_heal = game`: the `forced` heal applies. `stricter`: the user's `heal` applies instead, a house rule; the report says the game heals there.
 - `cap_overflow = sit_out_after_fight`: a member that passes the next fight's level cap (`config/level_caps.toml`, `data/kaizo/level_caps.toml`) finishes the current fight, then takes no part in any later fight of the chain. `cap_sit_out_in_party = allowed`: it may stay in the party unused when it cannot be deposited. A fight where only sit-out members can still battle counts as lost.
 - `field_poison = worst_case`: at every gap each poisoned living member drops to 1 HP and is cured, with the friendship loss (F5). `ignore`: no change.
@@ -198,7 +217,7 @@ Level-ups, learn prompts and evolutions are decisions of the line, in single bat
 - **G6 Evolution after a battle.** Only on a win, capture or flee (`src/battle/battle_system.c:829-833`); only members that levelled (`leveledUpMonsMask`, `bs.c:9867` -> `battle_system.c:835-849`). HP is not checked: a member that levelled and then fainted is offered too (`battle_system.c:826-850`). It runs before field control returns (`battle_main.c:261`, `:274-297`). B cancels (flag 0x1, `battle_main.c:283`; `src/evolution.c:283-286`); a cancelled member is offered again only after its next level-up.
 - **G7 Evolution between fights.** A Rare Candy level-up runs the same check (`src/applications/party_menu/callbacks.c:816-829`) and can be cancelled (`src/start_menu.c:1081-1090`, `:1740` flag 0x1). Kaizo's change there only keeps the menu in Rare Candy mode (`data/kaizo/rom_diff.toml:195-197`). A stone evolution cannot be cancelled (`src/start_menu.c:1069-1080`, `:1742`); the decision is whether to use the stone. Trade evolutions (`EVO_CLASS_BY_TRADE`, `src/pokemon.c:3727`) are not offered.
 - **G8 Conditions** (`Pokemon_GetEvolutionTargetSpecies`, `src/pokemon.c:3528-3725`; first match wins, `:3721-3723`). Everstone blocks every level evolution (`:3543-3547`). Methods: level; friendship >= 220 (`include/constants/pokemon.h:25`), raised at the level-up before the check (`bs.c:9857`); day or night (`IsNight`, `src/rtc.c:134`); held item by day or night; known move; species in party; gender; Attack vs Defense; personality; map (`mapEvolutionMethod`, `src/field_battle_data_transfer.c:264`). Data: `Learnsets.evolutions` (`src/nuzline/data/learnsets.py:98`).
-- **G9 On evolution.** Species set, ability from the new species and personality bit 0 (`src/evolution.c:435-436`; `src/pokemon.c:4746-4763`), stats recalculated with HP raised by the max-HP gain (`src/evolution.c:437`; `src/pokemon.c:633-645`). The new species' entries of exactly the current level are offered (`src/evolution.c:461-480`; `src/pokemon.c:3950`). A Nincada evolution adds a Shedinja when the party has a free slot and the bag a Poke Ball, which it uses up (`src/evolution.c:723-740`).
+- **G9 On evolution.** Species set, ability from the new species and personality bit 0 (`src/evolution.c:435-436`; `src/pokemon.c:4746-4763`), stats recalculated with HP raised by the max-HP gain (`src/evolution.c:437`; `src/pokemon.c:633-645`). The new species' entries of exactly the current level are offered (`src/evolution.c:461-480`; `src/pokemon.c:3950`). A Nincada evolution adds a Shedinja when the party has a free slot and the bag a Poke Ball, which it uses up (`src/evolution.c:723-740`). Held-item evolutions (`EVO_LEVEL_WITH_HELD_ITEM_DAY`, `_NIGHT`, and trade with held item) use up the held item: it is set to none (`src/evolution.c:782-787`).
 - **G10 Nincada in Kaizo.** The Kaizo encounter data holds Nincada (290) only in Eterna Forest's Poke Radar slots: `fielddata/encountdata/pl_enc_data.narc` member 8 (`res/field/encounters/encounters.order` line 9, Eterna Forest), bytes 124-136 = `radarEncounters[0..3]` (`include/overlay006/wild_encounters.h:31-36`; read at `src/overlay006/wild_encounters.c:696-699`). It is obtainable, so the Shedinja case stays. Gift, trade, honey tree and egg sources were not scanned.
 
 ### Decisions
@@ -298,7 +317,7 @@ Not carried (reset at every fight start): volatiles, stat stages, types, battle 
 | GT-5 | Fight start from a Carry; Gym/E4/Champion battle-start friendship; level-cap sit-out | 3, 5, 7 | all |
 | GT-6 | Gap transition steps 0-9; item field-effect table from the ROM item data (`ITEM_PARAM_*`, F2); `Resources` gains medicine, PP items, Rare Candies, stones; field poison | 5 | all |
 | GT-7 | Swaps: bench, budget, plans (`MAX_SWAP_PLANS = 64`), deposit and withdraw effects, order change, policy swap | 3, 5 | user swaps |
-| GT-8 | Chosen order: next opponent as a root choice within `orders`, `MAX_ORDERS = 24`, greedy beyond | 5 | Route 213, Building #3 |
+| GT-8 | Chosen order: next opponent as a root choice within `orders`, `MAX_ORDERS = 24`, greedy beyond | 5 | Route 213, Building #1, Building #3 |
 | GT-9 | Chain search: chain playout, chain score, funnel / ladder / Stage B on it, Stage B across 296/297, `--horizon` | 5 | all |
 | GT-10 | Lookahead policy (bag top-up incl. PP, PC, reorder lead, planned and policy swaps, cap sit-out) | 5 | all |
 | GT-11 | Report and record: settings with origin, forced sources, chain cost | 3, 5 | all |
@@ -383,7 +402,9 @@ Every answer is a default; each stays a setting (section 3).
 | 16 | Shedinja | Nincada is obtainable in Kaizo (G10), so the case stays; default strictest | `run.shedinja = forbidden` |
 | 17 | Time of day | not read at the E4 + Champion; an input for earlier groups | `time` |
 
-Still open (game facts, not user questions):
-- Eterna Gym trainers: order and walk-out depend on the clock map feature, which the read does not model.
-- Wayward Cave: order and walk-out not read (multi pairs; the group stays E2-blocked).
-- Oreburgh Mine and Building #1: the map read gives the reverse of the sheet order. The sheet ordering is to be checked against the ROM read before the facts are committed in GT-2.
+## 14. Game data vs user belief
+
+Where the map data and the user's belief differ, the data is the game fact and the user's rule is a setting on top (`order`, `heal`, `partner_heal`).
+- Route 204 North: Ravaged Path (header 254) is reachable on foot after fights 15 and 13 (rom header 346, warp (180,698)).
+- Oreburgh Mine: 195 is fought first, not the sheet's 196 (Map reads).
+- Wayward Cave: 450+496 come before 459+460 (Wayward Cave facts).
