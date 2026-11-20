@@ -89,6 +89,7 @@ from nuzline.engine.actions import (
     imprisoning_foe,
     locked_slot,
     move_imprisoned,
+    replacement_bench,
 )
 from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
@@ -811,17 +812,12 @@ def _pay_all(
 
 
 def _has_bench(state: BattleState, side) -> jnp.ndarray:
-    """``BattleSystem_AnyReplacementMons`` (battle_lib.c:3125-3180) in singles: a living,
-    non-empty party slot of ``side`` other than the active one (TryReplaceFaintedMon,
-    battle_script.c:5867-5877)."""
-    fmt = format_of(state)
-    slots = jnp.arange(state.hp.shape[1])
-    bench = (
-        (state.species[party(fmt, side)] != 0)
-        & (state.hp[party(fmt, side)] > 0)
-        & (slots != state.active[side])
-    )
-    return jnp.any(bench)
+    """``BattleSystem_AnyReplacementMons`` (battle_lib.c:3125-3180): a living, non-empty party
+    slot of ``side`` other than its own active slot and, where the partner sends from the same
+    party (DOUBLES, TWO_TRAINERS' player side), other than the partner's (:3151-3157; 2vs2's and
+    the TAG enemy's separate parties: only its own, :3142-3150): ``actions.replacement_bench``
+    (TryReplaceFaintedMon, battle_script.c:5867-5882; D3-10)."""
+    return jnp.any(replacement_bench(state, side))
 
 
 def _blacked_out(state: BattleState, side) -> jnp.ndarray:
@@ -967,6 +963,7 @@ def _use_move(
     enduring=False,
     speed_order=None,
     picks=None,
+    defender_in=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -1016,6 +1013,10 @@ def _use_move(
     (``MODE_PURSUIT``): ``(flag, sideEffectMon, held)`` after the Pursuit, the head's
     Synchronize flag and side-effect battler as the Pursuit's contact ability left them and each
     battler's ``BattleMon.status`` before the Pursuit's faint check (``_execute_actions``).
+    ``defender_in`` (B = 4, D3-10): ``battleCtx->defender`` of the paused action, as FightCommand
+    fixed it (bcp.c:1900); ``MODE_PURSUIT`` and ``MODE_RESUME`` use it as the resolved defender and
+    never pick one again (the draws of ``targets.resolve`` are not read twice). B = 2 re-resolves
+    (the same battler there, ledger D3-10).
 
     Returns ``(state, own, foe, ctl)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -1058,6 +1059,10 @@ def _use_move(
         speed_order,
         outcome.target_draw[side],
     )
+    if fmt.B == 4 and defender_in is not None:
+        # The tail modes keep the defender of the action's start (D3-10; the Pursuit and the
+        # party list never rebind ``battleCtx->defender``, subscript_pursuit.s:5, :80, :116).
+        resolved = _redefend(resolved, side, defender_in, ~head_on)
     target_side = resolved.target_side
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[party(fmt, side), user] > 0)
@@ -2846,6 +2851,7 @@ def _act(
     pursuit_sync=None,
     enduring=False,
     speed_order=None,
+    defender_in=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -2916,6 +2922,7 @@ def _act(
         enduring,
         picks=(actions, choices),
         speed_order=speed_order,
+        defender_in=defender_in,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -3338,17 +3345,20 @@ def _execute_actions(
 
     def body(carry):
         state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry[:10]
-        custap, claw, entered, owed_c = carry[10:]
+        custap, claw, entered, owed_c, defender_c, speed_c, hold = carry[10:]
         active0 = state.active
         side = order[position].astype(_I32)
         # BranchActions' BattleSystem_SortMonSpeedOrder before this entry (bcp.c:888), on the state
-        # after the previous MoveEnd; its tie bits are the acting battler's row (D3-4). A resumed
-        # or pursuit pass sorts afresh until D3-10's ``ts_speed_order``. B = 2: identity.
-        speed_order = (
-            sort_mon_speed(tables, state, outcome.quick_claw, outcome.sort_tie[side])[0]
-            if fmt.B == 4
-            else None
-        )
+        # after the previous MoveEnd; its tie bits are the acting battler's row (D3-4). Only the
+        # action's start pass sorts: its Pursuit and resumed passes keep the action's sort
+        # (``speed_c``: BranchActions is not re-entered across the party list, D3-4 rule 7; the
+        # resumed one starts from ``ts_speed_order``, D3-10); a chain pass (``hold``) keeps it too.
+        # B = 2: identity.
+        if fmt.B == 4:
+            fresh = sort_mon_speed(tables, state, outcome.quick_claw, outcome.sort_tie[side])[0]
+            speed_order = jnp.where((phase == _START) & ~hold, fresh, speed_c).astype(_I32)
+        else:
+            speed_order = None
         # D3-6: PICK_COMMAND == MOVE_END of every battler at this action's start (script.c:1801,
         # bcp.c:3988, :4430, :330-333; lib.c:2053): its action is over, its Pursuit fired, it was
         # dragged or a Pokemon entered its slot this turn, or it is at 0 HP. Fact A reads one
@@ -3515,6 +3525,7 @@ def _execute_actions(
             pursuit_sync=pursuit_sync,
             enduring=enduring,
             speed_order=speed_order,
+            defender_in=defender_c if fmt.B == 4 else None,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         # A switcher the Pursuit KO'd still runs its switch's MoveEnd (bcp.c:1984, :4008), so
@@ -3611,6 +3622,11 @@ def _execute_actions(
             claw,
             entered,
             jnp.where(again, owed_all, jnp.zeros_like(owed_all)),
+            # battleCtx->defender stays from FightCommand through a Pursuit and the party list
+            # (bcp.c:1900; subscript_pursuit.s:5, :80, :116): the start pass sets it (D3-10).
+            jnp.where(start, ctl["defender"], defender_c).astype(_I32),
+            speed_order.astype(_I32) if fmt.B == 4 else speed_c,
+            again,
         )
 
     start = (
@@ -3628,9 +3644,14 @@ def _execute_actions(
         claw0,
         jnp.zeros(fmt.B, bool),  # a slot filled this turn (a list's or a switch's newcomer)
         jnp.zeros_like(_alive_mask(state)),  # the recoil-felled pursuers MoveEnd pays (``owed``)
+        # the paused action's defender and monSpeedOrder (B = 4; D3-10), and a chain pass
+        jnp.where(paused, state.ts_defender.astype(_I32) - 1, NO_DEFENDER).astype(_I32),
+        jnp.where(paused, state.ts_speed_order.astype(_I32), jnp.arange(fmt.B, dtype=_I32)),
+        jnp.bool_(False),
     )
     out = jax.lax.while_loop(cond, body, start)
-    state, read, shown, position, _, pursued, base, pick_mul, fired, _, custap, claw, _, _ = out
+    state, read, shown, position, _, pursued, base, pick_mul, fired, _, custap, claw = out[:12]
+    defender_c, speed_c = out[14], out[15]
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
     alive_now = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
@@ -3660,6 +3681,10 @@ def _execute_actions(
         "ts_used": state.ts_used,
         "ts_damaged": state.ts_damaged,
         "ts_dealt": state.ts_dealt,
+        # The paused action's battleCtx->defender (1 + battler) and monSpeedOrder: written at B = 4
+        # only (D3-10); at B = 2 the re-resolve gives the same defender and the order is the identity.
+        "ts_defender": (1 + defender_c) if fmt.B == 4 else jnp.zeros((), _I32),
+        "ts_speed_order": speed_c if fmt.B == 4 else jnp.zeros(fmt.B, _I32),
         "ts_se": state.ts_se,
         "ts_sub_hit": state.ts_sub_hit,
         "ts_alive": base,

@@ -4749,10 +4749,9 @@ def _shielded(turn: _Turn, s: RefState, side: int) -> bool:
 
 
 def _bench(s: RefState, side: int) -> bool:
-    """``BattleSystem_AnyReplacementMons`` (lib.c:3125) in singles."""
-    sd = s.battlers[side]
-    sd_pt = _party_of(s, side)
-    return any(m.species and m.hp for i, m in enumerate(sd_pt.mons) if i != sd.active)
+    """``BattleSystem_AnyReplacementMons`` (lib.c:3125-3180): ``_replacement_bench`` has a slot
+    (the partner's active slot excluded where it shares the party, :3142-3157; D3-10)."""
+    return any(_replacement_bench(s, side))
 
 
 def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int) -> bool:
@@ -4767,7 +4766,8 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
     (:56-57) and the party list (:71): ``_Pause``. A user that fainted switches nothing: the
     action goes on, King's Rock included (bcp.c:3524, no attacker HP test)."""
     tables, o = turn.tables, turn.outcome
-    foe = _foe(side)
+    # The action's defender (CheckBlackOut BTLSCR_DEFENDER, :5); at B = 2 the foe.
+    foe = turn.target_side
     if _blacked_out(s, foe) or not _bench(s, side):
         return False
     target_moved = turn.position == 1
@@ -7479,7 +7479,7 @@ def _ref_step(
     picked = [int(a) for a in actions]
     actions = tuple(int(a) for a in actions)  # one per battler (D3-1b, taken early from D3-2 4.2)
     if s.pivot_battler:
-        return _resume(tables, s, actions, outcome)
+        return _resume(tables, s, actions, outcome, actions_only)
     s.learn_pin = 0  # the turn's own pin (design §3.3(a))
     # The command selection's CheckInvalidMoves (bcp.c:433, every FIGHT battler that picks a
     # command, :335) clears a Choice lock its holder no longer knows (lib.c:2307-2310).
@@ -7863,6 +7863,9 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     s.ts_damaged = int(turn.damaged)
     s.ts_dealt = turn.pivot_dealt
     s.ts_se = int(turn.move_se)  # moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
+    if _fmt(s).B == 4:  # the paused action's battleCtx->defender and monSpeedOrder (D3-10)
+        s.ts_defender = 0 if turn.defender is None else 1 + turn.defender
+        _put(s, "ts_speed_order", turn.speed_order)
     # The paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT sits on its defender (F-4).
     _put(s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)])
     fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
@@ -7892,11 +7895,13 @@ def _fainted_battler(s: RefState, k: int, i: int) -> int:
 
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_pursued": 0, "ts_used": 0, "ts_damaged": 0,
-    "ts_dealt": 0, "ts_se": 0, "ts_power_mul": 0, "ts_pick_mul": 0,
+    "ts_dealt": 0, "ts_se": 0, "ts_power_mul": 0, "ts_pick_mul": 0, "ts_defender": 0,
 }  # fmt: skip
 
 
-def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
+def _resume(
+    tables, s: RefState, actions: tuple[int, ...], outcome, actions_only: bool = False
+) -> RefState:
     """Resume a turn paused at a party list: the turn's scratch back into ``_Turn``, the
     switch of ``subscript_show_party_list.s`` (``SwitchAndUpdateMon``, a Baton Pass keeping its
     effects, ``PokemonSendOut``, the hazards, the faint check: :9-24), then the rest of the paused
@@ -7920,10 +7925,9 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     # The paused move's battleCtx->defender, for MoveEnd's battle-end cure (bcp.c:3966-3967):
     # FightCommand's pick (bcp.c:1900) re-resolved here on the paused state, before ``_enter``
     # (the outgoing mon's Encore and chosen_target still in place); ``step._act`` re-resolves in
-    # MODE_RESUME on the post-list state. No visible case at B = 2 (ledger SF2-gate (2)); at B = 4 they can differ (an
-    # encored U-turn user randomizes in one and not the other). The game never re-resolves:
-    # battleCtx->defender stays from FightCommand. Owed 22 (ledger): carry the action-start
-    # defender in both engines.
+    # MODE_RESUME on the post-list state. No visible case at B = 2 (ledger SF2-gate (2)), so B = 2
+    # keeps the re-resolve. The game never re-resolves: battleCtx->defender stays from
+    # FightCommand; at B = 4 both engines carry it (``ts_defender``, D3-10).
     p_move, p_struggling, _ = turn.choices[side]
     p_sd = s.battlers[side]
     if (
@@ -7932,11 +7936,19 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
         and _active(s, side).moves[p_sd.encore_slot] == p_sd.encore_move
     ):
         p_move = p_sd.encore_move
-    turn.defender = _resolve(
-        tables, s, side, p_move, p_struggling or bool(p_sd.encore_move), p_sd.chosen_target,
-        turn.speed_order if turn.speed_order is not None else list(range(_fmt(s).B)),
-        outcome.target_draw[side],
-    )[0]  # fmt: skip
+    if _fmt(s).B == 4:
+        # D3-10: the defender FightCommand fixed (bcp.c:1900) and the sort before the action
+        # stay through the list (battleCtx->defender, monSpeedOrder: nothing rewrites them).
+        kept = s.ts_defender - 1
+        turn.defender = None if kept < 0 else kept
+        turn.target_side = kept if kept >= 0 and kept != side else _foe(side)
+        turn.speed_order = _get(s, "ts_speed_order")
+    else:
+        turn.defender = _resolve(
+            tables, s, side, p_move, p_struggling or bool(p_sd.encore_move), p_sd.chosen_target,
+            turn.speed_order if turn.speed_order is not None else list(range(_fmt(s).B)),
+            outcome.target_draw[side],
+        )[0]  # fmt: skip
     turn.protecting = [bool(f) for f in _get(s, "ts_protect_ok")]
     turn.enduring = [bool(f) for f in _get(s, "ts_endure_ok")]
     turn.roosting = [bool(sd.roosting) for sd in s.battlers]
@@ -7955,13 +7967,8 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
         for i, m in enumerate(pt.mons)
         if m.hp == 0 and pt.ts_alive >> i & 1
     ]
-    for position in range(s.ts_cursor):
-        turn.done[turn.order[position]] = True
-    for k in range(_fmt(s).B):
-        if s.ts_pursued >> k & 1:
-            turn.done[k] = True
-    for k in range(_fmt(s).B):
-        if s.battlers[k].ts_dragged:
+    for k in range(_fmt(s).B):  # MOVE_END: acted, pursued (script.c:6931), dragged (lib.c:2053)
+        if s.battlers[k].ts_acted or s.ts_pursued >> k & 1 or s.battlers[k].ts_dragged:
             turn.done[k] = True
     move, used = s.battlers[side].ts_move, s.ts_used
     damaged, dealt = bool(s.ts_damaged), s.ts_dealt
@@ -7976,7 +7983,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
         pt.ts_alive = 0
     for sc in s.sides:
         sc.ts_follow_me = 0
-    foe = _foe(side)
+    foe = turn.target_side if _fmt(s).B == 4 else _foe(side)  # the kept defender (D3-10)
     # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (F-4): the tail's TriggerHeldItemOnHit returns
     # early on it (battle_lib.c:5378).
     sub_hit = turn.sub_hit and turn.sub_hit_mon == foe
@@ -8004,7 +8011,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
         turn.sync_mon = foe  # bcp.c:4643 (G-13)
     if (
         rock
-        and position == 0
+        and (position == 0 if _fmt(s).B == 2 else not turn.done[foe])  # the defender has not moved
         and _ignorable(s, side, foe) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
     ):
         s.battlers[foe].flinched = 1
@@ -8040,12 +8047,15 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     for b in range(_fmt(s).B):
         if turn.pursued >> b & 1 and _active(s, b).hp == 0 and side_of(b) == 1:
             turn.payout.append((b, s.battlers[b].active))
-    turn.target_side = foe  # the resumed tail's defender (D3-10 carries the kept one)
+    turn.target_side = foe  # the resumed tail's defender (the kept one at B = 4, D3-10)
     _finish_action(turn, s, side, position, record)
     try:
         _actions(turn, s, position + 1)
     except _Pause:
         _write_scratch(turn, s)
+        return s
+    if actions_only:  # the test seam of ``ref_step``: stop before the end of the turn
+        _carry_flags(turn, s)
         return s
     return _end_turn(turn, s)
 

@@ -172,6 +172,7 @@ class RefBattler:
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
     ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
+    ts_speed_order: int  # the paused action's monSpeedOrder entry (D3-10; B = 4 only)
     ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
@@ -234,6 +235,7 @@ class RefState:
     ts_used: int
     ts_damaged: int
     ts_dealt: int
+    ts_defender: int  # 1 + the paused action's battleCtx->defender (D3-10; B = 4 only)
     ts_se: int
     ts_power_mul: int
     ts_pick_mul: int

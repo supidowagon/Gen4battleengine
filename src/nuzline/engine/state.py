@@ -544,6 +544,12 @@ class BattleState(NamedTuple):
     ts_used: jnp.ndarray  # int16, the paused action's moveCur
     ts_damaged: jnp.ndarray  # int8, its defender's physical / specialDamageTaken != 0
     ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
+    # int8, 1 + battleCtx->defender of the paused action, 0 = BATTLER_NONE; written at B = 4 only
+    # (D3-10: the resumed tail reads the defender FightCommand fixed, not a new pick)
+    ts_defender: jnp.ndarray
+    # int8[B], the paused action's monSpeedOrder (BattleSystem_SortMonSpeedOrder's result before
+    # that action, kept to its MoveEnd, D3-4 rule 7); written at B = 4 only
+    ts_speed_order: jnp.ndarray
     # int8, moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE as the paused or chased action's tail
     # reads it (Enigma Berry): the stopping hit's, or the last Pursuit's (SF2 (i))
     ts_se: jnp.ndarray
@@ -928,6 +934,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_used": (_FIELD, np.int16),
     "ts_damaged": (_FIELD, np.int8),
     "ts_dealt": (_FIELD, np.int16),
+    "ts_defender": (_FIELD, np.int8),
+    "ts_speed_order": (_BATTLER, np.int8),
     "ts_se": (_FIELD, np.int8),
     "ts_alive": (_PARTY, np.int8),
     "ts_power_mul": (_FIELD, np.int8),

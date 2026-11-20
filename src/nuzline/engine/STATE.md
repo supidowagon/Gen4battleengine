@@ -463,7 +463,7 @@ three structs has a row.
   `ts_follow_me` (per side, `SideConditions.followMe` / `followMeUser`: `1 + followMeUser`, 0 when `followMe`
   is clear; `BattleSystem_SetupNextTurn` clears it, battle_lib.c:2251-2252, D2-11; written in both
   formats, ruling D2-33: at B = 2 the other side's non-Ghost Curse reads it, lib.c:1714-1717),
-  `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
+  `ts_defender` / `ts_speed_order` (the paused action's `battleCtx->defender` as `1 + defender` and `monSpeedOrder`, written at B = 4 only, D3-10), `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
   itself and Assurance reads, B13-17; `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
   battler, the only self turn flag kept across a U-turn's list (`BattleContext_Init` clears the rest at the
   action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `focusItemActivated` and
@@ -675,7 +675,7 @@ three structs has a row.
 | `BattleContext.padding0060` | — | not needed because it is padding |
 | `BattleContext.attacker` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.attackerTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.defender` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.defender` | `ts_defender` | mapped (the paused action's only, `1 + defender`, 0 = BATTLER_NONE, written at B = 4: the resumed tail reads the defender FightCommand fixed, bcp.c:1900, kept through the party list and a Pursuit, subscript_pursuit.s:5, :80, :116; inside the turn `step` recomputes it; at B = 2 the re-resolve gives the same battler, D3-10) |
 | `BattleContext.defenderTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.faintedMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.switchedMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |

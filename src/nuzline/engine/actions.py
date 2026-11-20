@@ -184,14 +184,11 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 
 def legal_replacements(state: BattleState, side) -> jnp.ndarray:
     """``bool[6]``: party slots ``side`` may send in, non-active, non-empty and not
-    fainted."""
-    fmt = format_of(state)
-    slots = jnp.arange(SLOTS)
-    return (
-        (slots != state.active[side])
-        & (state.species[party(fmt, side)] > 0)
-        & (state.hp[party(fmt, side)] > 0)
-    )
+    fainted and, at B = 4 where the partner draws from the same party, not the partner's active
+    slot (``BattleSystem_AnyReplacementMons``, battle_lib.c:3125-3180, :3142-3157: the same
+    ``replacement_bench`` set, which is the party list's legal picks: D3-10). At B = 2 a party is
+    one battler's: the singles set."""
+    return replacement_bench(state, side)
 
 
 def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
