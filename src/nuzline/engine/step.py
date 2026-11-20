@@ -2971,7 +2971,7 @@ def _pursuit_hit(
     )
     # subscript_pursuit.s:85's Destiny Bond take-down runs inside play_hit (``pursuit_switch``),
     # before the contact ability (:86-87) and the items (:90, :94-95).
-    state = sticky_barb_transfer(tables, state, pursuer, _foe(pursuer), move, info.damaged)
+    state = sticky_barb_transfer(tables, state, pursuer, switcher, move, info.damaged)
     # subscript_pursuit.s:32 writes the script's damage (before CheckHoldOnWith1HP) to the
     # defender's physicalDamageTaken whatever the class; its specialDamageTaken stays 0 (G-54).
     # The Jaboca Berry's TriggerHeldItemOnPivotMove case (:48-49) then finds no berry: OnHit
@@ -2980,7 +2980,7 @@ def _pursuit_hit(
         tables,
         state,
         pursuer,
-        _foe(pursuer),
+        switcher,
         info.update_hp,
         False,
         info.super_effective & info.effective,

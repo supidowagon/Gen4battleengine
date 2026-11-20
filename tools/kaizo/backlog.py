@@ -260,7 +260,7 @@ SCRIPT_START_CONDITIONS = (
         ),
         (
             "playable after heal; multi-status start refused (`SaveMon.to_spec`,"
-            " src/nuzline/saves/pkm.py:109)"
+            " src/nuzline/saves/pkm.py:109) until the status-word batch (E1 G-39)"
         ),
         (
             "scr_seq 213 entry 20 (the Pokemon Center 2F bed, common script 9019) warps to 320 with"

@@ -140,7 +140,7 @@ battle needs them, so they count in no total above.
 
 | Condition | Status | Source |
 |---|---|---|
-| Newmoon status 0x7B on party[0] (sleep 3, poison, burn, freeze, paralysis; condition.h:7-13), kept by the battle until healed | playable after heal; multi-status start refused (`SaveMon.to_spec`, src/nuzline/saves/pkm.py:109) | scr_seq 213 entry 20 (the Pokemon Center 2F bed, common script 9019) warps to 320 with trainer flag 882 set (scr_seq 278 0x011d), always with flag 823 (0x0199 -> 0x0b18); scr_seq 362 0x00f8 warps 320 -> 321; scr_seq 363 0x00f2 writes the word, then StartFirstBattle 674 (Lady Emi, no split) |
+| Newmoon status 0x7B on party[0] (sleep 3, poison, burn, freeze, paralysis; condition.h:7-13), kept by the battle until healed | playable after heal; multi-status start refused (`SaveMon.to_spec`, src/nuzline/saves/pkm.py:109) until the status-word batch (E1 G-39) | scr_seq 213 entry 20 (the Pokemon Center 2F bed, common script 9019) warps to 320 with trainer flag 882 set (scr_seq 278 0x011d), always with flag 823 (0x0199 -> 0x0b18); scr_seq 362 0x00f8 warps 320 -> 321; scr_seq 363 0x00f2 writes the word, then StartFirstBattle 674 (Lady Emi, no split) |
 
 ## Your side (upper bound)
 
