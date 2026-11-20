@@ -13,12 +13,14 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.coverage import UnsupportedMechanics
 from nuzline.engine.enumerate import enumerate_turn
-from nuzline.engine.ids import Stat, Weather
+from nuzline.engine.format import DOUBLES
+from nuzline.engine.ids import AbilityId, Stat, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step
 from nuzline.search.learn import learn_reason
 from nuzline.search.playout import finish_turn
+from tests.engine.d2_states import four, with_ability, with_moves
 from tests.engine.helpers import assert_matches_reference, jit_step
 
 pytestmark = pytest.mark.fullset
@@ -210,3 +212,118 @@ def test_search_entry_points_refuse_an_acid_rain_state(tables, names):
         evaluate_players(tables, s, None, [()], 1, key)
     with pytest.raises(UnsupportedMechanics, match="Acid Rain"):
         find_line(tables, names, s, key)
+
+
+# --- B = 4 (D3-9): the write per pass of the per-pursuer site -------------------------------
+
+
+SW4 = MOVE_ACTIONS + 2
+
+
+def _hail4(tables, names, chasers, **kw):
+    """DOUBLES under permanent hail: battlers in ``chasers`` know Pursuit, the rest Swords Dance."""
+    s = four(tables, names, DOUBLES)
+    for b in range(4):
+        s = with_moves(s, names, b, ["Pursuit" if b in chasers else "Swords Dance"])
+    return s._replace(
+        weather=_i8(s.weather, Weather.HAIL), weather_timer=_i8(s.weather_timer, 0), **kw
+    )
+
+
+def _play4(tables, s, acts, order, targets=(0, 0, 0, 0)):
+    from tests.engine.test_d3_action_loop import play
+
+    return play(tables, s, acts, order, targets)[0]
+
+
+def _hurt(s, party, slot, hp):
+    return s._replace(hp=s.hp.at[party, slot].set(hp))
+
+
+def test_four_permanent_hail_ko_by_battler_0_of_the_switching_battler_3(tables, names):
+    s = _hail4(tables, names, (0,))
+    s = _hurt(s, 1, int(s.active[3]), 1)
+    out = _play4(tables, s, [0, 0, 0, SW4], (3, 0, 1, 2))
+    assert int(out.acid_rain) == 3
+    _refused(tables, out)
+    # the same KO with no field condition up: 0, plays on
+    calm = s._replace(weather=_i8(s.weather, Weather.NONE))
+    assert int(_play4(tables, calm, [0, 0, 0, SW4], (3, 0, 1, 2)).acid_rain) == 0
+
+
+def test_four_uproar_alone_battler_1_ko_by_battler_2(tables, names):
+    s = _hail4(tables, names, (2,))
+    s = s._replace(weather=_i8(s.weather, Weather.NONE))
+    s = s._replace(uproar=s.uproar.at[0].set(_i8(s.uproar, 3)))
+    s = _hurt(s, 1, int(s.active[1]), 1)
+    out = _play4(tables, s, [0, SW4, 0, 0], (1, 2, 0, 3))
+    assert int(out.acid_rain) == 1
+    _refused(tables, out)
+
+
+def test_four_ko_without_recoil_leaves_operand_zero(tables, names):
+    s = _hurt(_hail4(tables, names, (1,)), 0, 0, 1)
+    out = _play4(tables, s, [SW4, 0, 0, 0], (0, 1, 2, 3))
+    assert int(out.hp[0, 0]) == 0 and int(out.acid_rain) == 0
+
+
+def test_four_rough_skin_fells_battler_3(tables, names):
+    s = with_ability(_hail4(tables, names, (3,)), 0, AbilityId.ROUGH_SKIN)
+    s = _hurt(_hurt(s, 0, 0, 1), 1, int(s.active[3]), 1)
+    out = _play4(tables, s, [SW4, 0, 0, 0], (0, 3, 1, 2))
+    assert int(out.acid_rain) == 3
+    _refused(tables, out)
+
+
+def test_four_life_orb_recoil_fells_battler_2(tables, names):
+    s = _hail4(tables, names, (2,))
+    s = s._replace(item=s.item.at[0, int(s.active[2])].set(names.item("Life Orb")))
+    s = _hurt(_hurt(s, 1, int(s.active[1]), 1), 0, int(s.active[2]), 1)
+    out = _play4(tables, s, [0, SW4, 0, 0], (1, 2, 0, 3))
+    assert int(out.hp[0, int(s.active[2])]) == 0
+    assert int(out.acid_rain) == 2
+    _refused(tables, out)
+
+
+def test_four_aftermath_fells_battler_1(tables, names):
+    s = with_ability(_hail4(tables, names, (1,)), 0, AbilityId.AFTERMATH)
+    s = _hurt(_hurt(s, 0, 0, 1), 1, int(s.active[1]), 1)
+    out = _play4(tables, s, [SW4, 0, 0, 0], (0, 1, 2, 3))
+    assert int(out.hp[1, int(s.active[1])]) == 0
+    assert int(out.acid_rain) == 1
+    _refused(tables, out)
+
+
+def test_four_destiny_bond_restores_the_switcher_as_operand_zero(tables, names):
+    """Battler 0 holding Destiny Bond (and Rough Skin) switches under hail, battler 3's Pursuit
+    KOs it: battler 3 is at 0 HP by the bond, no contact ability, no reveal, ``acid_rain == 0``
+    (faintedMon restored to the switcher, battler 0)."""
+    s = with_ability(_hail4(tables, names, (3,)), 0, AbilityId.ROUGH_SKIN)
+    s = _hurt(s, 0, 0, 1)
+    s = s._replace(destiny_bond=s.destiny_bond.at[0].set(_i8(s.destiny_bond, 1)))
+    out = _play4(tables, s, [SW4, 0, 0, 0], (0, 3, 1, 2))
+    assert int(out.hp[1, int(s.active[3])]) == 0
+    assert int(out.acid_rain) == 0
+
+
+def test_four_destiny_bond_clears_the_pursuers_uproar_bit(tables, names):
+    """Battler 1 (Destiny Bond) KO'd by battler 2 with ``uproar[2] != 0`` the only condition: the
+    bond's faint clears battler 2's bit before :115, mask 0: plays on."""
+    s = _hail4(tables, names, (2,))
+    s = s._replace(weather=_i8(s.weather, Weather.NONE))
+    s = s._replace(uproar=s.uproar.at[2].set(_i8(s.uproar, 3)))
+    s = s._replace(destiny_bond=s.destiny_bond.at[1].set(_i8(s.destiny_bond, 1)))
+    s = _hurt(s, 1, int(s.active[1]), 1)
+    out = _play4(tables, s, [0, SW4, 0, 0], (1, 2, 0, 3))
+    assert int(out.acid_rain) == 0
+
+
+def test_four_the_lower_battler_hits_first_whatever_the_speeds(tables, names):
+    """Battler 0 (Rough Skin) switches under hail, battlers 1 (1 HP) and 3 both ready, battler 3
+    faster: battler 1 hits first (index order) and falls to the Rough Skin, battler 3 never
+    pursues (the KO'd chain: the switcher is dead at 1 HP): 1 (by speed it would be 3)."""
+    s = with_ability(_hail4(tables, names, (1, 3)), 0, AbilityId.ROUGH_SKIN)
+    s = _hurt(_hurt(s, 0, 0, 1), 1, int(s.active[1]), 1)
+    out = _play4(tables, s, [SW4, 0, 0, 0], (0, 3, 1, 2))
+    assert int(out.acid_rain) == 1
+    _refused(tables, out)

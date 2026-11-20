@@ -83,6 +83,7 @@ from nuzline.data.tables import Tables
 from nuzline.engine import targets
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
+    absent_now,
     chosen_targets,
     gravity_banned,
     imprisoning_foe,
@@ -929,7 +930,6 @@ def _use_move(
     roosting=False,
     foe_taken=(0, 0, 0, 0, 0, 0),
     mode=MODE_FULL,
-    pursuit=None,
     claw=(False, False),
     entry_poisoned=False,
     entry_status=None,
@@ -958,8 +958,10 @@ def _use_move(
     of the defender's (G-65, bcp.c:3386-3400). ``roosting`` (``bool[B]``): each battler's Roost
     succeeded earlier this turn (``turnFlags.roosting``, cleared at the turn end,
     battle_lib.c:2231): the type chart of a move skips the defender's Flying rows
-    (``damage.chart_types``, lib.c:2540-2543). ``picks``: ``(actions, moves)`` of every battler
-    (``int32[B]`` each, from ``_act``): Me First copies the resolved defender's move. ``foe_taken``: the
+    (``damage.chart_types``, lib.c:2540-2543). ``picks``: ``(actions, choices)`` of every battler
+    (``int32[B]`` and ``selected_move``'s ``(move, struggling, locked)`` of each, from ``_act``):
+    Me First copies the resolved defender's move; a U-turn's Pursuit scan reads every battler
+    (``next_pursuer``, with ``moved`` as its MOVE_END battlers). ``foe_taken``: the
     physical, special and last damage the user took this turn and each one's attacker as
     ``1 + battler`` (its ``turnFlags``, bcp.c:3413-3434: the ``phys_taken`` / ``spec_taken`` /
     ``last_taken`` and ``phys_from`` / ``spec_from`` / ``last_from`` events), which Counter,
@@ -969,7 +971,7 @@ def _use_move(
     (subscript_attack_then_switch_out.s) runs after the hit's contact ability; past the defender
     side's black-out check and the user's replacement check (:5-6) it runs the pivot item (:11,
     ``effects.pivot_item``) and Destiny Bond (:15-34); a user still alive (:48) then meets the foe's
-    Pursuit (:54: ``pursuit``, ``(action, move, struggling)`` of the foe at selection), which
+    Pursuit (:54: ``next_pursuer`` over ``picks``, the battlers' actions and moves at selection), which
     ``_execute_actions`` plays (``ctl["pursue"]``), else its Natural Cure (:56-57) and the party
     list (:71): the action stops there (``ctl["pause"]``). Baton Pass (subscript_baton_pass.s): a
     user with a replacement (:5; else MOVE_STATUS_FAILED, :19-20) gets its Natural Cure (:7-8) and
@@ -1272,18 +1274,13 @@ def _use_move(
     # (moveTemp).
     kind = call_kind(tables, move)
     invoker = kind != CALL_NONE
-    # Me First (E3-2-3; BtlCmd_TryMeFirst, battle_script.c:7286-7312) copies the foe's chosen move
-    # while the foe has not acted (``moved[target_side]``): ``pursuit`` carries its action, selected move
-    # and struggling flag (``_act``); with none given the call finds nothing.
+    # Me First (E3-2-3; BtlCmd_TryMeFirst, battle_script.c:7286-7312) copies the resolved
+    # defender's chosen move (DEFENDER_ACTION, ``Battler_SelectedMove(defender)``, :7292-7299)
+    # while it has not acted (``moved[target_side]``): ``picks`` carries every battler's action,
+    # selected move and struggling flag (``_act``); with none given the call finds nothing.
     me_first = jnp.asarray(0, _I32)
-    if pursuit is not None:
-        # The copied move is the resolved defender's (battle_script.c:7286-7312: DEFENDER_ACTION,
-        # ``Battler_SelectedMove(defender)``); at B = 2 that is the foe's, ``pursuit``'s.
-        copy_action, copy_move = (
-            (pursuit[0], pursuit[1])
-            if picks is None
-            else (picks[0][target_side], picks[1][target_side])
-        )
+    if picks is not None:
+        copy_action, copy_move = picks[0][target_side], picks[1][0][target_side]
         foe_fights = ~is_switch(copy_action) & ~is_item(copy_action)
         copied = me_first_copy(tables, state, target_side, copy_move, foe_fights)
         me_first = jnp.where(jnp.asarray(moved, bool)[target_side], 0, copied)
@@ -2171,10 +2168,6 @@ def _use_move(
         & (state.semi_invulnerable[target_side] == 0)
         & (state.transformed[target_side] == 0)
     )
-    # U-turn's Pursuit (:54): the foe has not moved and can Pursuit now (``_pursuer_ready``).
-    if pursuit is None:
-        pursuit = (jnp.int32(0), jnp.int32(0), jnp.bool_(True))
-    foe_action, foe_move, foe_struggling = pursuit
     is_uturn = tables.move_effect[used] == EffectId.U_TURN
     # The tail modes' items (AfterMoveEffects): on the newcomer, or a U-turn user that died to the
     # Pursuit (its continuation without a switch).
@@ -2317,12 +2310,11 @@ def _use_move(
         hit_state = _set_mon(hit_state, "hp", side, user, 0, bonded)
         # :48: a user that fainted does not switch; :54 its foe's Pursuit, else the list.
         goes = tries & (hit_state.hp[party(fmt, side), user] > 0)
-        foe = target_side
-        chases = (
-            goes
-            & ~tgt_moved
-            & _pursuer_ready(tables, hit_state, foe, foe_action, foe_move, foe_struggling)
-        )
+        # :54 U-turn's Pursuit: a battler on the other side that is not MOVE_END can use Pursuit
+        # now (``next_pursuer``, index order).
+        chases = goes
+        if picks is not None:
+            chases = goes & next_pursuer(tables, hit_state, side, picks[0], picks[1], moved)[0]
         lists = goes & ~chases
         hit_state = _natural_cure(hit_state, side, lists)
         # A U-turn that does not switch makes its King's Rock check after the secondary effect
@@ -2820,7 +2812,6 @@ def _act(
     taken=(0, 0, 0, 0, 0, 0),
     mode=MODE_FULL,
     base=None,
-    foe=None,
     claw=(False, False),
     pursuit_sync=None,
     enduring=False,
@@ -2874,8 +2865,6 @@ def _act(
     )
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
-    # U-turn's Pursuit reads the battler it hits (convention 1: passed in by the caller).
-    pursuit = (actions[foe], choices[0][foe], choices[1][foe])
     after, own, foe_events, ctl = _use_move(
         tables,
         _where(resumed, listed, state),
@@ -2890,13 +2879,12 @@ def _act(
         roosting,
         taken,
         mode,
-        pursuit,
         claw,
         entry_poisoned,
         landed,  # the newcomer's BattleMon.status before the list's faint check (G-24)
         pursuit_sync,
         enduring,
-        picks=(actions, choices[0]),
+        picks=(actions, choices),
         speed_order=speed_order,
     )
     live = state.over == 0
@@ -2930,36 +2918,88 @@ def _act(
     return acted, own, foe_events, ctl
 
 
+def _move_slot(state: BattleState, b, move) -> jnp.ndarray:
+    """``int32``: the first move slot of battler ``b`` holding ``move`` (``Battler_SlotForMove``,
+    battle_script.c:6910; 0 when none does)."""
+    fmt = format_of(state)
+    row = state.moves[party(fmt, b), state.active[b]].astype(_I32)
+    return jnp.argmax(row == jnp.asarray(move, _I32)).astype(_I32)
+
+
+def _pursuer_move(state: BattleState, pursuer, action, move, struggling):
+    """``(has, move)`` of ``BtlCmd_TryPursuit``'s move choice for ``pursuer`` (battle_script.c:
+    6905-6909): its Encore move when the Encore slot still holds it, whatever it selected (a FIGHT,
+    a bag item or a switch), else ``Battler_SelectedMove`` (the chosen slot's move of a FIGHT, 0
+    for any other command and for Struggle: lib.c:2858-2868; ``move`` / ``struggling`` are
+    ``selected_move``'s). ``has`` is false when it has no move. D3-9 variant B (SF2 (e) did not
+    land): at B = 2 the command test stays, a FIGHT that is not Struggling only, and SF2 (e)
+    removes it."""
+    fmt = format_of(state)
+    mon = state.active[pursuer]
+    picked = ~is_switch(action) & ~is_item(action) & ~jnp.asarray(struggling)
+    if fmt.B == 2:
+        return picked, move
+    enc = state.encore_move[pursuer].astype(_I32)
+    holds = (enc != 0) & (
+        state.moves[party(fmt, pursuer), mon, state.encore_slot[pursuer]].astype(_I32) == enc
+    )
+    return holds | picked, jnp.where(holds, enc, move)
+
+
 def _pursuer_ready(tables: Tables, state: BattleState, pursuer, action, move, struggling):
     """``BtlCmd_TryPursuit``'s test of a battler that has not acted yet (battle_script.c:
-    6899-6918): ``pursuer`` chose a move (``action``) whose effect is Pursuit (``move``, fixed at
-    selection; not Struggle) and is alive, not asleep or frozen and not loafing
-    (``truant_loafs``, :6903) now, as the switch or U-turn finds it."""
+    6899-6918, but for its PICK_COMMAND: ``next_pursuer``'s ``move_end``): ``pursuer`` has a
+    move (``_pursuer_move``) whose effect is Pursuit, with PP left in the first slot holding it
+    (:6910-6916), and is alive, not asleep or frozen and not loafing (``truant_loafs``, :6903)
+    now, as the switch or U-turn finds it."""
     fmt = format_of(state)
     mon = state.active[pursuer]
     status = state.status[party(fmt, pursuer), mon]
+    has, used = _pursuer_move(state, pursuer, action, move, struggling)
+    slot = _move_slot(state, pursuer, used)
     return (
         ~truant_loafs(state, pursuer)
         & (state.over == 0)
-        & ~is_switch(action)
-        & ~is_item(action)
-        & ~jnp.asarray(struggling)
-        & (tables.move_effect[move] == EffectId.PURSUIT)
+        & has
+        & (tables.move_effect[used] == EffectId.PURSUIT)
+        & (state.pp[party(fmt, pursuer), mon, slot] > 0)
         & (state.hp[party(fmt, pursuer), mon] > 0)
         & (status != Status.SLEEP)
         & (status != Status.FREEZE)
     )
 
 
+def next_pursuer(
+    tables: Tables, state: BattleState, switcher, actions, choices, move_end
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(found bool, pursuer int32)``: ``BtlCmd_TryPursuit``'s scan (battle_script.c:6899-6934).
+    The first battler in index order (``i = 0 .. maxBattlers - 1``, never the fastest), on the
+    other side from ``switcher`` (:6904), that is not MOVE_END (``move_end``, ``bool[B]``: its
+    action is over, it pursued, was dragged, entered or fainted) and passes ``_pursuer_ready``.
+    ``pursuer`` is a masked placeholder (an opposing battler) when none is found."""
+    fmt = format_of(state)
+    found = jnp.bool_(False)
+    who = jnp.asarray(switcher, _I32) ^ 1
+    for i in range(fmt.B):
+        ready = (
+            (side_of(i) != side_of(switcher))
+            & ~jnp.asarray(move_end, bool)[i]
+            & _pursuer_ready(tables, state, i, actions[i], choices[0][i], choices[1][i])
+        )
+        who = jnp.where(ready & ~found, i, who)
+        found = found | ready
+    return found, who
+
+
 def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
-    """``side`` switches and the other side, which has not acted yet, chose Pursuit:
+    """``side`` switches and a battler of the other side, which has not acted yet, chose Pursuit:
     ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
-    ``subscript_switch_pokemon.s:11`` before the switch; ``_pursuer_ready``)."""
-    pursuer = _foe(side)
-    ready = _pursuer_ready(
-        tables, state, pursuer, actions[pursuer], choices[0][pursuer], choices[1][pursuer]
-    )
-    return is_switch(actions[side]) & ready
+    ``subscript_switch_pokemon.s:11`` before the switch; ``next_pursuer`` on the turn-start
+    ``state``, only the absent battlers MOVE_END)."""
+    fmt = format_of(state)
+    absent = jnp.stack([absent_now(state, b) for b in range(fmt.B)])
+    found, _ = next_pursuer(tables, state, side, actions, choices, absent)
+    return is_switch(actions[side]) & found
 
 
 def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -2997,8 +3037,12 @@ def _pursuit_hit(
     holder holds one of them). The switching side chose no FIGHT, so no Custap flag is set.
     ``switcher``: the switching battler (``switchedMon``)."""
     fmt = format_of(state)
-    action = actions[pursuer]
-    slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
+    # The move (an Encored pursuer's whatever it chose) and the PP slot: the first slot holding it
+    # (battle_script.c:6905-6917, ``Battler_SlotForMove``).
+    _, move = _pursuer_move(
+        state, pursuer, actions[pursuer], choices[0][pursuer], choices[1][pursuer]
+    )
+    slot = _move_slot(state, pursuer, move)
     mon = state.active[pursuer]
     state = state._replace(pp=state.pp.at[party(fmt, pursuer), mon, slot].add(jnp.int8(-1)))
     # battle_script.c:6919-6922: one more while PP is left when the switching battler has
@@ -3009,7 +3053,6 @@ def _pursuit_hit(
             jnp.where(extra, -1, 0).astype(state.pp.dtype)
         )
     )
-    move = choices[0][pursuer]
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
     # subscript_pursuit.s:11 ApplyTypeEffectiveness: a Wonder Guard block
@@ -3037,7 +3080,7 @@ def _pursuit_hit(
     )
     # subscript_pursuit.s:85's Destiny Bond take-down runs inside play_hit (``pursuit_switch``),
     # before the contact ability (:86-87) and the items (:90, :94-95).
-    state = sticky_barb_transfer(tables, state, pursuer, _foe(pursuer), move, info.damaged)
+    state = sticky_barb_transfer(tables, state, pursuer, switcher, move, info.damaged)
     # subscript_pursuit.s:32 writes the script's damage (before CheckHoldOnWith1HP) to the
     # defender's physicalDamageTaken whatever the class; its specialDamageTaken stays 0 (G-54).
     # The Jaboca Berry's TriggerHeldItemOnPivotMove case (:48-49) then finds no berry: OnHit
@@ -3046,7 +3089,7 @@ def _pursuit_hit(
         tables,
         state,
         pursuer,
-        _foe(pursuer),
+        switcher,
         info.update_hp,
         False,
         info.super_effective & info.effective,
@@ -3265,7 +3308,7 @@ def _execute_actions(
 
     def body(carry):
         state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry[:10]
-        custap, claw, entered = carry[10:]
+        custap, claw, entered, owed_c = carry[10:]
         active0 = state.active
         side = order[position].astype(_I32)
         # BranchActions' BattleSystem_SortMonSpeedOrder before this entry (bcp.c:888), on the state
@@ -3297,18 +3340,24 @@ def _execute_actions(
         )
         first_switch = start & runs & is_switch(acts[side]) & (state.over == 0)
         state = _natural_cure(state, side, first_switch)
-        # The one Pursuit site: the hit before a first actor's switch, or the one U-turn's
-        # head stopped for (``ap``); the pursuer has not acted yet, so it is the second actor.
-        pursuer = _foe(side)
-        fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
+        # The one Pursuit site (D3-9): one pass per pursuer, before a switch action's switch or at
+        # the stop of a U-turn's head (``ap``). ``BtlCmd_TryPursuit`` takes the first battler in
+        # index order that is not MOVE_END (``moved``), on the other side (``next_pursuer``,
+        # battle_script.c:6899-6934); while the switcher lives the chain goes on with the next one
+        # (``again``, subscript_pursuit.s:79-82 -> :8): the pass puts no ``_act`` result.
+        found, pursuer = next_pursuer(tables, state, side, acts, choices, moved)
+        fire = (first_switch & found) | (ap & found)
         pre = state
+        pmove = _pursuer_move(
+            pre, pursuer, acts[pursuer], choices[0][pursuer], choices[1][pursuer]
+        )[1]
         hit, p_se = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
-        crit = crit_lands(tables, pre, pursuer, choices[0][pursuer], outcome.crit[pursuer, 0])
+        crit = crit_lands(tables, pre, pursuer, pmove, outcome.crit[pursuer, 0])
         crit = crit & ~crit_blocked(pre, pursuer, side)
         seen = _hit_events(pre, hit, pursuer, True, crit)
         pursuer_events = {
             "act_kind": ACT_MOVE,
-            "act_id": choices[0][pursuer],
+            "act_id": pmove,
             "hits": 1,
             "crit": jnp.zeros((MAX_HITS,), _I32).at[0].set(seen["crit"]),
         }
@@ -3337,23 +3386,30 @@ def _execute_actions(
         # Aftermath, Jaboca Berry, its Life Orb) is only flagged: AnyExpPayout pays it at the
         # action's MoveEnd (bcp.c:3968), after the newcomer's hazards (``owed``). A U-turn user
         # cleared its Destiny Bond (bcp.c:2425); the resumed pass finds its fallen pursuer by
-        # ``ts_pursued`` (SF2 (a2) R3, R4).
+        # ``ts_pursued`` (SF2 (a2) R3, R4). Per pass (SF2 (a2) B = 4 (ii)): paid are the switcher's
+        # KO and a Destiny-Bond pursuer, owed every recoil-felled pursuer, OR-ed into ``owed_all``
+        # for MoveEnd's AnyExpPayout (lowest battler first, ``_pay_all``).
         ko = fire & (_active_hp(fmt, pre, side) > 0) & (_active_hp(fmt, hit, side) == 0)
         bonded_ko = ko & (pre.destiny_bond[side] != 0)
         pp, pm = party(fmt, pursuer), pre.active[pursuer]
         p_fell = fire & (pre.hp[pp, pm] > 0) & (struck.hp[pp, pm] == 0)
-        owed_site = p_fell & ~bonded_ko
-        owed_res = (
-            resumed & (((pursued >> pursuer) & 1) != 0) & (state.hp[pp, state.active[pursuer]] == 0)
-        )
-        bit = jnp.left_shift(jnp.int32(1), pm.astype(_I32))
-        owed_bit = jnp.where(jnp.where(resumed, owed_res, owed_site), bit, 0)
-        owed = jnp.zeros_like(base).at[pp].set(owed_bit.astype(base.dtype))
+        owed = jnp.zeros_like(base)
+        for b in range(fmt.B):
+            pb, mb = party(fmt, b), state.active[b]
+            # The paused U-turn's resumed pass finds every fallen pursuer by ``ts_pursued``.
+            felled = (fire & (pursuer == b) & p_fell & ~bonded_ko) | (
+                resumed & (((pursued >> b) & 1) != 0) & (state.hp[pb, mb] == 0)
+            )
+            bit = jnp.left_shift(jnp.int32(1), mb.astype(_I32))
+            owed = owed.at[pb].set((owed[pb] | jnp.where(felled, bit, 0)).astype(base.dtype))
         state = _pay_all(tables, _with_alive(pre, _alive_mask(pre) & ~owed), state)
+        owed_all = owed_c | owed
         # moveStatusFlags & SUPER_EFFECTIVE: the U-turn chase's Pursuit overwrites the paused
         # hit's (lib.c:3359); the tail (MODE_PURSUIT, a later MODE_RESUME) reads it (SF2 (i)). A
         # switch's Pursuit has no tail.
-        state = state._replace(ts_se=jnp.where(ap, p_se, state.ts_se).astype(state.ts_se.dtype))
+        state = state._replace(
+            ts_se=jnp.where(ap & fire, p_se, state.ts_se).astype(state.ts_se.dtype)
+        )
         # subscript_pursuit.s:100, :115: the KO of the switcher runs ``fieldConditionsMask -=
         # faintedMon`` (SUB_TO_ZERO, battle_script.c:3282-3287), which the engine cannot hold:
         # ``acid_rain`` records the operand and the state is refused (docs/kaizo FCM.md). The
@@ -3388,8 +3444,17 @@ def _execute_actions(
         # loops over every battler (battle_script.c:6884-6935), so several may chase one switch.
         pursued = jnp.where(fire, pursued | jnp.left_shift(jnp.int32(1), pursuer), pursued)
         fired = fired | fire
+        # The chain goes on while the switcher lives and another battler can pursue (:79-82); the
+        # pass then keeps the post-Pursuit state, its position and phase.
+        moved_after = moved | ((battlers == pursuer) & fire)
+        again = (
+            fire
+            & (_active_hp(fmt, state, side) > 0)
+            & next_pursuer(tables, state, side, acts, choices, moved_after)[0]
+        )
+        after_pursuit = state
         # BtlCmd_TryPursuit's powerMul = 20 (battle_script.c:6928) stands at U-turn's list.
-        pick_mul = jnp.where(ap, PURSUIT_POWER_MUL, pick_mul)
+        pick_mul = jnp.where(ap & fire, PURSUIT_POWER_MUL, pick_mul)
         # The faints handled so far: the action's faint check and payout start here.
         base = jnp.where(resumed, base, _alive_mask(state))
         # The foe's Protect this turn (turnFlags.protecting): only a first actor's succeeds.
@@ -3416,7 +3481,6 @@ def _execute_actions(
             taken,
             phase,
             base,
-            pursuer,
             claw=claw,
             pursuit_sync=pursuit_sync,
             enduring=enduring,
@@ -3445,7 +3509,7 @@ def _execute_actions(
         acted = _stale_known_item(state, acted, (jnp.arange(fmt.B) == side) & ran & fight)
         # The events of an action are its start's (a U-turn's head) or its resume's; the pass
         # after the Pursuit adds none of its own.
-        keep = ~skip & ~ap
+        keep = ~skip & ~ap & ~again
         # Only a FIGHT that ran reached FightCommand's moveCur (bcp.c:1898).
         own = {**own, "move_cur": jnp.where(ran, own["move_cur"], 0)}
         read, shown = put((read, shown), side, own, keep)
@@ -3478,27 +3542,29 @@ def _execute_actions(
             [(side_of(b) == 0) & ~over[b] & (real[b] < MOVE_ACTIONS) for b in range(fmt.B)]
         )
         pending = (side_of(side) == 1) & jnp.any(to_come)
-        done = _pay_all(tables, _with_alive(acted, base | owed), done, pending, real[0])
-        state = _where(stop, acted, done)
+        done = _pay_all(tables, _with_alive(acted, base | owed_all), done, pending, real[0])
+        state = _where(again, after_pursuit, _where(stop, acted, done))
         # moveEffectsData.quickClaw / .custapBerry (SF2 (k)): the acting battler's BeforeMove
         # cleared its own (subscript_check_quick_claw.s:22-28; not a pursuer's or a resumed tail),
         # a battler that switched in or is fainted lost them (battle_lib.c:2100-2104, :2185-2188);
         # a Trick Room's MoveEnd re-sort sets them again where a FIGHT pair is alive (bcp.c:3991).
-        gone = (jnp.arange(fmt.B) == side) & ctl["started"] & ~skip
+        gone = (jnp.arange(fmt.B) == side) & ctl["started"] & ~skip & ~again
         gone = gone | (state.active != active0)
         entered = entered | (state.active != active0)
         gone = gone | jnp.stack(
             [state.hp[party(fmt, b), state.active[b]] <= 0 for b in range(fmt.B)]
         )
         claw_set, custap_set = resort_claw_flags(tables, state, real, outcome.quick_claw)
-        resort = ran & ctl["trick_room"] & (state.over == 0) & ~stop
+        resort = ran & ctl["trick_room"] & (state.over == 0) & ~stop & ~again
         claw = (claw & ~gone) | (resort & claw_set)
         custap = (custap & ~gone) | (resort & custap_set)
-        position = jnp.where(stop, position, position + 1)
-        phase = jnp.where(ctl["pursue"], _PURSUIT, _START).astype(_I32)
+        position = jnp.where(stop | again, position, position + 1)
+        phase = jnp.where(again, phase, jnp.where(ctl["pursue"], _PURSUIT, _START)).astype(_I32)
         sync = (
-            jnp.where(ctl["pursue"], ctl["sync_flag"], sync[0]),
-            jnp.where(ctl["pursue"], ctl["sync_sem"], sync[1]).astype(_I32),
+            jnp.where(again, pursuit_sync[0], jnp.where(ctl["pursue"], ctl["sync_flag"], sync[0])),
+            jnp.where(
+                again, pursuit_sync[1], jnp.where(ctl["pursue"], ctl["sync_sem"], sync[1])
+            ).astype(_I32),
         )
         return (
             state,
@@ -3514,6 +3580,7 @@ def _execute_actions(
             custap,
             claw,
             entered,
+            jnp.where(again, owed_all, jnp.zeros_like(owed_all)),
         )
 
     start = (
@@ -3530,9 +3597,10 @@ def _execute_actions(
         custap0,
         claw0,
         jnp.zeros(fmt.B, bool),  # a slot filled this turn (a list's or a switch's newcomer)
+        jnp.zeros_like(_alive_mask(state)),  # the recoil-felled pursuers MoveEnd pays (``owed``)
     )
     out = jax.lax.while_loop(cond, body, start)
-    state, read, shown, position, _, pursued, base, pick_mul, fired, _, custap, claw, _ = out
+    state, read, shown, position, _, pursued, base, pick_mul, fired, _, custap, claw, _, _ = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
     alive_now = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])

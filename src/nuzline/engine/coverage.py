@@ -331,12 +331,6 @@ def _replacement_point(state: BattleState) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-9: Pursuit scan over four (pursuit_fires, _pursues); deleted by D3-9
-    TurnClause(
-        "D3-9",
-        "Pursuit scan over four battlers",
-        lambda t, s, a: _four(s) and _selects(t, s, a, {EffectId.PURSUIT}),
-    ),
     # D3-10: pause and resume with the action's defender (to_come over arange(2));
     # deleted by D3-10
     TurnClause(

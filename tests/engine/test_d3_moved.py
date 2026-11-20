@@ -186,3 +186,26 @@ def test_roar_into_slot_three_clears_its_quick_claw_flag(tables, names):
     kept = _set_item(kept, 3, lum)
     ctl, _ = _forced_play(tables, kept, [0, 0, 0, 0], (0, 2, 1, 3), (1, 0, 3, 0))
     assert int(ctl.item[1, 1]) == lum
+
+
+def test_a_pursuer_keeps_its_quick_claw_flag_so_knock_off_fails(tables, names):
+    """Fact C, the Pursuit half (owed by D3-6): battler 1's activated Quick Claw, battler 1 pursues
+    battler 0's switch (no BeforeMove, script.c:6931, so the flag stays); battler 2's Knock Off on
+    battler 1 then fails. Control: battler 1 acts at its own turn first (BeforeMove clears the
+    flag) and the Knock Off takes the item."""
+    from tests.engine.d2_states import four, with_moves
+    from tests.engine.test_d3_action_loop import _set_item
+
+    claw = names.item("Quick Claw")
+    s = four(tables, names, bench=3)
+    s = with_moves(s, names, 0, ["Swords Dance"])
+    s = with_moves(s, names, 1, ["Pursuit"])
+    s = with_moves(s, names, 2, ["Knock Off"])
+    s = with_moves(s, names, 3, ["Swords Dance"])
+    s = _set_item(s, 1, claw)
+    s = s._replace(claw_flag=s.claw_flag.at[1].set(1))
+    switch = 4 + 2
+    out, _ = _four_play(tables, s, [switch, 0, 0, 0], (0, 2, 1, 3), (0, 0, 1, 0))
+    assert int(out.item[1, 0]) == claw  # the flag stood: Knock Off failed
+    ctl, _ = _four_play(tables, s, [0, 0, 0, 0], (1, 0, 2, 3), (0, 2, 1, 0))
+    assert int(ctl.item[1, 0]) == 0  # BeforeMove cleared it: knocked off
