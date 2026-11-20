@@ -2761,8 +2761,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     else the fresh Roar newcomer's (``InitBattleMon`` resets the stages, battle_lib.c:97-101; a
     dragged battler does not act, so only a foe's bounded gains and 2 for the rest reach it): five
     values unless those reach +6. A fourth eat needs a foe's Fling of a Starf Berry
-    (lib:6110-6127) on top, which is unsupported (``coverage.ITEM_MOVING_EFFECTS``), as are Thief /
-    Covet and Trick / Switcheroo, the other item givers; an eat past the third reads the queue's
+    (lib:6110-6127) on top, which is unsupported (no ``EffectId``: ``Support.NONE`` in
+    ``coverage.IMPLEMENTED_EFFECTS``), as are Thief / Covet and Trick / Switcheroo, the other
+    item givers; an eat past the third reads the queue's
     last entry."""
     fmt = format_of(state)
     sides = jnp.arange(fmt.B)
@@ -2856,7 +2857,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # incoming one too: a switch acts before moves) or a berry it Recycles first
     # (effect_script_0184.s:5-7, BtlCmd_TryRecycle battle_script.c:9000-9013). Knock Off and a
     # foe's own eaten berry only remove it (an over-read); Thief / Covet, Trick / Switcheroo and
-    # Fling are unsupported effects (``coverage.ITEM_MOVING_EFFECTS``); a foe's U-turn / Baton
+    # Fling are unsupported effects (no ``EffectId``: ``coverage.IMPLEMENTED_EFFECTS`` gives
+    # ``Support.NONE``); a foe's U-turn / Baton
     # Pass newcomer is read by the resumed call (``pivot_battler``); in singles only d itself
     # could Roar the foe's side, and d is Plucking.
     keeps = jnp.asarray(

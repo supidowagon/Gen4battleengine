@@ -913,7 +913,7 @@ def pluck_berry(
     max_hp = state.max_hp[row, user].astype(_I32)
     blocked = jnp.asarray(foe_custap) & (item != 0)
     eaten = jnp.asarray(cond) & ~blocked & jnp.isin(effect, jnp.asarray(PLUCKABLE, effect.dtype))
-    # :5839-5844: an eater with Klutz (Battler_Ability) or MOVE_EFFECT_EMBARGO gets scriptTemp 0:
+    # :5839-5845: an eater with Klutz (Battler_Ability) or MOVE_EFFECT_EMBARGO gets scriptTemp 0:
     # the berry is eaten with no effect and the pluck flag stays set (B13-31).
     numb = (battler_ability(state, side, user) == AbilityId.KLUTZ) | (state.embargo[side] != 0)
     on = eaten & ~numb

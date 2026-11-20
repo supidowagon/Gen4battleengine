@@ -568,7 +568,7 @@ def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "move, foe_item, full, second",
+    "move, foe_item, second",
     [
         ("Bug Bite", "Grip Claw", False),
         ("Pluck", "Micle Berry", False),
