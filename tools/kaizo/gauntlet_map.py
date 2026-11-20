@@ -923,12 +923,20 @@ WAYWARD_MIRA = 4  # object local id of the partner at (72, 13)
 WAYWARD_PAIRS = ((383, 443), (380, 458), (450, 496), (459, 460), (454, 455))
 WAYWARD_EXIT_ROW = 4  # coord script of row 47 (0x4091 == 1): scr 318 entry 4, the fight 749+750
 WAYWARD_BACK_ROW = 5  # coord script of row 48 (0x4091 == 0): scr 318 entry 5, warps back to start
+# coord script of (85,8)-(85,10) (0x4091 == 0): scr 318 entry 6 @277 asks "Ignore the cry for
+# help?"; yes @385-431 Warp 350 (310,608) (the walk-out), no @299 walks the player 2 west.
+WAYWARD_WALKOUT = 6
+# Every coord script of the header takes the player: a fight, a warp back, or the walk-out.
+WAYWARD_TAKES = (WAYWARD_EXIT_ROW, WAYWARD_BACK_ROW, WAYWARD_WALKOUT)
 WAYWARD_LAST = (749, 750)
 
 
 def _wayward_walker(maps, joined: bool) -> Walker:
     """The walk with the partner following (she neither blocks nor sees; 0x4091 = 1) or still
-    standing at (72, 13) as an obstacle (0x4091 = 0)."""
+    standing at (72, 13) as an obstacle (0x4091 = 0). Each coord runs by its var condition, as
+    the field does (``coord_matches``): a running coord of ``WAYWARD_TAKES`` takes the player,
+    so its tiles are not walked through; a coord whose var does not match is walked over; any
+    other running coord raises (not modelled)."""
 
     def ignore(header: int, obj: MapObject) -> bool:
         return joined and header == WAYWARD_HEADER and obj.local_id == WAYWARD_MIRA
@@ -936,8 +944,11 @@ def _wayward_walker(maps, joined: bool) -> Walker:
     def rule(header: int, coord: Coord, matches: bool | None) -> str | None:
         if header != WAYWARD_HEADER:
             return None
-        row = coord.script in (WAYWARD_EXIT_ROW, WAYWARD_BACK_ROW)
-        return "block" if matches and row else "pass"
+        if matches is None:
+            raise MapReadError(f"Wayward Cave: coord {coord.script} reads var {coord.var:#x}")
+        if not matches:
+            return "pass"
+        return "block" if coord.script in WAYWARD_TAKES else None
 
     return Walker(
         maps,
@@ -1000,8 +1011,12 @@ def wayward_facts(maps: RomMaps, scripts: ScriptReader) -> dict:
             without_partner(s.pos, done | set(pair), (*seq, pair))
 
     without_partner(WAYWARD_START, frozenset(), ())
-    if sorted(reached) != list(range(1, len(order) + 2)) or not all(reached.values()):
-        raise MapReadError(f"Wayward Cave: the partner is not reachable at every gap: {reached}")
+    # Without the partner the walk-out coord (0x4091 == 0) closes the start pocket: no pair is
+    # reached and her tile is, so the game makes her join before fight 1 and the walk-out
+    # never runs at a gap. A fight reached without her would make the join point a choice.
+    join_before = sorted(k for k, ok in reached.items() if ok)
+    if join_before != [1]:
+        raise MapReadError(f"Wayward Cave: the partner's join points are {reached}, not fight 1")
 
     # the split: a pair member with a talk tile outside both sight lines is fought alone
     orders = [[list(p) for p in order]]
@@ -1030,7 +1045,7 @@ def wayward_facts(maps: RomMaps, scripts: ScriptReader) -> dict:
     return {
         "orders": orders,
         "leave_gaps": [[] for _ in orders],
-        "partner": {"trainer": partner[0][1], "join_before": sorted(reached)},
+        "partner": {"trainer": partner[0][1], "join_before": join_before},
     }
 
 

@@ -1764,3 +1764,32 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/prep/test_gauntlet_start.py (friendship tiers 99/100/199/200, Luxury Ball, egg location against the label
   and not the header id, Soothe Bell rounding, clamp, Gym and E4 classes yes and regular no, Return and Frustration in both
   engines, `setup_specs`, cap sit-out cases). Not run locally (RAM below the 8000 MB rule): all of them, for the pod.
+
+- E3-B3-2 fix: Wayward Cave coord gate (`tools/kaizo/gauntlet_map.py`, `tools/kaizo/overrides.py`,
+  `data/kaizo/overrides.toml`, `src/nuzline/data/gauntlet.py`). Changes E3-B3-2.d and E3-B3-3 (a), (b), (e).
+  (a) Rule: each coord runs by its var condition (`Walker.coord_matches`). Header 284 has three coords, all on var 0x4091:
+  script 4 row (39..42,47) value 1 (749+750), script 5 row (39..42,48) value 0 (warp back to (84,9), scr 318 @232),
+  script 6 (85,8)-(85,10) value 0 (scr 318 entry 6 @277 "Ignore the cry for help?"; yes @399 `Warp 350 (310,608)`, no
+  @299 two steps west). `_wayward_walker` blocks a running coord of these three, walks over one whose var does not match,
+  and raises on any other running coord or an unknown var. GT-2 let every coord but rows 47/48 through.
+  (b) Fact: coord 6 is the only way east of the start pocket. Without Mira (0x4091 == 0) the walk from (84,9) reaches 76
+  tiles, her tile and no trainer. Talking to her sets 0x4091 = 1 (scr 318 entry 2 @152) and the partner (@165, @171
+  `SetHasPartner`). So `partner.join_before = [1]`: the game makes her join before fight 1. At every gap the partner is set:
+  no walk-out (coord 6 and row 48 do not run), Escape Rope and Dig refused (item_use_functions.c:943-945,
+  field_move_tasks.c:764), every pair a multi (encounter.c:733-734), heal after every win (encounter.c:197-199).
+  `leave_gaps = []` stays. The skip (walk out before fight 1) leaves the gauntlet unplayed; Spear Pillar's
+  521/527 format then follows flag 864 (scr 236 @1118-1122 -> @1411; overrides comment corrected from @1438).
+  (c) 459, 460 as two singles stays: with Mira joined and the coords applied, 459's talk tiles (34,28), (35,27) are
+  reached outside both sight lines, and 460 then spots the player at (35,29). Talking to 459 runs scr 1114 entry 1 @3873
+  `StartTrainerBattle 0x8004, 0`; `ScrCmd_StartTrainerBattle` (scrcmd_trainer.c:124-144) passes the partner id, but with
+  one enemy id `Encounter_NewVsTrainer` picks `BATTLE_TYPE_TRAINER` (encounter.c:738-739), and `Trainer_Encounter` ORs in
+  only trainer headers' `battleType` (trainer_data.c:50), which is 0 for 459, 460 and 612 (rom trdata byte 16). 460 by
+  sight: scr 1114 @4275 `StartTrainerBattle 0x8004, 0`, also a single. The partner heal still runs after each.
+  (d) Settings: `partner_from` is dropped (design v5.4): the join point is a game fact, not a choice. `Partner` holds one
+  join point (`joins`); `walkout_gaps(order)`, `check_swap_gap(facts, order, k)`; `GauntletSetup.joins`, `open_joins` and
+  the re-run partner rule are gone. `overrides.py` takes `partner.source` and refuses a `join_before` of more than one fight.
+  Table input changed: yes (`overrides.toml` Wayward partner); rebuild the Kaizo tables. `MANIFEST_VERSION` unchanged (same
+  shape).
+  Tests: tests/kaizo/test_gauntlet_map.py (synthetic: a var-gated coord on the only exit; an unknown running coord raises;
+  ROM: join_before [1], the walk-out coord and the 76-tile start pocket), tests/kaizo/test_overrides.py,
+  tests/kaizo/test_resolve.py, tests/data/test_gauntlet_settings.py. Not run locally (RAM below the 8000 MB rule).

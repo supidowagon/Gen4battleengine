@@ -770,6 +770,7 @@ def test_wayward_fights_and_facts_in_the_real_table(resolved_trainers):
     facts = resolved_trainers[443]["gauntlet_facts"]
     assert [len(o) for o in facts["orders"]] == [6, 7]
     assert facts["partner"]["trainer"] == 612
+    assert facts["partner"]["join_before"] == [1] and facts["leave_gaps"] == [[], []]
     assert resolved_trainers[870]["gauntlet"] == ["Elite Four + Champion", 870]
     for t in resolved_trainers.values():
         for order in (t["gauntlet_facts"] or {}).get("orders", ()):

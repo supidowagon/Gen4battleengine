@@ -166,12 +166,13 @@ def test_gauntlet_permutations_and_all(tmp_path):
 def test_gauntlet_leave_gaps_per_order_and_partner(tmp_path):
     facts = (
         "orders = [[[1], [2]], [[2], [1]]]\nleave_gaps = [[], [1]]\nescape = true\npc_gaps = []\n"
-        "heal_gaps = []\nlocked_gaps = []\npartner = { trainer = 9, join_before = [1, 2] }\n"
+        "heal_gaps = []\nlocked_gaps = []\n"
+        'partner = { trainer = 9, join_before = [2], source = "rom:header 1 events 3" }\n'
         'orders_source = "rom:header 1 events 2"\n'
     )
     f = load_overrides(write(tmp_path, gauntlet_text(facts=facts))).gauntlets[0].facts
     assert f.leave_gaps == ((), (1,)) and f.leave_gaps_of(((2,), (1,))) == (1,)
-    assert f.partner == Partner(9, (1, 2), "rom:header 1 events 2")
+    assert f.partner == Partner(9, (2,), "rom:header 1 events 3")
 
 
 @pytest.mark.parametrize(
@@ -189,6 +190,11 @@ def test_gauntlet_leave_gaps_per_order_and_partner(tmp_path):
             "locked_gaps = []",
             "locked_gaps = []\npartner = { trainer = 5, join_before = [3] }",
             "1..2",
+        ),
+        (
+            "locked_gaps = []",
+            "locked_gaps = []\npartner = { trainer = 5, join_before = [1, 2] }",
+            "one fight",
         ),
         ('"rom:header 1 events 2"', '"somewhere"', "orders_source"),
     ],

@@ -11,7 +11,10 @@ from tools.kaizo.gauntlet_map import (
     CLOCK_SIDE,
     CLOCK_STATES,
     FOUNTAIN_WIDTH,
+    WAYWARD_HEADER,
+    WAYWARD_PARTNER_VAR,
     WAYWARD_START,
+    WAYWARD_WALKOUT,
     Area,
     ChainSpec,
     Coord,
@@ -223,6 +226,32 @@ def test_a_pair_member_can_be_talked_to_outside_both_sight_lines():
     assert w.talk_tiles(Pos(1, 0, 2), 1, 11, {12}) == [(0, 0), (2, 0)]
 
 
+def test_a_var_gated_coord_closes_the_only_way_out():
+    # The Wayward walk-out: a coord that runs while the partner var is 0 sits on the only tile
+    # out of the start pocket. It takes the player (leave or step back), so alone the walk ends
+    # there; with the partner (var 1) it does not run and the trainer beyond is reached.
+    walkout = Coord(WAYWARD_WALKOUT, 3, 0, 1, 1, 0, WAYWARD_PARTNER_VAR)
+    maps = StaticMaps(
+        [area(WAYWARD_HEADER, ["........"], [trainer(383, 7, 0, WEST, 1)], (), [walkout])]
+    )
+    start = Pos(WAYWARD_HEADER, 0, 0)
+    alone = _wayward_walker(maps, False).walk(start)
+    assert alone.spot == {} and set(alone.seen) == {Pos(WAYWARD_HEADER, x, 0) for x in range(3)}
+    joined = _wayward_walker(maps, True).walk(start)
+    assert 383 in joined.spot and Pos(WAYWARD_HEADER, 3, 0) in joined.seen
+
+
+def test_an_unknown_running_wayward_coord_raises():
+    other = Coord(9, 3, 0, 1, 1, 0, WAYWARD_PARTNER_VAR)
+    maps = StaticMaps([area(WAYWARD_HEADER, ["......"], coords=[other])])
+    with pytest.raises(MapReadError, match="not modelled"):
+        _wayward_walker(maps, False).walk(Pos(WAYWARD_HEADER, 0, 0))
+    assert (
+        Pos(WAYWARD_HEADER, 5, 0)
+        in _wayward_walker(maps, True).walk(Pos(WAYWARD_HEADER, 0, 0)).seen
+    )
+
+
 # --- the Eterna Gym tables -----------------------------------------------------------------------
 
 
@@ -409,7 +438,8 @@ def test_wayward_order_join_points_and_the_459_talk_tiles(rom_files, derived):
 
     d = derived["Wayward Cave"]
     assert [len(o) for o in d["orders"]] == [6, 7]
-    assert d["partner"] == {"trainer": 612, "join_before": [1, 2, 3, 4, 5, 6]}
+    assert d["partner"] == {"trainer": 612, "join_before": [1]}
+    assert d["leave_gaps"] == [[], []] and d["escape"] is True
     maps = RomMaps(rom_files)
     joined = _wayward_walker(maps, True)
     pos, done = WAYWARD_START, frozenset()
@@ -418,6 +448,21 @@ def test_wayward_order_join_points_and_the_459_talk_tiles(rom_files, derived):
         pos, done = nxt[pair].pos, done | set(pair)
     assert joined.talk_tiles(pos, 284, 459, done) == [(34, 28), (35, 27)]
     assert joined.talk_tiles(pos, 284, 460, done) == []
+
+
+@pytest.mark.slow
+def test_wayward_walkout_closes_the_start_without_the_partner(rom_files):
+    from tools.kaizo.gauntlet_map import DIRS, RomMaps
+
+    maps = RomMaps(rom_files)
+    (c,) = [c for c in maps.area(284).coords if c.script == WAYWARD_WALKOUT]
+    assert (c.x, c.z, c.width, c.length, c.var, c.value) == (85, 8, 1, 3, WAYWARD_PARTNER_VAR, 0)
+    alone = _wayward_walker(maps, False).walk(WAYWARD_START, ())
+    assert alone.spot == {}  # no trainer is reachable before the partner joins
+    assert any(Pos(284, 72 + dx, 13 + dz) in alone.seen for dx, dz in DIRS)  # her tile is
+    assert not any(p.x > 85 for p in alone.seen)
+    joined = _wayward_walker(maps, True).walk(WAYWARD_START, ())
+    assert any(p.x > 85 for p in joined.seen)  # with 0x4091 == 1 the coord does not run
 
 
 @pytest.mark.slow

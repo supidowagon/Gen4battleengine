@@ -1,12 +1,12 @@
-"""Gauntlet options, their precedence and the tracked game facts of a group (design v5.3
+"""Gauntlet options, their precedence and the tracked game facts of a group (design v5.4
 sections 1-3, 13).
 
 ``OPTIONS`` is the one registry of user options; the loader, CLI, coverage and report
 iterate it and nothing else lists option names. Every option carries the name of its
 transition in ``prep/gauntlet.py``; ``missing_transitions`` names the options without one
 and the loader refuses them. Every default is the strictest value, the one whose score is
-a lower bound under every user rule (design section 13): for ``order`` and
-``partner_from`` that is ``"worst"``. ``time`` has no default.
+a lower bound under every user rule (design section 13): for ``order`` that is
+``"worst"``. ``time`` has no default.
 
 ``GauntletFacts`` holds what the game fixes for one group (design section 2); user
 choices never appear in it. Fights are numbered 1..n along an order; gap k sits after the
@@ -120,14 +120,6 @@ def _move_sources(v) -> tuple[str, ...]:
     raise SettingsError(f"{v!r} is not one of {[list(s) for s in _MOVE_SOURCES]}")
 
 
-def _partner_from(v):
-    if v in ("worst", "best"):
-        return v
-    if isinstance(v, int) and not isinstance(v, bool) and v >= 1:
-        return v
-    raise SettingsError(f"{v!r} is not worst, best or a fight number")
-
-
 def _cap(v) -> int:
     if isinstance(v, bool) or not isinstance(v, int) or v < 0:
         raise SettingsError(f"{v!r} is not an integer >= 0")
@@ -185,16 +177,6 @@ _OPTION_LIST = (
     _run("shedinja", ("forbidden", "allowed")),
     _run("field_poison", ("worst_case", "ignore")),
     Option(
-        "partner_from",
-        CHOICE,
-        GAUNTLET,
-        False,
-        ("worst", "best"),
-        "worst",
-        _partner_from,
-        "partner_from",
-    ),
-    Option(
         "time",
         CHOICE,
         GAUNTLET,
@@ -235,11 +217,20 @@ Order = tuple[Fight, ...]
 
 @dataclass(frozen=True)
 class Partner:
-    """The Wayward Cave partner: ``trainer`` and the fights before which she can join."""
+    """The Wayward Cave partner: ``trainer`` and ``join_before``, the one fight before which
+    the game makes her join (a one-item tuple; no user choice)."""
 
     trainer: int
     join_before: tuple[int, ...]
     source: str
+
+    def __post_init__(self):
+        if len(self.join_before) != 1:
+            raise ValueError(f"partner {self.trainer}: join_before {self.join_before} is not one")
+
+    @property
+    def joins(self) -> int:
+        return self.join_before[0]
 
 
 @dataclass(frozen=True)
@@ -334,18 +325,15 @@ class GauntletFacts:
     def leave_gaps_of(self, order: Order) -> tuple[int, ...]:
         return self.leave_gaps[self._index(order)]
 
-    def walkout_gaps(self, order: Order, partner_from: int | None) -> tuple[int, ...]:
+    def walkout_gaps(self, order: Order) -> tuple[int, ...]:
         """Gaps where the player can leave the map: ``leave_gaps`` of the order plus every
         gap where ``escape`` holds and no partner is set (design section 3). The partner
-        who joins before fight J is set at gaps J and later (gap k is after fight k); with
-        ``partner_from`` None she is never set. A group without a partner fact takes
-        ``partner_from`` None."""
-        if self.partner is None and partner_from is not None:
-            raise ValueError(f"{self.name} has no partner")
+        who joins before fight J is set at gaps J and later (gap k is after fight k)."""
         gaps = set(self.leave_gaps_of(order))
         if self.escape:
+            joins = None if self.partner is None else self.partner.joins
             for k in range(1, self.n_fights(order)):
-                if partner_from is None or k < partner_from:
+                if joins is None or k < joins:
                     gaps.add(k)
         return tuple(sorted(gaps))
 
@@ -389,15 +377,6 @@ def _check_layer(layer: Layer, facts: GauntletFacts, order: Order) -> None:
                 option.validate(value)
             except SettingsError as e:
                 raise SettingsError(f"{where}: {key}: {e}") from None
-    pf = layer.gauntlet.get("partner_from")
-    if pf is not None:
-        if facts.partner is None:
-            raise SettingsError(f"{where}: partner_from needs a group with a partner")
-        if pf not in ("worst", "best") and pf not in facts.partner.join_before:
-            raise SettingsError(
-                f"{where}: partner_from {pf} is not in join_before "
-                f"{list(facts.partner.join_before)}"
-            )
     n = facts.n_fights(order)
     for k, table in layer.gaps.items():
         if not 1 <= k <= n - 1:
@@ -445,8 +424,8 @@ def resolve(
     """Merge the layers per value: flag > rules file > local > default (a locked gap
     overrides all of them in ``Settings.at_gap``). A gap value overrides the group value
     whichever layer holds it; among layers the same precedence applies. Raises
-    ``SettingsError`` for an unknown key, an invalid value, a key in the wrong scope,
-    ``partner_from`` outside ``partner.join_before`` or a gap outside 1..n-1."""
+    ``SettingsError`` for an unknown key, an invalid value, a key in the wrong scope or a
+    gap outside 1..n-1."""
     facts._index(order)
     layers = [
         (origin, layer)
@@ -619,7 +598,7 @@ def _parse_rule_value(name: str, text: str) -> Any:
         return [int(i) for i in ids]
     if name == "move_sources":
         return text.split(",")
-    if name in ("bag_uses", "partner_from"):
+    if name == "bag_uses":
         return int(text) if _INT.fullmatch(text) else text
     return text
 
@@ -757,7 +736,7 @@ def _check_members(run: RunInput, save: Any, err: Callable[..., GauntletSettings
         raise err(f"{both[0].label} is in both --dead and --bench", key="--bench")
 
 
-# --- the open orders and join points -------------------------------------------------
+# --- the open orders -----------------------------------------------------------------
 
 
 def open_orders(
@@ -784,34 +763,18 @@ def open_orders(
     return tuple(kept)
 
 
-def open_joins(facts: GauntletFacts, partner_from: Any) -> tuple[int | None, ...]:
-    """The join points still open: ``(None,)`` for a group without a partner, the number
-    a setting fixes, else every ``partner.join_before``."""
-    if facts.partner is None:
-        return (None,)
-    if isinstance(partner_from, int):
-        return (partner_from,)
-    return facts.partner.join_before
-
-
-def _gap_allows(facts: GauntletFacts, order: Order, join: int | None, k: int, need: str) -> bool:
-    if k in facts.walkout_gaps(order, join):
+def _gap_allows(facts: GauntletFacts, order: Order, k: int, need: str) -> bool:
+    if k in facts.walkout_gaps(order):
         return True
     return k in (facts.heal_gaps if need == "heal" else facts.pc_gaps)
 
 
-def _map_refusal(
-    facts: GauntletFacts,
-    orders: Sequence[Order],
-    joins: Sequence[int | None],
-    k: int,
-    need: str,
-) -> str | None:
+def _map_refusal(facts: GauntletFacts, orders: Sequence[Order], k: int, need: str) -> str | None:
     """Why the map gives no ``need`` ("heal" or "pc") at gap k, else None. Where an order
-    or join point is open, a value is refused only when refused under every open order
-    and join point in which gap k exists."""
-    combos = [(o, j) for o in orders for j in joins if 1 <= k <= len(o) - 1]
-    if not combos or any(_gap_allows(facts, o, j, k, need) for o, j in combos):
+    is open, a value is refused only when refused under every open order in which gap k
+    exists."""
+    open_ = [o for o in orders if 1 <= k <= len(o) - 1]
+    if not open_ or any(_gap_allows(facts, o, k, need) for o in open_):
         return None
     what, listed, src = (
         ("a free full heal", facts.heal_gaps, facts.heal_gaps_source)
@@ -819,7 +782,7 @@ def _map_refusal(
         else ("a PC", facts.pc_gaps, facts.pc_gaps_source)
     )
     return (
-        f"the map gives {what} at gap {k} under no open order and join point "
+        f"the map gives {what} at gap {k} under no open order "
         f"(gaps {list(listed)}: {src}; walk-out gaps: {facts.leave_gaps_source}, "
         f"{facts.escape_source})"
     )
@@ -828,14 +791,13 @@ def _map_refusal(
 def check_swap_gap(
     facts: GauntletFacts,
     order: Order,
-    partner_from: int | None,
     k: int,
     *,
     origin: str = "swap plan",
 ) -> None:
     """A swap at gap k needs a PC or a walk-out there (design section 3): a
     ``GauntletSettingsError`` otherwise."""
-    why = _map_refusal(facts, (order,), (partner_from,), k, "pc")
+    why = _map_refusal(facts, (order,), k, "pc")
     if why is not None:
         raise GauntletSettingsError(
             f"a swap at gap {k}: {why}", key="swap", group=facts.name, origin=origin
@@ -848,14 +810,13 @@ def check_swap_gap(
 @dataclass(frozen=True)
 class GauntletSetup:
     """One group's resolved input: ``settings`` merged over the longest open order,
-    ``orders`` and ``joins`` still open (consumers take the minimum over them under
-    ``"worst"``), ``run`` the re-run inputs, ``sheet_fallback`` true when ``order =
-    "sheet"`` fell back to ``"worst"``."""
+    ``orders`` still open (consumers take the minimum over them under ``"worst"``), ``run``
+    the re-run inputs, ``sheet_fallback`` true when ``order = "sheet"`` fell back to
+    ``"worst"``."""
 
     facts: GauntletFacts
     settings: Settings
     orders: tuple[Order, ...]
-    joins: tuple[int | None, ...]
     run: RunInput
     sheet_fallback: bool = False
 
@@ -896,13 +857,12 @@ def resolve_settings(
                 raise err(f"no such gauntlet group {bad[0]!r}", key="gauntlet", origin=raw.source)
     layers = [(origin, raw.layer(group)) for origin, raw in raws if raw is not None]
 
-    for key in ("order", "partner_from"):
-        for _, layer in layers:
-            if key in layer.gauntlet:
-                try:
-                    OPTIONS[key].validate(layer.gauntlet[key])
-                except SettingsError as e:
-                    raise err(str(e), key=key, origin=layer.source) from None
+    for _, layer in layers:
+        if "order" in layer.gauntlet:
+            try:
+                OPTIONS["order"].validate(layer.gauntlet["order"])
+            except SettingsError as e:
+                raise err(str(e), key="order", origin=layer.source) from None
     for name, value, check in (
         ("--swaps-left", run.swaps_left, _count),
         ("--horizon", run.horizon, _cap),
@@ -914,20 +874,6 @@ def resolve_settings(
             except SettingsError as e:
                 raise err(str(e), key=name, origin=name) from None
 
-    # partner_from: only for a group with a partner, a number from its join_before
-    for _, layer in layers:
-        pf = layer.gauntlet.get("partner_from")
-        if pf is None:
-            continue
-        if facts.partner is None:
-            raise err("the group has no partner", key="partner_from", origin=layer.source)
-        if pf not in ("worst", "best") and pf not in facts.partner.join_before:
-            raise err(
-                f"{pf} is not in join_before {list(facts.partner.join_before)} "
-                f"({facts.partner.source})",
-                key="partner_from",
-                origin=layer.source,
-            )
     # order: a list names one of the group's orders (checked in every layer)
     all_orders = [facts.fight_ids(o) for o in facts.orders]
     for _, layer in layers:
@@ -942,16 +888,6 @@ def resolve_settings(
 
     found = _first(layers, GAUNTLET, "order")
     order_value = OPTIONS["order"].validate(found[0]) if found else OPTIONS["order"].default
-    pf_found = _first(layers, GAUNTLET, "partner_from")
-    pf_value = pf_found[0] if pf_found else OPTIONS["partner_from"].default
-    if facts.partner is not None and run.beaten and pf_value in ("worst", "best"):
-        raise err(
-            "a re-run (--beaten) in a group with a partner needs partner_from as the fight "
-            "number the partner joined before (the save's vars are not read); it is "
-            f"{pf_value!r}" + ("" if pf_found else " by default"),
-            key="partner_from",
-            origin=pf_found[2].source if pf_found else "default",
-        )
 
     orders = open_orders(facts, order_value, run.beaten, run.next_fight)
     if not orders:
@@ -967,7 +903,6 @@ def resolve_settings(
             key="--beaten",
             origin="--beaten",
         )
-    joins = open_joins(facts, pf_value)
     longest = max(orders, key=len)
 
     for _, layer in layers:
@@ -1010,8 +945,8 @@ def resolve_settings(
                     need = "pc"
                 else:
                     continue
-                if why := _map_refusal(facts, orders, joins, k, need):
+                if why := _map_refusal(facts, orders, k, need):
                     raise err(f"{value!r}: {why}", key=where, origin=layer.source)
 
     _check_members(run, save, err)
-    return GauntletSetup(facts, settings, orders, joins, run, sheet_fallback=order_value == "sheet")
+    return GauntletSetup(facts, settings, orders, run, sheet_fallback=order_value == "sheet")

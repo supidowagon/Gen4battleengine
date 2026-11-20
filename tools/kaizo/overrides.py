@@ -22,7 +22,8 @@ Tables (keys are ROM trainer ids unless said otherwise):
   order of the fights), ``leave_gaps`` (the gaps where the player can leave the map on foot: one
   list for every order, one list per order, or ``"all"``), ``escape`` (bool), ``pc_gaps``,
   ``heal_gaps``, ``locked_gaps`` (a list of gaps or ``"all"``) and, optional, ``partner``
-  (``trainer``, ``join_before``, ``source``). Gap k follows the k-th fight of an order. Each fact
+  (``trainer``, ``join_before``: the one fight before which the game makes the partner join,
+  as a one-item list; ``source``). Gap k follows the k-th fight of an order. Each fact
   has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
   read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
@@ -278,13 +279,14 @@ def _fact_source(entry: str, t: dict, key: str, default: str) -> str:
 def _partner(entry: str, p: object, n: int, default_source: str) -> Partner:
     if not isinstance(p, dict):
         raise OverridesError(f"{entry}: partner must be a table")
-    _keys(f"{entry} partner", p, ("trainer", "join_before"))
+    _keys(f"{entry} partner", p, ("trainer", "join_before", "source"))
     if not isinstance(p.get("trainer"), int) or isinstance(p.get("trainer"), bool):
         raise OverridesError(f"{entry}: partner.trainer must be an integer")
     join = _ints(entry, "partner.join_before", p.get("join_before"))
-    if not join or join != sorted(set(join)) or join[0] < 1 or join[-1] > n:
+    if len(join) != 1 or not 1 <= join[0] <= n:
         raise OverridesError(
-            f"{entry}: partner.join_before {join} is not an ascending list within 1..{n}"
+            f"{entry}: partner.join_before {join} is not one fight within 1..{n} (the game "
+            "fixes the join point)"
         )
     source = _source(f"{entry} partner", {"source": p.get("source", default_source)})
     return Partner(p["trainer"], tuple(join), source)
