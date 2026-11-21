@@ -1714,9 +1714,43 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   holder, with and without Thief known).
   Snapshot compare against the main capture: no layout change, no UPGRADES row, `--allow-new` empty. Expected
   divergence: `ts_qc` of an output state at a pause (pivot_battler or learn_site != 0), 1 -> 0 at a side with no
-  living Quick Claw holder in its party and none on its active (step, jitstep, the reference output), and
-  enumerate_turn's children of such a pausing turn, which merge (fewer children, summed probabilities). A saved
-  paused input's unread bit changes no output: nothing reads it.
+  living Quick Claw holder in its party and none on its active (step, jitstep, the reference output). The rest
+  parts (enumerate_turn) do not change: the exact law draws `quick_claw` only where it is true (enumerate.py
+  `outcome_laws`), so main's children already held 0 there. A saved paused input's unread bit changes no output:
+  nothing reads it.
+  Compare explained (fde6c6d3 against the main 81c47f2c capture; 3baff50b has the same src delta, the main 7698de58
+  merge adds only the game_constants EXEMPT row): 90 ok, 32 diverged, all E3-B2-31; ai, gen, rest, sample,
+  roark.trace and roark.rank identical; E3-B2-30, (b) and (c) diverge nothing (no input has a Quick Claw in
+  `recycle_item`, none knows effect 105 / 177). Cause: the pause stores only readable `ts_qc` bits, 1 -> 0 at a side
+  with no Quick Claw holder. Segment 0's outcome draws a free bit per battler (tests/strategies.py `any_outcome`
+  :2522, `quick_claw=_flag(sides)` :2543), and a segment 0 that pauses stores it. Each part's first diff is
+  `ts_qc` alone (`.ref_step` for step, `.jit_step` for jitstep); the rows were rebuilt through `ref_step` with
+  `_qc_readable` as built and forced true:
+
+  | parts (.step, .jitstep) | first diff | pause | outcome.quick_claw | dropped |
+  |---|---|---|---|---|
+  | 0-9 | s7 t1 ts_qc[0] | learn_site 3 | [1, 0] | b0 (Cubone 104) |
+  | 10-19 | s10 t2 ts_qc[1] | pivot 2 | [0, 1] | b1 (Electrike 309) |
+  | 40-49 | s49 t3 ts_qc[1] | learn_site 3 | [0, 1] | b1 (Clamperl 366) |
+  | 50-59 | s59 t3 ts_qc[0] | pivot 1 | [1, 0] | b0 (Venonat 48) |
+  | 70-79 | s70 t4 ts_qc[0] | learn_site 1 | [1, 1] | both |
+  | 80-89 | s81 t2 ts_qc[0] | pivot 1 | [1, 1] | both |
+  | 90-99 | s99 t1 ts_qc[0] | learn_site 3 | [1, 1] | both |
+  | 110-119 | s112 t1 ts_qc[1] | learn_site 3 | [0, 1] | b1 (Dialga 483) |
+  | 120-129 | s125 t2 ts_qc[1] | learn_site 1 | [0, 1] | b1 (Camerupt 323) |
+  | 130-139 | s137 t2 ts_qc[0] | learn_site 3 | [1, 0] | b0 (Shinx 403) |
+  | 140-149 | s141 t4 ts_qc[0] | learn_site 1 | [1, 0] | b0 (Shinx 403) |
+  | 150-159 | s154 t4 ts_qc[1] | pivot 2 | [1, 1] | b1 (Meowth 52); b0 kept (party slot 3 Prinplup 394, hp 12, holds one) |
+  | 160-169 | s167 t3 ts_qc[0] | learn_site 1 | [1, 1] | both |
+  | 170-179 | s170 t3 ts_qc[0] | pivot 1 | [1, 1] | both |
+  | 180-189 | s188 t3 ts_qc[1] | learn_site 1 | [0, 1] | b1 (Chansey 113) |
+  | 190-199 | s194 t1 ts_qc[0] | learn_site 3 | [1, 1] | both |
+
+  "both": neither side holds one; the first diff is index 0. Proof: throwaway 149f6df2 (from 3baff50b, never
+  merged) reverts only the three `ts_qc` write sites to main's raw draw; its closing compare ended `compare: ok`,
+  122 parts ok, 0 diverged. The 3baff50b compare log was never fetched: the cause rests on the fde6c6d3 log, the
+  throwaway's `ok` and claude/e3-nmw 871be9de's compare against the main 7698de58 capture, which diverges in the
+  same 32 parts.
   (b) Review of d9c68dfb. (1) Recycle: Fling ends in `RemoveItem BTLSCR_ATTACKER` (effect_script_0233.s:18), which
   stores the flung item, a Quick Claw included (flingPower 80, res/items/data/quick_claw.json:20), in
   `recycleItem[battler]` (battle_script.c:8978); `BtlCmd_TryRecycle` gives it back (:9000-9012, effect_script_0184.s:
@@ -1735,8 +1769,8 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   the own item, no; Pickup runs after the battle (`BtlCmd_GenerateEndOfBattleItem` :7781-7797), no. (2) Tag battles:
   only a side-1 attacker's steal or swap is blocked (:5102-5104, :6345-6346), so a side-0 battler can Thief or Trick
   its ally, another party in a tag battle. `elsewhere` (step, reference) and `other_claw` (enumerate) now count a
-  living holder in any party but b's own; singles is unchanged (the other party is the foe's). (3) Doubles item,
-  owner: the multi-battler milestone (split-by-split roadmap): a partner that learns Thief, Covet, Trick or
+  living holder in any party but b's own; singles is unchanged (the other party is the foe's). (3) Doubles gap,
+  owner: E2 (multi exp and learn, M5), reported 21 Nov; on no backlog yet: a partner that learns Thief, Covet, Trick or
   Switcheroo at a MoveEnd pause re-reads its slot for its pending action (STATE.md, mid-turn learn prompts;
   FightCommand :1889-1895), but the turn's law and the pause read the moves of the turn's start, so its bit can be
   dropped. Unreachable today: coverage refuses every format but singles and refuses a learnable move whose effect is
@@ -1758,6 +1792,25 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   (c) Review of 7c07c614: the brute force (`outcome_laws(loose=True)`) also draws every bit when any battler's
   `recycle_item` is a Quick Claw (`order.qc_recycle`), so it stays a superset of the exact law with no holder left
   (test_quick_claw.py::test_a_flung_quick_claw_recycle_turn_equals_the_bruteforce, slow, failed before the fix).
+- E3-B2-32 `effects.entry_hazards` returns `(state, stopped)`: `stopped` is MOVE_STATUS_NO_MORE_WORK of the Toxic
+  Spikes block (subscript_hazards_check.s:5-28; subscript_poison.s:5-10 -> :127, subscript_badly_poison.s:5-10 -> :140):
+  not Magic Guard, grounded, layers, not a Poison type (battle_script.c:7643-7647), and the plain Immunity or Leaf Guard
+  in sun without a weather lock (battle_script.c:9195-9206), tested before any status, type, substitute or Safeguard
+  test. Reference `_entry_hazards` returns the same bool. `step._send_out` returns the pair; Roar's drag
+  (`drag_stopped`) and `_act`'s list (`entry_stopped`) keep it for E2 D6-21 / D6-20; `replace`, `replace_round`,
+  `hooks.on_switch_in` and the reference `_switch`, `ref_replace`, `ref_replace_round` drop it. No behaviour change;
+  snapshot: no divergence. Tests: tests/engine/test_e3_nmw.py (the flag in both engines, Leaf Guard in sun, Immunity,
+  a burned Leaf Guard newcomer, controls without sun and under Cloud Nine).
+- E3-B2-33 Thunder Wave on a 0x chart (BattleControllerPlayer_CheckTypeChart, bcp.c:2350-2357: the only power-0 move
+  it takes; MOVE_STATUS_INEFFECTIVE, battle_lib.c:7551-7552; DID_NOT_HIT -> subscript_missed.s, LOOP_FAINTED,
+  bcp.c:3325-3328) has no AfterMoveEffects and NO_EFFECTS: `step` `tw_immune` (STATUS_FOE, `move_param[m, 1]`, chart 0
+  or `ground_immune`) ends `items_full`; reference `full = full or tw_immune`. Before: only the paralysis was blocked
+  (`play_hit` `type_ok`). The defender's conversion2 record is cleared (bcp.c:4531-4535), so its Conversion 2 fails; a
+  held Metronome's repeat count drops (battle_lib.c:6181-6197). noEffect (bcp.c:2367-2368) not modelled: its readers
+  need an Uproar / Thrash lock (bcp.c:1525, :1551). Snapshot: conv2 fields of a Thunder Waved Ground defender, its
+  later Conversion 2, and metronome_turns of a Metronome holder repeating Thunder Wave into Ground; item order within
+  the action only. Tests: tests/engine/test_e3_nmw.py (E1 sheet T3 and a landing control).
+  TABLE INPUT: yes (src/nuzline/engine and src/nuzline/reference changed).
 
 - E3-B2-34 Lone enemies on walking-partner maps are singles (sheet partnerfix/sheet.md; decomp 579d2d5c6; no move, no
   table array). Rule: every field-script battle goes through `ScrCmd_StartTrainerBattle`, which passes
