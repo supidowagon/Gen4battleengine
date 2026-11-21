@@ -2702,7 +2702,9 @@ def _use_move(
             jnp.where(first, info.super_effective & info.effective, se0),
             tr_ran | info.trick_room,
             loved,
-            jnp.where(going, knot_now, knot_failed),
+            # Only a hit that happens runs SetupLoop (``landed``; a disrupted Triple Kick hit too):
+            # the iterations past ``n_hits`` keep the last hit's flag.
+            jnp.where(landed | kick_miss, knot_now, knot_failed),
         )
 
     init = (
