@@ -94,6 +94,12 @@ For a timeout, a run without `WATCH_F`/`WATCH_D`, or a question the beacons do n
 2. `{"command":["bash","/work/<run>/bin/fetch.sh"],"timeoutSeconds":25}` prints a code. PC: `bash tools/ops/day/collect.sh <run> <code>` unpacks into `<scratch>/rent/out/<run>/results/`.
 3. Tests that need the ROM, saves, `.cache`, the PKCalc zip, the docs sheet or their extractions skip on the pod. A skip there is not a pass: run those tests locally, one process at a time (`CLAUDE.md`, "Where tests run").
 
+## Housekeeping (managing session)
+
+1. Pod disk: before each gate dispatch exec `{"command":["sh","-c","df -h /work"],"timeoutSeconds":25}` and delete finished run folders. Keep `_bin`, `_decomp`, `_jaxcache`, `_python`, `_uvcache`, the standing `main` capture and active runs. A failed run name is used up: resend under a new name.
+2. Stop a run: message the agent that owns it first ("superseded, do not resend"). Then kill on the pod by pid list: `ps -eo pid,args | grep -E '/work/<run>[/]' | awk '{print $1}' | xargs -r kill -9` (the pattern must not match the exec's own command line). Check that the new run's `runner.log` shows starts. Ten minutes after any dispatch check that the unit count moves.
+3. Spacing: pass `SPACING=4` in the exec-pod body's `env` at dispatch. To change a live run: on the pod `kill $(cat runner.pid)` (that pid only, never `pkill -P`), then `cd /work/<run> && SPACING=4 GATE_GB=.. MAXP=.. KILL_GB=.. setsid nohup bash /work/<run>/bin/runner.sh >> runner.log 2>&1 < /dev/null &` with the absolute script path (a relative path hides it from `pgrep -f`), and write the new pid to `runner.pid`. A restart ends the run's `notify.sh` beacon, so `wait.sh` returns a false "run over": tell the run's agent first; it polls `out/DONE` and collects by hand (Collect).
+
 ## Delete
 
 When nothing is queued and `status.sh` of the last run prints `DONE=y` (or shows a failed run as defined under Status) and exactly `other active runs: none` (any listed run, `(beacon)` included, or `pytest_outside_this_run` keeps the pod up), and the snapshot guard (Snapshot compare, step 8) prints `GUARD_END` with at most `FAILED` lines before it: collect every run, MCP `delete-pod`, confirm with `list-pods`, clear `POD_ID`, log the hours and cost. Never stop the pod instead: a stopped CPU pod loses `/work` and saves nothing.
