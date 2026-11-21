@@ -32,10 +32,12 @@ def test_longest_matching_entry_gives_the_weight(test_id, gb):
     assert w.id_weight(test_id, TABLE) == gb
 
 
-def test_unit_weight_is_its_heaviest_id_and_a_line_weight_replaces_the_table():
+def test_unit_weight_is_its_heaviest_id_and_a_line_weight_only_raises_it():
     ids = ["tests/search/test_x.py::test_small", "tests/search/test_x.py::test_big[0]"]
     assert w.unit_weight(ids, TABLE) == 90
-    assert w.unit_weight(ids, TABLE, 40) == 40
+    assert w.unit_weight(ids, TABLE, 40) == 90
+    assert w.unit_weight(ids, TABLE, 120) == 120
+    assert w.unit_weight(["tests/engine/test_q.py::test_a"], TABLE, 40) == 40
     assert w.unit_weight([], TABLE) == w.DEFAULT_GB
 
 

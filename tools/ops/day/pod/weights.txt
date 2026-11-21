@@ -4,7 +4,7 @@
 # max_rss_MB, MiB) times 1.048576 / 1000, rounded up. An entry matches an id equal to it or
 # starting with it plus "::", "[" or "/"; the longest matching entry gives an id's weight, the
 # largest id weight is the unit's. Ids no entry matches weigh 12 (docs/process.md section 5,
-# Chunking). A list line's own <GB>G field replaces this table for the units cut from it.
+# Chunking). A list line's own <GB>G field raises the units cut from it to at least <GB>.
 # A test measured inside a multi-id unit carries that unit's peak. "killed" = the unit was killed
 # at the memory limit (rc 137), so the peak is a lower bound.
 # Runs: _scratch/rent/out/<run>/results/agg.txt on the managing PC.

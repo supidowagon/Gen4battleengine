@@ -120,7 +120,7 @@ while :; do
     if [ "$plive" -lt "$MAXP" ] && { [ "$plive" -eq 0 ] || [ $((mem + pres + w)) -lt "$GATE_GB" ]; }; then
       sed -i 1d pending.txt
       setsid bash "$D/bin/unit.sh" "$u" < /dev/null > /dev/null 2>&1 &
-      echo "$!" > "run/$u"
+      echo "$!" > "run/.$u.tmp"; mv -f "run/.$u.tmp" "run/$u"   # other runners never read a half-written id
       echo "$(date +%s) start $u $f weight ${w} GB mem ${mem} GB reserve ${pres} GB pod units $((plive + 1))"
       sleep "$SPACING"; continue
     fi

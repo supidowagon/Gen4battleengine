@@ -10,8 +10,8 @@
 # exec-pod body before this script. Collection runs at most COLLECTP (default 4) jobs at once, each
 # started only while container memory is under GATE_GB (default 88, the runner's gate).
 # files.txt lines: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]"; A = no -m filter;
-# <GB>G = the expected peak of every unit cut from that line. Each unit's expected peak goes to
-# out/<unit>.w: the line's <GB>G, else bin/weights.py over bin/weights.txt; runner.sh gates on it.
+# <GB>G = a floor on the expected peak of every unit cut from that line. Each unit's expected peak
+# goes to out/<unit>.w: max(<GB>, bin/weights.py over bin/weights.txt); runner.sh gates on it.
 set -euxo pipefail
 export PATH="/root/.local/bin:/work/_bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 # meta.env holds the beacon codes: sourced with the trace off, so setup.log never shows them.

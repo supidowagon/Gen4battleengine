@@ -3,7 +3,8 @@
 weights.txt lines: "<entry> <GB> <cite...>"; "#" starts a comment. An entry matches a test id
 equal to it or starting with it plus "::", "[" or "/". An id's weight is the GB of its longest
 matching entry, else DEFAULT_GB; a unit's weight is the largest weight of its ids. A list
-line's weight (its "<GB>G" field) replaces the table for every unit cut from that line.
+line's weight (its "<GB>G" field) raises the weight of every unit cut from that line: such a
+unit weighs max(<GB>, its table weight); a line weight never lowers a measured peak.
 """
 
 from __future__ import annotations
@@ -38,9 +39,8 @@ def id_weight(test_id: str, table: list[tuple[str, int]]) -> int:
 
 
 def unit_weight(ids: list[str], table: list[tuple[str, int]], line_gb: int | None = None) -> int:
-    if line_gb is not None:
-        return line_gb
-    return max((id_weight(i, table) for i in ids), default=DEFAULT_GB)
+    table_gb = max((id_weight(i, table) for i in ids), default=DEFAULT_GB)
+    return table_gb if line_gb is None else max(line_gb, table_gb)
 
 
 def parse_line(line: str) -> tuple[str, int, str, int | None]:
