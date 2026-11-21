@@ -23,7 +23,9 @@ static argument); what varies between runs is its ``params``, any pytree of arra
 draws first (``root_state``), a pending learn-move prompt and opponent replacement settled
 (``learn.settle_learns``) and a pending player replacement resolved first (no turn), the
 same key splits per turn (``act`` gets the policy key ``k_policy``), and each turn's learns
-resolved before its replacements (``learn.resolve_learns``, as ``playout.finish_turn``).
+resolved before its replacements and again after them (``learn.resolve_learns``, as
+``playout.finish_turn``; the root's after its settle and passes), except at a finished battle,
+which keeps its learn work (ruling D8).
 Learn prompts are answered by ``learn.learn_policy`` (give the move up), not by the player:
 a level-up only fills an empty move slot, so a line's move slots stay valid. ``GREEDY`` is
 ``playout_policy`` and ``replacement_policy`` (``params`` and the replacement key
@@ -150,6 +152,10 @@ def _player_run(
     state, refused0 = _replace_while_needed(
         tables, state, player, params, learn_refused, SLOTS - 1, key, REPLACE_FOLD, layout
     )
+    # The settle's send and these passes pay for a newcomer the hazards faint (step.replace
+    # marks the work, no scan); TurnEnd answers it before the next turn (bcp.c:1844-1850), so
+    # before turn 1's decisions. A finished battle keeps it (ruling D8).
+    state = _select(state.over != 0, state, resolve_learns(tables, state))
 
     def cond(carry):
         s, _, turns, _, refused = carry
@@ -163,14 +169,15 @@ def _player_run(
         played, refused, ai_switched, power_mul = _play(
             tables, s, jnp.asarray(action, _I32), k_turn, layout
         )
-        # The turn's learn-move prompts before any replacement, as playout.finish_turn.
-        played = resolve_learns(tables, played)
+        # The turn's learn work before any replacement, as playout.finish_turn; a finished
+        # battle keeps its prompts here as after the passes (ruling D8).
+        played = _select(played.over != 0, played, resolve_learns(tables, played))
         played, sent_refused = send_replacements(tables, played, ai_switched, power_mul)
         played, pass_refused = _replace_while_needed(
             tables, played, player, params, sent_refused, SLOTS - 1, k_policy, 1, layout
         )
-        # A newcomer's hazard faint inside the replacement loop leaves its prompt (E3-B2-21), but
-        # not at a finished battle (ruling D8).
+        # A newcomer's hazard faint in send_replacements or the passes leaves its learn work
+        # (E3-B2-21), answered here unless the battle is over (ruling D8).
         played = _select(played.over != 0, played, resolve_learns(tables, played))
         refused = refused | pass_refused | act_refused
         s = _select(refused, s, played)
@@ -272,6 +279,8 @@ def _replay(
     reason, state = _passes_reason(tables, state, player, params, key, REPLACE_FOLD, layout)
     if reason:
         return reason, state, 0
+    if int(state.over) == 0:  # the root's hazard-faint work, as _player_run (D8: kept if over)
+        state = _resolve_jit(tables, state)
     for turns in range(max_turns):
         if int(state.over) != 0:
             return None, state, turns
@@ -286,7 +295,8 @@ def _replay(
             if reason is None and bool(act_refused):
                 reason = "the opponent's action distribution is refused"
             return reason or "the opponent's AI is refused", state, turns
-        played = _resolve_jit(tables, played)
+        if int(played.over) == 0:  # a finished battle keeps its prompts (D8), as the loop
+            played = _resolve_jit(tables, played)
         sent, sent_refused = send_replacements(tables, played, ai_switched, power_mul)
         if bool(sent_refused):
             reason = _send_reason(tables, played, ai_switched, power_mul)[0]
@@ -294,8 +304,8 @@ def _replay(
         reason, after = _passes_reason(tables, sent, player, params, k_policy, 1, layout)
         if reason:
             return reason, state, turns
-        # The loop's hazard-faint prompts (E3-B2-21), left at a finished battle (D8) as the loop
-        # leaves them (``_player_run``).
+        # The hazard-faint work of the send and the passes (E3-B2-21), left at a finished battle
+        # (D8) as the loop leaves it (``_player_run``).
         state = after if int(after.over) != 0 else _resolve_jit(tables, after)
     return None, state, max_turns
 

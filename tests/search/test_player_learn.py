@@ -28,7 +28,7 @@ from nuzline.search.line import LINE, empty_line
 from nuzline.search.player import GREEDY, Player, _player_run, player_playout
 from nuzline.search.playout import playout, playout_from_action, replacement_policy, root_state
 from tests.engine.helpers import drop_programs, roark_real_state
-from tests.engine.test_levelup import _base, _mon, _with
+from tests.engine.test_levelup import _base, _mon, _prinplup_state, _with
 from tests.search.test_learn import CRANIDOS, GEODUDE, ONIX, _window_c, _with_prompt
 
 # Slow: each test compiles or loads a whole-engine loop or turn program (about 8 GB resident
@@ -85,6 +85,16 @@ def _window_c_root(tables, names):
     return _with_prompt(tables, names, s)[0]
 
 
+def _bonsly_last(tables, names):
+    # test_learn.py::test_learn_work_of_a_battle_ending_entry_ko_stays: Prinplup KOs Geodude
+    # (L17, no move); Bonsly L40 (1 HP), the last foe, faints on Stealth Rock in the replacement
+    # pass and ends the battle: its payout's L18 work stays (D8, the loop's skipped second
+    # resolve and _replay's).
+    opp = [_mon(names, "Geodude", 12), _mon(names, "Bonsly", 40, current_hp=1)]
+    s = _prinplup_state(tables, names, opp=opp).replace_hp(1, 0, 1)
+    return s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
+
+
 def _same(got, want, root=""):
     for field in ("won", "player_faints", "turns", "refused", "ended", "hp_left", "pp_left"):
         assert float(getattr(got, field)) == float(getattr(want, field)), f"{root}: {field}"
@@ -93,13 +103,20 @@ def _same(got, want, root=""):
 
 TURNS = 8  # the free-policy runs' one turn count (playout, GREEDY, LINE)
 FIXED_TURNS = 5  # the fixed-action runs' one turn count (playout_from_action, FIXED)
-_ROOTS = (_level_up_turn, _pending_learn_root, _pending_learn_root_pursuit, _window_c_root)
+_ROOTS = (
+    _level_up_turn,
+    _pending_learn_root,
+    _pending_learn_root_pursuit,
+    _window_c_root,
+    _window_c,  # the hazard faint's work answered after the passes, the battle going on
+    _bonsly_last,  # the hazard faint ends the battle: the work stays (D8)
+)
 _KEYS = jax.random.split(jax.random.PRNGKey(5), 4)
 
 
 @pytest.fixture(scope="module")
 def roots(tables, names):
-    """``[(label, root, key, playout result)]`` over the four roots and four keys: the
+    """``[(label, root, key, playout result)]`` over the roots and four keys: the
     ``playout`` every player run is compared with, computed once for the module; its program
     is dropped before the players' compile (``drop_programs``)."""
     out = []
@@ -113,14 +130,16 @@ def roots(tables, names):
 
 
 def test_greedy_equals_playout_through_learns(tables, roots):
-    # The GREEDY run answers each turn's prompts (player.py: resolve_learns after the turn, before
-    # send_replacements, and again after the replacement passes) and the root's pending one. A
-    # prompt survives only from a newcomer's hazard faint in the passes at a finished battle, where
-    # the second resolve is skipped (D8, player.py:172-174). The result fields alone cannot see a
-    # skipped resolve (every move is given up anyway), so each run's final state is checked:
-    # (1) the host replay of the same run (player._replay, the same key splits) to its turn count
-    # equals it field by field, which ties the run to the replay; (2) a run that did not end holds
-    # no prompt; (3) a prompt at a finished battle is the final turn's: the replay one turn
+    # The GREEDY run answers each turn's learn work (player.py: resolve_learns after the turn,
+    # before send_replacements, and again after them and the replacement passes) and the root's
+    # (after its settle, whose send can leave a hazard faint's work, and its passes). Work
+    # survives only at a finished battle (D8): from the turn itself, from a newcomer's hazard
+    # faint in send_replacements or the passes, or from the root's settle and passes. The result
+    # fields alone cannot see a skipped resolve (every move is given up anyway), so each
+    # unrefused run's final state is checked: (1) the host replay of the same run
+    # (player._replay, the same key splits) to its turn count equals it field by field, which
+    # ties the run to the replay (every root has such a run); (2) a run that did not end holds
+    # no learn work; (3) work at a finished battle is the final turn's: the replay one turn
     # shorter holds none. The pending roots also pin the root's opponent replacement and its
     # carried powerMul (Cranidos at 0, Onix at 20): a run settling them otherwise plays a
     # different battle.
@@ -142,16 +161,14 @@ def test_greedy_equals_playout_through_learns(tables, roots):
         assert reason is None and n == turns, root
         for name, a, b in zip(out._fields, out, final, strict=True):
             assert np.array_equal(np.asarray(a), np.asarray(b)), f"{root}: replay {name}"
-        name = root.split(",")[0]
+        checks[root.split(",")[0]] += 1
         if not int(got.ended):
-            assert not bool(needs_learn(out)), f"{root}: a learn prompt was left pending"
-            checks[name] += 1
+            assert not bool(needs_learn(out)), f"{root}: learn work was left pending"
         elif bool(needs_learn(out)) and turns:  # turns 0: the root's settle ended the battle
             reason, before, n = player_module._replay(tables, s, GREEDY, (), k, turns - 1, VANILLA)
             assert reason is None and n == turns - 1 and int(before.over) == 0, root
-            assert not bool(needs_learn(before)), f"{root}: a prompt left before the final turn"
-            checks[name] += 1
-    assert all(checks.values()), f"roots with no learn check: {checks}"
+            assert not bool(needs_learn(before)), f"{root}: learn work left before the final turn"
+    assert all(checks.values()), f"roots with no unrefused run: {checks}"
 
 
 @pytest.mark.fullset

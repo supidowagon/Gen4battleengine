@@ -1619,13 +1619,14 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
 - E3-B2-30 Main's red tiers on 8c5cd83e (branch claude/e3-slowfix):
   (a) 6c3063e0, tests only: test_trace_to_state's oracle resumes a MoveEnd learn pause (bcp.c:3968) with the same
   actions and outcome, as trace_to_state._apply_turn; test_stage_b_learn's paused root asserts `learn_site`
-  LEARN_MOVE_END (step scans and pauses). test_player_learn (reviews of 8c5cd83e..5639b245 and ..609693aa): each
-  unrefused GREEDY run's final state equals the host replay `player._replay` to its turn count field by field; a run
-  that did not end holds no prompt; a prompt at a finished battle (a newcomer's hazard faint in the replacement
-  passes, where the loop skips its second resolve, D8, player.py:172-174) is the final turn's: the replay one turn
-  shorter holds none; every root reaches one of these learn checks. `_replay` now leaves that prompt at a finished
-  battle as the loop does (it answered it); its callers: `refusal_reason` (reads only the reason; cli.py),
-  tests/search/test_player.py (compares its whole end state with the loop) and test_player_learn.
+  LEARN_MOVE_END (step scans and pauses). test_player_learn (reviews of 8c5cd83e..5639b245, ..609693aa and
+  ..184489c6): each unrefused GREEDY run's final state equals the host replay `player._replay` to its turn count field
+  by field, and every root has such a run; a run that did not end holds no learn work; work at a finished battle is
+  the final turn's: the replay one turn shorter holds none. Roots added: test_learn.py's `_window_c` (a hazard faint
+  in the passes, the battle goes on: the resolve after the passes) and the Bonsly-last state (the hazard faint ends
+  the battle: the work stays). `_replay` leaves that work at a finished battle as the loop does; its callers:
+  `refusal_reason` (reads only the reason; cli.py), tests/search/test_player.py (compares its whole end state with
+  the loop) and test_player_learn.
   (b) 3d6b5fb5, tests only: Tackle's flags carry MIRROR_MOVE (res/moves/tackle/data.json:21-27, E3-B2-2).
   (c) 5639b245, src/nuzline/ai: `AiContext.flag`, `first_cmp`, `inject` hold the script's flag bit (thinkingBitShift,
   trainer_ai.c:307, read at :488; loop :297-309), not its index in the layout's list, so ALLIN keeps the fight's own context (test_allin); the
@@ -1642,6 +1643,18 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   `ai_action_distribution` on the VANILLA layout (per_slot_sites False, ai/layout.py:184-186): no speed tracking;
   the roark parts use Kaizo Roark (trainer 246), whose six members hold no Gyro Ball (move 360) and four moves
   each: no speed tracking and no skipped slot. No snapshot part records AiContext fields.
+  (d) src/nuzline/search (review of ..184489c6), D8 made uniform: learn work survives only at a finished battle, from
+  the turn itself, from a newcomer's hazard faint in `send_replacements` or the passes, or from the root's settle send
+  and passes; the resolve before the replacements now keeps it there too (player.py, `playout.finish_turn`,
+  `_replay`), as the one after them did, for the growth plan (gauntlet-design.md G1, step 0). The game answers every
+  payout's prompt inside GetExpTask (battle_script.c:10003-10197, `taskData` NULL at :10197), which WaitGetExpTask
+  waits for (:2340-2348; subscript_grant_exp.s StartGetExpTask/WaitGetExpTask) before CheckBattleOver
+  (bcp.c:1845-1847). The root's hazard-faint work (`step.replace` marks it, no scan) is now resolved after the root's
+  settle and passes (`player._player_run`, `playout._resolve_pending`, both replays): TurnEnd answers it before the
+  next turn (bcp.c:1844-1856); left, turn 1's policy read the unscanned move list and its first MoveEnd `learn_prompt`
+  (step.py:3792) scanned it mid-turn.
+  Snapshot: a part that records a final state at a battle-ending payout with learn work can now differ in
+  `learn_level` / `learn_cursor` (formerly given up); `observe` reads both as 0 once `over` is set (observe.py:347-348).
 - E3-B2-31 The slow tier's red test_damage_classes_equal_bruteforce_generated on 8c5cd83e (branch claude/e3-slowfix):
   a pause (MoveEnd learn, bcp.c:3968; LEARN_FIELD / LEARN_MON; an E2 party list) stored every side's raw speedRand
   bit in `ts_qc`. The brute force draws `quick_claw` for every side when any Quick Claw exists; the exact law only for
