@@ -57,6 +57,7 @@ from nuzline.engine.ids import (
     CANNOT_ENCORE_MOVES,
     GRAVITY_TURNS,
     INVOKER_MOVES,
+    ITEM_TRANSFER_EFFECTS,
     ME_FIRST_BANNED_MOVES,
     METRONOME_DRAW,
     METRONOME_HEAVY,
@@ -816,6 +817,27 @@ def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
     return jnp.stack(
         [_holds(tables, state, side, ItemId.QUICK_CLAW) & (qc[side] != 0) for side in range(fmt.B)]
     )
+
+
+def qc_transfer(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool``: a held item can move onto another battler in this turn: a party Pokemon (either
+    side) knows a move of an ``ITEM_TRANSFER_EFFECTS`` battle effect. Thief / Covet
+    (``BtlCmd_TryStealItem``, battle_script.c:5093-5126) and Trick / Switcheroo
+    (``BtlCmd_TrySwapItems``, :6336-6360) move it between the attacker and the defender, both on
+    the field. Nothing else gives a battler an item in a turn: Knock Off removes one (:6620-6628),
+    ``BtlCmd_RemoveItem`` consumes the battler's own (:8972-8979, Fling and the eaten berries),
+    Recycle gives the attacker back its own consumed item (:9000-9012), Pickup's item comes after
+    the battle (``BtlCmd_GenerateEndOfBattleItem``, :7781). A battler uses those moves only out of
+    a moveset: Metronome and Assist never call them (``sCannotMetronomeMoves``, battle_lib.c:
+    7152-7179, read by ``Move_CanBeMetronomed`` :7194-7210 in ``BtlCmd_Metronome``,
+    battle_script.c:4554, and ``BtlCmd_TryAssist``, :6430); Mirror Move, Me First, Mimic, Sleep
+    Talk and Transform take a move a Pokemon of the battle knows."""
+    effect = tables.move_ai_effect[state.moves]  # [P, 6, 4]
+    known = (state.moves != 0) & (state.species[..., None] != 0)
+    hit = jnp.zeros(effect.shape, bool)
+    for e in ITEM_TRANSFER_EFFECTS:
+        hit = hit | (effect == e)
+    return jnp.any(known & hit)
 
 
 # BattleSystem_CompareBattlerSpeed's results (include/constants/battle.h:163-165).

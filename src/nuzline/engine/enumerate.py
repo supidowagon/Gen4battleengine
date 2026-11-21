@@ -126,7 +126,10 @@ of the turn:
   active). Relevant when side ``s`` has a living Quick Claw holder anywhere in its party:
   the active, the Pokemon it switches in, or a bench Pokemon that a replacement can send in
   (sound, not tight: the replacement needs the active to faint this turn, which is not
-  judged here). The turn's own order reads ``BattleState.qc_roll`` (``action_order``), so
+  judged here), or, while a Pokemon of the battle knows an item-transfer move
+  (``order.qc_transfer``: Thief, Covet, Trick, Switcheroo), a living holder in an opposing
+  party, whose Quick Claw that move can put on ``s``'s battler in this turn (a pause keeps
+  the bit by the same rule, ``step.qc_readable``). The turn's own order reads ``BattleState.qc_roll`` (``action_order``), so
   every order-conditioned read above already sees Quick Claw through ``Reads.first``.
 * ``flinch_item[s, i]``: King's Rock / Razor Fang's roll on hit ``i`` of ``s``'s damaging
   move with ``MOVE_FLAG_TRIGGERS_KINGS_ROCK`` while ``s``'s active Pokemon holds one
@@ -304,6 +307,7 @@ from nuzline.engine.order import (
     mirror_call,
     mirror_copied,
     move_effects,
+    qc_transfer,
     sealed_state,
     selected_move,
     takeover_possible,
@@ -2477,14 +2481,16 @@ def outcome_laws(
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
 
-    # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party.
+    # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party, or,
+    # when an item-transfer move is known (order.qc_transfer), in an opposing party: Thief or
+    # Trick can put it on the battler in this turn (step.qc_readable).
     claw = tables.item_effect[state.item] == ItemId.QUICK_CLAW
-    quick_claw = (
-        live
-        & jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)[
-            party(fmt, jnp.arange(fmt.B))
-        ]
-    )
+    living_claw = jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)
+    battlers = jnp.arange(fmt.B)
+    own_claw = living_claw[party(fmt, battlers)]
+    sides_b = side_of(battlers)
+    foe_claw = jnp.any((sides_b[:, None] != sides_b[None, :]) & own_claw[None, :], axis=1)
+    quick_claw = live & (own_claw | (qc_transfer(tables, state) & foe_claw))
     # Acupressure (B12-9): BtlCmd_BoostRandomStatBy2 reads the count of its defender's stats
     # below +6 at the move (battle_script.c:8943-8950; effects.defender_side, the user in
     # singles). Those stages can change before then only by the foe's action (a move, or a

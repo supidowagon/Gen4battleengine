@@ -29,7 +29,17 @@ from nuzline.search.player import GREEDY, Player, _player_run, player_playout
 from nuzline.search.playout import playout, playout_from_action, replacement_policy, root_state
 from tests.engine.helpers import drop_programs, roark_real_state
 from tests.engine.test_levelup import _base, _mon, _prinplup_state, _with
-from tests.search.test_learn import CRANIDOS, GEODUDE, ONIX, _window_c, _with_prompt
+from tests.search.test_learn import (
+    CRANIDOS,
+    GEODUDE,
+    HAZARD_SETTLED_MOVES,
+    ONIX,
+    _moves,
+    _window_c,
+    _with_prompt,
+    hazard_settle_root,
+    perish_root,
+)
 
 # Slow: each test compiles or loads a whole-engine loop or turn program (about 8 GB resident
 # at its compile, 10 GB at a load from the persistent cache, minutes either way), past the
@@ -179,6 +189,41 @@ def test_greedy_equals_playout_through_learns(tables, roots):
             assert not bool(needs_learn(before)), f"{root}: learn work left before the final turn"
     assert all(checks.values()), f"roots with no unrefused run: {checks}"
     assert all(sites.values()), f"hazard-faint sites not reached: {sites}"
+
+
+def test_the_root_settle_answers_a_hazard_faints_learn_work(tables, names):
+    # The root's settle sends Bonsly into Stealth Rock (test_learn.py::hazard_settle_root); the
+    # resolve after the root's passes (player._player_run, player._replay) scans its L19 work
+    # before turn 1, so turn 1's policy reads BubbleBeam in the empty slot. Without it the work
+    # stays unscanned (learn_level 19, slot 3 empty) until turn 1's MoveEnd. The no-turn
+    # program (max_turns 0) of test_a_pending_learn_root_sends_with_the_carried_mul.
+    s = hazard_settle_root(tables, names)
+    key = jax.random.PRNGKey(0)
+    got, out = _run(tables, s, GREEDY, (), key, 0)
+    reason, replayed, n = player_module._replay(tables, s, GREEDY, (), key, 0, VANILLA)
+    assert reason is None and n == 0 and int(got.refused) == 0
+    for state in (out, replayed):
+        assert int(state.over) == 0 and int(state.hp[1, 1]) == 0
+        assert int(state.level[0, 0]) == 19
+        assert np.asarray(state.learn_level).tolist() == [0] * 6
+        assert _moves(names, state, 0) == HAZARD_SETTLED_MOVES
+
+
+def test_a_battle_ending_turn_end_payout_keeps_its_learn_work(tables, names):
+    # Turn 1's Perish Song faint ends the battle at TurnEnd's payout, which step leaves unscanned
+    # (test_learn.py::perish_root): the loop's first resolve after the turn (player._player_run)
+    # and the replay's (player._replay) keep it (ruling D8), so no move fills the empty slots.
+    s = perish_root(tables, names)
+    key = jax.random.PRNGKey(0)
+    got, out = _run(tables, s, GREEDY, (), key, TURNS)
+    assert int(got.ended) == 1 and int(got.won) == 1 and int(got.turns) == 1
+    drop_programs()  # the loop program before the replay's turn programs (module docstring)
+    reason, replayed, n = player_module._replay(tables, s, GREEDY, (), key, TURNS, VANILLA)
+    assert reason is None and n == 1
+    for state in (out, replayed):
+        assert int(state.over) == 1 and int(state.level[0, 0]) == 13
+        assert int(state.learn_level[0]) == 13
+        assert _moves(names, state, 0) == ["Growl", "", "", ""]
 
 
 @pytest.mark.fullset

@@ -1653,8 +1653,21 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   settle and passes (`player._player_run`, `playout._resolve_pending`, both replays): TurnEnd answers it before the
   next turn (bcp.c:1844-1856); left, turn 1's policy read the unscanned move list and its first MoveEnd `learn_prompt`
   (step.py:3792) scanned it mid-turn.
-  Snapshot: a part that records a final state at a battle-ending payout with learn work can now differ in
-  `learn_level` / `learn_cursor` (formerly given up); `observe` reads both as 0 once `over` is set (observe.py:347-348).
+  Snapshot: `resolve_learns` runs `advance_learns`, which also auto-learns into an empty move slot at the move's base
+  PP (`_advance_once`, levelup.py:383-392). (1) Work kept at a finished battle: the final `learn_level` / `learn_cursor` (formerly given
+  up) and, where the kept scan would have filled an empty slot, the final `moves` / `pp` and the result's `pp_left`
+  (`playout._resources_left`, playout.py:186-193); `observe` reads `learn_*` as 0 once `over` is set (observe.py:347-348). (2) The root's
+  hazard-faint work resolved before turn 1: turn 1's policy reads the filled slot, so every result field (`won`,
+  `turns`, `hp_left`, `pp_left`, `deaths`, ...) of a playout or player run from such a root can differ.
+  (e) Review of 8bbcf05c..40c318aa, tests pinning (d): test_learn.py `hazard_settle_root` (the root's settle sends
+  Bonsly into Stealth Rock, Prinplup L19 with an empty slot: `_resolve_pending`, the player loop at 0 turns and
+  `_replay` at 0 turns all hold no learn work and BubbleBeam in slot 3) and `perish_root` (turn 1's Perish Song faint,
+  bcp.c:1791-1820, ends the battle at TurnEnd's payout, bcp.c:1846, which `step` leaves unscanned: `_future_sight`
+  ends in `pay_exp`, step.py:4878, and `step_events` runs no `learn_prompt` after it; `finish_turn`, the loop at
+  TURNS and `_replay` keep learn_level 13 and no auto-learn). So the guard at the first resolve after a turn
+  (player.py:174, playout.py:456, `_replay`) is reached and kept: the other payouts inside `step` scan
+  (`learn_prompt`, step.py:3793, :4691, :4761), TurnEnd's does not, and D8 keeps a finished battle's work
+  uniformly. Both tests assert fixed values; reverting either resolve change fails one of them.
 - E3-B2-31 The slow tier's red test_damage_classes_equal_bruteforce_generated on 8c5cd83e (branch claude/e3-slowfix):
   a pause (MoveEnd learn, bcp.c:3968; LEARN_FIELD / LEARN_MON; an E2 party list) stored every side's raw speedRand
   bit in `ts_qc`. The brute force draws `quick_claw` for every side when any Quick Claw exists; the exact law only for
@@ -1664,13 +1677,27 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   each action (bcp.c:888; the turn end's monSpeedOrder), the Trick Room re-sort after MoveEnd (bcp.c:3990-3992,
   SortMonActionOrder battle_lib.c:7275-7302), the next turn's readers (`step.qc_kept`). It reads speedRand only for
   a battler holding HOLD_EFFECT_SOMETIMES_PRIORITY (battle_lib.c:1278-1279, :1345), a fainted one only against
-  another fainted one (:1205-1211). No battler gains a held item in the modelled engine (Thief / Covet, Trick /
-  Switcheroo, effects 105 / 177, have no EffectId: unsupported; Knock Off and Fling only remove), so a pause keeps
-  side b's bit only when b's party has a living Quick Claw holder or b's active holds one, fainted or not (as
-  order.quick_claw_active reads it; raw item, as qc_kept), else 0. Both were living holders at the turn's start,
-  where the exact law draws the bit. `step.qc_readable` at both JAX stops (`_execute_actions`, `step_events`),
-  `reference._qc_readable` in `_write_scratch`; generic over B.
-  Test: tests/engine/test_e3_batch2.py::test_a_learn_pause_stores_only_the_readable_speed_rand_bits.
+  another fainted one (:1205-1211). A battler gains a held item in a turn only by Thief / Covet (BtlCmd_TryStealItem, battle_script.c:5093-5126)
+  and Trick / Switcheroo (BtlCmd_TrySwapItems, :6336-6360), between the attacker and the defender on the field;
+  Knock Off removes (:6620-6628), RemoveItem consumes the own item (:8972-8979), Recycle restores the attacker's own
+  (:9000-9012), Pickup runs after the battle (:7781). Metronome and Assist never call them (sCannotMetronomeMoves,
+  battle_lib.c:7152-7179; Move_CanBeMetronomed :7194-7210, read at battle_script.c:4554 and :6430); every other
+  caller takes a move a party Pokemon knows. So a pause keeps battler b's bit when b's party has a living Quick
+  Claw holder, b's active holds one, fainted or not (as order.quick_claw_active reads it; raw item, as qc_kept), or
+  a Pokemon of the battle knows an ITEM_TRANSFER_EFFECTS move (`order.qc_transfer`, decomp effects 105 / 177 by
+  `move_ai_effect`) and an opposing party has a living holder (a bench holder can still enter by a pivot's party
+  list before the Thief); an AI attacker's steal or swap fails (battle_script.c:5102-5104, :6345-6346), kept anyway
+  (over-keeping only splits states). Else 0. The exact law (`enumerate`'s `quick_claw`) draws b's bit by the same
+  rule at the turn's start, where every such holder was living; the pause rule is within it, so the exact
+  enumeration still equals the brute force. `step.qc_readable` at both JAX stops (`_execute_actions`,
+  `step_events`), `reference._qc_readable` in `_write_scratch`; generic over B (`side_of`). Today coverage refuses
+  effects 105 / 177 (no EffectId), so `qc_transfer` is false in every accepted state.
+  Tests: tests/engine/test_e3_batch2.py::test_a_learn_pause_stores_only_the_readable_speed_rand_bits (five cases,
+  the foe's bench holder with and without Thief known), its brute force twin (slow)
+  ::test_a_learn_pause_quick_claw_law_equals_the_bruteforce,
+  ::test_a_turn_end_learn_pause_stores_only_the_readable_speed_rand_bits (LEARN_FIELD, LEARN_MON, both engines),
+  ::test_a_party_list_pause_keeps_the_bit_of_a_side_that_can_take_the_foes_quick_claw (the foe's living active
+  holder, with and without Thief known).
   Snapshot compare against the main capture: no layout change, no UPGRADES row, `--allow-new` empty. Expected
   divergence: `ts_qc` of an output state at a pause (pivot_battler or learn_site != 0), 1 -> 0 at a side with no
   living Quick Claw holder in its party and none on its active (step, jitstep, the reference output), and
