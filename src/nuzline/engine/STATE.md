@@ -542,10 +542,13 @@ three structs has a row.
   formats, ruling D2-33: at B = 2 the other side's non-Ghost Curse reads it, lib.c:1714-1717),
   `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
   itself and Assurance reads, B13-17; `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
-  battler (`hooks.intimidate` reads it, F-4), and `ts_loved`: `selfTurnFlags.statusFlags & SELF_TURN_FLAG_INFATUATED` per
-  battler slot (H-4: set by a landed Attract, Cute Charm or Destiny Knot, subscript_infatuate.s:29; read by the resumed
-  tail's Destiny Knot step with the newcomer's item, battle_lib.c:4546-4566), the two self turn flags kept across a U-turn's list
-  (`BattleContext_Init` clears the rest at the action's end, bcp.c:3998); `ts_grudge`: per battler, the battler fainted in the paused
+  battler (`hooks.intimidate` reads it, F-4), and `ts_loved`: the paused action's `selfTurnFlags.statusFlags &
+  SELF_TURN_FLAG_INFATUATED` per battler slot (H-4: set by a landed Cute Charm, subscript_infatuate.s:29). The
+  attacker's slot is cleared before the list (subscript_attack_then_switch_out.s:70, battle_script.c:9623-9624), so
+  the resumed tail sees only a pursuer flagged by the U-turn user's Cute Charm during the Pursuit (:54,
+  subscript_pursuit.s:40); a user felled by the Pursuit ends the script at :55 and its MODE_PURSUIT tail reads its
+  own flag. Both feed the tail's Destiny Knot step (battle_lib.c:4546-4566). The two self turn flags kept across a
+  U-turn's list (`BattleContext_Init` clears the rest at the action's end, bcp.c:3998); `ts_grudge`: per battler, the battler fainted in the paused
   action holding `MOVE_EFFECT_GRUDGE`: its `battleStatusMask` SYSCTL_MON_FAINTED bit and `moveEffectsMask` survive the
   U-turn's list (battle_script.c:1770-1771, :1799; battle_lib.c:2166), so the resumed action's LOOP_FAINTED runs
   TryGrudge on the newcomer (review b2 #5); `focusItemActivated` and

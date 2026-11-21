@@ -903,8 +903,13 @@ def test_destiny_knot_reflects_a_cute_charm_after_the_holders_hit(tables, names)
 def test_a_cute_charm_that_cannot_land_raises_no_flag_and_the_engines_agree(tables, names):
     """battle_lib.c:4344-4346 moves sideEffectMon to the attacker before TryAttract, which fails
     here (both female): no INFATUATED flag (subscript_infatuate.s:29 is on the landing path), so the
-    knot stays quiet; the moved sideEffectMon is read by Synchronize (:4506-4511), engine ==
-    reference with a Synchronize attacker holding its own burn."""
+    knot stays quiet. The moved sideEffectMon itself is read only by the Synchronize step, and only
+    with SYSCTL_TRY_SYNCHRONIZE_STATUS set (battle_lib.c:4499-4511), which a status landing in this
+    action sets (``effects.sync_landed``). Singles cannot tell the move apart: the defender's
+    ability is Cute Charm, so the one status that can land before the step is a secondary on the
+    defender, which then cannot take the attacker's passed status (``can_have_status``); with no
+    status landed the flag is clear. Engine == reference with a Synchronize attacker holding its
+    own burn (the step's attacker branch runs on the moved value and lands nothing)."""
     s = _charmed(tables, names)
     s = s._replace(gender=s.gender.at[1, 0].set(1))
     s = s._replace(
@@ -915,10 +920,36 @@ def test_a_cute_charm_that_cannot_land_raises_no_flag_and_the_engines_agree(tabl
     assert np.asarray(out.infatuated).tolist() == [0, 0]
 
 
-def test_the_resumed_u_turn_reads_the_newcomers_knot(tables, names):
-    """The INFATUATED flag stays through U-turn's party list (battle_lib.c:2013-2015 clears it
-    at the action's end) and the resumed AfterMoveEffects reads the newcomer's item
-    (battle_lib.c:4546-4566): the Cute Charm foe falls in love with the newcomer's knot."""
+def test_a_knot_whose_reflection_fails_marks_the_move_failed(tables, names):
+    """subscript_infatuate.s:6-7, :108-110: the reflected TryAttract fails on a receiver already in
+    love (battle_script.c:5733) and sets MOVE_STATUS_FAILED (type HELD_ITEM, not ABILITY), one of
+    MOVE_STATUS_NO_EFFECTS (moves.h:85). UpdateFlagsWhenHit then clears the defender's Conversion 2
+    record (bcp.c:4511-4512, :4528-4531) and VerifyMetronomeCount takes the Metronome item's count
+    back (battle_lib.c:6183-6192). The foe, already in love with the holder, uses Attract."""
+    attract = names.move("Attract")
+    s = _lovers(tables, names, ("Attract",), player_item="Destiny Knot")
+    s = s._replace(item=s.item.at[1, 0].set(names.item("Metronome")))
+    s = s._replace(
+        metronome_move=s.metronome_move.at[1].set(attract),
+        metronome_turns=s.metronome_turns.at[1].set(2),
+    )
+    acts = A("Leer", "Attract", s, names)
+    ok = assert_matches_reference(tables, s, acts, empty_outcome())
+    assert int(ok.infatuated[0]) != 0 and int(ok.infatuated[1]) != 0
+    assert int(ok.conv2_move[0]) == attract
+    loving = s._replace(infatuated=s.infatuated.at[1].set(1))
+    out = assert_matches_reference(tables, loving, acts, empty_outcome())
+    assert int(out.infatuated[0]) != 0
+    assert int(out.conv2_move[0]) == 0 and int(out.conv2_battler[0]) == 0
+    assert int(out.metronome_turns[1]) == int(ok.metronome_turns[1]) - 1
+
+
+def test_the_resumed_u_turn_never_reads_its_users_cute_charm_flag(tables, names):
+    """subscript_attack_then_switch_out.s:7 runs the foe's Cute Charm on the U-turn user
+    (sideEffectMon = attacker, battle_lib.c:4351; subscript_infatuate.s:29 flags it), then :70 sets
+    BTLVAR_ATTACKER_SELF_TURN_STATUS_FLAGS (selfTurnFlags[attacker], battle_script.c:9623-9624) to
+    SELF_TURN_FLAG_CLEAR before the list: the resumed AfterMoveEffects finds the newcomer's knot
+    with no INFATUATED flag (battle_lib.c:4553-4556), so the foe stays out of love, no reveal."""
     from dataclasses import replace
 
     from nuzline.engine.state import make_state
@@ -932,11 +963,85 @@ def test_the_resumed_u_turn_reads_the_newcomers_knot(tables, names):
     s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.CUTE_CHARM))
     s = s._replace(stats=s.stats.at[0, 0, Stat.SPE - 1].set(500))
     paused = assert_matches_reference(tables, s, (0, 0), _procs(opp=1))
-    assert int(paused.pivot_battler) == 1 and np.asarray(paused.ts_loved).tolist() == [1, 0]
+    assert int(paused.pivot_battler) == 1 and np.asarray(paused.ts_loved).tolist() == [0, 0]
     out = _resume(tables, paused, 1, _procs(opp=1))
-    assert int(out.active[0]) == 1 and int(out.infatuated[1]) != 0
-    assert np.asarray(out.ts_loved).tolist() == [0, 0]
-    assert int(out.ai_item_known[1]) == n.item("Destiny Knot")
+    assert int(out.active[0]) == 1 and int(out.infatuated[1]) == 0
+    assert int(out.ai_item_known[1]) == 0
+
+
+def _pursued_u_turn(tables, names, bench="Geodude", **start):
+    """The foe's female Cute Charm Scyther U-turns (``bench`` behind it, female) into the player's
+    slower male Houndour holding a Destiny Knot, which pursues."""
+    from dataclasses import replace
+
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon
+
+    n = names
+    me = replace(_mon(n, "Houndour", ["Pursuit"], 30, item="Destiny Knot"), gender=0)
+    lead = replace(_mon(n, "Scyther", ["U-turn"], 50), gender=1)
+    back = replace(_mon(n, bench, ["Tackle"], 30), gender=1)
+    s = make_state(tables, [me], [lead, back], **start)
+    return s._replace(ability=s.ability.at[1, 0].set(AbilityId.CUTE_CHARM))
+
+
+@pytest.mark.parametrize(
+    "case, reflects",
+    [
+        ("plain", True),
+        # The list's CheckToxicSpikes makes the newcomer the sideEffectMon (battle_script.c:
+        # 7638-7641) before AfterMoveEffects: the defender branch's test fails.
+        ("toxic spikes", False),
+        # A Castform newcomer in rain: TriggerFormChange (battle_lib.c:6314-6340) returns first
+        # (:4536-4544), before the switch-in effects (bcp.c:3672): the knot is lost.
+        ("castform", False),
+    ],
+)
+def test_the_pursuers_cute_charm_flag_reaches_the_resumed_knot(tables, names, case, reflects):
+    """subscript_attack_then_switch_out.s:54 calls subscript_pursuit.s before the :70 clear,
+    which is the attacker's slot only: the Pursuit's contact runs the U-turn user's Cute Charm on
+    the pursuer (:40; SYSCTL_UTURN_ACTIVE is set only at :68), making it the sideEffectMon
+    (battle_lib.c:4351) and flagging it (subscript_infatuate.s:29). The resumed AfterMoveEffects
+    then takes the knot's defender branch (battle_lib.c:4546-4552): the newcomer falls in love with
+    the pursuer and the AI learns the item (subscript_infatuate.s:37-41)."""
+    from tests.engine.test_pivot import _resume
+
+    if case == "castform":
+        s = _pursued_u_turn(tables, names, "Castform", start_condition=Weather.RAIN)
+    else:
+        s = _pursued_u_turn(tables, names)
+    if case == "toxic spikes":
+        s = s._replace(toxic_spikes=s.toxic_spikes.at[1].set(1))
+    paused = assert_matches_reference(tables, s, (0, 0), _procs(opp=1))
+    assert int(paused.pivot_battler) == 2 and int(paused.ts_pursued) == 1
+    assert np.asarray(paused.ts_loved).tolist() == [1, 0] and int(paused.infatuated[0]) != 0
+    out = _resume(tables, paused, 1, _procs(opp=1))
+    assert int(out.active[1]) == 1
+    assert (int(out.infatuated[1]) != 0) is reflects
+    knot = names.item("Destiny Knot")
+    assert int(out.ai_item_known[0]) == (knot if reflects else 0)
+
+
+def test_a_u_turn_user_felled_by_the_pursuit_keeps_its_flag_for_its_knot(tables, names):
+    """subscript_attack_then_switch_out.s:55 ends the script when the Pursuit felled the user,
+    before the :70 clear: AfterMoveEffects reads the user's INFATUATED flag from the foe's Cute
+    Charm (:7) and its knot (battle_lib.c:4553-4559) infatuates the pursuer, the message tagging
+    the item (subscript_infatuate.s:37-41). The love toward the fainted holder is cleared again
+    at its faint (battle_lib.c:2175-2176); the reveal stays."""
+    from dataclasses import replace
+
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon
+
+    n = names
+    lead = replace(_mon(n, "Scyther", ["U-turn"], 30, item="Destiny Knot"), gender=1)
+    bench = replace(_mon(n, "Geodude", ["Tackle"], 30), gender=1)
+    foe = replace(_mon(n, "Houndour", ["Pursuit"], 40), gender=0)
+    s = make_state(tables, [lead, bench], [foe]).replace_hp(0, 0, 1)
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.CUTE_CHARM))
+    out = assert_matches_reference(tables, s, (0, 0), _procs(opp=1))
+    assert int(out.hp[0, 0]) == 0
+    assert int(out.ai_item_known[0]) == n.item("Destiny Knot")
 
 
 def test_the_h4_items_have_their_own_ids_and_the_inert_ones_one_shared_set(tables, names):

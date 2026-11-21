@@ -3053,6 +3053,7 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
     # :7 an Iron Ball grounds it too (CheckItemHoldEffect), G-56.
     if _gravity_on(s) or _iron_ball(tables, s, mon) or not airborne:
         if sd_sc.toxic_spikes:
+            turn.sync_mon = side  # BtlCmd_CheckToxicSpikes (script.c:7638-7641), H-4
             if Type.POISON in mon.types:
                 sd_sc.toxic_spikes = 0
             else:
@@ -5365,6 +5366,9 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         _restore_status_on_switch(turn.tables, s, side)
         turn.pivot_dealt = dealt
         turn.grudge_kept = kept
+        # :70 clears the attacker's selfTurnFlags.statusFlags before the list (battle_script.c:
+        # 9623-9624): its Cute Charm INFATUATED flag never reaches the resumed tail (H-4).
+        turn.loved[side] = False
         raise _Pause  # the resumed pass finds the owed pursuer again (``_resume``)
     turn.payout.extend(owed)
     # No switch: AfterMoveMessage goes on with the extra flinch (the pursuer, if any, has moved).
@@ -8655,7 +8659,7 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
             s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)]
         )
         _put(s, "ts_grudge", turn.grudge_kept)
-        # SELF_TURN_FLAG_INFATUATED stays through the list too (H-4).
+        # SELF_TURN_FLAG_INFATUATED stays through the list too, the attacker's cleared at :70 (H-4).
         _put(s, "ts_loved", [int(f) for f in turn.loved[: _fmt(s).B]])
         fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
         for k, pt in enumerate(s.parties):
@@ -8831,9 +8835,12 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     out = _active(s, side)
     if out.status == Status.TOXIC:
         out.status_counter = 0
-    # sideEffectMon is the attacker's slot through the list: Cute Charm moved it there (battle_lib.c:
-    # 4344-4346), the newcomer's hazard status lands on it (H-4; the engine's ``sync_sem``).
-    turn.sync_mon = side
+    # sideEffectMon at the list (H-4; the engine's ``sync_sem``): the pursuer whose INFATUATED flag
+    # the paused action kept, which the U-turn user's Cute Charm trigger made the sideEffectMon
+    # (subscript_pursuit.s:40, battle_lib.c:4351); else read only by the Synchronize step, whose
+    # flag only the list's Toxic Spikes poison sets, and CheckToxicSpikes makes the newcomer the
+    # sideEffectMon (``_entry_hazards``).
+    turn.sync_mon = next((b for b in range(_fmt(s).B) if turn.loved[b]), side)
     _enter(turn, s, side, actions[side] - MOVE_ACTIONS, baton)
     _send_out_exp(s, side)  # :18
     _entry_hazards(turn, s, side)  # :22

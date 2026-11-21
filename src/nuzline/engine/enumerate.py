@@ -1335,7 +1335,8 @@ INPUT_NEUTRAL_ITEMS = (
     # E1 Batch H, H-4. Quick Powder (a speed factor of the order fixed at the turn's start; a
     # Transform changes only the end-of-turn order, kept by ``xform_used``), Full Incense (as
     # Lagging Tail), Shed Shell (only the choice set), and the items with no in-battle hold
-    # effect (``ids.NO_IN_BATTLE_HOLD_EFFECT_ITEMS``: the payout's raw reads, the escape paths).
+    # effect (``ids.NO_IN_BATTLE_HOLD_EFFECT_ITEMS``: the escape paths, and the exp payout, which
+    # changes state through the raw party item and reads no damage or chance input).
     ItemId.QUICK_POWDER,
     ItemId.FULL_INCENSE,
     ItemId.SHED_SHELL,

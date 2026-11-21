@@ -179,6 +179,7 @@ from nuzline.engine.effects import (
     targets_foe_side,
     targets_user,
     thaw_target,
+    toxic_spikes_reached,
     try_grudge,
     unlock_move,
     weather_fails,
@@ -941,6 +942,7 @@ def _use_move(
     entry_status=None,
     pursuit_sync=None,
     foe_enduring=False,
+    entry_toxic=False,
     speed_order=None,
     mover=None,
     waiting=None,
@@ -984,6 +986,8 @@ def _use_move(
     (``MODE_PURSUIT``): ``(flag, sideEffectMon, held)`` after the Pursuit, the head's
     Synchronize flag and side-effect battler as the Pursuit's contact ability left them and each
     battler's ``BattleMon.status`` before the Pursuit's faint check (``_execute_actions``).
+    ``entry_toxic`` (``MODE_RESUME``): the list's ``CheckToxicSpikes`` found layers for the
+    newcomer, which made it the sideEffectMon (battle_script.c:7638-7641; H-4).
 
     Returns ``(state, own, foe, ctl)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -2274,9 +2278,22 @@ def _use_move(
         & (state.hp[party(fmt, target_side), state.active[target_side]] > 0)
     )
     p_sem = jnp.where(pursuit_rock, target_side, jnp.asarray(p_sem, _I32))
+    # The resumed tail's sideEffectMon (H-4): where the Pursuit's contact hit ran the U-turn
+    # user's Cute Charm, its trigger made the pursuer the sideEffectMon (battle_lib.c:4351) and
+    # the landing flagged it (subscript_infatuate.s:29: the one slot ``ts_loved`` keeps through
+    # the list); the list's CheckToxicSpikes then makes the newcomer the sideEffectMon whenever
+    # layers reach it (subscript_hazards_check.s:5-14, battle_script.c:7638-7641), and King's
+    # Rock the defender (bcp.c:4643). Without the pursuer's flag only the Synchronize step reads
+    # the value, and its flag is set only by the list's Toxic Spikes poison: the newcomer.
+    kept_loved = state_in.ts_loved != 0
+    pre_list = jnp.where(
+        jnp.any(kept_loved) & ~jnp.asarray(entry_toxic, bool),
+        jnp.argmax(kept_loved).astype(_I32),
+        side,
+    )
     sync_sem = jnp.where(
         resumed,
-        jnp.where(resumed_rock, target_side, side),
+        jnp.where(resumed_rock, target_side, pre_list),
         jnp.where(after_pursuit, p_sem, target_side),
     ).astype(_I32)
     sync_flag = jnp.where(
@@ -2289,8 +2306,9 @@ def _use_move(
         held = jnp.where(resumed, held.at[side].set(jnp.asarray(entry_status, _I32)), held)
     if p_held is not None:
         held = jnp.where(after_pursuit, jnp.asarray(p_held, _I32), held)
-    # The paused action's SELF_TURN_FLAG_INFATUATED of each slot (``ts_loved``) reaches the resumed
-    # tail's Destiny Knot step, which reads the newcomer's item (H-4); a Roar's drag has none.
+    # The paused action's SELF_TURN_FLAG_INFATUATED of each slot (``ts_loved``) reaches the tail's
+    # Destiny Knot step (H-4): on the resumed tail only the pursuer's (the user's own was cleared
+    # at :70), on a Pursuit-felled user's tail the user's too; a Roar's drag has none.
     tail_loved = (state_in.ts_loved != 0) & (resumed | tail_fainted)
     state, _, _, _, tail_knot_failed = sync_step(
         tables,
@@ -2317,7 +2335,13 @@ def _use_move(
     )
     state = state._replace(
         ts_sub_hit=jnp.where(resumed, 0, state.ts_sub_hit).astype(state.ts_sub_hit.dtype),
-        ts_loved=jnp.where(resumed | tail_fainted, 0, state.ts_loved).astype(state.ts_loved.dtype),
+        # The tails read ``ts_loved`` once; a U-turn user that survived the Pursuit goes on to
+        # :70, which clears its own slot before the list (the pursuer's stays).
+        ts_loved=jnp.where(
+            resumed | tail_fainted | (pursuit_pause & (jnp.arange(fmt.B) == side)),
+            0,
+            state.ts_loved,
+        ).astype(state.ts_loved.dtype),
         # The Grudge bit is the paused action's (review b2 #5): read once by its resumed tail
         # (``state_in``, below), and dropped when a Pursuit stopped the switch.
         ts_grudge=jnp.where(resumed | tail_fainted, 0, state.ts_grudge).astype(jnp.int8),
@@ -2727,7 +2751,14 @@ def _use_move(
         ts_damaged=jnp.where(note, damaged0, state.ts_damaged).astype(state.ts_damaged.dtype),
         ts_dealt=jnp.where(note, dealt0, state.ts_dealt).astype(state.ts_dealt.dtype),
         ts_se=jnp.where(note, se_now, state.ts_se).astype(state.ts_se.dtype),
-        ts_loved=jnp.where(note, loved_now, state.ts_loved).astype(state.ts_loved.dtype),
+        # A U-turn that goes to the list clears the attacker's selfTurnFlags.statusFlags first
+        # (subscript_attack_then_switch_out.s:70, BTLVAR_ATTACKER_SELF_TURN_STATUS_FLAGS =
+        # selfTurnFlags[attacker], battle_script.c:9623-9624): its Cute Charm INFATUATED flag
+        # (:7) never reaches the resumed tail. The Pursuit (:54) comes before :70: the MODE_PURSUIT
+        # tail clears it where the user survived, a felled user keeps it (:55 ends the script).
+        ts_loved=jnp.where(
+            note, loved_now & ~(paused & (jnp.arange(fmt.B) == side)), state.ts_loved
+        ).astype(state.ts_loved.dtype),
         ts_sub_hit=jnp.where(
             note,
             (jnp.arange(fmt.B) == target_side) & sub_hit_now,
@@ -3164,6 +3195,11 @@ def _act(
         & (state.status[party(fmt, side), newcomer] == Status.NONE)
         & ((landed == Status.POISON) | (landed == Status.TOXIC))
     )
+    # The list's CheckToxicSpikes reached the newcomer (the side's layers before an absorb):
+    # the resumed tail's sideEffectMon (H-4).
+    entry_toxic = resumed & toxic_spikes_reached(
+        tables, entered, side, state.toxic_spikes[side_of(side)]
+    )
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
     if reselected is not None:  # FightCommand's branch 1.5 (bcp.c:1889-1893), E3-B2-21
@@ -3189,6 +3225,7 @@ def _act(
         landed,  # the newcomer's BattleMon.status before the list's faint check (G-24)
         pursuit_sync,
         foe_enduring,
+        entry_toxic,
         mover=foe,
         waiting=waiting,
     )
@@ -3743,6 +3780,15 @@ def _execute_actions(
         # MODE_PURSUIT tail's Synchronize step reads both battlers' BattleMon.status (G-24).
         chased = ap & sync_landed(pre, struck, pursuer)
         sides = jnp.arange(fmt.B)
+        # The U-turn user's Cute Charm landed on the pursuer (subscript_pursuit.s:40, before the
+        # :70 clear, which is the attacker's slot only): subscript_infatuate.s:29 flags the
+        # pursuer INFATUATED in the paused action's selfTurnFlags (``ts_loved``, H-4).
+        charmed = ap & (pre.infatuated[pursuer] == 0) & (struck.infatuated[pursuer] != 0)
+        state = state._replace(
+            ts_loved=state.ts_loved.at[pursuer]
+            .set(jnp.where(charmed, 1, state.ts_loved[pursuer]))
+            .astype(state.ts_loved.dtype)
+        )
         pursuit_sync = (
             sync[0] ^ chased,
             jnp.where(chased, pursuer, sync[1]),

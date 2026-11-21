@@ -3235,8 +3235,10 @@ def sync_step(
 
 def form_change_pending(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool``: ``BattleSystem_TriggerFormChange`` (battle_lib.c:6305-6451) would change a form
-    now. Only Castform's (Forecast, ``hooks.forecast``) is modelled: Cherrim, Arceus's Multitype
-    plate and Giratina's Origin revert have no state here (H-4)."""
+    now. Only Castform's (Forecast, ``hooks.forecast``) is modelled. Giratina-Origin is refused by
+    coverage (``coverage.py``, Griseous Orb test); Cherrim's formNum (:6367-6400, no ability test)
+    and Arceus's plate formNum (:6402-6410) have no state here and no coverage refusal: an open
+    gap, ledger H-4."""
     from nuzline.engine.hooks import forecast  # hooks imports this module
 
     return jnp.any(forecast(tables, state).types != state.types)
@@ -3523,6 +3525,17 @@ def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> Ba
     return _set(state, "hp", (side, mon), jnp.minimum(hp + heal, max_hp), on)
 
 
+def toxic_spikes_reached(tables: Tables, state: BattleState, side, layers) -> jnp.ndarray:
+    """``bool``: subscript_hazards_check.s reaches ``CheckToxicSpikes`` (:14) for ``side``'s active
+    Pokemon with ``layers`` (the side's count before an absorb) above 0: no Magic Guard (:5), and
+    ``damage.grounded`` (:6-11). ``BtlCmd_CheckToxicSpikes`` then makes it the sideEffectMon
+    (battle_script.c:7638-7641), poisoned or not (H-4)."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
+    return grounded(tables, state, side, mon) & ~guarded & (jnp.asarray(layers, _I32) > 0)
+
+
 def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     """subscript_hazards_check.s on ``side``'s active Pokemon as it switches in, skipped whole
     for a Magic Guard holder (:5, CheckAbility):
@@ -3542,10 +3555,10 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
     guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
-    down = grounded(tables, state, side, mon) & ~guarded
     layers = state.toxic_spikes[side_of(side)].astype(_I32)
+    reached = toxic_spikes_reached(tables, state, side, layers)
     poison_type = jnp.any(state.types[party(fmt, side), mon] == Type.POISON)
-    absorbed = down & (layers > 0) & poison_type
+    absorbed = reached & poison_type
     state = _set(state, "toxic_spikes", side, 0, absorbed)
     ability = battler_decomp_ability(tables, state, side, mon)
     sun = _sunny(tables, state)
@@ -3557,7 +3570,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     blocks = (ability == ITEM_ABILITY_IDS["Immunity"]) | (
         sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     )
-    stopped = down & (layers > 0) & ~poison_type & blocks
+    stopped = reached & ~poison_type & blocks
     known = jnp.where(stopped & (side == 0), ability, state.ai_ability_known[mon])
     state = state._replace(
         ai_ability_known=state.ai_ability_known.at[mon].set(
@@ -3565,8 +3578,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
         )
     )
     poisoned = (
-        down
-        & (layers > 0)
+        reached
         & ~poison_type
         & ~blocks
         # subscript_poison.s:29 / subscript_badly_poison.s:46: CheckSubstitute after the ability

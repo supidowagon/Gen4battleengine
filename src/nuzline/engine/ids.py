@@ -1258,7 +1258,12 @@ class ItemId(IntEnum):
 
 # H-4: the one shared handler of the items with no hook in the fight: the id lifts the coverage
 # refusal and ``enumerate`` treats them as input-neutral (readers are the payout's raw hold
-# effects and escape paths a trainer battle never reaches).
+# effects and escape paths a trainer battle never reaches). Exp. Share, Lucky Egg and Soothe Bell
+# do change state, through the exp payout: it reads each party Pokemon's raw item data
+# (Pokemon_GetValue(MON_DATA_HELD_ITEM) + the hold effect, battle_script.c:2209-2210, :9706-9709,
+# :9745-9749; battle_system.c:746), never Battler_HeldItemEffect, and ``levelup`` reads
+# ``tables.item_hold_effect`` likewise: no Klutz / Embargo, no ``ItemId`` read, so the shared id
+# is enough and no damage or chance input depends on them.
 NO_IN_BATTLE_HOLD_EFFECT_ITEMS = (
     ItemId.SMOKE_BALL,
     ItemId.EXP_SHARE,

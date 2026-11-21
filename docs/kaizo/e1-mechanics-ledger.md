@@ -2504,19 +2504,36 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `infatuated` from 0 to non-0 = Attract or Cute Charm landing, and by a landed knot); cleared by BattleContext_Init at
   the action's end (battle_lib.c:2013-2015), so kept across a multi-hit action and across U-turn's party list:
   new scratch `ts_loved` (int8[B], STATE.md row `BattleContext.selfTurnFlags`; reference `turn.loved`, `ts_loved`).
-  4. U-turn pause: the resumed tail's Synchronize step reads the NEWCOMER's item (Battler_HeldItemEffect(attacker) after
-  the switch) with the paused action's flag: a Cute Charm that infatuated the old U-turn user is reflected by the
-  newcomer's knot; `sideEffectMon` on the tail is the attacker's slot (the engine's `sync_sem`; the reference sets
-  `sync_mon = side` at the resume, then CheckExtraFlinch may move it).
+  4. U-turn pause (review 42bbeb89 must-fix 1): subscript_attack_then_switch_out.s:70 sets
+  BTLVAR_ATTACKER_SELF_TURN_STATUS_FLAGS (selfTurnFlags[attacker].statusFlags, battle_script.c:9623-9624) to
+  SELF_TURN_FLAG_CLEAR before SHOW_PARTY_LIST (:71), after the :7 Cute Charm that infatuated the user: the resumed tail's
+  attacker branch (battle_lib.c:4553-4556) never passes, whatever the newcomer holds. `ts_loved` keeps the attacker's slot
+  cleared where the user goes to the list (the head's write, and the MODE_PURSUIT tail where the user survived).
+  Pursuit (:54, before :70): its contact (subscript_pursuit.s:40; SYSCTL_UTURN_ACTIVE is set only at :68) can run the
+  U-turn user's Cute Charm on the pursuer: sideEffectMon = the pursuer (battle_lib.c:4351), its flag set
+  (subscript_infatuate.s:29); both survive the list unless the list's CheckToxicSpikes finds layers for the newcomer,
+  which makes it the sideEffectMon (subscript_hazards_check.s:5-14, battle_script.c:7638-7641), or the newcomer's
+  King's Rock test makes the defender it (bcp.c:4643). So the resumed knot's defender branch (battle_lib.c:4546-4552)
+  reflects the pursuer's knot onto the newcomer: `ts_loved[pursuer]` set in the Pursuit stage (`step._execute_actions`;
+  reference `_contact_ability` in `_pursuit`), the resumed `sync_sem` = the flagged slot unless `entry_toxic`
+  (`effects.toxic_spikes_reached`, `_act`; reference `_entry_hazards` sets `sync_mon`, `_resume` starts from the flagged
+  slot). A user felled by the Pursuit ends the script at :55, before :70: its MODE_PURSUIT tail reads its own flag
+  (`tail_fainted`), and its knot infatuates the pursuer (cleared again at its faint, battle_lib.c:2175-2176; the AI
+  reveal stays). `ts_loved` is therefore kept. A Castform newcomer in weather makes TriggerFormChange return at the
+  resumed step (battle_lib.c:6314-6340, :4536-4544; the switch-in effects come after, bcp.c:3672): the reachable case of
+  ruling 1's form-change skip.
   5. FAILED: an unlanded knot sets MOVE_STATUS_FAILED, which is in MOVE_STATUS_DID_NOT_HIT / NO_EFFECTS
   (moves.h:81-85): it clears UpdateFlagsWhenHit's conversion2 record (bcp.c:4512) and counts as a no-effect move for
   BattleSystem_VerifyMetronomeCount (battle_lib.c:6184). The last hit's value stands (SetupLoop zeroes the flags per
   hit, battle_lib.c:3359): `knot_failed` in the hit loop and `_Turn.knot_failed`; on the U-turn tail the conv2 record
   clears likewise (`tail_knot_failed`). Nothing else reads the flag after the Synchronize step (grep of
   MOVE_STATUS_NO_EFFECTS / DID_NOT_HIT in battle_controller_player.c, battle_lib.c).
-  6. Not modelled (owed): the knot step of a Pursuit chase on a U-turn user (the nested Pursuit hit's Cute Charm
-  flags the pursuer's slot and the final Synchronize reads it; `pursuit_sync` carries only the flag and the
-  side-effect battler), and the Gen 4 form changes of Cherrim / Arceus / Giratina at that step (no mid-battle state).
+  6. Not modelled (owed): the Cherrim (battle_lib.c:6367-6400, no ability test) and Arceus plate (:6402-6410) form
+  changes at that step. Coverage does NOT refuse them (only Giratina-Origin without its Orb is refused, coverage.py's
+  Griseous Orb test); Flower Gift and Multitype are EXACT abilities: an open gap reported to the manager, no form state
+  built here. Unobservable in singles (review should-fix 3): the sideEffectMon a failed Cute Charm moves is read only
+  by the Synchronize step with SYSCTL_TRY_SYNCHRONIZE_STATUS set, which needs a status landed this action; with Cute
+  Charm the defender's ability, that is a secondary on the defender, which cannot then take the passed status.
   Enumerate: `knot_love` (the foe's damaging contact move, a knot holder, a Cute Charm holder on `s` that can
   infatuate its attacker) joins `infatuated_by_foe`, so a foe moving first reads `s`'s attract-check coin; the items are
   in `INPUT_NEUTRAL_ITEMS` (infatuation is no damage input). Foe-side holders need Trick / Thief (unsupported).
@@ -2528,7 +2545,9 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   rows close: 14 player-only groups become 5); coverage.py's header note no longer lists Mental Herb / Destiny Knot.
   Tests: tests/engine/test_e1_batch_h.py (H-4 block: Quick Powder's order of terms, Full Incense against Lagging Tail,
   Shed Shell against Mean Look / Ingrain / Klutz, Mental Herb's cure and keep, Destiny Knot on Attract, on a Cute Charm
-  hit and across a U-turn pause, ids and the shared set).
+  hit, a failed reflection's MOVE_STATUS_FAILED (Conversion 2 record, Metronome count), the U-turn user's cleared flag,
+  the pursuer's flag at the resumed tail (plain, Toxic Spikes, Castform in rain), the Pursuit-felled user's knot, ids and
+  the shared set).
   Snapshot (expected): `none` for every item here: the items were refused by coverage until now, so no snapshot team
   can hold one (and tests/strategies.py's generators draw no such item).
 
