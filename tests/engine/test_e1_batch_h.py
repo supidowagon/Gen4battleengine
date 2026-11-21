@@ -4,7 +4,8 @@ classes over the union of every mask the hit can read (``outcome.future_threshol
 axis, ``outcome._future_fields``), and the roll kept whole (``loose``) only on a battler whose hit
 is due (bcp.c:1767-1769, :1782; accuracy 0 draws nothing, bcp.c:2900-2902). H-2: Immunity, Own Tempo,
 Water Veil, Magma Armor and Oblivious (blocks, MoveEnd cures, the switch-out and battle-won cures).
-H-3: Color Change (per hit), Marvel Scale and Soundproof."""
+H-3: Color Change (per hit), Marvel Scale and Soundproof. H-4: the held items Quick Powder, Full
+Incense, Shed Shell, Mental Herb, Destiny Knot, and the ids of the items with no in-battle hook."""
 
 from __future__ import annotations
 
@@ -32,7 +33,14 @@ from nuzline.engine.outcome import (
     hit_class,
 )
 from tests.engine.d2_states import four, with_moves
-from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state, sample_rows
+from tests.engine.helpers import (
+    A,
+    as_species,
+    assert_matches_reference,
+    jit_step,
+    roark_state,
+    sample_rows,
+)
 from tests.engine.test_field_mask import _hits, _masked, _pursuit_fight, _rearming
 
 
@@ -747,3 +755,211 @@ def test_perish_song_skips_a_soundproof_battler(tables, names, user, opp_species
     out = assert_matches_reference(tables, s, acts, empty_outcome())
     assert (int(out.perish_song[0]), int(out.perish_song[1])) == marked
     assert int(out.ai_ability_known[0]) == 0
+
+
+# --- H-4: held items ---------------------------------------------------------------------------
+
+
+def _item(s, names, item, side=0):
+    """``side``'s active Pokemon holds ``item`` (a name)."""
+    return s._replace(item=s.item.at[side, int(s.active[side])].set(names.item(item)))
+
+
+def _speed(tables, s, side):
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.order import effective_speed
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _effective_speed
+
+    got = int(effective_speed(tables, s, side))
+    assert got == _effective_speed(to_numpy(tables), to_ref(s), side)
+    return got
+
+
+def test_quick_powder_doubles_a_dittos_speed_after_the_scarf_and_before_paralysis(tables, names):
+    """battle_lib.c:1248-1261: Choice Scarf x15/10, Quick Powder x2 on a Ditto, then paralysis /4."""
+    from nuzline.engine.ids import ItemId
+
+    ditto = as_species(tables, roark_state(tables, names), 0, 0, names.species("Ditto"))
+    base = _speed(tables, ditto, 0)
+    powder = _item(ditto, names, "Quick Powder")
+    assert int(tables.item_effect[names.item("Quick Powder")]) == ItemId.QUICK_POWDER
+    assert _speed(tables, powder, 0) == base * 2
+    para = powder._replace(status=powder.status.at[0, 0].set(Status.PARALYSIS))
+    assert _speed(tables, para, 0) == base * 2 // 4
+    # A non-Ditto holder, and a Klutz Ditto (Battler_HeldItemEffect), are unchanged.
+    plain = roark_state(tables, names)
+    assert _speed(tables, _item(plain, names, "Quick Powder"), 0) == _speed(tables, plain, 0)
+    klutz = powder._replace(ability=powder.ability.at[0, 0].set(AbilityId.KLUTZ))
+    assert _speed(tables, klutz, 0) == _speed(tables, klutz._replace(item=ditto.item), 0)
+
+
+@pytest.mark.parametrize("item", ["Full Incense", "Lagging Tail"])
+def test_full_incense_orders_its_holder_last_like_lagging_tail(tables, names, item):
+    """battle_lib.c:1302-1304, :1412-1421: a lone PRIORITY_DOWN holder acts second (equal
+    priority), a faster one too; the AI's speed compare (``battler_slower``) agrees."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.order import battler_slower
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _player_second
+
+    s = roark_state(tables, names, player_moves=("Tackle",), opp_moves=("Tackle",))
+    fast = s._replace(stats=s.stats.at[0, 0, Stat.SPE - 1].set(500))
+    held = _item(fast, names, item)
+    for state, second in ((fast, False), (held, True)):
+        assert bool(battler_slower(tables, state, 0, 0, state.qc_roll)) is second
+        ref = _player_second(to_numpy(tables), to_ref(state), (0, 0), 0, [0, 0])
+        assert ref is second
+    klutz = held._replace(ability=held.ability.at[0, 0].set(AbilityId.KLUTZ))
+    assert not bool(battler_slower(tables, klutz, 0, 0, klutz.qc_roll))
+
+
+def test_shed_shell_lets_a_trapped_holder_switch(tables, names):
+    """battle_lib.c:5514-5520: Battler_HeldItemEffect == HOLD_EFFECT_SWITCH returns FALSE before
+    Mean Look, Ingrain and the trapping abilities; Klutz hides it."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.actions import switch_targets, trapped
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _switch_targets, _trapped
+
+    s = roark_state(tables, names)
+    s = s._replace(mean_look=s.mean_look.at[0].set(1), ingrain=s.ingrain.at[0].set(1))
+    held = _item(s, names, "Shed Shell")
+    klutz = held._replace(ability=held.ability.at[0, 0].set(AbilityId.KLUTZ))
+    for state, want in ((s, True), (held, False), (klutz, True)):
+        assert bool(trapped(tables, state, 0)) is want
+        assert _trapped(to_numpy(tables), to_ref(state), 0) is want
+        assert bool(np.asarray(switch_targets(tables, state, 0)).any()) is (not want)
+        assert (
+            _switch_targets(to_numpy(tables), to_ref(state), 0)
+            == np.asarray(switch_targets(tables, state, 0)).tolist()
+        )
+
+
+def _lovers(tables, names, foe_moves, *, player_item="", player_moves=("Leer",), **kw):
+    """A female player lead against a male foe lead (the sample party's lead, Roark's Geodude)."""
+    s = roark_state(
+        tables, names, player_moves=player_moves, opp_moves=foe_moves,
+        player_gender="female", opp_gender="male", **kw,
+    )  # fmt: skip
+    return _item(s, names, player_item) if player_item else s
+
+
+def test_mental_herb_cures_infatuation_at_once_and_is_used_up(tables, names):
+    """battle_lib.c:4889-4894 / :5102-5107 (VOLATILE_CONDITION_ATTRACT only), subscript_held_item_
+    heal_infatuation.s:10-11: the foe's Attract lands, the holder is cured by the after-move checks
+    and the item is spent (Recycle's slot), no AI reveal (BTLSCR_MSG_TEMP)."""
+    herb = names.item("Mental Herb")
+    s = _lovers(tables, names, ("Attract", "Leer"), player_item="Mental Herb")
+    out = assert_matches_reference(tables, s, A("Leer", "Attract", s, names), empty_outcome())
+    assert int(out.infatuated[0]) == 0 and int(out.item[0, 0]) == 0
+    assert int(out.item_consumed[0, 0]) == herb and int(out.recycle_item[0]) == herb
+    assert int(out.ai_item_known[0]) == 0
+    # Not in love: the item is kept. Klutz: stays in love.
+    kept = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), empty_outcome())
+    assert int(kept.item[0, 0]) == herb
+    klutz = s._replace(ability=s.ability.at[0, 0].set(AbilityId.KLUTZ))
+    out = assert_matches_reference(tables, klutz, A("Leer", "Attract", s, names), empty_outcome())
+    assert int(out.infatuated[0]) != 0 and int(out.item[0, 0]) == herb
+
+
+def test_destiny_knot_reflects_an_attract_and_the_ai_learns_the_item(tables, names):
+    """battle_lib.c:4546-4552: the defender holds the knot, is sideEffectMon and flagged
+    INFATUATED (subscript_infatuate.s:29): the attacker falls in love too (:37-41 tags the
+    holder's item). Same gender: Attract itself fails and nothing changes; Klutz hides the knot."""
+    knot = names.item("Destiny Knot")
+    s = _lovers(tables, names, ("Attract",), player_item="Destiny Knot")
+    out = assert_matches_reference(tables, s, A("Leer", "Attract", s, names), empty_outcome())
+    assert int(out.infatuated[0]) != 0 and int(out.infatuated[1]) != 0
+    assert int(out.ai_item_known[0]) == knot
+    male = s._replace(gender=s.gender.at[0, 0].set(0))
+    out = assert_matches_reference(tables, male, A("Leer", "Attract", male, names), empty_outcome())
+    assert np.asarray(out.infatuated).tolist() == [0, 0] and int(out.ai_item_known[0]) == 0
+    klutz = s._replace(ability=s.ability.at[0, 0].set(AbilityId.KLUTZ))
+    out = assert_matches_reference(tables, klutz, A("Leer", "Attract", s, names), empty_outcome())
+    assert int(out.infatuated[1]) == 0 and int(out.infatuated[0]) != 0
+
+
+def _charmed(tables, names):
+    """The knot-holding female player's Tackle (contact) into a male foe with Cute Charm."""
+    s = _lovers(tables, names, ("Leer",), player_item="Destiny Knot", player_moves=("Tackle",))
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.CUTE_CHARM))
+    return s._replace(stats=s.stats.at[0, 0, Stat.SPE - 1].set(500))  # the holder hits first
+
+
+def test_destiny_knot_reflects_a_cute_charm_after_the_holders_hit(tables, names):
+    """The attacker holds the knot: battle_lib.c:4553-4559 (sideEffectMon was moved to it by Cute
+    Charm, :4344-4346). The foe falls in love too."""
+    s = _charmed(tables, names)
+    out = assert_matches_reference(tables, s, A("Tackle", "Leer", s, names), _procs(opp=1))
+    assert np.asarray(out.infatuated).tolist() == [1, 1]
+    assert int(out.ai_item_known[0]) == names.item("Destiny Knot")
+    # An Oblivious attacker is not charmed, so no knot flag exists.
+    oblivious = s._replace(ability=s.ability.at[0, 0].set(AbilityId.OBLIVIOUS))
+    out = assert_matches_reference(tables, oblivious, A("Tackle", "Leer", s, names), _procs(opp=1))
+    assert np.asarray(out.infatuated).tolist() == [0, 0]
+
+
+def test_a_cute_charm_that_cannot_land_raises_no_flag_and_the_engines_agree(tables, names):
+    """battle_lib.c:4344-4346 moves sideEffectMon to the attacker before TryAttract, which fails
+    here (both female): no INFATUATED flag (subscript_infatuate.s:29 is on the landing path), so the
+    knot stays quiet; the moved sideEffectMon is read by Synchronize (:4506-4511), engine ==
+    reference with a Synchronize attacker holding its own burn."""
+    s = _charmed(tables, names)
+    s = s._replace(gender=s.gender.at[1, 0].set(1))
+    s = s._replace(
+        ability=s.ability.at[0, 0].set(AbilityId.SYNCHRONIZE),
+        status=s.status.at[0, 0].set(Status.BURN),
+    )
+    out = assert_matches_reference(tables, s, A("Tackle", "Leer", s, names), _procs(opp=1))
+    assert np.asarray(out.infatuated).tolist() == [0, 0]
+
+
+def test_the_resumed_u_turn_reads_the_newcomers_knot(tables, names):
+    """The INFATUATED flag stays through U-turn's party list (battle_lib.c:2013-2015 clears it
+    at the action's end) and the resumed AfterMoveEffects reads the newcomer's item
+    (battle_lib.c:4546-4566): the Cute Charm foe falls in love with the newcomer's knot."""
+    from dataclasses import replace
+
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon, _resume
+
+    n = names
+    lead = replace(_mon(n, "Scyther", ["U-turn"], 30), gender=1)
+    bench = replace(_mon(n, "Geodude", ["Tackle"], 30, item="Destiny Knot"), gender=1)
+    foe = replace(_mon(n, "Bulbasaur", ["Leer"], 35), gender=0)
+    s = make_state(tables, [lead, bench], [foe])
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.CUTE_CHARM))
+    s = s._replace(stats=s.stats.at[0, 0, Stat.SPE - 1].set(500))
+    paused = assert_matches_reference(tables, s, (0, 0), _procs(opp=1))
+    assert int(paused.pivot_battler) == 1 and np.asarray(paused.ts_loved).tolist() == [1, 0]
+    out = _resume(tables, paused, 1, _procs(opp=1))
+    assert int(out.active[0]) == 1 and int(out.infatuated[1]) != 0
+    assert np.asarray(out.ts_loved).tolist() == [0, 0]
+    assert int(out.ai_item_known[1]) == n.item("Destiny Knot")
+
+
+def test_the_h4_items_have_their_own_ids_and_the_inert_ones_one_shared_set(tables, names):
+    from nuzline.engine.coverage import IMPLEMENTED_ITEMS
+    from nuzline.engine.ids import NO_IN_BATTLE_HOLD_EFFECT_ITEMS, ItemId
+
+    expect = {
+        "Smoke Ball": ItemId.SMOKE_BALL,
+        "Exp. Share": ItemId.EXP_SHARE,
+        "Soothe Bell": ItemId.SOOTHE_BELL,
+        "Lucky Egg": ItemId.LUCKY_EGG,
+        "Quick Powder": ItemId.QUICK_POWDER,
+        "Full Incense": ItemId.FULL_INCENSE,
+        "Destiny Knot": ItemId.DESTINY_KNOT,
+        "Shed Shell": ItemId.SHED_SHELL,
+        "Mental Herb": ItemId.MENTAL_HERB,
+    }
+    for name, item in expect.items():
+        assert int(tables.item_effect[names.item(name)]) == item, name
+        assert item in IMPLEMENTED_ITEMS
+    assert set(NO_IN_BATTLE_HOLD_EFFECT_ITEMS) == {
+        ItemId.SMOKE_BALL,
+        ItemId.EXP_SHARE,
+        ItemId.SOOTHE_BELL,
+        ItemId.LUCKY_EGG,
+    }

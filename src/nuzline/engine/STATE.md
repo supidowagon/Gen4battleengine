@@ -542,8 +542,10 @@ three structs has a row.
   formats, ruling D2-33: at B = 2 the other side's non-Ghost Curse reads it, lib.c:1714-1717),
   `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
   itself and Assurance reads, B13-17; `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
-  battler, the only self turn flag kept across a U-turn's list (`BattleContext_Init` clears the rest at the
-  action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `ts_grudge`: per battler, the battler fainted in the paused
+  battler (`hooks.intimidate` reads it, F-4), and `ts_loved`: `selfTurnFlags.statusFlags & SELF_TURN_FLAG_INFATUATED` per
+  battler slot (H-4: set by a landed Attract, Cute Charm or Destiny Knot, subscript_infatuate.s:29; read by the resumed
+  tail's Destiny Knot step with the newcomer's item, battle_lib.c:4546-4566), the two self turn flags kept across a U-turn's list
+  (`BattleContext_Init` clears the rest at the action's end, bcp.c:3998); `ts_grudge`: per battler, the battler fainted in the paused
   action holding `MOVE_EFFECT_GRUDGE`: its `battleStatusMask` SYSCTL_MON_FAINTED bit and `moveEffectsMask` survive the
   U-turn's list (battle_script.c:1770-1771, :1799; battle_lib.c:2166), so the resumed action's LOOP_FAINTED runs
   TryGrudge on the newcomer (review b2 #5); `focusItemActivated` and
@@ -804,7 +806,7 @@ three structs has a row.
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | `roosting`, `ts_assurance`, `magic_coat` | mapped |
-| `BattleContext.selfTurnFlags` | `ts_sub_hit` | mapped |
+| `BattleContext.selfTurnFlags` | `ts_sub_hit`, `ts_loved` | mapped |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

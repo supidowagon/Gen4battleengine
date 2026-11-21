@@ -32,9 +32,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   opponent's lowest Defense, and an opponent's move against a candidate's own Defense.
   ``effect_script_0007.s``'s Damp branch is never met: Damp is an unsupported ability, so
   a Damp holder on either side is refused. ``subscript_infatuate.s``'s Oblivious branch
-  (Attract, Cute Charm) and Oblivious' cure are modelled (E1 batch H, H-2); the other
-  infatuation cure (Mental Herb) and Destiny Knot are unsupported, so a holder on either side
-  is refused (pool and prep too). Reflect and Light Screen are modelled
+  (Attract, Cute Charm) and Oblivious' cure are modelled (E1 batch H, H-2); Mental
+  Herb's cure and Destiny Knot are modelled (E1 batch H, H-4). Reflect and Light Screen are modelled
   (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``), and so are the
   four weather moves (``EffectId.WEATHER``, ``effects._weather``). Moves the tables map to
   ``UNSUPPORTED`` include Tailwind and Trick Room;

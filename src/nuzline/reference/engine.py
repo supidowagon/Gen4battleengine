@@ -95,6 +95,7 @@ from nuzline.engine.ids import (
     POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
+    PRIORITY_DOWN_ITEMS,
     PROTECT_CHAIN_MOVES,
     REFRESH_STATUSES,
     RESIST_ANY_NORMAL,
@@ -332,6 +333,12 @@ class _Turn:
     # in singles (rulings G-12, G-13).
     sync_flag: bool = False
     sync_mon: int = -1
+    # SELF_TURN_FLAG_INFATUATED per battler (subscript_infatuate.s:29; cleared by BattleContext_Init
+    # at the action's end, kept through U-turn's list: BattleState.ts_loved), H-4; and the last
+    # hit's knot MOVE_STATUS_FAILED (subscript_infatuate.s:108-110), which UpdateFlagsWhenHit's
+    # conversion2 test and the Metronome item's verify read as MOVE_STATUS_NO_EFFECTS.
+    loved: list[bool] = field(default_factory=lambda: [False] * 4)
+    knot_failed: bool = False
     # turnFlags.assuranceDamageMask != 0 per battler (subscript_update_hp.s:18-19; cleared by
     # SetupNextTurn and CleanupFaintedMon), B13-17.
     assurance: list[bool] = field(default_factory=lambda: [False, False])
@@ -1305,6 +1312,9 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
     # lib.c:1248: Choice Scarf.
     if _item_effect(tables, mon, s) == ItemId.CHOICE_SCARF:
         speed = speed * 15 // 10
+    # lib.c:1252-1255: Quick Powder on a battler whose species is Ditto (H-4).
+    if _item_effect(tables, mon, s) == ItemId.QUICK_POWDER and mon.species == SPECIES_DITTO:
+        speed *= 2
     # lib.c:1257-1261: Quick Feet with any status x15/10, else paralysis quarters it.
     if _ability(s, mon) == AbilityId.QUICK_FEET and mon.status != Status.NONE:
         speed = speed * 15 // 10
@@ -1398,7 +1408,7 @@ def _player_second(
     if claw[0] != claw[1]:  # lib.c:1408-1411: the lone activated holder goes first
         return claw[1]
     lag = [
-        _item_effect(tables, _active(s, side), s) == ItemId.LAGGING_TAIL
+        _item_effect(tables, _active(s, side), s) in PRIORITY_DOWN_ITEMS  # H-4: Full Incense too
         for side in range(_fmt(s).B)
     ]
     if lag[0] and lag[1]:  # lib.c:1412-1417: the faster goes second, Trick Room ignored
@@ -2093,7 +2103,7 @@ def _conv2_writes(tables, s: RefState, turn: _Turn, side: int, move: int, record
     (a charge turn counts as having them) or its range clears the record."""
     if record is None:
         return None
-    worked = turn.charging or (turn.met_worked and not turn.met_immune)
+    worked = turn.charging or (turn.met_worked and not turn.met_immune and not turn.knot_failed)
     if not (turn.met_reached and worked) or _move_target(tables, turn.move_cur) in CONV2_CLEARING:
         return 0, 0, 0
     return turn.move_cur, side + 1, _move_type(tables, s, side, turn.move_cur, turn.gift)
@@ -2696,6 +2706,9 @@ def _cure(s: RefState, side: int, effect: int) -> bool:
             sd.nightmare = 0
         mon.status = Status.NONE  # sleep turns and the toxic counter are status bits
         mon.status_counter = 0
+        return True
+    if effect == ItemId.MENTAL_HERB and sd.infatuated:  # lib.c:4889-4894, :5102-5107, H-4
+        sd.infatuated = 0
         return True
     if effect == ItemId.WHITE_HERB and any(x < 0 for x in sd.stages):
         # lib.c:4875-4887: every stage below DEFAULT_STAT_STAGE back to it, in C.
@@ -3575,16 +3588,74 @@ def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None
     nothing. As an ABILITY side effect: the receiver's own Immunity / Water Veil / Limber,
     Leaf Guard in sun, a status, a Poison / Steel or Fire type stop it silently; no substitute
     or Safeguard test, no HP test (a fainted receiver's status is cleared at its faint). The
-    message tags the passer's Synchronize (rulings G-12, G-13)."""
-    if not turn.sync_flag:
+    message tags the passer's Synchronize (rulings G-12, G-13). A status script that ran returns
+    before the form change and the Destiny Knot (:4515-4532, ``_knot``, H-4)."""
+    turn.knot_failed = False  # SetupLoop's zeroed moveStatusFlags (lib.c:3359), this hit's
+    if _sync_status(turn, s, attacker, defender):
         return
+    if _form_pending(turn.tables, s):  # :4536-4544: the form change runs instead, the knot is lost
+        return
+    _knot(turn, s, attacker, defender)
+
+
+def _form_pending(tables, s: RefState) -> bool:
+    """``BattleSystem_TriggerFormChange`` (lib.c:6305-6451) would change a form now: only
+    Castform's is modelled (``effects.form_change_pending``)."""
+    saved = [list(_active(s, b).types) for b in range(_fmt(s).B)]
+    _forecast(tables, s)
+    pending = any(list(_active(s, b).types) != saved[b] for b in range(_fmt(s).B))
+    for b in range(_fmt(s).B):
+        _active(s, b).types = saved[b]
+    return pending
+
+
+def _knot(turn: _Turn, s: RefState, attacker: int, defender: int) -> None:
+    """The Destiny Knot half of ``BattleSystem_SynchronizeStatus`` (lib.c:4546-4566, H-4; the
+    engine's ``effects.knot``): a defender holding it (``Battler_HeldItemEffect``) that is the
+    sideEffectMon and flagged INFATUATED reflects to the attacker, else an attacker likewise to the
+    defender; sideEffectMon becomes the receiver. ``subscript_infatuate.s`` (HELD_ITEM): the
+    receiver's ignorable Oblivious (:5, :98) with HP shows "made the item ineffective" (the AI
+    learns both); else ``BtlCmd_TryAttract`` (script.c:5727-5742), failing into MOVE_STATUS_FAILED
+    (:108-110); landing sets the receiver in love, tags the holder's item and flags the receiver."""
+    if (
+        _item_effect(turn.tables, _active(s, defender), s) == ItemId.DESTINY_KNOT
+        and turn.sync_mon == defender
+        and turn.loved[defender]
+    ):
+        holder, receiver = defender, attacker
+    elif (
+        _item_effect(turn.tables, _active(s, attacker), s) == ItemId.DESTINY_KNOT
+        and turn.sync_mon == attacker
+        and turn.loved[attacker]
+    ):
+        holder, receiver = attacker, defender
+    else:
+        return
+    turn.sync_mon = receiver
+    if _ignorable(s, attacker, receiver) == AbilityId.OBLIVIOUS and _active(s, receiver).hp:
+        if receiver == 0:
+            _know_ability(s, s.battlers[0].active)
+        _reveal_item(s, holder)
+    elif not _attractable(s, receiver, holder):
+        turn.knot_failed = True
+    else:
+        s.battlers[receiver].infatuated = 1
+        turn.loved[receiver] = True
+        _reveal_item(s, holder)
+
+
+def _sync_status(turn: _Turn, s: RefState, attacker: int, defender: int) -> bool:
+    """``_synchronize``'s status half (lib.c:4493-4532): True when a status script ran
+    (a poison, burn or paralysis passer), whether or not the status landed."""
+    if not turn.sync_flag:
+        return False
     passer = receiver = None
     if _ability(s, _active(s, defender)) == AbilityId.SYNCHRONIZE and turn.sync_mon == defender:
         passer, receiver = defender, attacker
     elif _ability(s, _active(s, attacker)) == AbilityId.SYNCHRONIZE and turn.sync_mon == attacker:
         passer, receiver = attacker, defender
     if passer is None:
-        return
+        return False
     turn.sync_mon = receiver
     # The passer's BattleMon.status, which its faint did not clear (G-24).
     held = _active(s, passer).status
@@ -3597,28 +3668,29 @@ def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None
     elif held == Status.PARALYSIS:
         status = Status.PARALYSIS
     else:
-        return
+        return False
     mon = _active(s, receiver)
     own = _battler_decomp_ability(turn.tables, s, mon)
     if status == Status.POISON and own == ITEM_ABILITY_IDS["Immunity"]:
-        return
+        return True
     if status == Status.BURN and own == ITEM_ABILITY_IDS["Water Veil"]:
-        return
+        return True
     if status == Status.PARALYSIS and _ability(s, mon) == AbilityId.LIMBER:
-        return
+        return True
     if _ability(s, mon) == AbilityId.LEAF_GUARD and _sunny(turn.tables, s):
-        return
+        return True
     # The receiver's BattleMon.status, which a faint keeps, too (G-31).
     current = mon.status
     if mon.hp == 0:
         current = turn.battle_status.get((receiver, s.battlers[receiver].active), current)
     if not _can_have_status(turn.tables, s, receiver, status, current):
-        return
+        return True
     if mon.hp:
         mon.status, mon.status_counter = status, 0
     turn.sync_flag = not turn.sync_flag
     if passer == 0:
         _know_ability(s, s.battlers[0].active)
+    return True
 
 
 def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
@@ -4084,11 +4156,14 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # subscript_infatuate.s -> BtlCmd_TryAttract (script.c:5727-5742).
         # subscript_infatuate.s:5 -> :_055: an ignorable Oblivious stops it first and prints
         # "prevents romance" (:39), tagging the ability (H-2).
+        if target_alive:
+            turn.sync_mon = target  # effect_script_0120.s: sideEffectMon is the defender (H-4)
         if target_alive and seen == AbilityId.OBLIVIOUS:
             if target == 0:
                 _know_ability(s, s.battlers[0].active)
         elif target_alive and _attractable(s, target, side):
             s.battlers[target].infatuated = 1
+            turn.loved[target] = True  # subscript_infatuate.s:29
     elif effect == EffectId.DRAIN and effective and dealt > 0:
         # subscript_drain_half_damage_dealt.s: Divide(hitDamage * percent, 100), then
         # Big Root.
@@ -4730,16 +4805,16 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         # subscript_infatuate.s, whose TryAttract fails silently; its message (:17) tags the
         # holder's ability.
         holder = _active(s, target)
-        # subscript_infatuate.s:5 -> :_082 -> :_117: the attacker's own Oblivious, silent (H-2).
-        if (
-            holder.hp
-            and turn.outcome.contact_proc[target][hit]
-            and _ability(s, attacker) != AbilityId.OBLIVIOUS
-            and _attractable(s, side, target)
-        ):
-            s.battlers[side].infatuated = 1
-            if target == 0:
-                _know_ability(s, s.battlers[0].active)
+        # The trigger (lib.c:4339-4350) moves sideEffectMon to the attacker before the script
+        # tries the infatuation, which may then fail (H-4).
+        if holder.hp and turn.outcome.contact_proc[target][hit] and not s.battlers[side].infatuated:
+            turn.sync_mon = side
+            # subscript_infatuate.s:5 -> :_082 -> :_117: the attacker's own Oblivious, silent (H-2).
+            if _ability(s, attacker) != AbilityId.OBLIVIOUS and _attractable(s, side, target):
+                s.battlers[side].infatuated = 1
+                turn.loved[side] = True  # subscript_infatuate.s:29
+                if target == 0:
+                    _know_ability(s, s.battlers[0].active)
         return
     if ability == AbilityId.STATIC:
         status = Status.PARALYSIS
@@ -5876,6 +5951,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
     # action's end (G-13).
     turn.sync_flag, turn.sync_mon = False, -1
+    turn.loved, turn.knot_failed = [False] * 4, False
     # FightCommand (bcp.c:1900) picks the defender first: the foe while it is alive (any
     # HP for RANGE_OPPONENT_SIDE), the user for SELF_DEFENDER ranges.
     # Randomized: Struggle or any Encore at the action's start (bcp.c:1866-1884).
@@ -7995,6 +8071,8 @@ def _trapped(tables, s: RefState, b: int) -> bool:
     """``Battler_IsTrapped`` (lib.c:5514-5536): Bind, Mean Look, Ingrain, or a living foe's Shadow
     Tag, Magnet Pull (Steel) or Arena Trap (grounded)."""
     mon, sd = _active(s, b), s.battlers[b]
+    if _item_effect(tables, mon, s) == ItemId.SHED_SHELL:  # lib.c:5518, H-4
+        return False
     grounded = (
         (
             _ability(s, mon) != AbilityId.LEVITATE  # BattlerIsGrounded, lib.c:5502
@@ -8303,7 +8381,9 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             finally:
                 _unstrip_roost(turn, s)
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
-            no_effects = turn.met_reached and not (turn.met_worked and not turn.met_immune)
+            no_effects = turn.met_reached and not (
+                turn.met_worked and not turn.met_immune and not turn.knot_failed
+            )
             last_of_multi = turn.charge_strike or turn.bide_ended
             repeated = (
                 _t(tables, "move_effect", turn.move_cur) == EffectId.ROLLOUT and rollout0 != 0
@@ -8575,6 +8655,8 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
             s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)]
         )
         _put(s, "ts_grudge", turn.grudge_kept)
+        # SELF_TURN_FLAG_INFATUATED stays through the list too (H-4).
+        _put(s, "ts_loved", [int(f) for f in turn.loved[: _fmt(s).B]])
         fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
         for k, pt in enumerate(s.parties):
             pt.ts_alive = sum(
@@ -8638,6 +8720,7 @@ def _turn_from_scratch(tables, s: RefState, outcome, acted_upto: int) -> _Turn:
     turn.assurance = [bool(f) for f in _get(s, "ts_assurance")]
     flagged = [k for k, sd in enumerate(s.battlers) if sd.ts_sub_hit]  # the paused action's (F-4)
     turn.sub_hit, turn.sub_hit_mon = bool(flagged), flagged[0] if flagged else -1
+    turn.loved = [bool(sd.ts_loved) for sd in s.battlers] + [False] * (4 - _fmt(s).B)
     turn.trace_fires = _get(s, "ts_trace_fires")
     turn.follow_me = [sc.ts_follow_me for sc in s.sides]
     turn.fainted = [
@@ -8748,6 +8831,9 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     out = _active(s, side)
     if out.status == Status.TOXIC:
         out.status_counter = 0
+    # sideEffectMon is the attacker's slot through the list: Cute Charm moved it there (battle_lib.c:
+    # 4344-4346), the newcomer's hazard status lands on it (H-4; the engine's ``sync_sem``).
+    turn.sync_mon = side
     _enter(turn, s, side, actions[side] - MOVE_ACTIONS, baton)
     _send_out_exp(s, side)  # :18
     _entry_hazards(turn, s, side)  # :22
@@ -8806,7 +8892,8 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     # The pivot's hit landed (it paused): the foe records it for Conversion 2 (E3-B2-3).
     conv2 = None
     if record is not None:
-        clears = _move_target(tables, used) in CONV2_CLEARING
+        # The knot's MOVE_STATUS_FAILED (H-4) makes the record the clearing one (bcp.c:4512).
+        clears = _move_target(tables, used) in CONV2_CLEARING or turn.knot_failed
         conv2 = (0, 0, 0) if clears else (used, side + 1, _move_type(tables, s, side, used))
     # SF2 (a2) R3, R4: the pursuer the Pursuit's recoil felled in the paused pass (a U-turn user
     # has no Destiny Bond) is paid at this MoveEnd.

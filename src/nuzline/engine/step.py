@@ -175,7 +175,7 @@ from nuzline.engine.effects import (
     spite_slot,
     sticky_barb_transfer,
     sync_landed,
-    synchronize,
+    sync_step,
     targets_foe_side,
     targets_user,
     thaw_target,
@@ -2289,13 +2289,17 @@ def _use_move(
         held = jnp.where(resumed, held.at[side].set(jnp.asarray(entry_status, _I32)), held)
     if p_held is not None:
         held = jnp.where(after_pursuit, jnp.asarray(p_held, _I32), held)
-    state, _, _ = synchronize(
+    # The paused action's SELF_TURN_FLAG_INFATUATED of each slot (``ts_loved``) reaches the resumed
+    # tail's Destiny Knot step, which reads the newcomer's item (H-4); a Roar's drag has none.
+    tail_loved = (state_in.ts_loved != 0) & (resumed | tail_fainted)
+    state, _, _, _, tail_knot_failed = sync_step(
         tables,
         state,
         side,
         sync_defender,
         sync_flag,
         sync_sem,
+        tail_loved,
         (dragged & head_on & items_full) | resumed | tail_fainted,
         held,
     )
@@ -2313,6 +2317,7 @@ def _use_move(
     )
     state = state._replace(
         ts_sub_hit=jnp.where(resumed, 0, state.ts_sub_hit).astype(state.ts_sub_hit.dtype),
+        ts_loved=jnp.where(resumed | tail_fainted, 0, state.ts_loved).astype(state.ts_loved.dtype),
         # The Grudge bit is the paused action's (review b2 #5): read once by its resumed tail
         # (``state_in``, below), and dropped when a Pursuit stopped the switch.
         ts_grudge=jnp.where(resumed | tail_fainted, 0, state.ts_grudge).astype(jnp.int8),
@@ -2368,7 +2373,11 @@ def _use_move(
         # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
         # BattleContext_Init at the action's end, battle_lib.c:2009); ``disrupted``: a later
         # Triple Kick hit missed (MOVE_STATUS_MULTI_HIT_DISRUPTED).
-        sync_flag, sync_sem, disrupted, unprotect, se0, tr_ran = carry[16:]
+        sync_flag, sync_sem, disrupted, unprotect, se0, tr_ran = carry[16:22]
+        # SELF_TURN_FLAG_INFATUATED per battler (kept through the action's hits, battle_lib.c:2013-
+        # 2015) and this hit's Destiny Knot MOVE_STATUS_FAILED, which the next hit's SetupLoop
+        # zeroes (battle_lib.c:3359) so the last hit's stays (H-4).
+        loved, knot_failed = carry[22:]
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
@@ -2556,6 +2565,11 @@ def _use_move(
         att_landed = sync_landed(state, hit_state, side)
         sync_flag = sync_flag ^ def_landed ^ att_landed
         sync_sem = jnp.where(att_landed, side, jnp.where(def_landed, target_side, sync_sem))
+        # Cute Charm's trigger moves sideEffectMon to the attacker before its infatuation is tried,
+        # which may fail (battle_lib.c:4344-4346, H-4); a landed Attract / Cute Charm flags its
+        # receiver INFATUATED (subscript_infatuate.s:29).
+        sync_sem = jnp.where(info.charm_proc, side, sync_sem)
+        loved = loved | ((state.infatuated == 0) & (hit_state.infatuated != 0))
         attacker_rock = tables.item_effect[held_item(hit_state, side)] == ItemId.KINGS_ROCK
         rock_test = (
             attacker_rock
@@ -2567,13 +2581,14 @@ def _use_move(
             going & first & is_uturn & ~goes & landed & info.damaged
         )
         sync_sem = jnp.where(rock_sem & rock_test, target_side, sync_sem).astype(_I32)
-        hit_state, sync_flag, sync_sem = synchronize(
+        hit_state, sync_flag, sync_sem, loved, knot_now = sync_step(
             tables,
             hit_state,
             side,
             sync_defender,
             sync_flag,
             sync_sem,
+            loved,
             items & landed & head_on & ~dragged,
         )
         state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
@@ -2662,6 +2677,8 @@ def _use_move(
             unprotect | (landed & info.effective & _feint_clears(tables, used)),
             jnp.where(first, info.super_effective & info.effective, se0),
             tr_ran | info.trick_room,
+            loved,
+            jnp.where(going, knot_now, knot_failed),
         )
 
     init = (
@@ -2687,6 +2704,8 @@ def _use_move(
         jnp.bool_(False),  # Feint's hit cleared the defender's turnFlags.protecting (E3-B2-13)
         jnp.bool_(False),  # MOVE_STATUS_SUPER_EFFECTIVE of the first hit (``ts_se``, SF2 (i))
         jnp.bool_(False),  # trickRoomActivated: Trick Room's script ran (SF2 (k))
+        jnp.zeros((fmt.B,), bool),  # SELF_TURN_FLAG_INFATUATED per battler (H-4)
+        jnp.bool_(False),  # the last hit's Destiny Knot MOVE_STATUS_FAILED (H-4)
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[party(fmt, target_side), target]
@@ -2696,6 +2715,8 @@ def _use_move(
     sub_hit_now = looped[15]  # the target's SELF_TURN_FLAG_SUBSTITUTE_HIT after the hits
     se_now = looped[20]  # the stopping hit's MOVE_STATUS_SUPER_EFFECTIVE (a Baton Pass: 0)
     trick_room_ran = looped[21]  # MoveHit.trick_room over the hits
+    loved_now = looped[22]  # SELF_TURN_FLAG_INFATUATED per battler after the hits (H-4)
+    knot_failed_last = looped[23]  # the last hit's knot MOVE_STATUS_FAILED (H-4)
     # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
     # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
     stopped = paused | pursue
@@ -2706,6 +2727,7 @@ def _use_move(
         ts_damaged=jnp.where(note, damaged0, state.ts_damaged).astype(state.ts_damaged.dtype),
         ts_dealt=jnp.where(note, dealt0, state.ts_dealt).astype(state.ts_dealt.dtype),
         ts_se=jnp.where(note, se_now, state.ts_se).astype(state.ts_se.dtype),
+        ts_loved=jnp.where(note, loved_now, state.ts_loved).astype(state.ts_loved.dtype),
         ts_sub_hit=jnp.where(
             note,
             (jnp.arange(fmt.B) == target_side) & sub_hit_now,
@@ -2857,7 +2879,9 @@ def _use_move(
     # MOVE_STATUS_NO_EFFECTS: CheckMoveFailure (bcp.c:3312-3331) did not reach USE_MOVE (a miss,
     # Protect, a semi-invulnerable foe, a failure, an immunity: no AfterMoveEffects) once the
     # move got past BeforeMove; a status-check disruption or no target sets none of those bits.
-    worked = items_full & ~no_effect
+    # The knot's MOVE_STATUS_FAILED (subscript_infatuate.s:108-110) is in the flags UpdateMoveBuffers
+    # reads (MOVE_STATUS_DID_NOT_HIT, moves.h:81-85): the last hit's, SetupLoop zeroing each hit's.
+    worked = items_full & ~no_effect & ~(head_on & knot_failed_last)
     no_effects = succeeded & ~charging & ~worked
     # SYSCTL_LAST_OF_MULTI_TURN: every charge move's strike runs subscript_charge_move_cleanup.s:7
     # (the second turn, a Power Herb, SolarBeam in sun), and subscript_bide_end.s.
@@ -2891,7 +2915,7 @@ def _use_move(
     # type its script set else the move's: Normalize is an unsupported ability); every other case
     # clears all three. ``ctl["conv2"]`` = (write, move, battler, type); ``_move_end`` applies it
     # after the faint check like moveHit. A defender that is the user is cleared at its own MoveEnd.
-    c2_ok = jnp.where(head_on, succeeded & ~no_effects, True)
+    c2_ok = jnp.where(head_on, succeeded & ~no_effects, ~tail_knot_failed)
     c2_range = ~jnp.isin(tables.move_target[used_t], jnp.asarray(CONV2_CLEARING_RANGES, _I32))
     c2_set = c2_ok & c2_range
     c2_type = move_type_of(tables, state, side, used_t, gift_removed)
@@ -3979,6 +4003,7 @@ def _execute_actions(
         "ts_dealt": jnp.where(pivot_stopped, state.ts_dealt, 0),
         "ts_se": jnp.where(pivot_stopped, state.ts_se, 0),
         "ts_sub_hit": jnp.where(pivot_stopped, state.ts_sub_hit, 0),
+        "ts_loved": jnp.where(pivot_stopped, state.ts_loved, 0),
         "ts_grudge": jnp.where(pivot_stopped, state.ts_grudge, 0),
         "ts_alive": jnp.where(pivot_stopped, base, 0),
         "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),

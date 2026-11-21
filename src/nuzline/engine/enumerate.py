@@ -60,7 +60,9 @@ of the turn:
 * ``infatuation[s]``: ``s`` moves and is in love at the start while the foe does not switch
   (a switch goes first and ``_source_leaves`` clears it), or the foe moves first with Attract
   and could infatuate ``s`` (opposite genders, neither genderless, ``s`` not in love yet;
-  ``effects._attract``). Cute Charm infatuates the attacker during its own move, after its
+  ``effects._attract``), or the foe moves first with a damaging contact move, holds a
+  Destiny Knot and ``s`` is a Cute Charm holder that can infatuate it (the knot reflects the
+  love back, H-4). Cute Charm infatuates the attacker during its own move, after its
   check: read only on a later turn.
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe moves
   first with a ``CONFUSE_FOE`` or ``SECONDARY_CONFUSE`` move and ``s`` is not confused
@@ -251,6 +253,7 @@ from nuzline.engine.ids import (
     FOCUS_BAND_PARAM,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
+    NO_IN_BATTLE_HOLD_EFFECT_ITEMS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
     SNORE_PARAM,
@@ -731,7 +734,7 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     para_by_foe = b["uses_move"] & foe_first & foes(b["para_inflict"])
     freeze_by_foe = b["uses_move"] & foe_first & foes(b["freeze_inflict"])
     confused_by_foe = b["uses_move"] & foe_first & foes(b["confuse_inflict"])
-    infatuated_by_foe = b["uses_move"] & foe_first & foes(b["attract_inflict"])
+    infatuated_by_foe = b["uses_move"] & foe_first & (foes(b["attract_inflict"]) | b["knot_love"])
     # A foe moving first can bring an unconfused holder of a disliked flavor berry to half HP
     # (hooks.held_item_check, G-5): its check then reads the berry's counter.
     berry_by_foe = b["uses_move"] & foe_first & b["berry_confuse"] & foes(b["uses_move"])
@@ -1329,6 +1332,19 @@ INPUT_NEUTRAL_ITEMS = (
     # only the holder's crit odds, a variant bit of ``outcome.crit_variants`` (F-9).
     ItemId.MACHO_BRACE,
     ItemId.LANSAT_BERRY,
+    # E1 Batch H, H-4. Quick Powder (a speed factor of the order fixed at the turn's start; a
+    # Transform changes only the end-of-turn order, kept by ``xform_used``), Full Incense (as
+    # Lagging Tail), Shed Shell (only the choice set), and the items with no in-battle hold
+    # effect (``ids.NO_IN_BATTLE_HOLD_EFFECT_ITEMS``: the payout's raw reads, the escape paths).
+    ItemId.QUICK_POWDER,
+    ItemId.FULL_INCENSE,
+    ItemId.SHED_SHELL,
+    # Mental Herb cures infatuation and Destiny Knot reflects it: infatuation is no damage input;
+    # the cure only removes an ``infatuation`` read (the existing clause over-approximates) and the
+    # knot's reflected love is the ``infatuated_by_foe`` read (``knot_love``).
+    ItemId.MENTAL_HERB,
+    ItemId.DESTINY_KNOT,
+    *NO_IN_BATTLE_HOLD_EFFECT_ITEMS,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -2042,6 +2058,13 @@ def outcome_laws(
     if loose:
         charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
     holders = holders | charm
+    # H-4 Destiny Knot (battle_lib.c:4546-4566): a knot holder's contact hit that makes a Cute
+    # Charm foe infatuate it infatuates that foe back: the foe's attract check, if it moves later
+    # this turn, reads it (``infatuated_by_foe``). Raw item, Klutz / Embargo ignored (over-approximate).
+    knot_love = (
+        foes(_holds_item(tables, state, actions, (ItemId.DESTINY_KNOT,)) & damaging & contact)
+        & charm
+    )
     contact_proc = foes(lands & (damaging & contact & foes(holders))[:, None]) | (
         lands & (damaging & contact & holders & lock)[:, None]
     )
@@ -2249,6 +2272,7 @@ def outcome_laws(
         "confuse_inflict": uses_move & (confuses | fling_confuses) & ~confused_blocked,
         "infatuated_own": infatuated_own,
         "attract_inflict": attract,
+        "knot_love": knot_love,
         "focus_band": band_move,
         "own_band": uses_move & own_band,
         "berry_confuse": uses_move & own_berry & calm_now,
@@ -2468,7 +2492,9 @@ def outcome_laws(
     # B13-31: a foe's Embargo can hide a side's Choice Scarf (CompareBattlerSpeed's
     # Battler_HeldItemEffect, battle_lib.c:1248) before the turn end's sort, a speed the grid
     # does not follow: the tie draw is then always enumerated (over-approximate, sound).
-    scarf = tables.item_effect[held_items(state)] == ItemId.CHOICE_SCARF
+    # H-4: a Quick Powder (a Ditto's x2, battle_lib.c:1252-1255) is hidden by Embargo likewise.
+    speed_item = tables.item_effect[held_items(state)]
+    scarf = (speed_item == ItemId.CHOICE_SCARF) | (speed_item == ItemId.QUICK_POWDER)
     embargo_speed = jnp.any(scarf & foes(uses_move & (effect == _E.EMBARGO)))
     end_speed_tie = live & (
         jnp.any(ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])) | embargo_speed

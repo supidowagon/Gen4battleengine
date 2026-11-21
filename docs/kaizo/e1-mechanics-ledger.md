@@ -2452,6 +2452,80 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   step's; @smogon/calc returns 0).
   Snapshot (expected): no divergence: tests/strategies.py's M1_SPECIES has no Color Change, Marvel Scale or Soundproof
   holder (no generator drift), and the changed paths need one on the field.
+- H-4 Held items: Quick Powder (102), Full Incense (107), Shed Shell (123), Mental Herb (54), Destiny Knot (108), and the
+  items with no in-battle hook: Smoke Ball (63), Exp. Share (51), Soothe Bell (53), Lucky Egg (66). Manager rulings:
+  each item keeps its own id (`ItemId.QUICK_POWDER` .. `LUCKY_EGG`, 67-75; `tools/effect_map.HOLD_EFFECT_TO_ID`), one
+  shared set for the four with no hook (`ids.NO_IN_BATTLE_HOLD_EFFECT_ITEMS`: it lifts the coverage refusal and joins
+  `INPUT_NEUTRAL_ITEMS`), and the exp payout stays E2's (it reads the raw party hold effect in `levelup`; no payout code
+  here). Sheets: item-readers.md and item-*.md; where a sheet cites an older engine line, the grep at the build tip rules.
+  (a) Quick Powder: `BattleSystem_CompareBattlerSpeed` (battle_lib.c:1252-1255, :1318-1321): x2 for a holder whose
+  battler species is Ditto (a Transformed one is not: `state.species`), through `Battler_HeldItemEffect` (Klutz /
+  Embargo), after Choice Scarf and before Quick Feet / paralysis. `order.effective_speed`; reference `_effective_speed`;
+  the AI's compares go through `order.compare_speed` (trainer_ai.c:1109, :1121, :2081). `enumerate._end_speeds`' Embargo
+  clause (B13-31) covers it with the Scarf (a foe's Embargo hides it before the end-of-turn sort); a Transform at the
+  turn end is already kept by `xform_used`.
+  (b) Full Incense: hold effect PRIORITY_DOWN as Lagging Tail (battle_lib.c:1302-1304, :1368-1370, :1412-1421), an own
+  id read through `ids.PRIORITY_DOWN_ITEMS` in `order.compare_speed` and the reference `_player_second`.
+  Departure from the sheet: the sheet mapped it onto `ItemId.LAGGING_TAIL`; the manager's ruling (own ids) wins.
+  (c) Shed Shell: `Battler_IsTrapped` returns FALSE first (battle_lib.c:5514-5520), before Mean Look / Ingrain /
+  Shadow Tag / Magnet Pull / Arena Trap (:5522-5536); `actions.trapped` and the reference `_trapped`; Klutz and Embargo
+  hide it; a move lock (`locked_slot`) still blocks. No Run / Teleport case exists (`Battler_IsTrappedMsg`); the AI's
+  own trapping test reads no item (trainer_ai.c:3901-3913).
+  (d) Mental Herb: BattleSystem_TriggerHeldItem (battle_lib.c:4889-4894) and ..OnStatus (:5102-5107) test
+  VOLATILE_CONDITION_ATTRACT only (Gen 4: no Taunt / Encore / Disable); `hooks._restore` clears `infatuated`; the shared
+  `held_item_check` spends it (PLUCK_CHECK, subscript_held_item_heal_infatuation.s:11) into `item_consumed` /
+  `recycle_item` and forgets the AI's record; the message tag is BTLSCR_MSG_TEMP: no reveal. Not in `PLUCKABLE`.
+  Reference `_cure`. Fling's cure was E3's (`hooks.fling_effect`).
+  (e) Destiny Knot (`effects.knot`, `effects.sync_step`; reference `_knot`, `_sync_status`, `_synchronize`): the tail of
+  `BattleSystem_SynchronizeStatus` (battle_lib.c:4546-4566). A defender holding it (Klutz / Embargo hide it) that is
+  `sideEffectMon` with SELF_TURN_FLAG_INFATUATED reflects to the attacker, else an attacker likewise to the defender;
+  `sideEffectMon` becomes the receiver before the script. subscript_infatuate.s as HELD_ITEM: the receiver's ignorable
+  Oblivious with HP (:5, :98, BtlCmd_CheckIgnorableAbility battle_script.c:7716-7720: Mold Breaker of the attacker
+  hides it) shows "made the item ineffective" (reveals the receiver's ability and the holder's item, battle_script.c:
+  11516-11520, :11546-11548) and nothing else; else BtlCmd_TryAttract (battle_script.c:5727-5742: genders differ,
+  neither genderless, receiver not in love); a failure sets MOVE_STATUS_FAILED (:108-110), a landing sets the
+  receiver's attract bit to the holder, tags the holder's item (AI reveal) and flags the receiver (:29).
+  Rulings (manager: follow the decomp, departures are must-fix):
+  1. Order. A status script that ran returns first (:4515-4532: `synchronize` now returns `ran`); then
+  BattleSystem_TriggerFormChange returns when any form would change (:4536-4544), losing the hit's knot
+  (`effects.form_change_pending`: Castform's Forecast only; Cherrim, Arceus' plate and Giratina's Origin have no state
+  here, never pending). Then the knot. The flag SYSCTL_TRY_SYNCHRONIZE_STATUS is not read by the knot.
+  2. Cute Charm moves `sideEffectMon` to the attacker BEFORE `subscript_infatuate` tries the infatuation
+  (battle_lib.c:4339-4350: tests `curHP`, the attacker not in love, no NO_EFFECTS, not FIRST_OF_MULTI_TURN / UTURN_ACTIVE,
+  damage taken, contact, defender HP, the 30 % roll), so a failed one (genders, Oblivious) still moves it:
+  `MoveHit.charm_proc`, `step`'s hit loop. The sem Attract sets (effect_script_0120.s: the defender) is the engine's
+  default `target_side`; the reference sets `sync_mon` at Attract.
+  3. SELF_TURN_FLAG_INFATUATED is per battler (`loved`, bool[B] in the hit loop, set when a hit takes a battler's
+  `infatuated` from 0 to non-0 = Attract or Cute Charm landing, and by a landed knot); cleared by BattleContext_Init at
+  the action's end (battle_lib.c:2013-2015), so kept across a multi-hit action and across U-turn's party list:
+  new scratch `ts_loved` (int8[B], STATE.md row `BattleContext.selfTurnFlags`; reference `turn.loved`, `ts_loved`).
+  4. U-turn pause: the resumed tail's Synchronize step reads the NEWCOMER's item (Battler_HeldItemEffect(attacker) after
+  the switch) with the paused action's flag: a Cute Charm that infatuated the old U-turn user is reflected by the
+  newcomer's knot; `sideEffectMon` on the tail is the attacker's slot (the engine's `sync_sem`; the reference sets
+  `sync_mon = side` at the resume, then CheckExtraFlinch may move it).
+  5. FAILED: an unlanded knot sets MOVE_STATUS_FAILED, which is in MOVE_STATUS_DID_NOT_HIT / NO_EFFECTS
+  (moves.h:81-85): it clears UpdateFlagsWhenHit's conversion2 record (bcp.c:4512) and counts as a no-effect move for
+  BattleSystem_VerifyMetronomeCount (battle_lib.c:6184). The last hit's value stands (SetupLoop zeroes the flags per
+  hit, battle_lib.c:3359): `knot_failed` in the hit loop and `_Turn.knot_failed`; on the U-turn tail the conv2 record
+  clears likewise (`tail_knot_failed`). Nothing else reads the flag after the Synchronize step (grep of
+  MOVE_STATUS_NO_EFFECTS / DID_NOT_HIT in battle_controller_player.c, battle_lib.c).
+  6. Not modelled (owed): the knot step of a Pursuit chase on a U-turn user (the nested Pursuit hit's Cute Charm
+  flags the pursuer's slot and the final Synchronize reads it; `pursuit_sync` carries only the flag and the
+  side-effect battler), and the Gen 4 form changes of Cherrim / Arceus / Giratina at that step (no mid-battle state).
+  Enumerate: `knot_love` (the foe's damaging contact move, a knot holder, a Cute Charm holder on `s` that can
+  infatuate its attacker) joins `infatuated_by_foe`, so a foe moving first reads `s`'s attract-check coin; the items are
+  in `INPUT_NEUTRAL_ITEMS` (infatuation is no damage input). Foe-side holders need Trick / Thief (unsupported).
+  (f) Smoke Ball, Exp. Share, Soothe Bell, Lucky Egg: no reader in a trainer battle outside the payout (the escape paths
+  of Smoke Ball are never reached: bcp.c:601-614, effect_script_0153.s:5, subscript_replace_fainted.s:6; the payout's
+  Exp. Share / Lucky Egg / Soothe Bell reads are the party item's raw hold effect, battle_script.c:2209, :9709, :9745,
+  :9749, :9857, E2's `levelup`). Item facts that still hold: Knock Off / Unburden, Fling power, Natural Gift failing.
+  Coverage: the nine ids lift the `UNSUPPORTED` refusal; docs/kaizo/mechanics_backlog.md regenerated (the nine held-item
+  rows close: 14 player-only groups become 5); coverage.py's header note no longer lists Mental Herb / Destiny Knot.
+  Tests: tests/engine/test_e1_batch_h.py (H-4 block: Quick Powder's order of terms, Full Incense against Lagging Tail,
+  Shed Shell against Mean Look / Ingrain / Klutz, Mental Herb's cure and keep, Destiny Knot on Attract, on a Cute Charm
+  hit and across a U-turn pause, ids and the shared set).
+  Snapshot (expected): `none` for every item here: the items were refused by coverage until now, so no snapshot team
+  can hold one (and tests/strategies.py's generators draw no such item).
 
 ## Stream state (restart point, 2026-11-19)
 

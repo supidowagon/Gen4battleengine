@@ -1028,6 +1028,17 @@ HOLD_EFFECT_TO_ID: dict[int, tuple[str, ItemId]] = {
             (122, "HOLD_EFFECT_LVLUP_HP_EV_UP"),
         )
     },
+    # E1 Batch H, H-4 (each item its own id; sheets item-*.md): the decomp hold effects.
+    54: ("HOLD_EFFECT_HEAL_INFATUATION", ItemId.MENTAL_HERB),
+    102: ("HOLD_EFFECT_DITTO_SPEED_UP", ItemId.QUICK_POWDER),
+    107: ("HOLD_EFFECT_PRIORITY_DOWN", ItemId.FULL_INCENSE),
+    108: ("HOLD_EFFECT_RECIPROCATE_INFAT", ItemId.DESTINY_KNOT),
+    123: ("HOLD_EFFECT_SWITCH", ItemId.SHED_SHELL),
+    # No in-battle effect (ids.NO_IN_BATTLE_HOLD_EFFECT_ITEMS): the payout reads the raw effect.
+    63: ("HOLD_EFFECT_FLEE", ItemId.SMOKE_BALL),
+    51: ("HOLD_EFFECT_EXP_SHARE", ItemId.EXP_SHARE),
+    53: ("HOLD_EFFECT_FRIENDSHIP_UP", ItemId.SOOTHE_BELL),
+    66: ("HOLD_EFFECT_EXP_UP", ItemId.LUCKY_EGG),
 }
 
 # Kaizo's re-purposed and renamed items (docs/kaizo/discrepancies.md:31-34, :1336-1348, :2654-2657;

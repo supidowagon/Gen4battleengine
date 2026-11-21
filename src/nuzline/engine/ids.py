@@ -1234,6 +1234,40 @@ class ItemId(IntEnum):
     # Kaizo's Lava Cookie / Old Gateau (hold 12, a Lum Berry's effect on a non-berry): Lum's cure
     # (``hooks._restore``), but Pluck / Bug Bite leave it (F-12).
     LAVA_COOKIE = 66
+    # E1 Batch H, H-4: held items, each its own id. Quick Powder (HOLD_EFFECT_DITTO_SPEED_UP):
+    # a Ditto's Speed x2 (``order.effective_speed``, battle_lib.c:1252-1255). Full Incense
+    # (HOLD_EFFECT_PRIORITY_DOWN, Lagging Tail's effect): ordered as ``LAGGING_TAIL``
+    # (battle_lib.c:1302-1304, :1412-1421). Destiny Knot (HOLD_EFFECT_RECIPROCATE_INFAT):
+    # ``effects.knot`` (battle_lib.c:4546-4566). Shed Shell (HOLD_EFFECT_SWITCH):
+    # ``actions.trapped`` (battle_lib.c:5518). Mental Herb (HOLD_EFFECT_HEAL_INFATUATION):
+    # ``hooks._restore`` (battle_lib.c:4889-4894, :5102-5107).
+    QUICK_POWDER = 67
+    FULL_INCENSE = 68
+    DESTINY_KNOT = 69
+    SHED_SHELL = 70
+    MENTAL_HERB = 71
+    # No in-battle hold effect in a trainer battle (``NO_IN_BATTLE_HOLD_EFFECT_ITEMS``): Smoke
+    # Ball (HOLD_EFFECT_FLEE, read only by the escape paths a trainer battle never reaches), and
+    # the party-item readers of the exp payout, which read the raw hold effect in ``levelup``:
+    # Exp. Share, Soothe Bell (friendship at a level-up), Lucky Egg.
+    SMOKE_BALL = 72
+    EXP_SHARE = 73
+    SOOTHE_BELL = 74
+    LUCKY_EGG = 75
+
+
+# H-4: the one shared handler of the items with no hook in the fight: the id lifts the coverage
+# refusal and ``enumerate`` treats them as input-neutral (readers are the payout's raw hold
+# effects and escape paths a trainer battle never reaches).
+NO_IN_BATTLE_HOLD_EFFECT_ITEMS = (
+    ItemId.SMOKE_BALL,
+    ItemId.EXP_SHARE,
+    ItemId.SOOTHE_BELL,
+    ItemId.LUCKY_EGG,
+)
+
+# Full Incense is ordered as Lagging Tail (HOLD_EFFECT_PRIORITY_DOWN).
+PRIORITY_DOWN_ITEMS = (ItemId.LAGGING_TAIL, ItemId.FULL_INCENSE)
 
 
 # subscript_bind_start.s:10-12: an attacker holding HOLD_EFFECT_EXTEND_TRAPPING (Grip Claw) sets

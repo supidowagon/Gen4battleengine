@@ -2975,10 +2975,14 @@ def _struggle_recoil(state: BattleState, h: _Hit, struggling) -> BattleState:
     return hp_update(state, h.side, h.user, -cost, cost > 0)
 
 
-def _contact_ability(tables, state, h: _Hit, outcome: Outcome, move_type) -> BattleState:
-    """``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200-4371) after hit ``h``;
-    ``move_type`` is the action's ``battleCtx->moveType`` or the table type (``move_type_of``),
-    which Color Change reads."""
+def _contact_ability(
+    tables, state, h: _Hit, outcome: Outcome, move_type
+) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, charm_proc)``: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200-4371)
+    after hit ``h``; ``move_type`` is the action's ``battleCtx->moveType`` or the table type
+    (``move_type_of``), which Color Change reads. ``charm_proc``: Cute Charm's trigger passed
+    (the attacker not in love, the roll), which moves ``sideEffectMon`` to the attacker before
+    ``subscript_infatuate.s`` tries the infatuation (:4344-4346), whether or not it lands (H-4)."""
     fmt = format_of(state)
     # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4200-4371): Battler_Ability.
     ability = battler_ability(state, h.target_side, h.target)
@@ -3056,6 +3060,16 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome, move_type) -> Bat
         & _attractable(state, h.side, h.user, h.target_side, h.target)
     )
     state = _set(state, "infatuated", h.side, 1, charm)
+    # The trigger itself (battle_lib.c:4339-4350): the same tests but the gender / Oblivious ones,
+    # which are subscript_infatuate.s's TryAttract and CheckIgnorableAbility, after sideEffectMon
+    # moved (H-4). SYSCTL_FIRST_OF_MULTI_TURN / _UTURN_ACTIVE hold no value in a hit that got here.
+    charm_proc = (
+        (ability == AbilityId.CUTE_CHARM)
+        & hit
+        & _alive(state, h.target_side, h.target)
+        & h.contact_proc
+        & (state.infatuated[h.side] == 0)
+    ) | charm
     # Color Change (battle_lib.c:4232-4253, H-3): no contact or attacker test. The type is
     # battleCtx->moveType when set, else the table's (``move_type``; the attacker's Normalize,
     # :4235-4236, is an unsupported ability). The defender has HP, no MOVE_STATUS_NO_EFFECTS
@@ -3090,7 +3104,7 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome, move_type) -> Bat
     state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond | charm)
     # subscript_aftermath.s:6 tags BTLSCR_DEFENDER's ability (BattleMessage_AbilityTag).
     state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough | aftermath)
-    return _set_status(state, h.side, h.user, status, cond)
+    return _set_status(state, h.side, h.user, status, cond), charm_proc
 
 
 SYNC_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
@@ -3113,11 +3127,12 @@ def sync_landed(before: BattleState, after: BattleState, side) -> jnp.ndarray:
 
 def synchronize(
     tables: Tables, state: BattleState, attacker, defender, flag, sem, cond, held=None
-) -> tuple[BattleState, jnp.ndarray, jnp.ndarray]:
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """``BattleSystem_SynchronizeStatus`` (battle_lib.c:4493-4534), the
     ``AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS`` step of ``AfterMoveEffects`` (bcp.c:3665-3670), where
     ``cond`` (the step runs: after every hit of a move whose AfterMoveEffects run). Returns
-    ``(state, flag, sem)``. ``flag``: ``SYSCTL_TRY_SYNCHRONIZE_STATUS``; ``sem``: the
+    ``(state, flag, sem, ran)``; ``ran``: a status script ran, which returns before the form change
+    and the knot (:4515-4532; ``sync_step``). ``flag``: ``SYSCTL_TRY_SYNCHRONIZE_STATUS``; ``sem``: the
     ``sideEffectMon`` (a battler; the side in singles). ``attacker`` / ``defender``: the action's
     battlers (the defender is the attacker itself for a self-defender move: Baton Pass).
 
@@ -3201,7 +3216,90 @@ def synchronize(
     )
     state = _set_status(state, receiver, r_mon, kind, lands & _alive(state, receiver, r_mon))
     state = reveal_ability(state, passer, p_mon, SYNCHRONIZED, lands)
-    return state, flag & ~lands, jnp.where(run, receiver, sem)
+    return state, flag & ~lands, jnp.where(run, receiver, sem), run & (kind != Status.NONE)
+
+
+def sync_step(
+    tables: Tables, state: BattleState, attacker, defender, flag, sem, loved, cond, held=None
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(state, flag, sem, loved, failed)``: the whole of ``BattleSystem_SynchronizeStatus``
+    (battle_lib.c:4493-4572) where ``cond``: ``synchronize``, which returns when a status script
+    ran; then ``BattleSystem_TriggerFormChange`` (:4536-4544), which returns when a form changes
+    (``form_change_pending``; the change itself runs at the later form-change checks, so the knot
+    of this hit is lost, H-4); then ``knot``. ``failed``: the knot's ``MOVE_STATUS_FAILED``."""
+    state, flag, sem, ran = synchronize(tables, state, attacker, defender, flag, sem, cond, held)
+    knots = jnp.asarray(cond, bool) & ~ran & ~form_change_pending(tables, state)
+    state, sem, loved, failed = knot(tables, state, attacker, defender, loved, sem, knots)
+    return state, flag, sem, loved, failed
+
+
+def form_change_pending(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_TriggerFormChange`` (battle_lib.c:6305-6451) would change a form
+    now. Only Castform's (Forecast, ``hooks.forecast``) is modelled: Cherrim, Arceus's Multitype
+    plate and Giratina's Origin revert have no state here (H-4)."""
+    from nuzline.engine.hooks import forecast  # hooks imports this module
+
+    return jnp.any(forecast(tables, state).types != state.types)
+
+
+def knot(
+    tables: Tables, state: BattleState, attacker, defender, loved, sem, cond
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(state, sem, loved, failed)``: the Destiny Knot half of ``BattleSystem_SynchronizeStatus``
+    (battle_lib.c:4546-4566) where ``cond``, the step reached it (``synchronize`` did not run a
+    status script and ``form_change_pending`` is false: both return first, :4515-4532, :4536-4544).
+    ``loved`` (``bool[B]``) is each battler's ``SELF_TURN_FLAG_INFATUATED``, set by
+    ``subscript_infatuate.s:29`` on a landed Attract, Cute Charm or knot, cleared at the action's
+    end (battle_lib.c:2013-2015); ``sem`` is ``sideEffectMon`` (a battler).
+
+    A defender (``Battler_HeldItemEffect``: Klutz / Embargo hide it) holding the knot that is
+    ``sem`` and flagged reflects to the attacker; else an attacker holding it that is ``sem`` and
+    flagged reflects to the defender (:4546-4559). ``sem`` becomes the receiver before the
+    script. ``subscript_infatuate.s`` (type ``HELD_ITEM``): the receiver's ignorable Oblivious
+    (:5, :98: no effect, the message names both, the AI learns the ability and the holder's item;
+    the receiver must have HP, ``BtlCmd_CheckIgnorableAbility`` :7716-7720); else
+    ``BtlCmd_TryAttract`` (bs:5727-5742: genders differ, neither genderless, the receiver not in
+    love), which on failure sets ``MOVE_STATUS_FAILED`` (:108-110: ``failed``, which the action's
+    ``NO_EFFECTS`` tests read: Conversion 2's record, the Metronome count); on success the
+    receiver's attract bit, the message (the AI learns the holder's item) and its flag (:29).
+    The missed branch (:6) is never met: the step runs after a hit that connected."""
+    from nuzline.engine.hooks import ROMANCE_BLOCKED, reveal_ability  # hooks imports this module
+
+    attacker = jnp.asarray(attacker, _I32)
+    defender = jnp.asarray(defender, _I32)
+    sem = jnp.asarray(sem, _I32)
+    loved = jnp.asarray(loved, bool)
+    a_mon, d_mon = state.active[attacker], state.active[defender]
+    on = jnp.asarray(cond, bool)
+    first = (
+        on
+        & (tables.item_effect[held_item(state, defender, d_mon)] == ItemId.DESTINY_KNOT)
+        & (sem == defender)
+        & loved[defender]
+    )
+    second = (
+        on
+        & ~first
+        & (tables.item_effect[held_item(state, attacker, a_mon)] == ItemId.DESTINY_KNOT)
+        & (sem == attacker)
+        & loved[attacker]
+    )
+    run = first | second
+    holder = jnp.where(first, defender, attacker)
+    receiver = jnp.where(first, attacker, defender)
+    h_mon, r_mon = state.active[holder], state.active[receiver]
+    oblivious = (
+        run
+        & (ignorable(state, attacker, receiver) == AbilityId.OBLIVIOUS)
+        & _alive(state, receiver, r_mon)
+    )
+    landed = run & ~oblivious & _attractable(state, receiver, r_mon, holder, h_mon)
+    failed = run & ~oblivious & ~landed
+    state = reveal_ability(state, receiver, r_mon, ROMANCE_BLOCKED, oblivious)
+    state = reveal_item(state, holder, h_mon, oblivious | landed)
+    state = _set(state, "infatuated", receiver, 1, landed)
+    loved = loved.at[receiver].set(loved[receiver] | landed)
+    return state, jnp.where(run, receiver, sem), loved, failed
 
 
 def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3534,6 +3632,8 @@ class MoveHit(NamedTuple):
     # trickRoomActivated (effect_script_0259.s:18; battle_script.c:7859-7866), so the action's
     # MoveEnd re-sorts the order (bcp.c:3989-3994; battle_lib.c:7276-7300), SF2 (k).
     trick_room: jnp.ndarray
+    # Cute Charm's trigger passed on this hit: sideEffectMon is the attacker (H-4).
+    charm_proc: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -4243,7 +4343,7 @@ def play_hit(
         # (BattleSystem_Defender, battle_lib.c:1665-1669): the foe's Shaymin is left as it is.
         on_foe = h.landed & ~targets_user(tables, move, ghost_user(state, side))
         state = shaymin_land(tables, state, target_side, on_foe)
-    state = _contact_ability(tables, state, h, outcome, move_type)
+    state, charm_proc = _contact_ability(tables, state, h, outcome, move_type)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)
     # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431; the substitute's share, :3361, :3366)
@@ -4268,4 +4368,5 @@ def play_hit(
         & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
         & ~((effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)),
         trick_room=trick_room_runs(h),
+        charm_proc=charm_proc,
     )

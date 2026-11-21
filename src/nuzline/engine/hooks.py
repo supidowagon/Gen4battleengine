@@ -600,7 +600,9 @@ def _restore(state: BattleState, side, mon, effect, cond):
     (``..._frz_restore.s``); Persim: confusion (``..._cnf_restore.s``, battle_lib.c:4655-4660);
     Lum: any status and confusion (``..._prz/slp/psn/brn/frz/cnf/multi_restore.s``: the
     status, then the confusion); White Herb: every stage below neutral back to neutral
-    (battle_lib.c:4875-4887, done in C before ``..._statdown_restore.s``). A cured status
+    (battle_lib.c:4875-4887, done in C before ``..._statdown_restore.s``); Mental Herb: the
+    attract bits (VOLATILE_CONDITION_ATTRACT only, no Taunt / Encore / Disable in Gen 4:
+    battle_lib.c:4889-4894, :5102-5107; ``subscript_held_item_heal_infatuation.s:10``, H-4). A cured status
     takes its counter with it (sleep turns and the toxic counter are bits of ``status``)."""
     row = party(format_of(state), side)
     status = state.status[row, mon]
@@ -617,6 +619,8 @@ def _restore(state: BattleState, side, mon, effect, cond):
     cure_status = cond & (berry | (lum & any_status))
     cure_confusion = cond & (lum | (effect == ItemId.PERSIM_BERRY)) & confused
     herb = cond & (effect == ItemId.WHITE_HERB) & jnp.any(lowered)
+    love = state.infatuated[side] != 0
+    cure_love = cond & (effect == ItemId.MENTAL_HERB) & love
     # VOLATILE_CONDITION_NIGHTMARE off (G-32): subscript_held_item_slp_restore.s:13 (a sleep cure,
     # battle_lib.c:4608-4611, :4667-4671, Pluck :5577-5580, :5648-5651) and _multi_restore.s:13
     # (Lum on a status and confusion, :4689-4692, :5669-5672); the other restore subscripts keep it.
@@ -633,12 +637,15 @@ def _restore(state: BattleState, side, mon, effect, cond):
         confusion=state.confusion.at[side].set(
             jnp.where(cure_confusion, 0, state.confusion[side]).astype(state.confusion.dtype)
         ),
+        infatuated=state.infatuated.at[side].set(
+            jnp.where(cure_love, 0, state.infatuated[side]).astype(state.infatuated.dtype)
+        ),
         stages=state.stages.at[side].set(
             jnp.where(herb & lowered, 0, state.stages[side]).astype(state.stages.dtype)
         ),
     )
     state = clear_nightmare(state, side, nightmare_off)
-    return state, cure_status | cure_confusion | herb
+    return state, cure_status | cure_confusion | herb | cure_love
 
 
 def _raise_stat(tables: Tables, state: BattleState, side, item, cond):

@@ -659,6 +659,11 @@ class BattleState(NamedTuple):
     # int8[B], the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of each battler (F-4): a U-turn
     # newcomer's Intimidate skips a foe whose substitute the action hit (hooks.intimidate)
     ts_sub_hit: jnp.ndarray
+    # int8[B], the paused action's SELF_TURN_FLAG_INFATUATED of each battler's slot (H-4): the flag
+    # stays through U-turn's party list (BattleContext_Init clears it at the action's end,
+    # battle_lib.c:2013-2015), so the resumed tail's Destiny Knot step (battle_lib.c:4546-4566)
+    # reads it with the newcomer's item (``effects.knot``)
+    ts_loved: jnp.ndarray
     # int8[B], 1 = the battler fainted in the paused action holding MOVE_EFFECT_GRUDGE (review b2
     # #5): SYSCTL_MON_FAINTED keeps it flagged across a U-turn's party list (battle_script.c:
     # 1770-1771, cleared by PlayFaintAnimation :1799) and its moveEffectsMask stays until its faint
@@ -1070,6 +1075,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
     "ts_sub_hit": (_BATTLER, np.int8),
+    "ts_loved": (_BATTLER, np.int8),
     "ts_grudge": (_BATTLER, np.int8),
     "ts_follow_me": (_SIDE, np.int8),
     "ts_trace_fires": (_BATTLER, np.int8),
