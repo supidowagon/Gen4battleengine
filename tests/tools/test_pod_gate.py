@@ -348,9 +348,11 @@ def test_unit_overdue_counts_from_the_start_file(tmp_path):
     assert _run(script).split() == ["n", "y", "n", "n"]
 
 
-def _podcheck(root: Path, pids: dict[int, str], cg: Path, want: str = "") -> tuple[int, list[str]]:
-    """want: podcheck.sh's arguments after <root> (POD_SCRIPTS, POD_WEIGHTS)."""
-    script = (f"{_fake_ps(pids)}\nexport -f ps\nCGROOT='{cg.as_posix()}' bash '{PODCHECK.as_posix()}' "
+def _podcheck(root: Path, pids: dict[int, str], cg: Path, want: str = "", vol: str = "") -> tuple[int, list[str]]:
+    """want: podcheck.sh's arguments after <root> (POD_SCRIPTS, POD_WEIGHTS). vol: the env for the
+    network volume line (default: a folder that does not exist, so the pod's own /vol never shows)."""
+    vol = vol or f"CACHE_VOL='{(root.parent / 'novol').as_posix()}'"
+    script = (f"{_fake_ps(pids)}\nexport -f ps\n{vol} CGROOT='{cg.as_posix()}' bash '{PODCHECK.as_posix()}' "
               f"'{root.as_posix()}' {want}")
     r = subprocess.run([BASH, "-c", script], check=False, capture_output=True, text=True, env=_clean_env())
     return r.returncode, r.stdout.strip().splitlines()
@@ -385,7 +387,8 @@ def test_podcheck_lists_runs_gate_versions_memory_and_claims(tmp_path):
     assert rc == 0
     assert out[0] == "run new-a gate=2 scripts=aaaaaaaaaaaa runner=alive live=0 pending=3"
     assert out[1] == "memory 94 GB limit 137 GB"
-    assert out[2].startswith("claim new-a.u_004 age ") and out[2].endswith(" s weight 30 GB runner not-runner")
+    assert out[2] == "volume none"
+    assert out[3].startswith("claim new-a.u_004 age ") and out[3].endswith(" s weight 30 GB runner not-runner")
     assert out[-1] == "PODCHECK OK"
     assert not any("secretcode" in x for x in out)
 
@@ -394,8 +397,24 @@ def test_podcheck_reads_cgroup_v1_and_an_unlimited_limit(tmp_path):
     root = tmp_path / "work"
     root.mkdir()
     cg = _cg(tmp_path, {"memory/memory.usage_in_bytes": "3000000000", "memory/memory.limit_in_bytes": "9223372036854771712"})
-    assert _podcheck(root, {}, cg) == (0, ["memory 3 GB limit max", "PODCHECK OK"])
-    assert _podcheck(root, {}, tmp_path / "nocg") == (0, ["memory none limit none", "PODCHECK OK"])
+    assert _podcheck(root, {}, cg) == (0, ["memory 3 GB limit max", "volume none", "PODCHECK OK"])
+    assert _podcheck(root, {}, tmp_path / "nocg") == (0, ["memory none limit none", "volume none", "PODCHECK OK"])
+
+
+def test_podcheck_prints_the_network_volume_line(tmp_path):
+    import re
+    root = tmp_path / "work"
+    root.mkdir()
+    vol = tmp_path / "vol"
+    for d in ("jax/0123456789abcdef", "snap/" + "a" * 40 + "-" + "b" * 16, "snap/.tmp-x-1-k"):
+        (vol / d).mkdir(parents=True)
+    for n in ("e1-cache", "e2-cache", ".tmp-p-1-e3-cache", "used-20261121"):
+        (vol / "jax" / "0123456789abcdef" / n).write_bytes(b"x")
+    rc, out = _podcheck(root, {}, tmp_path / "nocg", vol=f"CACHE_VOL='{vol.as_posix()}' CACHE_VOL_MOUNTCHECK=0")
+    assert rc == 0
+    assert re.fullmatch(rf"volume {re.escape(vol.as_posix())} free (\d+|\?) GB entries 2 captures 1", out[1]), out
+    rc, out = _podcheck(root, {}, tmp_path / "nocg", vol=f"CACHE_VOL='{vol.as_posix()}'")   # a plain folder, not a mount
+    assert out[1] == "volume none"
 
 
 def test_podcheck_fails_on_an_active_old_script_or_other_script_run(tmp_path):
@@ -632,7 +651,7 @@ def test_runner_kills_a_unit_over_unit_max_s_with_rc_96(tmp_path):
     (d / "out" / "u_001.w").write_text("1\n", encoding="utf-8", newline="\n")
     (d / "run.env").write_text("export RESERVE_PCT='80'\n", encoding="utf-8", newline="\n")   # setup.sh's
     cg = _cg(tmp_path, {"memory.current": "1000000000"})
-    env = (f"CGROOT='{cg}' WORK='{work}' RUNNER_LOCK='{tmp_path / 'lock'}' CLAIMS='{tmp_path / 'claims'}' "
+    env = (f"CACHE_VOL='{tmp_path / 'novol'}' CGROOT='{cg}' WORK='{work}' RUNNER_LOCK='{tmp_path / 'lock'}' CLAIMS='{tmp_path / 'claims'}' "
            "WARMUP=none SPACING=0 UNIT_MAX_S=2 RESERVE_PCT=80 RESERVE_TOP=3")
     log = d / "runner.log"
     subprocess.run([BASH, "-c", f"{env} bash '{d / 'bin/runner.sh'}' > '{log}' 2>&1"], check=True, timeout=120, env=_clean_env())
