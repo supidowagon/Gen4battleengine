@@ -3,19 +3,20 @@
 # needs the manager: an unexplained flag, or the fast-tier lock going away.
 # Flags that a live, progressing fast tier explains are ignored. While
 # -HoldUntil is in the future, "has not committed" and "may have stopped" are ignored.
-# -Streams: the stream list (default $NUZLINE_SCRATCH\manager\streams.json; format in README.md).
-param([int]$EveryMin = 10, [string]$HoldUntil = '', [string]$Streams = '')
+# -Streams: the stream list (default <scratch>\manager\streams.json; format in docs/process.md
+# section 6). -Lock and -MinFreeGB pass through to watchdog.ps1 (defaults there).
+param([int]$EveryMin = 10, [string]$HoldUntil = '', [string]$Streams = '', [string]$Lock = '', [double]$MinFreeGB = 1)
 
 $repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir) }
 $scratch = if ($env:NUZLINE_SCRATCH) { $env:NUZLINE_SCRATCH } else { Join-Path $repo '_scratch' }
 if (-not $Streams) { $Streams = Join-Path $scratch 'manager\streams.json' }
 $dog = Join-Path $PSScriptRoot 'watchdog.ps1'
-$lock = Join-Path $scratch 'fast_tier.lock'
+$lock = if ($Lock) { $Lock } else { Join-Path $scratch 'fast_tier.lock' }
 $hold = if ($HoldUntil) { [datetime]$HoldUntil } else { [datetime]::MinValue }
 $hadLock = Test-Path $lock
 
 while ($true) {
-    $out = & $dog -FixLock -Streams $Streams
+    $out = & $dog -FixLock -Streams $Streams -Lock $lock -MinFreeGB $MinFreeGB
     $flags = @($out | Where-Object { $_ -match '^ - ' })
     $hasLock = Test-Path $lock
 

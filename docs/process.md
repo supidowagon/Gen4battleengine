@@ -32,7 +32,7 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 4. The batch's tests run on the test pod while it is in work (CLAUDE.md, Where tests run;
    section 5).
 5. One Opus review agent checks the batch; one fix round fixes its findings. Commits added
-   after a review get their own review before the merge.
+   after a review get their own review before the merge, except as in step 8.
    A new test that asserts over a growing set or a coverage-dependent refusal carries the
    `fullset` marker.
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
@@ -107,13 +107,22 @@ per day is the rate used for estimates.
   of two shapes, each with its limits passed in the exec-pod body's `env`:
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
   - 256 GB (the memory-optimized 32 vCPU type): `GATE_GB` 176, `MAXP` 18 (more than about
-    18 units on one pod stalls it), `KILL_GB` 236, `SPACING` 4, and `SNAP_GATE_GB` 176 for
-    `snap.sh`.
+    18 units on one pod stalls it), `KILL_GB` 236, and `SNAP_GATE_GB` 176 for `snap.sh`.
+  - Every run gets the `MAXP` of the live runs on its pod: the shape's value, or the lowered
+    one while the pod is throttled (MAXP rule, Chunking below).
+  - `SPACING` (s between two chunk starts of one runner) is 4 on both shapes. It is the
+    runner's default; pass `"SPACING":"4"` in every exec-pod body's `env` anyway, so a run
+    packed with older pod scripts (another default) gets it too. This is the one SPACING
+    rule; DAYBOX.md and `tools/ops/nightly_brief.md` point here.
   Several test pods may be up at once (approval: `docs/decisions.md`, section 5). Pod N's id
-  is in `_scratch/rent/day<N>/POD_ID_<N>`; pod 1's is in `_scratch/rent/POD_ID`.
-  Read the shape before sending a body: exec `cat /sys/fs/cgroup/memory.max` on the pod
-  (bytes; `max` or a value under 200 GB means the 128 GB limits). Never pass the 256 GB
-  limits to a 128 GB pod.
+  is in `_scratch/rent/day<N>/POD_ID_<N>`; pod 1's is in `_scratch/rent/POD_ID`. Each pod
+  gets its own pod check before every pack (DAYBOX.md, Send a run step 3).
+  Read the shape before sending a body: exec
+  `{"command":["sh","-c","cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes"],"timeoutSeconds":25}`
+  on the pod (cgroup v2's `memory.max`, else cgroup v1's `memory.limit_in_bytes`: some rented
+  hosts are v1), or the `limit` of the pod check (DAYBOX.md, Send a run step 3). Bytes; `max`,
+  a value of 2^60 bytes or more (v1 without a limit: 9223372036854771712) or a value under
+  200 GB means the 128 GB limits. Never pass the 256 GB limits to a 128 GB pod.
   Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
@@ -125,6 +134,22 @@ per day is the rate used for estimates.
   file, or the first failure when the brief asked for `--until first-failure`. No polling
   turns: the agent does not call `status.sh` while `wait.sh` runs. Only committed code runs
   on the pod.
+- **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
+  sends a newer tip only after the previous run's result is back, and that tip's list holds
+  only:
+  - the lines new since the previous list;
+  - every test file changed since the previous run's tip:
+    `git diff --name-only --diff-filter=d <previous tip> <tip> -- ':(glob)tests/**/test_*.py'`
+    (the `:(glob)` form also matches `tests/test_*.py`; the plain `'tests/**/test_*.py'`
+    does not);
+  - every file the previous run counted as a failure by the Completeness rule below
+    (failed, errored, crashed, killed three times, collect failed, incomplete).
+  Each such file keeps the ids per chunk, `A` flag and weight of its line in the stream's
+  previous list (a file with no line there: the ids per chunk of Chunking below). When a
+  non-test file under `tests/` changed (`git diff --name-only <previous tip> <tip> -- tests`:
+  helpers, `conftest.py`, golden data), the list also holds every previous-list file that
+  can import or read it; when unsure, the whole previous list. The managing session holds
+  any other request until the run is back.
 - **Snapshot capture of `main`.** After every push of `main` the managing session starts
   one capture of the new tip on a test pod, in `/work/snapmain-<short sha>` (seeds 0-199,
   about 90 minutes; commands: `tools/ops/day/snap.sh`, DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
@@ -144,20 +169,57 @@ per day is the rate used for estimates.
   session, which copies those files from the pod with `snap.sh fetch` (DAYBOX.md) into `<scratch>/rent/out/<snapshot folder>/fetch-<epoch>/`.
 - **Snapshot seeds in tests.** No test may redraw snapshot seeds through the live generator; a
   test that needs a compare state pins the state.
-- **Snapshot jobs and the runner.** A capture or compare runs outside the runner's `MAXP`,
-  `GATE_GB` and `KILL_GB` accounting. While one runs, the managing session sends new pack
-  runs with `MAXP` lowered by 2.
+- **Snapshot jobs and the runner.** A capture or compare is outside the runner's chunk count
+  and reserves; the runner sees it only as container memory. New pack runs keep the pod's
+  `MAXP`. The memory gate protects the job: the runners' `GATE_GB` and `KILL_GB` (they read
+  its memory), and `SNAP_GATE_GB` for the job's own start. If the pod must carry fewer chunks
+  while the job runs, restart every live runner with the lower `MAXP` (MAXP rule, Chunking).
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
-  files, about 40 for other files. Start a chunk only while container memory
-  (`/sys/fs/cgroup/memory.current`) is under `GATE_GB`, and run at most `MAXP` chunks at
-  once across all runs on the pod (Test pod above: 88 GB and 10, or 176 GB and 18): a chunk
-  grows to 8-12 GB after it starts. Near `KILL_GB` (118 or 236 GB) kill
-  this run's newest chunk and queue it again, at most twice per chunk; a third kill counts
-  as a failure. Never signal PID 1.
+  files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
+  median 7 GB, 90th percentile 12 GB, 99th 24 GB, largest 92 GB. Every chunk has an expected peak: its heaviest id in
+  `tools/ops/day/pod/weights.txt` (every file any run measured, at its largest chunk and
+  at least 4 GB, plus hand-kept per-test lines, each citing its run; `UNMEASURED_FILE_GB` 20 GB for a
+  file never measured), raised to the list line's `<GB>G` field when that is larger. A
+  live chunk of a run packed before weights (no `out/<unit>.w`) counts `DEFAULT_WEIGHT_GB`
+  12 GB: the 90th percentile of 7183 measured chunks, as those runs are mostly fast-tier
+  chunks of measured files. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`, on cgroup v1
+  `/sys/fs/cgroup/memory/memory.usage_in_bytes`) plus
+  the unreached expected peaks of every live chunk on the pod (all runs) plus its own
+  expected peak stays under `GATE_GB`, and run at most `MAXP` chunks at once across all runs
+  on the pod (Test pod above: 88 GB and 10, or 176 GB and 18). With no other live chunk on
+  the pod a chunk starts when memory is under `GATE_GB` and memory plus its expected peak is
+  under `KILL_GB`; one whose expected peak alone reaches `KILL_GB` starts alone at once, and
+  one kept out only by memory no chunk holds starts after `IDLE_WAIT_S` (300 s). A head
+  chunk that does not fit lets the first later chunk of its run that fits start; after
+  `CLAIM_S` (120 s) it claims the pod, and no other run starts a chunk until it has started.
+  **MAXP rule.** Every runner compares its own `MAXP` with the pod-wide count of live chunks
+  (`tools/ops/day/pod/gate.sh` `admit`, `hold-maxp`; `RUNMAXP` caps this run's own chunks,
+  `runner.sh` main loop). A run sent with a lower `MAXP` than another live run: its head
+  chunk holds, after `CLAIM_S` it claims the pod, every runner then starts nothing until the
+  count is below the low `MAXP`, the low run starts at least one chunk and drops the claim, and the
+  others refill to their own `MAXP`; this repeats for every head chunk. A lower `MAXP`
+  reserves no slots: it stalls the other runs once per chunk. So every run gets the `MAXP` of
+  the live runs on its pod: the shape's value (Test pod above), or the lowered one while the
+  pod is throttled. To throttle a pod, restart every live runner with the lower value
+  (DAYBOX.md Housekeeping step 4); to end the throttle, restart every live runner with the
+  shape's value. To give one run a smaller share, send it with `RUNMAXP` below `MAXP`: a
+  runner at its `RUNMAXP` live chunks skips the gate (`runner.sh` main loop, the
+  `nrun -lt RUNMAXP` test), so it writes no claim and stalls no other run.
+  Heavy tests need no hand placement: list them with their weights and the runner keeps them
+  apart. A claim lasts while its runner lives: a dead runner's claim is dropped at once, a
+  claim whose pid was reused by another process after `CLAIM_MAX_S` (3600 s); a live
+  runner's claim never expires by time. A chunk running longer than `UNIT_MAX_S` (21600 s;
+  the longest measured chunk, 10080 s, ran on an uncontended pod) is killed and counts as a
+  failure. Old-script runners ignore claims: never send a run to a pod they keep full. Every
+  pack is preceded by the pod check (DAYBOX.md, Send a run step 3), and `pack.sh` runs from a
+  checkout at `main` (the pod scripts come from that checkout, not from the commit under
+  test), so runs of old and new scripts share a pod only when the run's report states it.
+  Near `KILL_GB` (118 or 236 GB) kill this run's newest chunk and queue it again, at most
+  twice per chunk; a third kill counts as a failure. Never signal PID 1.
 - **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed
-  equals its collected count. A file whose totals differ, a file that failed to collect and
-  a chunk that crashed count as failures.
+  equals its collected count. A file whose totals differ, a file that failed to collect, a
+  chunk that crashed and a chunk killed three times count as failures.
 - Only the managing session rents, uses and deletes pods. Use generic names. Verify every
   delete with a pod listing. Each spending cap is the user's explicit approval; anything
   larger or longer needs a new approval.
@@ -171,8 +233,18 @@ per day is the rate used for estimates.
 
 - `tools/ops/watchdog.ps1` prints, per stream, the age of its last commit and its
   uncommitted files, the Python test processes with memory and run time, free RAM and the
-  fast-tier lock state, and lists flags.
-- `tools/ops/watch_flags.ps1` runs the watchdog every 10 minutes in the background and exits
+  fast-tier lock state, and lists flags. Its paths come from its own checkout (or
+  `NUZLINE_REPO` / `NUZLINE_SCRATCH`) and its parameters: `-Streams` (default
+  `_scratch/manager/streams.json`), `-Lock` (the fast-tier lock, default
+  `_scratch/fast_tier.lock`), `-MinFreeGB` (default 1), `-FixLock` (removes a lock whose owner
+  is dead).
+- The stream list `_scratch/manager/streams.json` (git-ignored) is edited by hand at every
+  stream branch or worktree change: a JSON array, one object per stream, `name`, `branch`,
+  `worktree` (relative to the main checkout) and an optional `logs` (relative folder of the
+  stream's local `ft_*.log` files):
+  `[{"name": "E1", "branch": "claude/e1-example", "worktree": "_scratch/e1/wt", "logs": "_scratch/e1/logs"}]`.
+- `tools/ops/watch_flags.ps1` (same parameters, passed through, plus `-EveryMin` and
+  `-HoldUntil`) runs the watchdog every 10 minutes in the background and exits
   (waking the managing session) only on a flag that a running test tier does not explain.
   `-HoldUntil` silences "has not committed" and "may have stopped" while streams wait on tests.
 - A fallback check runs twice a day (section 7).
@@ -231,6 +303,10 @@ from the main checkout.
 
 - In a stream's worktree, after every merge of `main` (CLAUDE.md): `bash tools/ops/build_tables.sh --here`.
 - For a pod run: `bash tools/ops/build_tables.sh <commit>` writes `_scratch/rent/tables_<short>.tar.xz`.
+  It keys the archive on the build's inputs (`tools/ops/table_key.py`) and reuses an archive
+  with the same key instead of building; `_scratch/rent/tables_<short>.key` and
+  `_scratch/rent/tables/index.txt` record commit and key. Run it for every pod-run commit;
+  never reuse another commit's archive by hand.
 
 ## 11. Tidiness
 
@@ -262,9 +338,8 @@ pod work. This section is the source of the handoff procedure; a copy in
   project.
 - runpodctl's key: `_scratch/rent/home/.runpod/config.toml`. The scripts run runpodctl with
   `HOME` set to `_scratch/rent/home` (DAYBOX.md, Paths).
-- The live watch scripts: `_scratch/manager/watch_flags.ps1` and `_scratch/manager/watchdog.ps1`
-  (command line in `_scratch/handoff/MANAGER.md`). The copies under `tools/ops/` are older
-  until synced.
+- The watch scripts: `tools/ops/watch_flags.ps1` and `tools/ops/watchdog.ps1` with the stream
+  list `_scratch/manager/streams.json` (section 6; command line in `_scratch/handoff/MANAGER.md`).
 
 ### What does not travel
 
