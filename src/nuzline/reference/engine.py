@@ -8723,8 +8723,9 @@ def _qc_transfer(tables, s: RefState) -> bool:
 
 def _qc_readable(tables, s: RefState) -> list[bool]:
     """``step.qc_readable``: the battler's party has a living Quick Claw holder or its active
-    holds one, fainted or not (the raw item), or an item-transfer move is known and an opposing
-    party has a living holder."""
+    holds one, fainted or not (the raw item), its ``recycleItem`` is a Quick Claw
+    (``order.qc_recycle``), or an item-transfer move is known and a party other than its own
+    (the foe's, a tag-battle ally's) has a living holder."""
 
     def claw(m):
         return m.species and _item_effect(tables, m, None) == ItemId.QUICK_CLAW
@@ -8734,13 +8735,14 @@ def _qc_readable(tables, s: RefState) -> list[bool]:
     for b, sd in enumerate(s.battlers):
         mons = _party_of(s, b).mons
         own = any(claw(m) and (m.hp or i == sd.active) for i, m in enumerate(mons))
-        opposing = any(
+        recycle = _t(tables, "item_effect", sd.recycle_item) == ItemId.QUICK_CLAW
+        elsewhere = any(
             claw(m) and m.hp
-            for o in range(_fmt(s).B)
-            if side_of(o) != side_of(b)
-            for m in _party_of(s, o).mons
+            for p, party in enumerate(s.parties)
+            if p != _party(_fmt(s), b)
+            for m in party.mons
         )
-        out.append(bool(own or (transfer and opposing)))
+        out.append(bool(own or recycle or (transfer and elsewhere)))
     return out
 
 

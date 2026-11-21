@@ -824,20 +824,38 @@ def qc_transfer(tables: Tables, state: BattleState) -> jnp.ndarray:
     side) knows a move of an ``ITEM_TRANSFER_EFFECTS`` battle effect. Thief / Covet
     (``BtlCmd_TryStealItem``, battle_script.c:5093-5126) and Trick / Switcheroo
     (``BtlCmd_TrySwapItems``, :6336-6360) move it between the attacker and the defender, both on
-    the field. Nothing else gives a battler an item in a turn: Knock Off removes one (:6620-6628),
-    ``BtlCmd_RemoveItem`` consumes the battler's own (:8972-8979, Fling and the eaten berries),
-    Recycle gives the attacker back its own consumed item (:9000-9012), Pickup's item comes after
-    the battle (``BtlCmd_GenerateEndOfBattleItem``, :7781). A battler uses those moves only out of
-    a moveset: Metronome and Assist never call them (``sCannotMetronomeMoves``, battle_lib.c:
-    7152-7179, read by ``Move_CanBeMetronomed`` :7194-7210 in ``BtlCmd_Metronome``,
-    battle_script.c:4554, and ``BtlCmd_TryAssist``, :6430); Mirror Move, Me First, Mimic, Sleep
-    Talk and Transform take a move a Pokemon of the battle knows."""
+    the field; the defender may be the attacker's ally (another party in a tag battle): only a
+    side-1 attacker is blocked (:5102-5104, :6345-6346). The other paths that touch a held item
+    give no battler another's: Knock Off removes one (:6620-6628), ``BtlCmd_RemoveItem``
+    consumes the battler's own into its ``recycleItem`` (:8972-8979; Fling's
+    ``RemoveItem BTLSCR_ATTACKER``, effect_script_0233.s:18, Natural Gift, the eaten berries, the
+    defender's berry Bug Bite / Pluck eat, subscript_pluck_check.s:6), Sticky Barb moves only
+    itself (battle_lib.c:5385-5396, :7377-7384), Pickup's item comes after the battle
+    (``BtlCmd_GenerateEndOfBattleItem``, battle_script.c:7781-7797). Recycle gives the attacker
+    back its own ``recycleItem`` (:9000-9012), a flung Quick Claw included: ``qc_recycle``. A
+    battler uses Thief, Covet, Trick or Switcheroo only out of a moveset: Metronome and Assist
+    never call them (``sCannotMetronomeMoves``, battle_lib.c:7152-7179, read by
+    ``Move_CanBeMetronomed`` :7194-7210 in ``BtlCmd_Metronome``, battle_script.c:4554, and
+    ``BtlCmd_TryAssist``, :6430); Mirror Move, Me First, Mimic, Sleep Talk and Transform take a
+    move a Pokemon of the battle knows."""
     effect = tables.move_ai_effect[state.moves]  # [P, 6, 4]
     known = (state.moves != 0) & (state.species[..., None] != 0)
     hit = jnp.zeros(effect.shape, bool)
     for e in ITEM_TRANSFER_EFFECTS:
         hit = hit | (effect == e)
     return jnp.any(known & hit)
+
+
+def qc_recycle(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the battler's ``recycleItem`` is a Quick Claw (a flung one: Fling's
+    ``RemoveItem BTLSCR_ATTACKER``, effect_script_0233.s:18, stores it, battle_script.c:8978), so
+    a Recycle this turn can put it back on the battler (``BtlCmd_TryRecycle``, :9000-9012;
+    effect_script_0184.s:5-7) before the turn end's speed sort. ``recycleItem`` is per battler
+    and outlives a switch (nothing else writes it), and Recycle needs no moveset: Metronome can
+    call it (it is not in ``sCannotMetronomeMoves``, battle_lib.c:7152-7179), as can Assist,
+    Sleep Talk, Mimic, Sketch, Copycat and Mirror Move; so no move test (over-keeping only
+    splits states). The raw item, as ``qc_kept``."""
+    return tables.item_effect[state.recycle_item] == ItemId.QUICK_CLAW
 
 
 # BattleSystem_CompareBattlerSpeed's results (include/constants/battle.h:163-165).

@@ -3590,7 +3590,14 @@ def test_a_party_list_resume_keeps_the_turns_speed_rand_draw(tables, names):
     assert np.asarray(done.ts_qc).tolist() == [0, 0]
 
 
-_QC_CASES = ["bench", "fainted bench", "fainted foe", "foe bench", "foe bench, Thief known"]
+_QC_CASES = [
+    "bench",
+    "fainted bench",
+    "fainted foe",
+    "foe bench",
+    "foe bench, Thief known",
+    "foe bench, flung claw",
+]
 
 
 def _qc_pause_state(tables, names, holder):
@@ -3606,6 +3613,8 @@ def _qc_pause_state(tables, names, holder):
     s = s.replace_hp(1, 0, 1)
     if holder == "fainted bench":
         s = s.replace_hp(0, 1, 0)
+    if holder.endswith("flung claw"):  # a Fling's RemoveItem left it in recycleItem (:8978)
+        s = s._replace(recycle_item=s.recycle_item.at[0].set(claw["item"]))
     return s, A("Bubble", "Tackle", s, names)
 
 
@@ -3617,8 +3626,10 @@ def test_a_learn_pause_stores_only_the_readable_speed_rand_bits(tables, names, h
     # side's bit with a living holder in its party (Machop on the bench), a holder on its field
     # (the fainted Geodude), or, while an item-transfer move is known (Machop's Thief,
     # order.qc_transfer), a living holder in the opposing party that Thief can still take
-    # (Bonsly, which the foe's replacement can send in). Paused states that differ only in an
-    # unread bit are one state (the brute force check is the slow test below).
+    # (Bonsly, which the foe's replacement can send in), or a Quick Claw in the player's
+    # recycleItem (a flung one, which Recycle gives back, battle_script.c:9000-9012,
+    # order.qc_recycle). Paused states that differ only in an unread bit are one state (the
+    # brute force check is the slow test below).
     from nuzline.engine.levelup import LEARN_MOVE_END
 
     s, acts = _qc_pause_state(tables, names, holder)
@@ -3631,6 +3642,7 @@ def test_a_learn_pause_stores_only_the_readable_speed_rand_bits(tables, names, h
         "fainted foe": [0, 1],
         "foe bench": [0, 1],
         "foe bench, Thief known": [1, 1],
+        "foe bench, flung claw": [1, 1],
     }[holder]
     assert np.asarray(paused.ts_qc).tolist() == want
 

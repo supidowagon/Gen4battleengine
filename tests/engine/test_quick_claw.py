@@ -503,6 +503,46 @@ def test_relevance_of_the_turns_draw(tables, names):
     assert rel(over, acts) == [False, False]
 
 
+# Slow: Fling and Recycle compile their own step programs (160 s and 7 GB cold).
+@pytest.mark.slow
+def test_a_flung_quick_claw_keeps_the_bit_recycle_can_read(tables, names):
+    # E3-B2-31(b)(1): Fling ends in RemoveItem BTLSCR_ATTACKER (effect_script_0233.s:18), which
+    # stores the flung Quick Claw in recycleItem (battle_script.c:8978); Recycle gives it back
+    # (:9000-9012) before that turn's end sort reads the turn's speedRand bit (battle_lib.c:
+    # 1278-1279). So the next turn's law draws Monferno's bit with no holder in its party.
+    def rel(x, acts):
+        return np.asarray(laws_of(tables, x, acts).relevant.quick_claw).tolist()
+
+    claw = names.item("Quick Claw")
+    s = _state(tables, names, holders=(0,), mine=["Fling", "Recycle"], opp=["Growl"])
+    flung = assert_matches_reference(tables, s, A("Fling", "Growl", s, names), _o())
+    assert int(flung.item[0, 0]) == 0 and int(flung.recycle_item[0]) == claw
+    acts = A("Recycle", "Growl", flung, names)
+    assert rel(flung, acts) == [True, False]
+    assert rel(flung._replace(recycle_item=flung.recycle_item.at[0].set(0)), acts) == [False, False]
+    back = assert_matches_reference(tables, flung, acts, _o())
+    assert int(back.item[0, 0]) == claw
+
+
+def test_a_tag_battle_ally_holder_keeps_the_bit_when_thief_is_known(tables, names):
+    # E3-B2-31(b)(2): only a side-1 attacker's steal or swap is blocked (battle_script.c:
+    # 5102-5104, :6345-6346), so battler 0 can Thief its tag-battle ally (battler 2, party 2)
+    # and take its Quick Claw: with Thief known, every battler's bit is readable, battler 0's by
+    # the ally's holder (a party other than its own), in both engines.
+    from nuzline.engine.format import MULTI
+    from nuzline.engine.step import qc_readable
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _qc_readable
+    from tests.engine.d2_states import four, with_moves
+
+    s = four(tables, names, MULTI)
+    s = s._replace(item=s.item.at[2, 0].set(names.item("Quick Claw")))
+    for thief, want in ((False, [False, False, True, False]), (True, [True] * 4)):
+        x = with_moves(s, names, 0, ("Tackle", "Thief")) if thief else s
+        assert np.asarray(qc_readable(tables, x)).tolist() == want
+        assert _qc_readable(tables, to_ref(x)) == want
+
+
 def test_damage_classes_classify_quick_claw():
     assert ItemId.QUICK_CLAW in INPUT_NEUTRAL_ITEMS
 

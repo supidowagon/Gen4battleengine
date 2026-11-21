@@ -267,6 +267,7 @@ from nuzline.engine.order import (
     is_switch,
     me_first_copy,
     player_second,
+    qc_recycle,
     qc_transfer,
     record_speeds,
     resort_claw_flags,
@@ -5173,26 +5174,29 @@ def qc_readable(tables: Tables, state: BattleState) -> jnp.ndarray:
     It reads ``speedRand`` only for a battler holding ``HOLD_EFFECT_SOMETIMES_PRIORITY``
     (:1278-1279, :1345), and a fainted battler only against another fainted one (:1205-1211).
     So the bit is read when the battler's party has a living Quick Claw holder or its active
-    holds one (fainted or not, as ``order.quick_claw_active`` reads it), or when it can still
-    take one (``qc_transfer``): a battle knowing an item-transfer move and a living holder in an
-    opposing party (the defender of Thief, or the attacker of a Trick that gives it away; a bench
-    holder can still enter by a pivot's party list before a later action). An AI attacker's
-    steal or swap fails outside the Frontier (battle_script.c:5102-5104, :6345-6346); the rule
-    keeps the bit for both sides (over-keeping only splits states). The raw item, as
-    ``qc_kept``. Every such holder was living at the turn's start, where ``enumerate``'s
-    ``quick_claw`` law draws the bit under the same rule. Else it is 0, an unread value, so
-    paused states that differ only in it are one state."""
+    holds one (fainted or not, as ``order.quick_claw_active`` reads it), when its
+    ``recycleItem`` is a Quick Claw (``qc_recycle``: Recycle gives it back), or when it can
+    still take one (``qc_transfer``): a battle knowing an item-transfer move and a living holder
+    in any party but the battler's own (the defender of Thief, or the attacker of a Trick that
+    gives it away; the foe's, or a tag-battle ally's, whose attacker is not blocked: only side 1
+    is, battle_script.c:5102-5104, :6345-6346; a bench holder can still enter by a pivot's party
+    list before a later action). An AI attacker's steal or swap fails outside the Frontier
+    (same lines); the rule keeps the bit for both sides (over-keeping only splits states). The
+    raw item, as ``qc_kept``. Every such holder was living, and every ``recycleItem`` set, at
+    the turn's start, where ``enumerate``'s ``quick_claw`` law draws the bit under the same rule
+    (a Fling this turn stores the Quick Claw its battler held then). Else it is 0, an unread
+    value, so paused states that differ only in it are one state."""
     fmt = format_of(state)
     battlers = jnp.arange(fmt.B)
     rows = party(fmt, battlers)  # each battler's party
-    holds = tables.item_effect[state.item[rows]] == ItemId.QUICK_CLAW
-    alive = (state.species[rows] != 0) & (state.hp[rows] > 0)
+    holds = tables.item_effect[state.item] == ItemId.QUICK_CLAW  # [P, 6]
+    alive = (state.species != 0) & (state.hp > 0)
     on_field = jnp.arange(state.hp.shape[1])[None, :] == state.active[:, None]
-    own = jnp.any(holds & (alive | on_field), axis=1)
-    living = jnp.any(holds & alive, axis=1)
-    side = side_of(battlers)
-    opposing = jnp.any((side[:, None] != side[None, :]) & living[None, :], axis=1)
-    return own | (qc_transfer(tables, state) & opposing)
+    own = jnp.any((holds & alive)[rows] | (holds[rows] & on_field), axis=1)
+    living = jnp.any(holds & alive, axis=1)  # per party
+    others = jnp.arange(state.hp.shape[0])[None, :] != rows[:, None]  # [B, P]
+    elsewhere = jnp.any(others & living[None, :], axis=1)
+    return own | qc_recycle(tables, state) | (qc_transfer(tables, state) & elsewhere)
 
 
 def _keep_quick_claw(tables: Tables, state: BattleState, qc) -> BattleState:

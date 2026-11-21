@@ -1668,6 +1668,8 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   (player.py:174, playout.py:456, `_replay`) is reached and kept: the other payouts inside `step` scan
   (`learn_prompt`, step.py:3793, :4691, :4761), TurnEnd's does not, and D8 keeps a finished battle's work
   uniformly. Both tests assert fixed values; reverting either resolve change fails one of them.
+  Keeping learn work at a finished battle is the project's ruling D8 (the growth plan reads it), not a decomp rule:
+  the game answers every prompt inside GetExpTask before CheckBattleOver, so no learn work outlives its battle there.
 - E3-B2-31 The slow tier's red test_damage_classes_equal_bruteforce_generated on 8c5cd83e (branch claude/e3-slowfix):
   a pause (MoveEnd learn, bcp.c:3968; LEARN_FIELD / LEARN_MON; an E2 party list) stored every side's raw speedRand
   bit in `ts_qc`. The brute force draws `quick_claw` for every side when any Quick Claw exists; the exact law only for
@@ -1703,3 +1705,41 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   living Quick Claw holder in its party and none on its active (step, jitstep, the reference output), and
   enumerate_turn's children of such a pausing turn, which merge (fewer children, summed probabilities). A saved
   paused input's unread bit changes no output: nothing reads it.
+  (b) Review of d9c68dfb. (1) Recycle: Fling ends in `RemoveItem BTLSCR_ATTACKER` (effect_script_0233.s:18), which
+  stores the flung item, a Quick Claw included (flingPower 80, res/items/data/quick_claw.json:20), in
+  `recycleItem[battler]` (battle_script.c:8978); `BtlCmd_TryRecycle` gives it back (:9000-9012, effect_script_0184.s:
+  5-7; step.py `recycle`, the reference's Recycle block, reference/engine.py:6071-6077), so a Recycle on a later turn puts a Quick Claw on the battler before
+  that turn's end sort, which reads that turn's bit. `recycleItem` is written only there (grep: battle_script.c:8978,
+  :9007), so it outlives a switch, and Recycle needs no moveset: it is not in sCannotMetronomeMoves (battle_lib.c:
+  7152-7179), so Metronome calls it, as Assist, Sleep Talk, Mimic, Sketch, Copycat and Mirror Move can. Rule: b's bit
+  is also kept and drawn when b's `recycle_item` is a Quick Claw (`order.qc_recycle`, no move test), in
+  `step.qc_readable`, `reference._qc_readable` and enumerate's `quick_claw`. A Fling of this turn sets it from the
+  Quick Claw b held at the turn's start, so the law (read there) already drew it. Every other path that puts or
+  takes a held item, checked: Thief / Covet (`BtlCmd_TryStealItem` :5093-5126, subscript_steal_item.s:14-16) and
+  Trick / Switcheroo (`BtlCmd_TrySwapItems` :6336-6360, subscript_exchange_items.s:19-22) can give a Quick Claw
+  mid-turn (`qc_transfer`); Recycle can (above); Sticky Barb moves only itself (HOLD_EFFECT_DMG_USER_CONTACT_XFR,
+  battle_lib.c:5385-5396, :7377-7384), no; Knock Off removes (:6620-6628), no; Bug Bite / Pluck eat the defender's
+  berry (subscript_pluck_check.s:6, RemoveItem), Natural Gift (effect_script_0222.s:8) and the eaten berries consume
+  the own item, no; Pickup runs after the battle (`BtlCmd_GenerateEndOfBattleItem` :7781-7797), no. (2) Tag battles:
+  only a side-1 attacker's steal or swap is blocked (:5102-5104, :6345-6346), so a side-0 battler can Thief or Trick
+  its ally, another party in a tag battle. `elsewhere` (step, reference) and `other_claw` (enumerate) now count a
+  living holder in any party but b's own; singles is unchanged (the other party is the foe's). (3) Doubles item,
+  owner: the multi-battler milestone (split-by-split roadmap): a partner that learns Thief, Covet, Trick or
+  Switcheroo at a MoveEnd pause re-reads its slot for its pending action (STATE.md, mid-turn learn prompts;
+  FightCommand :1889-1895), but the turn's law and the pause read the moves of the turn's start, so its bit can be
+  dropped. Unreachable today: coverage refuses every format but singles and refuses a learnable move whose effect is
+  UNSUPPORTED (`learnable_moves` through `move_effect_line`, coverage.py), which Thief, Covet, Trick and Switcheroo
+  are (move_effect UNSUPPORTED, move_ai_effect 105 / 177). The exact fix (the law and the pause also count the
+  moves learnable this turn) belongs with doubles exp. (4) Coverage: any Pokemon of the fight (either party) that
+  knows or can learn Thief, Covet, Trick or Switcheroo is refused (`_check_party` grades every move, coverage.py
+  `move_effect_line`; EffectId UNSUPPORTED), so `qc_transfer` is false in every accepted state and the tag-battle
+  change diverges nothing. Recycle (EffectId.RECYCLE) and Fling (EffectId.FLING) are accepted.
+  Tests: test_e3_batch2.py::test_a_learn_pause_stores_only_the_readable_speed_rand_bits[foe bench, flung claw]
+  (the pause, both engines; its brute force twin, slow, gains the case), test_quick_claw.py
+  ::test_a_flung_quick_claw_keeps_the_bit_recycle_can_read (slow: a real Fling, then the law draws the bit and
+  Recycle restores the claw, both engines), ::test_a_tag_battle_ally_holder_keeps_the_bit_when_thief_is_known
+  (MULTI, ally holder in party 2, step and reference).
+  Expected snapshot divergence beyond the above: only states whose `recycle_item` is a Quick Claw (a flung Quick
+  Claw, no held one left in the party): `ts_qc` at a pause there 0 -> the drawn bit, and enumerate_turn's children
+  of their turns split by `quick_claw` (twice as many, probabilities 1/5 and 4/5). None if no snapshot part flings a
+  Quick Claw.
