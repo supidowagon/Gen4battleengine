@@ -175,3 +175,9 @@ while :; do
   sleep 10
 done
 date +%s > ALL.end; touch DONE
+# Network volume (only when /vol is a mountpoint): publish the pod's new compile cache entries in
+# the background (bin/cache_sync.sh publish, log /work/<run>/cache_sync.log), after DONE so neither
+# DONE nor the beacon waits for it. Without /vol nothing runs.
+if mountpoint -q /vol 2>/dev/null; then
+  CACHE_PY="$D/repo/.venv/bin/python" setsid nohup bash "$D/bin/cache_sync.sh" publish > "$D/cache_sync.log" 2>&1 < /dev/null 8>&- &
+fi
