@@ -596,7 +596,7 @@ def test_layout_of_a_bit_7_fight_has_the_bounds(tag):
     # one (the defender's guess), a highest damaging move two.
     from nuzline.ai.layout import fight_layout
 
-    t, n, fight = tag
+    t, n, _fight = tag
     layout = fight_layout(t, 1 << 7, np.asarray([_id(n, "Follow Me"), _id(n, "Tackle")]))
     assert layout.flags == 1 << 7 and layout.slot_reads >= 1
 
