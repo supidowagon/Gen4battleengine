@@ -202,10 +202,19 @@ managing session lowers cost per unit of work and never throttles the streams.
 
 ## 9. State and memory
 
+- **Standing rule:** run the project as if a successor with no access to any session takes
+  over at any moment, from the project folder alone. Write every decision, standing approval,
+  open problem and next step to project files when it happens, not at handoff time. Write for
+  a reader with zero context: full paths, branch names and tips, exact commands, what is
+  done, in work or blocked and why.
+- **Process and rules** are in the repo: `CLAUDE.md`, this file, `tools/ops/`.
+- **Standing decisions** (approvals, preferences, lessons) are in `docs/decisions.md`. Add a
+  decision there on the day it is made.
+- **Live state** is in `_scratch/handoff/` (git-ignored): one state file per role, rewritten
+  in full, sections as in section 12, "State files".
 - Each stream keeps its ledger in `docs/kaizo/` and restarts from it after a clear.
-- The managing session keeps, in its private memory folder outside the repo, a handoff note
-  (current tips, pending work, schedules to re-create) and one note per standing decision or
-  approval. After a clear it reads the handoff first.
+- A session's private memory folder is a copy. Nothing a successor needs exists only there,
+  in a session, or in the app's side-session notes.
 
 ## 10. Rebuilding the tables
 
@@ -227,3 +236,128 @@ from the main checkout.
 - The managing session runs the cleanup at every split close and once a week: move stray
   files into the project, delete merged worktrees and old logs, tighten the `.md` files.
 - The managing session fixes a doc in the same turn as the process change that made it stale.
+
+## 12. Taking over
+
+A successor has the project folder and nothing else. This section and the files it names are
+enough to run the project.
+
+**Read in this order:** `CLAUDE.md`; this file; `docs/decisions.md`;
+`_scratch/handoff/MANAGER.md` (a stream: its `E<n>.md`); `tools/ops/day/DAYBOX.md` before any
+pod work. This section is the source of the handoff procedure; a copy in
+`_scratch/handoff/README.md` follows it.
+
+### What travels with the project folder
+
+- The repo, all worktrees, `_scratch/` (tables, lists, pod results, `_scratch/handoff/`).
+- `CLAUDE.md`, `docs/`, `tools/ops/`.
+- The project's Claude files: `.claude/agents/review.md` (the fresh-context review agent of
+  every review and merge gate) and `.claude/commands/goal.md` (the `/goal` planning command).
+  These project copies are the source. A copy in the user profile's `.claude` folder follows
+  them.
+
+### What does not travel
+
+- Session ids, cross-session message addresses, linked-session lists, scheduled prompts,
+  background agents and shells. A new session recreates what it needs ("Picking up").
+- The app's side-session notes. Durable state never lives there.
+- A session's private memory folder (`~/.claude/projects/<project>/memory/`). It loads only
+  for a session opened in the main checkout under the same OS user, and it is a copy
+  (section 9).
+- Tool sign-ins: `gh`, the Runpod plugin, runpodctl's key.
+
+### State files (`_scratch/handoff/`, git-ignored)
+
+- `MANAGER.md`: the managing session. `E1.md`, `E2.md`, `E3.md`: one per work stream.
+  `SETUP.md`: this machine's setup inventory with its real paths.
+- Every state file has these sections: Role, Tips (branch, worktree, commit), In flight, Held,
+  Owed, Next steps in order, Open questions, Pointers. Its first line under the title is
+  `Updated:` with date and time.
+- A state file states facts as of its `Updated:` line. Verify tips with
+  `git log -1 <branch>` and pods with one pod exec call each before acting.
+- Personal details, pod ids and codes go only here, never in tracked files.
+
+### Writing a handoff (the session that stops)
+
+Trigger: the owner types `handoff`, the session is told to pause, or it reaches a commit
+point with usage nearly spent.
+1. Finish or abandon the current edit and commit. A `WIP:` commit is allowed on a stream
+   branch, never on `main`. Worktree clean.
+2. Stop own agents and local processes. Pod runs may continue; list them by run name.
+3. Rewrite its state file completely, never append: everything a stranger needs, nothing that
+   git already says.
+4. Reply to the owner in one line: file written, tip, what is in flight.
+
+The managing session also confirms that each stream's file is current, then writes
+`MANAGER.md` last.
+
+### Picking up (the fresh session)
+
+The owner opens a session in the main checkout folder and pastes one line:
+- Managing session: `Read docs/process.md section 12 and _scratch/handoff/MANAGER.md, then take over as the managing session.`
+  On a new account or machine add: `First do the setup in docs/process.md section 12.`
+- Stream: `Read docs/process.md section 12 and _scratch/handoff/E<n>.md, then take over as stream E<n>.`
+  The managing session normally starts the stream sessions itself and gives them this line.
+
+The session then:
+1. Reads `CLAUDE.md`, this file and `docs/decisions.md`.
+2. Verifies tips and worktrees (`git worktree list`, `git log -1 <branch>`).
+3. Recreates what does not travel: the watch loop (section 6), the scheduled prompts
+   (section 7), one Sonnet collector agent per pod for unfinished pod runs (DAYBOX.md, Wait
+   and Collect).
+4. Reports to the owner in five lines what it found and what it does first.
+5. Waits for nothing unless its state file says an owner decision is open.
+
+### Rules
+
+- One account or person works on a branch or worktree at a time. Never run the same role
+  twice at once.
+- Old session ids in a state file are history only. Never message them.
+
+### What you must supply yourself
+
+None of these is in the repo:
+- The inputs: the vanilla Platinum (US) ROM, the Kaizo patch, the PKCalc zip (the official
+  calc repo), the Kaizo docs spreadsheet and the save files. Their paths go in
+  `data/local.toml` (git-ignored; inputs and format: `docs/kaizo/pipeline.md`). The owner
+  writes it; sessions never edit it.
+- The decomp checkout at `external/pokeplatinum` (git-ignored).
+- `.cache/`: decomp symbols, ROM extraction, JAX caches (git-ignored, never uploaded).
+- The owner's recordings folder (path in `_scratch/handoff/`), read-only.
+- A Runpod account, signed in through the Runpod plugin's MCP server, and the runpodctl
+  binary at `_scratch/rent/bin/runpodctl-windows-amd64.exe` (used by `tools/ops/common.sh`;
+  not on PATH) with its key in the user profile's `.runpod/config.toml`.
+- Claude Code with the plugins `superpowers@claude-plugins-official` and `runpod@runpod` at
+  user scope. User settings `env`: `CLAUDE_CODE_TMPDIR`, `TEMP` and `TMP` on a folder on the
+  project's drive (never C:), and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50`.
+- git, `gh` (signed in; it pushes `main`), uv (it brings the project's Python 3.12), node.
+
+### Setup on a new account or machine (once, by the managing session)
+
+1. Open the session in the main checkout folder. The managing session runs on Fable.
+2. Runpod: make one read-only call (list pods). If it asks for authorisation, the owner signs
+   in; the session never types credentials.
+3. Desktop app preferences are per account: permission mode as on the other account,
+   keep-awake on while streams work, notifications on. The owner sets them, or approves the
+   change. Do not change security settings.
+4. Add the owner's recordings folder as an additional directory only when the Elite Four
+   replay check needs it.
+5. Connectors are not needed (section 8).
+6. Start three stream sessions (E1, E2, E3): folder the main checkout, model Opus, each with
+   its pick-up line. Record the new session ids in `MANAGER.md`.
+7. Recreate the watch loop (section 6) and the scheduled prompts (section 7), only when no
+   pause is in force.
+
+Checks (Git Bash, from the main checkout):
+```
+git status -sb && git log -1 --format=%h          # main matches origin/main
+for t in git gh uv python node; do $t --version | head -1; done
+gh auth status
+ls _scratch/rent/bin/runpodctl-windows-amd64.exe
+ls data/local.toml external/pokeplatinum/src .cache/decomp >/dev/null && echo INPUTS_OK
+python -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/settings.json')))['enabledPlugins'])"
+powershell -NoProfile -Command "[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)"   # free GB; local pytest needs more than 6
+```
+Then confirm in the session that the skills `superpowers:*` and `runpod:*` are listed and
+that the Runpod tools answer. Report to the owner in five lines: what matched, what was
+missing, whether Runpod answered, free RAM, and whether a pause is in force.

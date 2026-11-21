@@ -1,0 +1,133 @@
+# Standing decisions
+
+Every standing decision, approval, preference and lesson of the owner that `CLAUDE.md` and `docs/process.md` do not already state.
+Add a new decision here on the day it is made: the rule, the date, one line of why. When a rule changes, rewrite its entry and name what it replaces in one clause.
+
+## 1. Working with the owner
+
+- **One point of contact.** The owner talks only to the managing session. Never send the owner to another session. The managing session briefs, answers and reports for every other session and relays in full any step the owner must do by hand. (2026-11-12) Why: being sent between sessions was a burden.
+- **Keep the main chat clean.** What reaches the owner: `docs/process.md` section 1. Never relay routine stream progress. A wake-up with nothing for the owner gets the single reply `–` and no tool calls unless state must be saved. (2026-11-12; the `–` reply 2026-11-16, replaces "Nothing to report.") Why: relays buried the conversation and cost tokens.
+- **Answer questions without the owner.** Sort every question before it reaches the owner: (1) a game fact goes to the decomp, ROM, calc repo or docs sheet, never to the owner; (2) a play-rule choice becomes a per-run setting whose default is the strictest option, stated in the output; (3) a process or engineering choice the managing session decides and reports. Only the rest goes to the owner, batched and short: spending beyond the standing approvals, risky or irreversible actions, the owner's own nuzlocke rules where no strict default exists, things only the owner can do by hand. Tell the streams the same. (2026-11-19) Why: many questions were game facts the owner did not know, and asking stalls streams.
+- **Design questions go to the owner; merges do not.** (2026-11-12)
+- **The managing session owns throughput.** Find stalls and slowdowns itself, investigate at once, fix them within the standing approvals, then tell the owner only what was stuck and what changed. A stream's "waiting" note is not evidence: check commits, processes, pod unit counts and each session's last activity. When `main` has not moved for hours while work queues at the gate, say why. Never set a timer on something already overdue. At every stall ask what would make it faster, and act. If a tip or list is due and nothing arrived, ask the stream at once. (2026-11-14, 2026-11-16, 2026-11-18) Why: failures ran for hours until the owner noticed.
+- **Speed questions.** When the owner asks for faster, look for idle time and fixed costs first. Say plainly that more sessions burn usage faster. (2026-11-14)
+- **Mechanics told to the owner.** Say whether a mechanic is decomp-verified or not yet checked. When the owner reports in-game behaviour, verify it in the decomp and fix it; do not defend the error. (2026-11-08) Why: a rule stated from later-generation knowledge was wrong for Platinum.
+- **Never call a fight "solved".** Say "best setup and opening, the rest valued by playouts" until solve-from-here exists. (2026-11-12) Why: the exact plan covers about two decisions; the owner was misled once.
+- **Say what was checked.** A "no fault found" report names what was and was not checked. (2026-11-18)
+- **Hardware.** The PC has 20 logical CPUs, 32 GB RAM and an AMD graphics card (no NVIDIA). Plan within 32 GB; never suggest buying RAM (2026-11-18). GPU work means renting an NVIDIA machine.
+
+## 2. Merges, reviews and pushes
+
+- Gate, push rule and steps: `CLAUDE.md` (Pushing, Merges), `docs/process.md` section 2. The owner does not approve merges. (2026-11-12) Why: work must not park on a merge question; the check must be independent of the writer.
+- **Every merge keeps its fresh review agent**, also for a tiny test- or doc-only change. Do not propose skipping it unless the owner raises it. (2026-11-18) Why: the owner values the independent check over its tokens. The re-review exemption in `docs/process.md` section 2 step 8 is unchanged.
+- **Review agent brief.** Give it the exact commit range, covering every non-merge commit, and the criteria. Review every fix commit: a reviewer's fix suggestion can be wrong. Merge-gate and re-check agents run on Opus (pass the model on the Agent call) with a tool-call budget in the brief. (2026-11-16, 2026-11-18) Why: a "remove this" fix note once removed four needed refusals.
+- **Lean reviews.** One reviewer per task and one single-reviewer final review per branch. No multi-reviewer or adversarial review workflows. (2026-11-12) Why: review ceremony was most of the token cost.
+- **Push scope.** Standing yes since 2026-11-15 (`CLAUDE.md`, Pushing): `main` only, no force push, no other branch; anything else needs the owner's go. Replaces "ask before each push" (2026-11-12). Why: the push is the off-PC backup.
+- **Before any public announcement** add a licence file and README credits: the pret decomp, the Kaizo hack's author, PKCalc, the Kaizo docs spreadsheet. Owed. The owner wants the tool public eventually. (2026-11-12)
+- **Repo split.** One repo until the engine is complete. Training code (`src/nuzline/learn`) uses the engine only through a small public interface. When the engine is complete, freeze that interface and move training to its own repo with history. The UI is its own repo from its start, reads only engine output, and is last on the roadmap. Never create repos or move files between repos without the owner's go. (2026-11-13) Why: the battle state still changes every milestone.
+
+## 3. Streams and batches
+
+- **Streams.** E3 approved 2026-11-13; no further stream unless merges stay clean. E2 owns the doubles/tag/multi format (2026-11-17). Ownership per stream: `docs/process.md` section 1.
+- **Family lists.** Before approving one, have the stream rerun the backlog on the newest unmerged tips of the other streams. Approve only groups that cannot overlap; hold the rest. (2026-11-19) Why: two streams nearly built the same groups.
+- **A "known gap" that departs from the decomp is a must-fix**, also when the stream calls it unobservable. Rule sheets and reviews decide observability, not the builder. (2026-11-19)
+- **In-work tip message**: three lines: branch and sha; table inputs changed yes/no; path of `_scratch/<stream>/podlist.txt`. Builders run the guard scans, the dispatch check and the duplicate-name check before every tip. (2026-11-18)
+- **One in-work pod run per stream.** Send the next tip only when the previous run is back, unless it fixes a reported failure; send new list lines only. When a new tip still arrives during a run, run only the new list lines and the changed test files. Keep in-work lists under about 150 units. (2026-11-18, 2026-11-19; approved as roadmap item 4 on 2026-11-20)
+- **Ten-minute rule.** When a stream's agent waits on a local test run, the stream commits and the pod tests. (2026-11-19) Why: agents waiting on local runs stalled a merge train.
+- **Skipped is not passed.** Tests that skip on the pod for missing inputs run locally on the gate tip; the tip message says so. (2026-11-19)
+- **Fixed-seed failure on unchanged code**: triage first with a read-only Opus agent from logs, code and decomp. (2026-11-19) Why: both such failures on 19 Nov were test bugs.
+- **Snapshot compares.** A result with almost every part diverged is a tool or input fault until proven otherwise; ask the stream what the tool does before guessing. A captured field missing in the checkout needs an UPGRADES row in `tools/snap_compare.py` (reshapes too); `--allow-new` is for fields new in the checkout only. Run an early per-stream compare against the `main` capture before a train's shared compare. One capture serves several compares: bisect with compare-only runs against it. (2026-11-19)
+- **Ledgers** keep a RESUME section so a cut-off loses nothing. (2026-11-14)
+
+## 4. Tests
+
+- Cadence: `CLAUDE.md` (Test tiers), `docs/process.md` section 3. The owner: do not bloat the work with tests (2026-11-13). Write no hand-written test where the two-engine differential test already covers the rule. Keep per-batch review, decomp citations and mutation checks. Why: full suites almost never caught bugs; reviews and citations did.
+- **Real-game checks** are only the replays of the owner's recordings at split close (`docs/process.md` section 3); no other real-game check per split. (2026-11-13)
+- **Vanilla coverage sweep** after the last Kaizo split: run the coverage check over all vanilla trainers and model what it refuses. Do not raise it before then. (2026-11-17)
+- **Compute during pauses.** Before a usage pause, start the long CPU-only jobs so results wait at the reset. Never run two full suites at once on the PC. (2026-11-12)
+
+## 5. Pods and spending
+
+Rules: `docs/process.md` section 5. Steps: `tools/ops/day/DAYBOX.md`.
+
+- **Standing approvals.**
+  - Nightly: on Runpod, at most $6 per run on its own pod. (2026-11-17)
+  - Test pods: no daily limit (2026-11-18 evening; replaces $10/day of 2026-11-17 and $15/day of 2026-11-18). The 32 vCPU / 256 GB memory-optimized shape at $1.76/h is approved (2026-11-19). Up to six such pods at once (2026-11-20; replaces two pods). Delete a pod when nothing is queued on it. Report the day's pod cost to the owner.
+  - Upload scope: the `TABLE_ALLOW` list in `tools/ops/common.sh`. (2026-11-18)
+  - A split-close full run on Runpod: agreed in principle; quote the cost to the owner first. (2026-11-17)
+  - More pods, an always-on pod or a GPU: a new yes each time.
+- **Load per pod.** On a 256 GB pod at most four test runs and two snapshot jobs. Before adding runs read free memory (`status.sh`, last line); under 15 GB free add nothing. When a stream sends a newer tip, cancel that stream's older runs and compares unless the newer run does not cover their lists. (2026-11-18, 2026-11-20) Why: `MAXP` limits chunks, not memory; an overloaded pod killed units without a failure line.
+- **Stopping a run.** Message the agent that owns it first ("superseded, do not resend"), then kill on the pod by pid list: `ps -eo pid,args | grep -E '/work/<run>[/]' | awk '{print $1}' | xargs -r kill -9` (the pattern must not match the exec's own command line). Then check that the new run's `runner.log` shows starts. Ten minutes after any dispatch check that the unit count moves. (2026-11-20)
+- **Pod disk.** Before each gate dispatch run `df -h /work` on the pod and delete finished run folders. Keep `_bin`, `_decomp`, `_jaxcache`, `_python`, `_uvcache`, the standing `main` capture and active runs. A failed run name is used up: resend under a new name. (2026-11-20)
+- **Runner spacing.** Pass `SPACING=4` in the exec-pod body's `env`. To change a live run: on the pod `kill $(cat runner.pid)` (that pid only, never `pkill -P`), then `cd /work/<run> && SPACING=4 GATE_GB=.. MAXP=.. KILL_GB=.. setsid nohup bash /work/<run>/bin/runner.sh >> runner.log 2>&1 < /dev/null &` with the absolute script path, and write the new pid to `runner.pid`. A restart ends the run's `notify.sh` beacon: tell the run's agent first; it polls `out/DONE` and collects by hand. (2026-11-20) Why: the 15 s default throttled runs of short units.
+- **Pod stock.** The stock listing can be wrong for hours. Retry every 30-60 minutes; try without naming a data center. (2026-11-18)
+- **PC memory.** Tables are built locally, so low PC memory blocks pod runs. Reuse a tip's tables only when the diff cannot change them (`tools/ops`, docs, tests, docstrings); engine changes need a real build. Check free RAM at session start and ask the owner for a reboot early. (2026-11-20)
+- **Never `Start-Process bash` from PowerShell**: it starts WSL and takes about 2 GB. Run table builds through Git Bash. (2026-11-20)
+- **Timestamps** come from the pod (`date +%s`) or the PC, never from a running estimate. (2026-11-20)
+- **Pod procedures are scripts.** Road-test a new procedure with an agent told to report every step that does not work as written. (2026-11-19)
+- **Start the pod run as soon as a tip arrives**, in parallel with the merge check. (2026-11-18)
+
+## 6. Usage, context and models
+
+Rules: `CLAUDE.md` (Usage), `docs/process.md` section 8.
+
+- **The owner handles the usage limits.** Never report usage percentages, run-out dates or pace unless asked. Never slow or pause streams to save usage; a stream actually blocked by a limit is one line. Report efficiency, not consumption. (2026-11-14, 2026-11-17)
+- **Context.** Limits: `CLAUDE.md`, Usage (2026-11-18; replaces about 200k tokens of 2026-11-16 and about 100k of 2026-11-17). Read each session's context with the session usage tool at every stream commit point. Backstop: `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50` in the user settings' `env` (section 12 of `docs/process.md`).
+- **Self-clear only with the owner present.** The managing session clears or compacts itself only right after an owner message, after rewriting its state file, and asks the owner to send one word afterwards to restart it. Never while the owner is away. After the restart, re-create the watch loop first. (2026-11-15) Why: a clear kills the session's schedules and nothing wakes it.
+- **The managing session stays cheap.** A routine stream note gets at most one tool round. Never read large files, logs or agent transcripts whole; take tails and greps. Replies stay short; no repeated status tables unless asked. (2026-11-16)
+- **Models.** Well-scoped work (clear brief, named files, a test that says done): Opus. Open-ended or broad work (design, whole-project review, diagnosis with no known cause): Fable. Mechanical jobs checked on the spot: Sonnet (`CLAUDE.md`, Usage). Set the model explicitly on every session and Agent call; an agent otherwise inherits the caller's model. Re-check a session's model at every phase change (design finished, building from a plan: switch to Opus). (2026-11-12, 2026-11-13, 2026-11-16) Why: Fable is the costliest model.
+- **The managing session runs on Fable.** The owner chose not to switch it to Opus (2026-11-17). Fable's share of the week = (Fable bar % / 2) / all-models bar %, because the Fable bar is on half the scale. If that share is over about a quarter, propose switching the managing session to Opus. (2026-11-17)
+
+## 7. Roadmap and direction
+
+- **The end goal is a trained player.** The JAX engine exists so a self-taught best player can be trained on it. Never propose dropping or indefinitely deferring the learned player. Keep the engine batchable and trainable. Strength is win rate against the fixed, known trainer AI, scored on the player scoreboard (same fights, same seeds) and against exact answers where a fight is small enough. (2026-11-12)
+- **Engine first.** No training runs and no GPU spend until the engine is complete and the owner says to start training. Do not propose training alongside. (2026-11-13; replaces the two-track plan of 2026-11-12) The training proof of concept is parked on branch `claude/training-t1-c74e08`.
+- **Split by split, Kaizo first.** A split is one stretch of progression, gym leader to gym leader, with its trainer list from that game's own data. A split covers every trainer in it, including double, tag and multi battles. Start each split with a coverage gap report; run the vanilla gap report for the same split alongside. (2026-11-09)
+- **Line quality.** Order of work: `docs/design.md` section 8, item 4a. (2026-11-12)
+- **Prep starting state** (Pokemon pre-damaged, pre-slept or pre-poisoned before a fight) is a prep task, not engine work. (2026-11-14)
+- **Prep ranking.** With a resource the owner has allowed, rank by win chance, then expected deaths; resource cost is the last tie-break and is still listed. A resource the owner has not allowed is never spent. No tie rule, halving key or leader choice may let cost beat a higher win chance. (2026-11-03) Why: a cost-first tie rule once picked a 98.9 % team over 99.2-99.9 % ones.
+- **Open ideas, not approved** (raise when the roadmap reaches them): plan for the whole run with a per-Pokemon weight for deaths; two tiers, a full solver for bosses and a labelled threat sheet for route trainers; whether the tool serves only the owner's run or other players too; exact solving of small fights by grouping damage rolls by break points. (2026-11-12)
+
+## 8. Data sources and owner rulings
+
+Rules: `CLAUDE.md` (first two bullets), `docs/kaizo/pipeline.md`.
+
+- **Before calling data missing**, or accepting a stream's "unknown", check that the ROM, the calc repo and the docs sheet were all consulted, and say which. A ruling that excludes data ("sheet only", "non-blocking") is to be re-verified, not settled. (2026-11-14) Why: partner teams and 60 real battles were dropped this way.
+- **Partner teams** for tag and multi battles are in the calc repo. Look there before calling one unknown. (2026-11-14)
+- **Plan and survey statements of a mechanic are hypotheses** until checked against the decomp code. (2026-11-08)
+- **Owner rulings on Kaizo data** (2026-11-05): the Galactic-split level cap is 100. A bare "(SUN)" sheet header means permanent sun; keep that reading in one easily edited place.
+- **`data/local.toml`** holds the input paths. Sessions never edit it.
+
+## 9. Gauntlet rules (owner's play rules)
+
+- **The owner sets the rules per gauntlet at planning time.** The engine models them as independent options per gauntlet: healing between fights (none, bag items, full heal), team change (none, reorder and held items, swap members), more as they come. What the ROM forces is a constraint or default, never the whole rule, and never rejects a rule the owner states. Do not ask the owner to fix one rule per group in the data. Do not ask walk-out, healer or order questions: establish those from the decomp and ROM. (2026-11-18, 2026-11-19)
+- **Elite Four + Champion.** Normal Elite Four, except the player may swap in one Pokemon, once; the swap is permanent. Team change therefore has a counted form: a bench of N extra Pokemon and a swap budget for the gauntlet (here bench 1, budget 1). Prep plans 7 Pokemon and when, if ever, to swap. Bag healing after each member and TM/move changes between fights are allowed. Bag healing is limited only by what the player carries. The choices are entered per run; there is no saved default. (2026-11-18, 2026-11-19)
+- **When a group's rules are not set**, use the strictest settings and say so. (2026-11-19)
+- **Rare Candies and evolution stones with healing off**: not allowed for now. (2026-11-19)
+- **Move changes between fights and the deaths allowance** (whole gauntlet or per fight): the owner decides per run. (2026-11-19)
+- **Level cap inside a gauntlet**: a Pokemon that passes the next fight's level cap finishes the current fight and takes part in no later fight. (2026-11-19)
+- **Opponent order**: a per-gauntlet setting, default fixed. (2026-11-18)
+- **Level-up and evolution choices** (learn, skip or replace a move at level-up, also mid-fight; evolve or cancel) are decisions of the line, in single fights too. Never treat them as declined by assumption. (2026-11-18)
+
+## 10. Owner's recordings
+
+- **Elite Four + Champion notes**: five text files (one per opponent) and the gauntlet save, in the owner's recordings folder (path in `_scratch/handoff/`). Read in place; never copy or commit the save. Each file lists a pre-fight setup and one line per turn; no HP numbers or damage rolls. Uses: the replay check for the last split (every AI move seen must be one the model allows), known winning lines as benchmarks for the line player and the trained player, the save as the endgame box for prep search. Usable only once that split's mechanics exist. (2026-11-13)
+- **Pre-Roark Kaizo save** (all bag items available): path in `data/local.toml`. Use in place; never commit or copy into the repo. (2026-11-05)
+
+## 11. References
+
+- **Jaxcalibur** (`https://jaxcalibur.github.io/`): the project's original inspiration. A pure-JAX masked battle engine plus a transformer trained by self-play PPO; search added little over the network. Lessons taken: the network is most of the strength, so do not over-invest in exact search; sample chance instead of enumerating it and bin HP; feed damage tables and the trainer AI's exact move distribution as inputs; Nuzline's case is single-agent (no hidden information, fixed known opponent). (2026-11-12)
+- **pkmn.ai** (`https://pkmn.ai/`): a directory of Pokemon battle AI projects and papers. When training planning starts, read the MissingNo.Zero and Metamon papers and the `/research/` list first. Most entries are player-vs-player with hidden information; the network design, value training and search-with-chance parts transfer best. (2026-11-17)
+
+## 12. Follow-ups the owner asked to keep
+
+Keep this list; review it when the owner asks for status or the roadmap; remove an item when it is done or the owner drops it. (2026-11-16)
+
+- Nightly fast tier under 3 hours: slowest tests to the slow set, shared compiled programs, JAX on-disk compile cache (measure first).
+- Split the nightly into 2-3 parallel parts once memory peaks are known.
+- Shrink the nightly to cross-area tests, with the full run only at split close (owner agreed 2026-11-17).
+- Sonnet for mechanical subagent jobs: check merge notes that it is used.
+- The Kaizo table rebuild writes a ROM copy to `.cache/rom`: make sure merge-check agents remove their worktrees so copies do not pile up.
+- Roadmap items approved 2026-11-20: a memory-aware pod runner (per-test weight), table reuse keyed on a hash of the files the build reads, one in-work pod run per stream. Built on branch `ops/runner-mem-tables`; the `tools/ops/build_tables.sh` pathspec bug (a changed tracked vanilla manifest is never packed) is fixed on the same branch. Its merge needs the review agent.
+- Deferred by the owner (2026-11-18, do not raise unless the situation changes): a queue script in place of collector agents; a separate cheaper session that owns pod runs; stopping no-action wake-ups of streams waiting on builders.
+- A daily local ROM tier (one process, more than 6 GB free) for tests that skip on the pod: started with E3 (2026-11-20).
