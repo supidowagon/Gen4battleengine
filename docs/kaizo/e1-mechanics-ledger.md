@@ -2749,6 +2749,34 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   unchanged (e2 ledger :1965; rom/changed_scripts.json be_seq 48, 88, 104, 141, 182), and the changed multi-hit
   scripts 88 / 104 only change Triple Kick's power step (data/kaizo/rom_diff.toml be_seq 88, 104).
 
+- H-S1 Batch H gate compare `snapcmp-e1h-5cdbaee` (tip 5cdbaeef vs the main 7698de58 capture, 200 seeds, 122 parts):
+  COMPARE_RC=1, 82 ok, 20 diverged, 20 generator drift, 0 error, 0 sampler drift; allow-new `form_num,ts_loved`
+  (H-5, H-4; `_scratch/e1/tmp/nt_fields.py`). Log: `_scratch/rent/out/snapcmp-e1h-5cdbaee/compare.log`. Every failed
+  part is one of two classes; no `step`, `jitstep`, `rest`, `ai`, `roark.trace` or `roark.rank` part changed.
+  - Diverged, class A (H-1 / G-S8): the 20 `sample` parts (seed blocks 0-9 ... 190-199), first diff each
+    `.sample_outcome.future_hit[d]` at turn 1 or 2: seeds 0 (71 -> 0), 10 (23 -> 0), 20 (72 -> 0), 30 (4 -> 1),
+    40 (d 1: 65 -> 1), 50 (34 -> 1), 60 (74 -> 0), 70 (21 -> 0), 80 (69 -> 0), 90 (d 1: 76 -> 1), 100 (d 1: 51 -> 1),
+    110 (83 -> 0), 120 (7 -> 1), 130 (46 -> 0), 140 (95 -> 0), 150 (57 -> 0), 160 (d 1: 29 -> 1), 170 (88 -> 76),
+    180 (5 -> 1), 190 (59 -> 51). Cause: H-1 (7074311e) narrowed `future_thresholds`' loose flag to a due hit
+    (`loose & due`, outcome.py:866-867; due = live, `future_timer == 1`, table accuracy != 0). The decomp draws the
+    hit roll only there: the Future Sight check runs when `futureSightTurns` drops to 0 with HP left
+    (battle_controller_player.c:1767-1769), its CheckMoveHit returns before the draw on accuracy 0 (:2900-2902) and
+    draws `RandNext() % 100 + 1` (:2976). So a side with a loose source and no due hit now stores the class
+    (`hit_class` over `future_thresholds`, outcome.py:2145-2146) where main stored the raw roll; same key
+    (`fold_in(key, 28)`), shape and bounds. The step reads the value only at a due hit, so no `step` part moved.
+    The single change a closing compare reverts: outcome.py:867 `loose & due` -> `loose`.
+  - Generator drift, class B (G-S2 / G-S7, 25fcebb5): the 20 `gen` parts, first diff each at turn 0
+    `.in_state.terrain[0]` -1 -> 0. Cause: `tests/strategies.py` `_draw_terrain` draws a TERRAIN_* id for every
+    state and never TERRAIN_UNKNOWN (-1), because the game never holds an unknown terrain (CalcTerrain
+    field_battle_data_transfer.c:470-504; BattleSystem_GetTerrain battle_system.c:375-381 maps any out-of-range
+    value to TERRAIN_MAX, never -1). Generator only: no engine default or engine read changed. The single change
+    a closing compare reverts: the `_draw_terrain` hunk of 25fcebb5 in tests/strategies.py.
+  - 1405cbb2 (after the compare) changes only tests/engine/test_attract.py (two fullset tests), which no snapshot
+    part runs: the compare holds for 1405cbb2.
+  - Closing compare: branch `e1-close-h-5` = the new tip with both reverts (the classes sit in different parts,
+    `sample` and `gen`, so one run attributes each). Expected: COMPARE_RC=0 with the same allow-new; a turn-0 drift
+    hides later `gen` steps today, so any other `gen` difference shows there first.
+
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
