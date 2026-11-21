@@ -477,13 +477,39 @@ def test_exec_body_script_writes_the_files_byte_for_byte(tmp_path):
     cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"]
     for i, sh in enumerate(_posix_shells()):
         w = tmp_path / str(i)
+        w.mkdir()
+        (w / "map_count").write_text("1048576\n")
         script = cmd[2].replace("W=/work/_podcheck;", f"W='{w.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
+        script = script.replace("/proc/sys/vm/max_map_count", f"'{(w / 'map_count').as_posix()}'")
         run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
         assert run.returncode == 0, (sh, run.stderr)
         assert run.stdout.startswith("RAN /work "), sh
-        assert sorted(p.name for p in w.iterdir()) == ["gate.sh", "podcheck.sh"], sh
+        assert sorted(p.name for p in w.iterdir()) == ["gate.sh", "map_count", "podcheck.sh"], sh
         for n in ("gate.sh", "podcheck.sh"):
             assert (w / n).read_bytes() == _head(n), sh
+
+
+@pytest.mark.parametrize("value", ["65530", "1048575", ""])
+def test_podcheck_body_refuses_a_low_or_unreadable_max_map_count(tmp_path, value):
+    """A pod with vm.max_map_count under 1048576 (65530 aborts JAX units, rc 134), or none to
+    read, ends PODCHECK REFUSED with exit 1 before podcheck.sh runs."""
+    import json
+    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1"}
+    r = subprocess.run([BASH, BODY.as_posix()], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
+    if "REFUSED: uncommitted changes" in r.stdout:
+        pytest.skip("tools/ops/day/pod has uncommitted changes")
+    cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"]
+    mc = tmp_path / "map_count"
+    if value:
+        mc.write_text(value + "\n")
+    for i, sh in enumerate(_posix_shells()):
+        w = tmp_path / str(i)
+        script = cmd[2].replace("W=/work/_podcheck;", f"W='{w.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
+        script = script.replace("/proc/sys/vm/max_map_count", f"'{mc.as_posix()}'")
+        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
+        assert run.returncode == 1, (sh, run.stdout, run.stderr)
+        assert run.stdout.strip().splitlines()[-1].startswith("PODCHECK REFUSED vm.max_map_count="), sh
+        assert "RAN" not in run.stdout, sh
 
 
 def _posix_shells() -> list[list[str]]:

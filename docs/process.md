@@ -13,7 +13,13 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
   - E1: abilities, held items, battle conditions, AI flags.
   - E2: the doubles/tag/multi format.
   - E3: singles move-effect families, mechanic plus trainer AI.
+  - E4: the doubles side: the doubles trainer AI, the observation at four battlers, the
+    two-trainer and multi fight data, search with targets, prep with two actives. E4 does not
+    touch E2's mechanic batches.
   A stream never pushes, never creates billable resources and never writes to `main`.
+- **Pods in working hours:** one test pod per active stream plus one for captures and
+  compares (section 5). Outside working hours delete every pod with nothing running or
+  queued.
 - **Subagents.** Each batch runs the pipeline in section 2.
 
 ## 2. A batch, start to merge
@@ -38,8 +44,10 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
    the targeted run on the merged tip (CLAUDE.md, Merges) on the pod. The `fullset`
    tests are their own pod run (DAYBOX.md: one mark per run). With the tip it sends for
-   these runs the stream sends its `--allow-new` list and the divergences it expects; then
-   the managing session runs the tip's snapshot compare (section 5).
+   these runs the stream sends its `--allow-new` list, which first passes the local
+   pre-check (section 5, Allow-new list; the tip message says it passed), and the
+   divergences it expects; then the managing session runs the tip's snapshot compare
+   (section 5).
 7. The stream sends one message: the final tip, the batch contents with citations, the
    review outcome, the targeted run's results with time and peak memory per test file, and
    its ledger's explanation of every diverged part of the snapshot compare.
@@ -117,16 +125,28 @@ per day is the rate used for estimates.
     runner's default; pass `"SPACING":"4"` in every exec-pod body's `env` anyway, so a run
     packed with older pod scripts (another default) gets it too. This is the one SPACING
     rule; DAYBOX.md and `tools/ops/nightly_brief.md` point here.
-  Several test pods may be up at once (approval: `docs/decisions.md`, section 5). Pod N's id
+  Several test pods may be up at once (approval: `docs/decisions.md`, section 5). In working
+  hours: one pod per active stream plus one capture pod (section 1). Pod N's id
   is in `_scratch/rent/day<N>/POD_ID_<N>`; pod 1's is in `_scratch/rent/POD_ID`. Each pod
   gets its own pod check before every pack (DAYBOX.md, Send a run step 3).
+  The capture pod is pod 1 (id in `_scratch/rent/POD_ID`), rented like any test pod
+  (`ci-day-big`, Bring-up in DAYBOX.md) in the 256 GB shape, so `snap.sh` runs with
+  `SNAP_GATE_GB` 176 (on a 128 GB pod: 88). When pod 1 is down, the managing session names
+  another up pod the capture pod and writes it in `_scratch/handoff/MANAGER.md`. For the
+  no-idle-pods rule a pending compare counts as queued: a pod holding the capture a sent or
+  expected merge candidate compares against is not idle (`docs/decisions.md`, section 5).
   Read the shape before sending a body: exec
   `{"command":["sh","-c","cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes"],"timeoutSeconds":25}`
   on the pod (cgroup v2's `memory.max`, else cgroup v1's `memory.limit_in_bytes`: some rented
   hosts are v1), or the `limit` of the pod check (DAYBOX.md, Send a run step 3). Bytes; `max`,
   a value of 2^60 bytes or more (v1 without a limit: 9223372036854771712) or a value under
   200 GB means the 128 GB limits. Never pass the 256 GB limits to a 128 GB pod.
-  Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
+  Never rent a 16 vCPU / 64 GB pod. Check every new pod before its first use: exec
+  `{"command":["sh","-c","cat /proc/sys/vm/max_map_count"],"timeoutSeconds":25}` must print
+  1048576 or more. A pod with less (65530 aborts JAX units with rc 134) is deleted and another
+  rented. The pod check (DAYBOX.md, Send a run step 3) refuses such a pod
+  (`PODCHECK REFUSED vm.max_map_count=<value>`) and a snapshot job stops at once
+  (`MAP_COUNT_LOW` in `times.txt`). Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
 - **Pod runs.** Streams have no pod tool: a stream sends the managing session its commit
@@ -138,30 +158,61 @@ per day is the rate used for estimates.
   turns: the agent does not call `status.sh` while `wait.sh` runs. Only committed code runs
   on the pod.
 - **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
-  sends a newer tip only after the previous run's result is back, and that tip's list holds
-  only:
-  - the lines new since the previous list;
-  - every test file changed since the previous run's tip:
-    `git diff --name-only --diff-filter=d <previous tip> <tip> -- ':(glob)tests/**/test_*.py'`
-    (the `:(glob)` form also matches `tests/test_*.py`; the plain `'tests/**/test_*.py'`
-    does not);
-  - every file the previous run counted as a failure by the Completeness rule below
-    (failed, errored, crashed, killed three times, collect failed, incomplete).
-  Each such file keeps the ids per chunk, `A` flag and weight of its line in the stream's
-  previous list (a file with no line there: the ids per chunk of Chunking below). When a
-  non-test file under `tests/` changed (`git diff --name-only <previous tip> <tip> -- tests`:
-  helpers, `conftest.py`, golden data), the list also holds every previous-list file that
-  can import or read it; when unsure, the whole previous list. The managing session holds
-  any other request until the run is back.
+  sends no new tip while that run is going, unless the run has already failed (a first-failure
+  report counts). The managing session holds any other request until the run is back.
+- **In-work list (short).** An in-work tip's list holds, in this order:
+  1. the test files new or changed since the previous run's tip:
+     `git diff --name-only --diff-filter=d <previous tip> <tip> -- ':(glob)tests/**/test_*.py'`
+     (the `:(glob)` form also matches `tests/test_*.py`; the plain `'tests/**/test_*.py'`
+     does not), and every file the previous run counted as a failure by the Completeness
+     rule below (failed, errored, crashed, killed three times, collect failed, incomplete);
+  2. the tests of the functions the tip changed (node ids or the files that call them);
+  3. the four guards (`CLAUDE.md`, Batches).
+  Size it for about 30 minutes on a pod: at most about 40 units. Never
+  `tests/test_differential.py` and never a whole-suite or whole-folder line (`tests 40`,
+  `tests/engine 8`). Each file keeps the ids per chunk, `A` flag and weight of its line in
+  the stream's previous list (a file with no line there: the ids per chunk of Chunking
+  below). When a non-test file under `tests/` changed (`git diff --name-only <previous tip>
+  <tip> -- tests`: helpers, `conftest.py`, golden data), add the previous-list files that
+  import or read it, within the 40 units; the rest waits for the merge-candidate list.
+- **Merge-candidate list (full delta).** Only a merge candidate gets the full delta list: the
+  test files of every area the change touches, the four guards and `tests/test_differential.py
+  1 A`, sized for about one hour on a pod alone (about 120 units). The nightly covers the
+  rest. The `fullset` run is unchanged (DAYBOX.md, Merge candidate).
 - **Snapshot capture of `main`.** After every push of `main` the managing session starts
-  one capture of the new tip on a test pod, in `/work/snapmain-<short sha>` (seeds 0-199,
-  about 90 minutes; commands: `tools/ops/day/snap.sh`, DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
+  one capture of the new tip on the capture pod, in `/work/snapmain-<short sha>` (seeds 0-199;
+  commands: `tools/ops/day/snap.sh`, DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
   delete an older one only when no compare reads it. A capture is never sent back to a pod:
   one lost with a pod is re-made on the next pod.
-- **Snapshot compare of a merge candidate.** Compare only (about 85 minutes), against the
+- **Capture pod.** Snapshot captures and compares run on the capture pod only. No pack run
+  is sent to it while a capture or compare is going there. One snapshot job at a time per
+  pod: each job gates only on its own parts, so two at once could overrun memory together.
+  `run.sh` enforces it with a pod-wide lock (`/work/.snaplock`, taken after `uv sync`,
+  released on every exit, a TERM included; a lock whose pid no longer runs a `run.sh` is
+  removed); a second job sent meanwhile waits for it, printing one `lock wait` line a minute
+  (DAYBOX.md, Snapshot compare). A job runs its parts in parallel
+  (`SNAP_WORKERS`, default 16, each part its own process; `tools/snap_compare.py`, Workers):
+  about 30 minutes for a capture or a compare (estimate: the longest part, `roark.rank`, takes
+  15-22 minutes alone; replace it with the first timed parallel run). Serially
+  (`SNAP_WORKERS=1`, or a commit whose `snap_compare.py` has no `--workers`) a job takes
+  85-115 minutes.
+- **Snapshot compare of a merge candidate.** Compare only, against the
   capture of the `main` tip its branch contains, with `--allow-new <the stream's list>`
   (left out when the list is empty). Never compare a merge candidate against an older base
   once `main` was merged into the branch.
+- **Allow-new list.** The stream derives the list from the code, never from a compare log:
+  every `BattleState` and `Outcome` field the tip has that the capture's commit lacks and no
+  `UPGRADES` row of the tip's `tools/snap_compare.py` writes
+  (`git diff <capture commit> <tip> -- src/nuzline/engine/state.py src/nuzline/engine/outcome.py`),
+  plus any other output field new since that commit. It pre-checks the list locally before
+  sending (one process, more than 6 GB free RAM, worktrees of both commits with their own
+  tables as DAYBOX.md, Collect step 3): `snap_compare.py capture <dir> 0 --no-roark --parts
+  step,jitstep,sample,rest,ai --repo <capture commit worktree> --commit <capture commit>`,
+  then `snap_compare.py compare <dir> 0 --no-roark --parts step,jitstep,sample,rest,ai
+  --repo <tip worktree> --commit <tip> --allow-new <list>`. The list passes when no part
+  prints `FAIL only in this checkout` or `FAIL dropped field without an upgrade row`; a
+  divergence in this local run does not count (the PC draws other states than the pod). The
+  tip message names the list and says it passed the pre-check.
 - **Snapshot pass rule.** `compare: ok` passes. A diverged compare passes only when the
   stream's ledger explains every diverged part (in a tests/docs-only commit) and the
   merge-gate review agent has checked that explanation against the compare log. Anything
@@ -171,10 +222,19 @@ per day is the rate used for estimates.
   a diverged part only from the capture's `<part>.inputs.pkl.gz`: it asks the managing
   session, which copies those files from the pod with `snap.sh fetch` (DAYBOX.md) into `<scratch>/rent/out/<snapshot folder>/fetch-<epoch>/`.
 - **Snapshot jobs and the runner.** A capture or compare is outside the runner's chunk count
-  and reserves; the runner sees it only as container memory. New pack runs keep the pod's
-  `MAXP`. The memory gate protects the job: the runners' `GATE_GB` and `KILL_GB` (they read
-  its memory), and `SNAP_GATE_GB` for the job's own start. If the pod must carry fewer chunks
-  while the job runs, restart every live runner with the lower `MAXP` (MAXP rule, Chunking).
+  and reserves; the runner sees it only as container memory. Pack runs stay off the capture
+  pod while a job runs there (Capture pod above); a pack run already live there when a job
+  starts keeps the pod's `MAXP`, and the runners' `GATE_GB` and `KILL_GB` read the job's
+  memory. `SNAP_GATE_GB` is the job's own gate, on container memory without reclaimable page
+  cache (`memory.current` minus `inactive_file`; cgroup v1: `total_inactive_file`): the job
+  starts while that is under it, or once no pack unit has been live on the pod for
+  `IDLE_WAIT_S` (300 s; `GATE_IDLE_START` in `times.txt`), and each part starts only while
+  it + the live parts' reserve
+  (expected peak minus RSS) + its own expected peak stays at or under it (`snap_compare.py`
+  `PART_GB`: 13 GB for a step, jitstep or sample part, 8 rest, 2 ai, 1 gen, 11 `roark.trace`,
+  27 `roark.rank`; the largest peaks of 19 pod logs times about 1.2). With no part of the job
+  live the next part starts whatever memory reads (memory the job does not hold need not
+  fall); a part held by the gate prints `gate wait` about once a minute.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
