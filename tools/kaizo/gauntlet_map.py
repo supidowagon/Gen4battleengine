@@ -830,9 +830,9 @@ def gym_reach(
 
     A coord tile runs its script when entered (var 0 always matches, ``sub_0203CC14``,
     ``src/unk_0203C954.c:218``): one whose script is not in ``passed`` starts its fight there,
-    so it is recorded and the walk does not go on from it (``gym.js`` walked on, which let
-    state 2 reach obj 4 past the coord (3, 13)). A script in ``passed`` (its fight won) is a
-    message only: scr 73 entry 7 fights while 0x40AE <= 1 (@475-481), entry 8 while <= 2
+    so it is recorded and the walk does not go on from it (``gym.js`` follows the same rule and
+    gives the same reach: start and leave on the south warp entrance, stop at an unwon coord). A
+    script in ``passed`` (its fight won) is a message only, neither recorded nor a stop: scr 73 entry 7 fights while 0x40AE <= 1 (@475-481), entry 8 while <= 2
     (@597-603), and each win raises 0x40AE past its gate (facts-final, Eterna Gym)."""
     clock, fountain = tables
     x0, z0 = CLOCK_ORIGIN
