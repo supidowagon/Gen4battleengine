@@ -6450,7 +6450,7 @@ def test_a_speed_compare_writes_monspeedvalues_where_it_is_live(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
     """``IfSpeedCompareEqualTo`` (trainer_ai.c:1102-1112) writes both speeds before it jumps, on
-    the paths that reach it: ``written`` and the slot's ``first_cmp`` (the first flag index of a
+    the paths that reach it: ``written`` and the slot's ``first_cmp`` (the first flag bit of a
     compare); a masked compare (not live) writes nothing, a later flag does not move the first,
     and an injected schedule overrides what the earlier runs wrote."""
     t, n = kaizo_tables, kaizo_names
@@ -6553,7 +6553,7 @@ def test_the_natural_run_is_the_injected_schedule_of_the_first_compare(
 ):
     """``written`` turns true at the first (flag, slot) run that makes an ``IfSpeedCompareEqualTo``
     and stays true: the natural threaded run equals the run with the schedule ``tau`` (a flag run
-    of index f starts with ``written`` = f >= tau) that the factoring injects for it
+    of flag bit b starts with ``written`` = b >= tau) that the factoring injects for it
     (``policy._slot_event_histograms``): the slots after the compare's (flag-major, slot-minor)
     run from its flag on, the others from the flag after it. E3-B2-15."""
     t, n = kaizo_tables, kaizo_names
@@ -6568,7 +6568,7 @@ def test_the_natural_run_is_the_injected_schedule_of_the_first_compare(
         0 if m == tr else c.NO_COMPARE for m in range(3)
     ]  # BASIC's Trick Room compare is the only one on the path
     assert bool(written)
-    never, _, _ = _inject_run(t, s, o, flags, layout)  # no run starts written
+    never, _, _ = _inject_run(t, s, o, c.NO_COMPARE, layout)  # no run starts written
     always, _, _ = _inject_run(t, s, o, 0, layout)  # every run does
     after_flag0, _, _ = _inject_run(t, s, o, 1, layout)  # the runs of flags 1.. do
     for slot in range(MOVES):
