@@ -22,11 +22,14 @@
 #   without ALL_DONE), CAPTURE_START or COMPARE_START, CAPTURE_RC=<n> <epoch> or
 #   COMPARE_RC=<n> <epoch>, ALL_DONE.
 #   Env: SNAP_GATE_GB (default 88): run.sh starts the capture or compare only while container
-#   memory is under it; pass the pod's GATE_GB (176 on a 256 GB pod).
+#   memory is under it; pass the pod's GATE_GB (176 on a 256 GB pod). Memory is read by pod/gate.sh's
+#   cgmem (cgroup v2, else v1), copied into run.sh; with neither readable times.txt ends
+#   GATE_NO_CGROUP_MEMORY <epoch>, without ALL_DONE.
 # fetch: receives what the pod sends (DAYBOX.md "Snapshot compare", Fetch) into
 #   $RENT/out/<name>/fetch-<epoch>/ and unpacks every .tgz received.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
+. "$HERE/pod/gate.sh"   # cgmem (cgroup v2, else v1), copied into run.sh
 usage() { sed -n '4,7p' "$0" | sed 's/^# *//'; exit 2; }
 refuse() { echo "REFUSED: $1"; [ -z "${2:-}" ] || echo "$2"; exit 3; }
 [ $# -ge 1 ] || usage
@@ -114,7 +117,8 @@ cat > "$O/run.sh" <<EOS
 # $MODE of $SHA; written by tools/ops/day/snap.sh
 export PATH=/root/.local/bin:/work/_bin:\$PATH UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 W="$W"; printf '%s\n' "$CAP" > "\$W/reads"; cd "\$W/repo"
-gate() { while [ \$(( \$(cat /sys/fs/cgroup/memory.current) / 1000000000 )) -ge $GATE ]; do echo "gate wait \$(date +%T)"; sleep 30; done; }
+$(declare -f cgmem)
+gate() { local b; while b=\$(cgmem current) || { echo "GATE_NO_CGROUP_MEMORY \$(date +%s)" >> "\$W/times.txt"; exit 1; }; [ \$(( b / 1000000000 )) -ge $GATE ]; do echo "gate wait \$(date +%T)"; sleep 30; done; }
 echo "START \$(date +%s)" > "\$W/times.txt"
 (uv sync --frozen -q) > "\$W/sync.log" 2>&1; rc=\$?; echo "SYNC_RC=\$rc \$(date +%s)" >> "\$W/times.txt"; [ "\$rc" = 0 ] || exit 1
 gate; echo "${JOB}_START \$(date +%s)" >> "\$W/times.txt"

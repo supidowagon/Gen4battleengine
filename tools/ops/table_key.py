@@ -1,0 +1,262 @@
+"""Content key of a table build (tools/ops/build_tables.sh <commit>).
+
+Usage: python tools/ops/table_key.py --root <checkout> [--ops <dir>] [--decomp <dir>]
+                                     [--symbols <file>] [--config <local.toml>] [--list]
+Prints one line: the 64-hex key. --list prints every input and its digest first.
+
+The key is a sha256 over exactly what decides the archive's content:
+- the build itself: <ops>/build_tables.sh (its steps and file selection) and <ops>/common.sh
+  (TABLE_ALLOW, TABLE_DENY); <ops> is the checkout running the build (default: this file's
+  folder), not the built commit; and what `git ls-files -o -i --exclude-standard` (the build's
+  output list) reads: <root>/.gitignore, $GIT_DIR/info/exclude, core.excludesFile;
+- the Python modules the build runs (entry_modules: every `-m tools.<x>` and `from tools.<x>
+  import` of build_tables.sh) and every repo module they import, found by walking their
+  import statements (module level and function level) from the files of <root>/tools and
+  <root>/src; package __init__.py files of every imported module count. MANIFEST_VERSION
+  (src/nuzline/data/tables.py) is in that set. No traced module imports by name at run time
+  (importlib, __import__): the walk refuses a file that does (exit 2).
+- tracked data: every tracked file under data/, every tracked non-.py file under tools/
+  (tools/ops excluded) and src/ (.md excluded), .python-version, uv.lock;
+- the interpreter: sys.version and every installed distribution with its version (run this
+  script with the build's python). All of them, not only those the traced modules declare:
+  packages use undeclared optional imports (openpyxl reads with lxml when lxml is installed,
+  openpyxl/xml/__init__.py:8-26, and does not require it), so a smaller set is not safe;
+- `node --version` (tools.extract_pkcalc runs node);
+- the decomp: HEAD of <decomp>, its `git diff HEAD`, its
+  `git status --porcelain --untracked-files=all` and the content of every untracked file
+  (`git ls-files -o --exclude-standard`). Files the decomp ignores (its .gitignore, build
+  outputs) are not covered: a change to one of those does not change the key;
+- the symbols map and the local inputs vanilla_rom, kaizo_patch, pkcalc_zip, kaizo_docs
+  (environment NUZLINE_* first, then <config>, as tools/rom/inputs.py resolves them), by
+  content; and the text of <config> (which holds paths) itself.
+Only digests of these enter the key; the key and --list hold no file content.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import hashlib
+import importlib.metadata
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+OPS = Path(__file__).resolve().parent
+_ENTRY_RE = re.compile(r"(?:-m\s+|from\s+)(tools(?:\.\w+)+)\b")
+
+
+def entry_modules(script: Path) -> tuple[str, ...]:
+    """Every module build_tables.sh runs: `-m tools.<x>` and `-c "from tools.<x> import ..."`."""
+    lines = [ln for ln in script.read_text(encoding="utf-8").splitlines() if not ln.lstrip().startswith("#")]
+    found = sorted({m for ln in lines for m in _ENTRY_RE.findall(ln)})
+    if not found:
+        raise KeyError_(f"{script}: no `-m tools.<module>` line found")
+    return tuple(found)
+
+
+LOCAL_INPUTS = {  # key of data/local.toml -> environment override (tools/rom/inputs.py _ENV)
+    "vanilla_rom": "NUZLINE_VANILLA_ROM",
+    "kaizo_patch": "NUZLINE_KAIZO_PATCH",
+    "pkcalc_zip": "NUZLINE_PKCALC_ZIP",
+    "kaizo_docs": "NUZLINE_KAIZO_DOCS",
+}
+DYNAMIC = ("importlib", "__import__")
+
+
+class KeyError_(Exception):
+    pass
+
+
+def _module_file(name: str, bases: list[Path]) -> Path | None:
+    parts = name.split(".")
+    for b in bases:
+        f = b.joinpath(*parts).with_suffix(".py")
+        if f.is_file():
+            return f
+        f = b.joinpath(*parts, "__init__.py")
+        if f.is_file():
+            return f
+    return None
+
+
+def _imports(path: Path, name: str) -> set[str]:
+    """Module names a file imports (absolute), plus `from X import y` candidates X.y."""
+    tree = ast.parse(path.read_bytes(), str(path))
+    is_pkg = path.name == "__init__.py"
+    pkg = name if is_pkg else name.rpartition(".")[0]
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.split(".")[0] in DYNAMIC:
+                    raise KeyError_(f"{path}: imports {a.name}; the import walk cannot trace it")
+                out.add(a.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = pkg.split(".")
+                base = base[: len(base) - (node.level - 1)] if node.level > 1 else base
+                mod = ".".join(base + ([node.module] if node.module else []))
+            else:
+                mod = node.module or ""
+            if mod.split(".")[0] in DYNAMIC:
+                raise KeyError_(f"{path}: imports from {mod}; the import walk cannot trace it")
+            out.add(mod)
+            out.update(f"{mod}.{a.name}" for a in node.names if a.name != "*")
+        elif isinstance(node, ast.Name) and node.id == "__import__":
+            raise KeyError_(f"{path}: calls __import__; the import walk cannot trace it")
+    return out
+
+
+def trace(root: Path, entry: tuple[str, ...]) -> dict[str, Path]:
+    """Repo modules reached from `entry`: module name -> file."""
+    bases = [root, root / "src"]
+    seen: dict[str, Path] = {}
+    todo = list(entry)
+    while todo:
+        name = todo.pop()
+        if not name or name in seen:
+            continue
+        f = _module_file(name, bases)
+        if f is None:
+            if name in entry:
+                raise KeyError_(f"entry module {name} not found under {root}")
+            continue  # third-party, stdlib, or a name imported from a module (not a module)
+        seen[name] = f
+        parts = name.split(".")
+        todo.extend(".".join(parts[:i]) for i in range(1, len(parts)))  # parent packages
+        todo.extend(_imports(f, name))
+    return seen
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _file_sha(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def _git(root: Path, *args: str) -> bytes:
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True).stdout
+
+
+def tracked_inputs(root: Path) -> list[str]:
+    files = _git(root, "ls-files", "-z", "--", "data", "tools", "src", ".python-version", "uv.lock")
+    out = []
+    for p in sorted(x for x in files.decode().split("\0") if x):
+        if p.startswith("data/") or p in (".python-version", "uv.lock"):
+            out.append(p)
+        elif p.startswith("tools/ops/") or p.endswith(".py"):
+            continue
+        elif p.startswith("tools/") or (p.startswith("src/") and not p.endswith(".md")):
+            out.append(p)
+    return out
+
+
+def local_inputs(root: Path, config: Path | None) -> dict[str, Path]:
+    toml: dict[str, object] = {}
+    if config is not None and config.is_file():
+        toml = tomllib.loads(config.read_text(encoding="utf-8"))
+    found = {}
+    for key, env in LOCAL_INPUTS.items():
+        if os.environ.get(env):
+            found[key] = Path(os.environ[env])
+        elif key in toml:
+            found[key] = root / str(toml[key])
+    return found
+
+
+def exclude_files(root: Path) -> list[tuple[str, Path]]:
+    """What `git ls-files -o -i --exclude-standard -- data` reads besides tracked .gitignore files
+    under data/ (tracked data, hashed apart): the root .gitignore, $GIT_DIR/info/exclude and
+    core.excludesFile (git's default $XDG_CONFIG_HOME/git/ignore when unset)."""
+    out = [(".gitignore", root / ".gitignore")]
+    info = _git(root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude").decode().strip()
+    out.append(("git info/exclude", Path(info)))
+    r = subprocess.run(["git", "-C", str(root), "config", "--path", "core.excludesFile"],
+                       capture_output=True, text=True)
+    if r.stdout.strip():
+        ex = Path(r.stdout.strip())
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+        ex = Path(xdg) / "git" / "ignore"
+    out.append(("git core.excludesFile", ex))
+    return out
+
+
+def _text_sha(path: Path) -> str:
+    return _sha(path.read_bytes().replace(b"\r\n", b"\n"))
+
+
+def entries(root: Path, decomp: Path | None, symbols: Path | None, config: Path | None,
+            ops: Path = OPS) -> list[tuple[str, str]]:
+    """(label, digest) pairs, in a fixed order; the key hashes them."""
+    e: list[tuple[str, str]] = []
+    script = ops / "build_tables.sh"
+    e.append(("ops build_tables.sh", _text_sha(script)))
+    e.append(("ops common.sh", _text_sha(ops / "common.sh")))
+    for label, f in exclude_files(root):
+        e.append((label, _text_sha(f) if f.is_file() else "missing"))
+    for name, f in sorted(trace(root, entry_modules(script)).items()):
+        e.append((f"module {name}", _sha(f.read_bytes().replace(b"\r\n", b"\n"))))
+    for p in tracked_inputs(root):
+        e.append((f"tracked {p}", _sha((root / p).read_bytes().replace(b"\r\n", b"\n"))))
+    dists = sorted(f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions())
+    e.append(("python", _sha(sys.version.encode())))
+    e.append(("distributions", _sha("\n".join(dists).encode())))
+    try:
+        node = subprocess.run(["node", "--version"], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        node = "none"
+    e.append(("node", _sha(node.encode())))
+    if decomp is not None:
+        e.append(("decomp HEAD", _git(decomp, "rev-parse", "HEAD").decode().strip()))
+        e.append(("decomp diff", _sha(_git(decomp, "diff", "HEAD"))))
+        e.append(("decomp status", _sha(_git(decomp, "status", "--porcelain", "--untracked-files=all"))))
+        for p in sorted(x for x in _git(decomp, "ls-files", "-z", "-o", "--exclude-standard").decode().split("\0") if x):
+            f = decomp / p
+            e.append((f"decomp untracked {p}", _file_sha(f) if f.is_file() else "not a file"))
+    if symbols is not None:
+        e.append(("symbols", _file_sha(symbols)))
+    if config is not None and config.is_file():
+        e.append(("local.toml", _sha(config.read_bytes())))
+    for key, p in sorted(local_inputs(root, config).items()):
+        e.append((f"input {key}", _file_sha(p) if p.is_file() else "missing"))
+    return e
+
+
+def key_of(e: list[tuple[str, str]]) -> str:
+    return _sha("".join(f"{a}\0{b}\n" for a, b in e).encode())
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--root", type=Path, required=True)
+    p.add_argument("--ops", type=Path, default=OPS)
+    p.add_argument("--decomp", type=Path)
+    p.add_argument("--symbols", type=Path)
+    p.add_argument("--config", type=Path)
+    p.add_argument("--list", action="store_true")
+    a = p.parse_args(argv)
+    try:
+        e = entries(a.root.resolve(), a.decomp, a.symbols, a.config, a.ops.resolve())
+    except (KeyError_, subprocess.CalledProcessError, OSError) as err:
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 2
+    if a.list:
+        for label, d in e:
+            print(d, label)
+    print(key_of(e))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

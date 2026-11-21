@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 # PC SIDE (Git Bash). Usage: pack.sh <commit> <tables.tar.xz> <run> <files.txt>
 # Bundles the git archive of <commit> + built tables + the test list + the pod scripts of
-# tools/ops/day/pod (from git at this checkout's HEAD, LF) into $RENT/out/<run>/payload.tar,
+# tools/ops/day/pod (*.sh, weights.py, weights.txt; from git at HEAD of the checkout that runs
+# pack.sh, LF, not from <commit>) into $RENT/out/<run>/payload.tar,
 # lists it, refuses forbidden files, starts a detached send and prints the exec-pod body that
 # receives the payload into /work/<run>, starts bin/notify.sh, then bin/setup.sh there; a failed
 # receive or unpack ends setup.log with RECEIVE_FAILED or UNPACK_FAILED. <run>: [a-z0-9_-], used once.
-# Refuses: uncommitted changes under tools/ops/day/pod; a files.txt line outside the list format
+# Refuses: uncommitted changes under tools/ops/day/pod; pod scripts at HEAD that differ from local
+# main's (common.sh pod_main_check: run pack.sh from a checkout at main, the main checkout;
+# PACK_OFF_MAIN_POD=1 overrides, for a road test of an ops branch only); a files.txt line outside the list format
 # (tools/ops/day/pod/setup.sh); forbidden files; table entries (directories included) with '..'
 # or a leading '/' or './'; table entries outside TABLE_ALLOW or in TABLE_DENY; a grep error in
 # any check (the checks fail closed). Any failure after $RENT/out/<run> is created removes it.
 # Env: MARK (pytest -m for lines without A; default "not slow and not fullset": the per-tip run;
 # MARK=fullset for the merge-candidate run, DAYBOX.md "Merge candidate"), runner knobs go in the exec body.
-# meta.env also gets WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
+# meta.env also gets GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
+# pod_sum: the packed *.sh and weights.py) and POD_WEIGHTS (pod_wsum: weights.txt); setup.sh copies
+# them to gate.env for podcheck.sh, which podcheck_body.sh runs before every pack,
+# and WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
 # tools/ops/day/wait.sh.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
@@ -22,7 +28,7 @@ refuse() { echo "REFUSED: $1"; echo "$2"; exit 3; }
 
 FORBID='\.(nds|sav|dsv|ds[0-9]|zip|xlsx|ods)$|(^|/)\.cache/|(^|/)backups?/|desktop|local\.toml'
 BADPATH='\.\.|^/|^\./'
-LINE='^tests[^[:space:]]* [1-9][0-9]*( A)?$'
+LINE='^tests[^[:space:]]* [1-9][0-9]*( A)?( [1-9][0-9]*G)?$'
 COMMENT='^[[:space:]]*(#|$)'
 # Every pattern must compile: on empty input grep exits 1 for a valid pattern, 2 for a bad one.
 for pat in "$FORBID" "$BADPATH" "$LINE" "$COMMENT" "$TABLE_ALLOW" "$TABLE_DENY"; do
@@ -39,26 +45,26 @@ TOP=$(git -C "$HERE" rev-parse --show-toplevel)
 DIRTY=$(git -C "$TOP" status --porcelain -- tools/ops/day/pod)
 [ -z "$DIRTY" ] || refuse "uncommitted changes in tools/ops/day/pod; commit them first" "$DIRTY"
 OPS=$(git -C "$TOP" rev-parse HEAD)
+pod_main_check "$TOP"
+[ "${PACK_OFF_MAIN_POD:-}" = 1 ] && echo "WARNING: PACK_OFF_MAIN_POD=1: the pod scripts come from HEAD $(git -C "$TOP" rev-parse --short HEAD), not checked against main; a road test of an ops branch only, stated in its report"
 [ -f "$LIST" ] || refuse "no such test list" "$LIST"
 
 mkdir -p "$P/bin"
 # From here every failure removes the payload folder, so the run name stays usable.
 trap 'rc=$?; [ "$rc" = 0 ] || { cd /; rm -rf "$P" || echo "WARNING: could not remove $P"; }' EXIT
 
-# Test list: "<test file, folder or node id> <ids per chunk> [A]". The uploaded copy drops comment
+# Test list: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]". The uploaded copy drops comment
 # and blank lines, and that copy is what gets checked.
 L=$(tr -d '\r' < "$LIST" | pick -vE "$COMMENT") || exit 3
 printf '%s\n' "$L" | sed '/^$/d' > "$P/files.txt"
 [ -s "$P/files.txt" ] || refuse "test list has no entries" "$LIST"
-deny "files.txt lines outside the format '<tests path or id> <ids per chunk> [A]'" "$(cat "$P/files.txt")" -vE "$LINE"
+deny "files.txt lines outside the format '<tests path or id> <ids per chunk> [A] [<GB>G]'" "$(cat "$P/files.txt")" -vE "$LINE"
 
 COMMIT=$(git -C "$REPO" rev-parse --verify "$C^{commit}")
 DECOMP=$(git -C "$REPO/external/pokeplatinum" rev-parse HEAD)
 git -C "$REPO" -c core.autocrlf=false archive --format=tar -o "$P/code.tar" "$COMMIT"
 cp "$TB" "$P/tables.tar.xz"
-mkdir "$P/podsrc"; git -C "$TOP" -c core.autocrlf=false archive --format=tar "$OPS" tools/ops/day/pod | tar -xf - -C "$P/podsrc"
-for f in "$P"/podsrc/tools/ops/day/pod/*.sh; do tr -d '\r' < "$f" > "$P/bin/$(basename "$f")"; done
-rm -rf "$P/podsrc"
+pod_bin "$TOP" "$OPS" "$P/bin" || refuse "could not extract tools/ops/day/pod at $OPS" ""
 # Beacon codes: two fresh random codephrases per run, WATCH_F (first failure) and WATCH_D (results),
 # for bin/notify.sh (runpodctl send --code) and tools/ops/day/wait.sh. runpodctl v3.1.1's croc fork
 # (cmd/transfer/croc.go:551,722) puts a transfer in the relay room code[:3] and its data rooms in
@@ -70,7 +76,8 @@ draw() { local a=abcdefghijklmnopqrstuvwxyz l="" b
 WF=$(draw); WD=$(draw)
 while [ "${WD:0:3}" = "${WF:0:3}" ]; do WD=$(draw); done
 for w in "$WF" "$WD"; do echo "$w" | grep -qE '^[a-z]{3}[0-9a-f]{30}$' || refuse "could not draw a random beacon code" "${#w} characters"; done
-printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$WF" "$WD" > "$P/meta.env"
+PODSUM=$(pod_sum "$P/bin"); PODW=$(pod_wsum "$P/bin")
+printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$PODW" "$WF" "$WD" > "$P/meta.env"
 CT=$(tar -tf "$P/code.tar"); TALL=$(tar -tJf "$P/tables.tar.xz")   # TALL: directories included
 T=$(printf '%s\n' "$TALL" | pick -v '/$') || exit 3                  # T: files only
 deny "tables entry with '..', a leading '/' or './'" "$TALL" -E "$BADPATH"
