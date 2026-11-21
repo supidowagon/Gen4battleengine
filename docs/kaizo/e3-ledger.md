@@ -1888,3 +1888,11 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Carry to pass until `carry_out` exists; it then passes `post_fight_evolution(...)` built with `next_fight_scorer` for `args.next_fight`'s trainer (fight tables, `build_trainer_party`).
   Deviations: sheet's `battle_system.c:835-849` is the loop; the mask bit clear is `:838-840`; `battle_main.c:261` sets the state, the case is `:274`.
   Tests: tests/prep/test_report.py. Not run (no local pytest): for the pod.
+
+- E3-B3-16 GT-16 playout learn answer from the growth plan (`src/nuzline/search/learn.py`). No table input changed.
+  `learn_answer_array(tables, members)` -> `int32[SLOTS, width]`: per party slot, per learnset column of the member's row (the entry offered, `src/pokemon.c:3935-3966`), the plan's answer (move slot 0-3) or `GIVE_UP`;
+  `members[slot] = (species, form, GrowthPlan.answers)` or `None` (base plan). `learn_policy(tables, state, answers=None)`, `resolve_learns`, `settle_learns`, `settle_reason` take it as an optional batch input (not a `BattleState` field);
+  `None` = give up, byte for byte as before. The answer ignores `learn_site` (every value, SF3's included, resolves alike). An answer the prompt does not allow (`learn_options`: an HM slot, `battle_party.c:1724-1735`) is given up.
+  Stage B's learn nodes and the `_play` key lines are unchanged. Not wired: `playout`/`player` still call `resolve_learns` without `answers`; GT-9's chain playout passes the per-row array.
+  Deviations: the HM guard is in the policy (the plan builder does not know the slots' moves); no reference-engine differential (the policy is search-side; `test_differential.py` already covers `learn` with every option).
+  Tests: tests/search/test_learn_policy.py (6). Local run green; fail-before: the new names do not exist on the old source.
