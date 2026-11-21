@@ -1702,9 +1702,43 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   holder, with and without Thief known).
   Snapshot compare against the main capture: no layout change, no UPGRADES row, `--allow-new` empty. Expected
   divergence: `ts_qc` of an output state at a pause (pivot_battler or learn_site != 0), 1 -> 0 at a side with no
-  living Quick Claw holder in its party and none on its active (step, jitstep, the reference output), and
-  enumerate_turn's children of such a pausing turn, which merge (fewer children, summed probabilities). A saved
-  paused input's unread bit changes no output: nothing reads it.
+  living Quick Claw holder in its party and none on its active (step, jitstep, the reference output). The rest
+  parts (enumerate_turn) do not change: the exact law draws `quick_claw` only where it is true (enumerate.py
+  `outcome_laws`), so main's children already held 0 there. A saved paused input's unread bit changes no output:
+  nothing reads it.
+  Compare explained (fde6c6d3 against the main 81c47f2c capture; 3baff50b has the same src delta, the main 7698de58
+  merge adds only the game_constants EXEMPT row): 90 ok, 32 diverged, all E3-B2-31; ai, gen, rest, sample,
+  roark.trace and roark.rank identical; E3-B2-30, (b) and (c) diverge nothing (no input has a Quick Claw in
+  `recycle_item`, none knows effect 105 / 177). Cause: the pause stores only readable `ts_qc` bits, 1 -> 0 at a side
+  with no Quick Claw holder. Segment 0's outcome draws a free bit per battler (tests/strategies.py `any_outcome`
+  :2522, `quick_claw=_flag(sides)` :2543), and a segment 0 that pauses stores it. Each part's first diff is
+  `ts_qc` alone (`.ref_step` for step, `.jit_step` for jitstep); the rows were rebuilt through `ref_step` with
+  `_qc_readable` as built and forced true:
+
+  | parts (.step, .jitstep) | first diff | pause | outcome.quick_claw | dropped |
+  |---|---|---|---|---|
+  | 0-9 | s7 t1 ts_qc[0] | learn_site 3 | [1, 0] | b0 (Cubone 104) |
+  | 10-19 | s10 t2 ts_qc[1] | pivot 2 | [0, 1] | b1 (Electrike 309) |
+  | 40-49 | s49 t3 ts_qc[1] | learn_site 3 | [0, 1] | b1 (Clamperl 366) |
+  | 50-59 | s59 t3 ts_qc[0] | pivot 1 | [1, 0] | b0 (Venonat 48) |
+  | 70-79 | s70 t4 ts_qc[0] | learn_site 1 | [1, 1] | both |
+  | 80-89 | s81 t2 ts_qc[0] | pivot 1 | [1, 1] | both |
+  | 90-99 | s99 t1 ts_qc[0] | learn_site 3 | [1, 1] | both |
+  | 110-119 | s112 t1 ts_qc[1] | learn_site 3 | [0, 1] | b1 (Dialga 483) |
+  | 120-129 | s125 t2 ts_qc[1] | learn_site 1 | [0, 1] | b1 (Camerupt 323) |
+  | 130-139 | s137 t2 ts_qc[0] | learn_site 3 | [1, 0] | b0 (Shinx 403) |
+  | 140-149 | s141 t4 ts_qc[0] | learn_site 1 | [1, 0] | b0 (Shinx 403) |
+  | 150-159 | s154 t4 ts_qc[1] | pivot 2 | [1, 1] | b1 (Meowth 52); b0 kept (party slot 3 Prinplup 394, hp 12, holds one) |
+  | 160-169 | s167 t3 ts_qc[0] | learn_site 1 | [1, 1] | both |
+  | 170-179 | s170 t3 ts_qc[0] | pivot 1 | [1, 1] | both |
+  | 180-189 | s188 t3 ts_qc[1] | learn_site 1 | [0, 1] | b1 (Chansey 113) |
+  | 190-199 | s194 t1 ts_qc[0] | learn_site 3 | [1, 1] | both |
+
+  "both": neither side holds one; the first diff is index 0. Proof: throwaway 149f6df2 (from 3baff50b, never
+  merged) reverts only the three `ts_qc` write sites to main's raw draw; its closing compare ended `compare: ok`,
+  122 parts ok, 0 diverged. The 3baff50b compare log was never fetched: the cause rests on the fde6c6d3 log, the
+  throwaway's `ok` and claude/e3-nmw 871be9de's compare against the main 7698de58 capture, which diverges in the
+  same 32 parts.
   (b) Review of d9c68dfb. (1) Recycle: Fling ends in `RemoveItem BTLSCR_ATTACKER` (effect_script_0233.s:18), which
   stores the flung item, a Quick Claw included (flingPower 80, res/items/data/quick_claw.json:20), in
   `recycleItem[battler]` (battle_script.c:8978); `BtlCmd_TryRecycle` gives it back (:9000-9012, effect_script_0184.s:
@@ -1723,8 +1757,8 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   the own item, no; Pickup runs after the battle (`BtlCmd_GenerateEndOfBattleItem` :7781-7797), no. (2) Tag battles:
   only a side-1 attacker's steal or swap is blocked (:5102-5104, :6345-6346), so a side-0 battler can Thief or Trick
   its ally, another party in a tag battle. `elsewhere` (step, reference) and `other_claw` (enumerate) now count a
-  living holder in any party but b's own; singles is unchanged (the other party is the foe's). (3) Doubles item,
-  owner: the multi-battler milestone (split-by-split roadmap): a partner that learns Thief, Covet, Trick or
+  living holder in any party but b's own; singles is unchanged (the other party is the foe's). (3) Doubles gap,
+  owner: E2 (multi exp and learn, M5), reported 21 Nov; on no backlog yet: a partner that learns Thief, Covet, Trick or
   Switcheroo at a MoveEnd pause re-reads its slot for its pending action (STATE.md, mid-turn learn prompts;
   FightCommand :1889-1895), but the turn's law and the pause read the moves of the turn's start, so its bit can be
   dropped. Unreachable today: coverage refuses every format but singles and refuses a learnable move whose effect is
