@@ -247,7 +247,8 @@ def test_doubleslap_two_hits_one_accuracy(tables, names):
     # Enumeration: no hit-count draw, crit and roll for the two hits only.
     rel = outcome_laws(tables, s, acts).relevant
     assert not bool(rel.n_hits[0])
-    assert np.asarray(rel.crit[0]).tolist() == [True, True, False, False, False]
+    # MAX_HITS is 6 (Beat Up, B13-9): every slot after the second is unread.
+    assert np.asarray(rel.crit[0]).tolist() == [True, True] + [False] * (MAX_HITS - 2)
     fury = roark_state(tables, names, player_moves=["Fury Swipes"])
     rel = outcome_laws(tables, fury, A("Fury Swipes", "Leer", fury, names)).relevant
     assert bool(rel.n_hits[0]) and all(np.asarray(rel.crit[0]).tolist())
