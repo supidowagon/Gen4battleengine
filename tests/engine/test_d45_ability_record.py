@@ -89,9 +89,10 @@ def test_entry_hazards_immunity_records_enemy(tables, names):
         types=s.types.at[1, slot].set(np.asarray([Type.NORMAL, Type.NORMAL], np.int8)),
         toxic_spikes=s.toxic_spikes.at[1].set(1),
     )
-    out = effects.entry_hazards(tables, s, 3)
+    out, stopped = effects.entry_hazards(tables, s, 3)
     r = to_ref(s)
-    ref._entry_hazards(_turn(tables, DOUBLES), r, 3)
+    ref_stopped = ref._entry_hazards(_turn(tables, DOUBLES), r, 3)
+    assert bool(stopped) == bool(ref_stopped)
     assert _known(out) == [0, 0, 0, _id(AbilityId.IMMUNITY)] == r.ai_ability_known
 
 
