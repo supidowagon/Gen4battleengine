@@ -52,11 +52,14 @@ if command -v npm >/dev/null && [ -f "$R/tools/smogon_calc/package-lock.json" ];
 elif [ "${NUZLINE_REQUIRE_NODE:-}" = 1 ]; then echo "ERROR: npm or tools/smogon_calc/package-lock.json missing"; exit 1; fi
 # Compile cache seed from the network volume (bin/cache_sync.sh seed: once per pod and jax version),
 # only when /vol (CACHE_VOL; tests point it elsewhere) is a mountpoint; a pod without the volume runs exactly as before. A failed seed
-# only means cold compiles.
+# only means cold compiles. The seed runs under timeout -k 30 900 (a hung volume never holds the
+# setup; a full seed takes 25-100 s): rc 124 or 137 prints "WARNING: cache seed timed out".
 if mountpoint -q "${CACHE_VOL:-/vol}" 2>/dev/null; then
-  JV=$(cd "$R" && uv run --frozen python -c 'from nuzline.jaxcache import jax_version; print(jax_version())') \
-    && CACHE_JAXVER="$JV" CACHE_PY="$R/.venv/bin/python" bash "$D/bin/cache_sync.sh" seed \
-    || echo "WARNING: cache seed failed (rc $?); this run compiles what the pod lacks"
+  src=0; JV=$(cd "$R" && uv run --frozen python -c 'from nuzline.jaxcache import jax_version; print(jax_version())') || src=$?
+  if [ "$src" = 0 ]; then CACHE_JAXVER="$JV" CACHE_PY="$R/.venv/bin/python" timeout -k 30 900 bash "$D/bin/cache_sync.sh" seed || src=$?; fi
+  case "$src" in 0) ;;
+    124|137) echo "WARNING: cache seed timed out after 900 s (rc $src: the volume did not answer); this run compiles what the pod lacks" ;;
+    *) echo "WARNING: cache seed failed (rc $src); this run compiles what the pod lacks" ;; esac
 fi
 rm -rf col out; mkdir -p col out
 grep -vE '^[[:space:]]*(#|$)' files.txt > col/list.txt   # the one list both steps below number

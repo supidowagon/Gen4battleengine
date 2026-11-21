@@ -22,6 +22,27 @@ SYNC = ROOT / "tools" / "ops" / "day" / "pod" / "cache_sync.sh"
 SNAP = ROOT / "tools" / "ops" / "day" / "snap.sh"
 PY = Path(sys.executable).as_posix()
 VER = "0123456789abcdef"
+CPUINFO = ("processor	: 0
+model name	: Test CPU 9000
+flags		: sse2 avx2  fpu
+
+"
+           "processor	: 1
+model name	: Test CPU 9000
+flags		: sse2 avx2 fpu
+")
+
+
+def _tag(model: str, flags: str) -> str:
+    """cache_sync.sh host_tag: 12 hex of sha256 over the model name and the sorted flags."""
+    import hashlib
+    return hashlib.sha256(f"{model}
+{' '.join(sorted(set(flags.split())))} 
+".encode()).hexdigest()[:12]
+
+
+HOST = _tag("Test CPU 9000", "sse2 avx2 fpu")
+VT = f"{VER}-{HOST}"   # the volume folder of VER compiled on this (fake) host
 KEY = "a" * 40 + "-" + "b" * 16
 
 pytestmark = pytest.mark.skipif(BASH is None, reason="no POSIX bash")
@@ -33,10 +54,14 @@ def _has(cmd: str) -> bool:
 
 def _env(tmp: Path, **kw: str) -> dict[str, str]:
     (tmp / "vol").mkdir(exist_ok=True)   # the mount point; a pod with the volume always has it
+    if not (tmp / "cpuinfo").exists():
+        (tmp / "cpuinfo").write_text(CPUINFO, encoding="utf-8", newline="
+")
     env = {k: v for k, v in _clean_env().items()
            if not k.startswith("CACHE_") and k not in ("NUZLINE_TEST_COMPILE_CACHE", "RUNPOD_POD_ID")}
     env.update(CACHE_VOL=(tmp / "vol").as_posix(), CACHE_VOL_MOUNTCHECK="0", CACHE_PY=PY, CACHE_POD="poda",
-               NUZLINE_TEST_COMPILE_CACHE=(tmp / "local").as_posix(), CACHE_SEED_LOCK=(tmp / "seed.lock").as_posix())
+               NUZLINE_TEST_COMPILE_CACHE=(tmp / "local").as_posix(), CACHE_CPUINFO=(tmp / "cpuinfo").as_posix(),
+               CACHE_SEED_LOCK=(tmp / "seed.lock").as_posix())
     env.update(kw)
     return env
 
@@ -102,18 +127,18 @@ def test_publish_copies_only_old_complete_entries_by_temp_name_then_rename(tmp_p
     _entry(tmp_path / "local" / "notaversion", "z-cache", _blob(6))   # not a version folder
     rc, out = _sync(tmp_path, "publish")
     assert rc == 0, out
-    vol = tmp_path / "vol" / "jax" / VER
+    vol = tmp_path / "vol" / "jax" / VT
     assert sorted(p.name for p in vol.iterdir()) == ["good-cache", f"used-{_today()}"]
     assert (vol / "good-cache").read_bytes() == good.read_bytes()
     assert "skip trunc-cache: zlib: incomplete or truncated stream" in out
     assert "skip empty-cache: empty" in out
-    assert f"publish {VER}: 1 entries published, 2 skipped" in out
+    assert f"publish {VT}: 1 entries published, 2 skipped" in out
     assert out.rstrip().endswith("cache_sync: publish done")
     assert not (tmp_path / "vol" / "jax" / "notaversion").exists()
     assert not (tmp_path / "vol" / "jax" / ".prune.lock").exists()
     assert _temps(tmp_path / "vol") == []
     rc, out = _sync(tmp_path, "publish")                              # nothing new: nothing copied
-    assert rc == 0 and f"publish {VER}: 0 entries published, 2 skipped" in out
+    assert rc == 0 and f"publish {VT}: 0 entries published, 2 skipped" in out
     rc, out = _sync(tmp_path, "publish", CACHE_MIN_AGE_S="0")         # age 0: the young one goes too
     assert (vol / "young-cache").is_file()
 
@@ -127,14 +152,14 @@ def test_publish_checks_zstd_entries_too(tmp_path):
     _entry(loc, "zt-cache", blob[: len(blob) // 2])
     rc, out = _sync(tmp_path, "publish")
     assert rc == 0, out
-    assert (tmp_path / "vol" / "jax" / VER / "z-cache").read_bytes() == blob
-    assert not (tmp_path / "vol" / "jax" / VER / "zt-cache").exists()
+    assert (tmp_path / "vol" / "jax" / VT / "z-cache").read_bytes() == blob
+    assert not (tmp_path / "vol" / "jax" / VT / "zt-cache").exists()
     assert "skip zt-cache: zstd:" in out
 
 
 @pytest.mark.skipif(not _has("flock"), reason="seed takes a flock; no flock here (Git Bash): runs on the pod")
 def test_seed_copies_complete_volume_entries_once_and_keeps_local_ones(tmp_path):
-    vol = tmp_path / "vol" / "jax" / VER
+    vol = tmp_path / "vol" / "jax" / VT
     _entry(vol, "a-cache", _blob(1))
     _entry(vol, "b-cache", _blob(2))
     _entry(vol, "bad-cache", _blob(3)[:10000])                          # a bad entry on the volume
@@ -158,7 +183,7 @@ def test_seed_copies_complete_volume_entries_once_and_keeps_local_ones(tmp_path)
 
 @pytest.mark.skipif(not _has("flock"), reason="seed takes a flock; no flock here (Git Bash): runs on the pod")
 def test_concurrent_seeds_seed_once(tmp_path):
-    vol = tmp_path / "vol" / "jax" / VER
+    vol = tmp_path / "vol" / "jax" / VT
     for i in range(40):
         _entry(vol, f"e{i:02d}-cache", _blob(i))
     procs = [_popen(tmp_path, "seed", CACHE_JAXVER=VER) for _ in range(2)]
@@ -177,7 +202,7 @@ def test_two_pods_publishing_the_same_entries_at_once_leave_one_complete_copy(tm
              for pod in ("a", "b")]
     outs = [p.communicate(timeout=120)[0] for p in procs]
     assert all(p.returncode == 0 for p in procs), outs
-    vol = tmp_path / "vol" / "jax" / VER
+    vol = tmp_path / "vol" / "jax" / VT
     names = sorted(p.name for p in vol.iterdir() if p.name.endswith("-cache"))
     assert names == [f"e{i:02d}-cache" for i in range(30)]
     assert all((vol / n).read_bytes() == _blob(int(n[1:3])) for n in names)
@@ -193,11 +218,11 @@ def _old(p: Path, seconds: float) -> None:
 def test_prune_skips_while_another_pod_holds_the_lock(tmp_path):
     jax = tmp_path / "vol" / "jax"
     (jax / ".prune.lock").mkdir(parents=True)
-    old = jax / "1111111111111111"
+    old = jax / f"1111111111111111-{HOST}"
     _entry(old, "x-cache", _blob(1))
     (old / f"used-{_days_ago(30)}").touch()
-    (jax / VER).mkdir()
-    (jax / VER / f"used-{_today()}").touch()
+    (jax / VT).mkdir()
+    (jax / VT / f"used-{_today()}").touch()
     rc, out = _sync(tmp_path, "prune")
     assert rc == 0 and "prune: lock" in out and "held" in out and "prune skipped" in out
     assert (old / "x-cache").is_file() and (jax / ".prune.lock").is_dir()
@@ -208,7 +233,7 @@ def test_prune_takes_over_a_stale_lock_and_prunes_versions_temps_size_and_captur
     jax = vol / "jax"
     (jax / ".prune.lock").mkdir(parents=True)
     _old(jax / ".prune.lock", 7200)                                   # a pod died mid-prune
-    new, recent, stale = jax / VER, jax / "2222222222222222", jax / "3333333333333333"
+    new, recent, stale = jax / VT, jax / f"2222222222222222-{HOST}", jax / f"3333333333333333-{HOST}"
     for d, used in ((new, [_days_ago(2), _today()]), (recent, [_days_ago(3)]), (stale, [_days_ago(10)])):
         d.mkdir()
         for u in used:
@@ -236,7 +261,7 @@ def test_prune_takes_over_a_stale_lock_and_prunes_versions_temps_size_and_captur
 
 
 def test_prune_keeps_the_most_recently_used_version_however_old(tmp_path):
-    only = tmp_path / "vol" / "jax" / VER
+    only = tmp_path / "vol" / "jax" / VT
     _entry(only, "x-cache", _blob(1))
     (only / f"used-{_days_ago(40)}").touch()
     rc, out = _sync(tmp_path, "prune")
@@ -246,6 +271,9 @@ def test_prune_keeps_the_most_recently_used_version_however_old(tmp_path):
 def _capture(w: Path, parts: dict[str, str], rc: str | None = "0", payload: bytes = b"states") -> Path:
     (w / "snap").mkdir(parents=True)
     (w / "snap" / "capture.json").write_text(json.dumps({"commit": "a" * 40, "parts": parts}), encoding="utf-8")
+    for part in parts:   # snap_compare writes <part>.pkl.gz and <part>.sha256 for each part
+        (w / "snap" / f"{part}.pkl.gz").write_bytes(payload)
+        (w / "snap" / f"{part}.sha256").write_text(f"{'0' * 64}  {part}\n", encoding="utf-8")
     (w / "snap" / "step.0.pkl.gz").write_bytes(payload)
     lines = ["START 1", "SYNC_RC=0 2", "CAPTURE_START 3"] + ([f"CAPTURE_RC={rc} 4"] if rc is not None else [])
     (w / "times.txt").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
@@ -286,7 +314,7 @@ def test_capture_publish_stores_complete_captures_once_and_fetch_brings_them_bac
     job = tmp_path / "work3" / "snapmain-aaaaaaa"
     job.mkdir(parents=True)
     (job / "times.txt").write_text("START 9\nSYNC_RC=0 9\n", encoding="utf-8", newline="\n")
-    assert _sync(tmp_path, "snap-fetch", KEY, job.as_posix())[0] == 0
+    assert _sync(tmp_path, "snap-fetch", KEY, job.as_posix(), "own")[0] == 0
     assert (job / "times.txt").read_text() == "START 9\nSYNC_RC=0 9\n" and (job / "snap" / "capture.json").is_file()
     unfinished = tmp_path / "work4" / "x"
     (unfinished / "snap").mkdir(parents=True)
@@ -300,6 +328,8 @@ def test_capture_publish_stores_complete_captures_once_and_fetch_brings_them_bac
 def test_a_stored_capture_that_is_incomplete_is_not_fetched(tmp_path):
     stored = tmp_path / "vol" / "snap" / KEY
     _capture(stored, {"step.0": "pending"})
+    (stored / "KEY").write_text(KEY + "
+")
     rc, out = _sync(tmp_path, "snap-fetch", KEY, (tmp_path / "d").as_posix())
     assert rc == 1 and "not a complete capture" in out
     assert not (tmp_path / "d" / "snap").exists() and _temps(tmp_path) == []
@@ -314,6 +344,179 @@ def test_two_pods_storing_one_capture_key_at_once_store_it_once(tmp_path):
     assert [p.name for p in snaps.iterdir()] == [KEY]
     assert (snaps / KEY / "snap" / "step.0.pkl.gz").read_bytes() in (b"A" * 100000, b"B" * 100000)
     assert sum("stored" in o and "kept" not in o for o in outs) == 1
+
+
+# Host tag (the cache holds compiled XLA CPU programs; JAX's key does not hold the CPU)
+
+def test_seed_and_publish_use_only_the_folder_of_this_hosts_cpu(tmp_path):
+    other = tmp_path / "vol" / "jax" / f"{VER}-{_tag('Other CPU', 'sse2')}"
+    _entry(other, "o-cache", _blob(1))                                 # compiled on another CPU
+    _entry(tmp_path / "local" / VER, "mine-cache", _blob(2))
+    rc, out = _sync(tmp_path, "publish")
+    assert rc == 0, out
+    assert (tmp_path / "vol" / "jax" / VT / "mine-cache").is_file() and not (other / "mine-cache").exists()
+    if _has("flock"):
+        rc, out = _sync(tmp_path, "seed", CACHE_JAXVER=VER, NUZLINE_TEST_COMPILE_CACHE=(tmp_path / "fresh").as_posix())
+        assert rc == 0 and f"seed: host tag {HOST}" in out, out
+        assert sorted(p.name for p in (tmp_path / "fresh" / VER).iterdir()) == ["mine-cache"]   # not o-cache
+    # flags in another order, doubled spaces, CRLF: the same CPU, the same tag
+    (tmp_path / "cpuinfo").write_text("model name : Test CPU 9000\r\nflags : fpu  sse2 avx2\r\n", encoding="utf-8", newline="")
+    _entry(tmp_path / "local" / VER, "mine2-cache", _blob(3))
+    assert _sync(tmp_path, "publish")[0] == 0 and (tmp_path / "vol" / "jax" / VT / "mine2-cache").is_file()
+
+
+def test_without_a_cpu_model_or_flags_seed_and_publish_skip(tmp_path):
+    (tmp_path / "cpuinfo").write_text("processor : 0\nFeatures : neon\n", encoding="utf-8")
+    _entry(tmp_path / "local" / VER, "e-cache", _blob(1))
+    rc, out = _sync(tmp_path, "publish")
+    assert rc == 0 and "no host tag, nothing published" in out and out.rstrip().endswith("publish done"), out
+    assert not list((tmp_path / "vol" / "jax").glob(f"{VER}*"))
+    rc, out = _sync(tmp_path, "seed", CACHE_JAXVER=VER)
+    assert rc == 0 and "no host tag, seed skipped" in out, out
+
+
+def test_prune_keeps_the_newest_version_per_host_tag_and_drops_untagged_folders(tmp_path):
+    jax = tmp_path / "vol" / "jax"
+    h2 = _tag("Other CPU", "sse2")
+    keep_a, old_a = jax / VT, jax / f"{'1' * 16}-{HOST}"
+    keep_b, untagged = jax / f"{'2' * 16}-{h2}", jax / ("3" * 16)
+    for d, used in ((keep_a, _today()), (old_a, _days_ago(10)), (keep_b, _days_ago(30)), (untagged, _today())):
+        _entry(d, "x-cache", _blob(1))
+        (d / f"used-{used}").touch()
+    rc, out = _sync(tmp_path, "prune")
+    assert rc == 0, out
+    assert keep_a.is_dir() and keep_b.is_dir() and not old_a.exists() and not untagged.exists()
+    assert f"jax folder {'3' * 16} has no host tag" in out
+
+
+# The prune lock: takeover re-check and release by owner
+
+def _shim(tmp: Path, name: str, body: str) -> str:
+    """A PATH folder holding the bash script <name>; returns the PATH to pass."""
+    d = tmp / "shim"
+    d.mkdir(exist_ok=True)
+    (d / name).write_text("#!/bin/bash\n" + body, encoding="utf-8", newline="\n")
+    os.chmod(d / name, 0o755)
+    path = subprocess.run([BASH, "-c", 'cygpath -u "$0" 2>/dev/null || echo "$0"', str(d)],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    rest = subprocess.run([BASH, "-c", 'echo "$PATH"'], env=_env(tmp), capture_output=True, text=True).stdout.strip()
+    return f"{path}:{rest}"
+
+
+def _real(cmd: str) -> str:
+    return subprocess.run([BASH, "-c", f"command -v {cmd}"], capture_output=True, text=True).stdout.strip()
+
+
+def test_prune_releases_the_lock_only_while_it_names_this_pod_and_pid(tmp_path):
+    jax = tmp_path / "vol" / "jax"
+    _entry(jax / VT, "x-cache", _blob(1))
+    # The cap step's helper runs while prune holds the lock: a python that first rewrites the
+    # owner file, as a pod taking the lock over mid-prune would.
+    wrap = tmp_path / "py.sh"
+    wrap.write_text(f'#!/bin/bash\n[ "$2" = cap ] && echo "podz 1 0" > "$LOCKDIR/owner"\nexec "{PY}" "$@"\n',
+                    encoding="utf-8", newline="\n")
+    os.chmod(wrap, 0o755)
+    rc, out = _sync(tmp_path, "prune", CACHE_PY=wrap.as_posix(), LOCKDIR=(jax / ".prune.lock").as_posix())
+    assert rc == 0 and "no longer names this pod and pid (owner: podz 1): left to its holder" in out, out
+    assert (jax / ".prune.lock" / "owner").read_text().split()[:2] == ["podz", "1"]
+    shutil.rmtree(jax / ".prune.lock")
+    rc, out = _sync(tmp_path, "prune")                                # its own lock: released
+    assert rc == 0 and not (jax / ".prune.lock").exists(), out
+
+
+def test_a_stale_lock_that_changes_before_the_takeover_is_left_alone(tmp_path):
+    lock = tmp_path / "vol" / "jax" / ".prune.lock"
+    lock.mkdir(parents=True)
+    (lock / "owner").write_text("podb 7 1\n")
+    _old(lock, 7200)
+    real = _real("stat")
+    # stat of the lock answers its old mtime once, then a new one: another pod took it over
+    # between the first read and the re-check
+    body = ('case "$*" in *.prune.lock)\n'
+            f'  if [ -f "$SHIMN" ]; then date +%s; else touch "$SHIMN"; exec "{real}" "$@"; fi; exit 0;; esac\n'
+            f'exec "{real}" "$@"\n')
+    path = _shim(tmp_path, "stat", body)
+    rc, out = _sync(tmp_path, "prune", PATH=path, SHIMN=(tmp_path / "n").as_posix())
+    assert rc == 0 and "changed while being taken over: prune skipped" in out, out
+    assert (lock / "owner").read_text() == "podb 7 1\n"
+    rc, out = _sync(tmp_path, "prune")                                # unchanged: taken over
+    assert rc == 0 and "taken over" in out and "owner podb 7 1" in out and not lock.exists(), out
+
+
+# Capture integrity
+
+def test_a_capture_with_a_part_file_missing_or_empty_is_not_stored_or_fetched(tmp_path):
+    for i, (gone, empty) in enumerate((("ai.0.pkl.gz", None), ("ai.0.sha256", None), (None, "ai.0.pkl.gz"))):
+        w = _capture(tmp_path / "work" / f"w{i}", {"step.0": "ok", "ai.0": "ok"})
+        if gone:
+            (w / "snap" / gone).unlink()
+        if empty:
+            (w / "snap" / empty).write_bytes(b"")
+        rc, out = _sync(tmp_path, "snap-publish", w.as_posix(), KEY)
+        assert rc == 1 and "is not a complete capture (part ai.0: ai.0." in out, out
+    assert not (tmp_path / "vol" / "snap" / KEY).exists()
+    w = _capture(tmp_path / "work" / "ok", {"step.0": "ok", "ai.0": "ok"})
+    assert _sync(tmp_path, "snap-publish", w.as_posix(), KEY)[0] == 0
+    (tmp_path / "vol" / "snap" / KEY / "snap" / "ai.0.sha256").unlink()   # lost on the volume
+    rc, out = _sync(tmp_path, "snap-fetch", KEY, (tmp_path / "d").as_posix())
+    assert rc == 1 and "on the volume is not a complete capture (part ai.0: ai.0.sha256 missing)" in out, out
+    assert not (tmp_path / "d" / "snap").exists() and _temps(tmp_path) == []
+
+
+def test_fetch_refuses_a_stored_capture_whose_key_file_names_another_key(tmp_path):
+    w = _capture(tmp_path / "work" / "w", {"step.0": "ok"})
+    assert _sync(tmp_path, "snap-publish", w.as_posix(), KEY)[0] == 0
+    k2 = "a" * 40 + "-" + "e" * 16
+    os.rename(tmp_path / "vol" / "snap" / KEY, tmp_path / "vol" / "snap" / k2)   # a hand rename
+    rc, out = _sync(tmp_path, "snap-fetch", k2, (tmp_path / "d").as_posix())
+    assert rc == 1 and f"KEY names '{KEY}', not {k2}: not fetched" in out, out
+    assert not (tmp_path / "d" / "snap").exists()
+
+
+def test_prune_keeps_a_temp_capture_copy_still_being_written(tmp_path):
+    snaps = tmp_path / "vol" / "snap"
+    live, dead = snaps / f".tmp-podb-1-{KEY}", snaps / ".tmp-podb-2-x"
+    for d in (live, dead):
+        _entry(d / "snap", "old.pkl.gz", b"x", age=7200)
+    (live / "snap" / "new.pkl.gz").write_bytes(b"y")                  # the copy goes on
+    for d in (live / "snap", live, dead / "snap", dead):              # folder mtimes: all old
+        _old(d, 7200)
+    rc, out = _sync(tmp_path, "prune")
+    assert rc == 0 and "prune: 1 stale temp names deleted" in out, out
+    assert live.is_dir() and not dead.exists()
+
+
+def test_a_compares_fetch_replaces_a_stale_failed_times_file(tmp_path):
+    w = _capture(tmp_path / "work" / "w", {"step.0": "ok"})
+    assert _sync(tmp_path, "snap-publish", w.as_posix(), KEY)[0] == 0
+    dest = tmp_path / "work2" / "snapmain-aaaaaaa"
+    dest.mkdir(parents=True)
+    (dest / "times.txt").write_text("START 1\nSYNC_RC=0 2\nCAPTURE_START 3\nCAPTURE_RC=1 4\nALL_DONE\n", newline="\n")
+    rc, out = _sync(tmp_path, "snap-fetch", KEY, dest.as_posix())
+    assert rc == 0, out
+    times = (dest / "times.txt").read_text().splitlines()
+    assert "CAPTURE_RC=1 4" not in times and "CAPTURE_RC=0 4" in times and times[-1] == "ALL_DONE"
+    assert times[-2].startswith(f"FETCHED_FROM_VOLUME {KEY} ")
+    assert "CAPTURE_RC=1 4" in (dest / "times.txt.before-fetch").read_text()
+    assert _sync(tmp_path, "snap-fetch", KEY, dest.as_posix(), "mine")[0] == 2   # only "own"
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="timeout signals a bash shim's process group: Linux only (WSL runner, the pod)")
+def test_a_store_stopped_by_timeout_leaves_no_key_and_no_temp(tmp_path):
+    w = _capture(tmp_path / "work" / "w", {"step.0": "ok"})
+    path = _shim(tmp_path, "cp", f'case "$*" in *times.txt*) sleep 60;; esac\nexec "{_real("cp")}" "$@"\n')
+    r = subprocess.run(["timeout", "-k", "5", "2", BASH, SYNC.as_posix(), "snap-publish", w.as_posix(), KEY],
+                       env=_env(tmp_path, PATH=path), capture_output=True, text=True, check=False)
+    assert r.returncode == 124, r.stdout + r.stderr
+    assert "stopped by a signal: temp copies removed" in r.stdout
+    assert not (tmp_path / "vol" / "snap" / KEY).exists() and _temps(tmp_path / "vol") == []
+
+
+def test_setup_seeds_under_a_timeout_with_a_warning():
+    setup = (ROOT / "tools" / "ops" / "day" / "pod" / "setup.sh").read_text(encoding="utf-8")
+    assert 'timeout -k 30 900 bash "$D/bin/cache_sync.sh" seed' in setup
+    assert "WARNING: cache seed timed out after 900 s" in setup
 
 
 # snap.sh: the store key and the run.sh lines (dry runs on a throwaway repo)
@@ -418,3 +621,50 @@ def test_snap_compare_fetches_a_missing_main_capture_by_its_index_key(tmp_path, 
     rc, out = _snap(tmp_path, repo, "compare", sha, tb.as_posix(), "/work/snap2-abcdef0/snap", "snapcmp-x-2")
     assert rc == 0 and "NOTE: no store key" in out
     assert "snap-fetch" not in (rent / "out" / "snapcmp-x-2" / "run.sh").read_text()
+
+
+def test_snap_capture_key_never_comes_from_index_txt(tmp_path, fake_repo):
+    """A capture made with a rebuilt or hand-made archive must not be stored under the official
+    key of its sha (every later compare would fetch it): the key comes from the archive only."""
+    if not _committed_cache_sync():
+        pytest.skip("cache_sync.sh is not committed at HEAD of this checkout")
+    repo, sha, rent, tb = fake_repo
+    (rent / "tables").mkdir()
+    (rent / "tables" / "index.txt").write_text(f"{sha} {'e' * 64}\n", encoding="utf-8")
+    rc, out = _snap(tmp_path, repo, "capture", sha, tb.as_posix())
+    assert rc == 0 and "NOTE: no table key" in out, out
+    run = (rent / "out" / f"snapmain-{sha[:7]}" / "run.sh").read_text()
+    assert "snap-fetch" not in run and "snap-publish" not in run
+    # a .key beside an archive that is not the build of that key: no key either
+    official = rent / "tables" / f"tables_k{'e' * 16}.tar.xz"
+    official.write_bytes(b"the official build")
+    tb.with_suffix("").with_suffix(".key").write_text("e" * 64 + "\n", encoding="utf-8")
+    rc, out = _snap(tmp_path, repo, "capture", sha, tb.as_posix(), "snapmain-x2")
+    assert rc == 0 and f"differs from {official.as_posix()}" in out and "NOTE: no table key" in out, out
+    assert "snap-publish" not in (rent / "out" / "snapmain-x2" / "run.sh").read_text()
+    # the archive is that build: its key
+    shutil.copyfile(tb, official)
+    rc, out = _snap(tmp_path, repo, "capture", sha, tb.as_posix(), "snapmain-x3")
+    assert rc == 0 and f"capture store key {sha}-{'e' * 16}" in out, out
+    # the build itself, by its tables_k<key16> name, no .key file
+    rc, out = _snap(tmp_path, repo, "capture", sha, official.as_posix(), "snapmain-x4")
+    assert rc == 0 and f"capture store key {sha}-{'e' * 16}" in out, out
+
+
+def test_snap_run_sh_puts_every_volume_call_under_a_timeout(tmp_path, fake_repo):
+    if not _committed_cache_sync():
+        pytest.skip("cache_sync.sh is not committed at HEAD of this checkout")
+    repo, sha, rent, tb = fake_repo
+    tb.with_suffix("").with_suffix(".key").write_text("d" * 64 + "\n", encoding="utf-8")
+    assert _snap(tmp_path, repo, "capture", sha, tb.as_posix())[0] == 0
+    run = (rent / "out" / f"snapmain-{sha[:7]}" / "run.sh").read_text()
+    skey = f"{sha}-{'d' * 16}"
+    assert f'timeout -k 30 900 bash "$W/cache_sync.sh" snap-fetch {skey} "$W" own' in run
+    assert f'timeout -k 30 900 bash "$W/cache_sync.sh" snap-publish "$W" {skey}' in run
+    assert run.count("VOLUME_TIMEOUT") == 2 and 'rm -rf "$W/snap" "$W"/.snapfetch.*' in run
+    cap = f"/work/snapmain-{sha[:7]}/snap"
+    assert _snap(tmp_path, repo, "compare", sha, tb.as_posix(), cap, "snapcmp-t-1")[0] == 0
+    run = (rent / "out" / "snapcmp-t-1" / "run.sh").read_text()
+    assert f'timeout -k 30 900 bash "$W/cache_sync.sh" snap-fetch {skey} "/work/snapmain-{sha[:7]}"' in run
+    assert f'NO_CAPTURE {cap} ' in run and "VOLUME_TIMEOUT fetch" in run
+    assert run.count("cache_sync.sh") == run.count("timeout -k 30 900 bash")

@@ -41,14 +41,21 @@
 #   runs (the commit's, or --tool's) has --workers; an older one runs its parts one by one.
 #   Capture store on the network volume (DAYBOX.md "Network volume"; pod/cache_sync.sh, which
 #   travels in the payload as committed at HEAD of this checkout): a capture without --tool is
-#   keyed "<full sha>-<key16>" (key16: table_key16 below, from the tables archive). On a pod whose
-#   /vol is a mountpoint, run.sh first fetches that key from the volume (store.log; times.txt
-#   then holds CAPTURE_FROM_VOLUME <key> <epoch>, CAPTURE_RC=0, ALL_DONE, and no capture runs);
-#   otherwise it captures and, after CAPTURE_RC=0, stores the capture (STORE_RC=<n> <epoch>; a
-#   stored key is never overwritten). A compare of /work/snapmain-<short>/snap whose capture.json
-#   is not on the pod fetches it from the volume first (FETCH_RC=<n> <epoch>), keyed by <short>'s
-#   full sha and its key16 from $RENT/tables. Without a key nothing is stored or fetched (NOTE
-#   line); on a pod without /vol run.sh does what it did before the volume.
+#   keyed "<full sha>-<key16>" (key16: table_key16 below, from the tables archive itself, never
+#   from index.txt). On a pod whose /vol is a mountpoint, run.sh first fetches that key from the
+#   volume (store.log; times.txt then holds CAPTURE_FROM_VOLUME <key> <epoch>, CAPTURE_RC=0,
+#   ALL_DONE, and no capture runs); otherwise it captures and, after CAPTURE_RC=0, stores the
+#   capture (STORE_RC=<n> <epoch>; a stored key is never overwritten). A compare of
+#   /work/snapmain-<short>/snap whose capture.json is not on the pod fetches it from the volume
+#   first (FETCH_RC=<n> <epoch>), keyed by <short>'s full sha and its key16 from $RENT; when
+#   capture.json is still missing after it, times.txt ends NO_CAPTURE <dir> <epoch> and run.sh
+#   exits 1 (no compare, no ALL_DONE). Without a key nothing is stored or fetched (NOTE line); on
+#   a pod without /vol run.sh does what it did before the volume. Every volume call runs under
+#   timeout -k 30 900 (VT): one that times out (rc 124 or 137) writes VOLUME_TIMEOUT fetch|store
+#   <epoch> to times.txt and a WARNING to run.out; a capture's timed-out fetch removes what it
+#   may have left (snap/, .snapfetch.*) and captures as without the volume; a compare's leaves
+#   only a complete, checked snap/ (renamed whole) or none, so NO_CAPTURE; a timed-out store
+#   leaves only a temp name on the volume (STORE_RC=124|137).
 #   Order in run.sh: uv sync, pod lock (SNAP_LOCK), the volume fetch, memory gate, job, snapstop,
 #   the volume store, ALL_DONE, lock released on exit. The fetch runs under the pod lock, so no
 #   other job on this pod writes the same capture folder meanwhile (another pod's store of the
@@ -61,17 +68,30 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
 . "$HERE/pod/gate.sh"   # podgate and reserve_knobs, copied into run.sh
-# table_key16 <full sha> [<tables archive>]: the first 16 hex of a build's table key
-# (tools/ops/build_tables.sh, tools/ops/table_key.py): the <archive minus .tar.xz>.key file beside
-# the archive, else a tables_k<key16>.tar.xz archive name, else the last "<sha> <key>" line of
-# $RENT/tables/index.txt for <full sha>; nothing when none is found. (Kept here, not in
-# common.sh: common.sh is an input of the table key.)
-table_key16() { local k=""
-  if [ -n "${2:-}" ]; then
-    [ -f "${2%.tar.xz}.key" ] && k=$(tr -dc 0-9a-f < "${2%.tar.xz}.key")
-    [ -n "$k" ] || k=$(basename "$2" | sed -n 's/^tables_k\([0-9a-f]\{16\}\)\.tar\.xz$/\1/p')
+# table_key16 capture|compare <full sha> <tables archive>: the first 16 hex of a build's table
+# key (tools/ops/build_tables.sh, tools/ops/table_key.py), or nothing.
+#   capture (the key a capture is stored under): only from the archive itself, the
+#     <archive minus .tar.xz>.key file beside it, else its tables_k<key16>.tar.xz name; and when
+#     $RENT/tables/tables_k<key16>.tar.xz exists, the archive must be byte for byte that build
+#     (cmp), else nothing (a rebuilt or edited archive beside a stale .key). Never from
+#     index.txt: a capture made with other tables would be stored under the official key and
+#     fetched by every later compare.
+#   compare (the key of the main capture to fetch): as capture, else the last "<sha> <key>" line
+#     of $RENT/tables/index.txt for <full sha>. The fallback only names which stored capture to
+#     fetch; a stored capture got its key from its own archive, so it fetches only a capture made
+#     with that key's tables.
+# (Kept here, not in common.sh: common.sh is an input of the table key.)
+table_key16() { local k="" a="${3:-}" ka
+  if [ -n "$a" ]; then
+    [ -f "${a%.tar.xz}.key" ] && k=$(tr -dc 0-9a-f < "${a%.tar.xz}.key")
+    [ -n "$k" ] || k=$(basename "$a" | sed -n 's/^tables_k\([0-9a-f]\{16\}\)\.tar\.xz$/\1/p')
+    k=${k:0:16}
+    if [[ "$k" =~ ^[0-9a-f]{16}$ ]]; then ka="$RENT/tables/tables_k$k.tar.xz"
+      if [ -f "$a" ] && [ -f "$ka" ] && ! cmp -s "$a" "$ka"; then
+        echo "NOTE: $a differs from $ka, the build of key $k its .key names: no key from it" >&2; k=""; fi
+    else k=""; fi
   fi
-  [ -n "$k" ] || k=$(awk -v s="$1" '$1 == s {k = $2} END {print k}' "$RENT/tables/index.txt" 2>/dev/null | tr -dc 0-9a-f)
+  [ -n "$k" ] || [ "$1" != compare ] || k=$(awk -v s="$2" '$1 == s {k = $2} END {print k}' "$RENT/tables/index.txt" 2>/dev/null | tr -dc 0-9a-f)
   k=${k:0:16}; if [[ "$k" =~ ^[0-9a-f]{16}$ ]]; then echo "$k"; fi; return 0; }
 usage() { sed -n '4,7p' "$0" | sed 's/^# *//'; exit 2; }
 # The functions below are copied into run.sh (declare -f); run.sh runs on the pod, not here.
@@ -285,16 +305,23 @@ SRC="$SHA"; [ -z "$TSHA" ] || SRC="$TSHA"; PAR=""
 SC=$(git -C "$REPO" show "$SRC:tools/snap_compare.py") || refuse "no tools/snap_compare.py at $SRC"
 if [[ "$SC" == *'"--workers"'* ]]; then PAR=" --workers $WORKERS --gate-gb $GATE"
 else echo "NOTE: tools/snap_compare.py at ${SRC:0:8} has no --workers: its parts run one after another"; fi
-VOLQ="mountpoint -q /vol 2>/dev/null"; PRE=":"; POST=":"
+VOLQ="mountpoint -q /vol 2>/dev/null"; PRE=":"; POST=":"; VT=900   # VT: timeout -k 30 of every volume call
 if [ "$MODE" = capture ]; then
   SCRIPT="tools/snap_compare.py"; [ -z "$TSHA" ] || SCRIPT="$W/tool/tools/snap_compare.py"
   JOB="CAPTURE"; CMD="uv run --frozen python \"$SCRIPT\" capture \"\$W/snap\" 0-199 --repo \"\$W/repo\" --commit $SHA$PAR -v > \"\$W/capture.log\" 2>&1"
-  K=""; [ -n "$TSHA" ] || K=$(table_key16 "$SHA" "$TB")
+  K=""; [ -n "$TSHA" ] || K=$(table_key16 capture "$SHA" "$TB")
   if [ -n "$TSHA" ]; then echo "NOTE: a --tool re-capture is not stored on the network volume"
-  elif [ -z "$K" ]; then echo "NOTE: no table key for $TB (no .key file beside it, no tables_k<key16> name, no $RENT/tables/index.txt line for $SHA): the capture is not stored on the network volume"
+  elif [ -z "$K" ]; then echo "NOTE: no table key for $TB (no .key file beside it and no tables_k<key16> name, or it differs from the build its key names; index.txt is not used for a capture): the capture is neither fetched from nor stored on the network volume"
   else SKEY="$SHA-$K"; echo "capture store key $SKEY (fetched instead of captured when the pod's volume has it)"
-    PRE="if $VOLQ && bash \"\$W/cache_sync.sh\" snap-fetch $SKEY \"\$W\" > \"\$W/store.log\" 2>&1; then echo \"CAPTURE_FROM_VOLUME $SKEY \$(date +%s)\" >> \"\$W/times.txt\"; echo \"CAPTURE_RC=0 \$(date +%s)\" >> \"\$W/times.txt\"; echo ALL_DONE >> \"\$W/times.txt\"; exit 0; fi"
-    POST="if [ \"\$rc\" = 0 ] && $VOLQ; then bash \"\$W/cache_sync.sh\" snap-publish \"\$W\" $SKEY >> \"\$W/store.log\" 2>&1; echo \"STORE_RC=\$? \$(date +%s)\" >> \"\$W/times.txt\"; fi"
+    PRE="if $VOLQ; then vr=0; timeout -k 30 $VT bash \"\$W/cache_sync.sh\" snap-fetch $SKEY \"\$W\" own > \"\$W/store.log\" 2>&1 || vr=\$?
+  if [ \"\$vr\" = 0 ]; then echo \"CAPTURE_FROM_VOLUME $SKEY \$(date +%s)\" >> \"\$W/times.txt\"; echo \"CAPTURE_RC=0 \$(date +%s)\" >> \"\$W/times.txt\"; echo ALL_DONE >> \"\$W/times.txt\"; exit 0; fi
+  if [ \"\$vr\" = 124 ] || [ \"\$vr\" = 137 ]; then echo \"VOLUME_TIMEOUT fetch \$(date +%s)\" >> \"\$W/times.txt\"; rm -rf \"\$W/snap\" \"\$W\"/.snapfetch.*
+    echo \"WARNING: the volume fetch of $SKEY timed out after $VT s (rc \$vr): captured instead\"; fi
+fi"
+    POST="if [ \"\$rc\" = 0 ] && $VOLQ; then sr=0; timeout -k 30 $VT bash \"\$W/cache_sync.sh\" snap-publish \"\$W\" $SKEY >> \"\$W/store.log\" 2>&1 || sr=\$?
+  if [ \"\$sr\" = 124 ] || [ \"\$sr\" = 137 ]; then echo \"VOLUME_TIMEOUT store \$(date +%s)\" >> \"\$W/times.txt\"; echo \"WARNING: the volume store of $SKEY timed out after $VT s (rc \$sr): not stored\"; fi
+  echo \"STORE_RC=\$sr \$(date +%s)\" >> \"\$W/times.txt\"
+fi"
   fi
 else
   JOB="COMPARE"; AN=""; [ -z "$ALLOW" ] || AN=" --allow-new $ALLOW"
@@ -302,10 +329,15 @@ else
   CS=""; K=""
   if [[ "$CAP" =~ ^/work/snapmain-([0-9a-f]{7})/snap$ ]]; then
     CS=$(git -C "$REPO" rev-parse --verify -q "${BASH_REMATCH[1]}^{commit}" 2>/dev/null || true)
-    [ -z "$CS" ] || K=$(table_key16 "$CS" "$RENT/tables_${CS:0:8}.tar.xz"); fi
+    [ -z "$CS" ] || K=$(table_key16 compare "$CS" "$RENT/tables_${CS:0:8}.tar.xz"); fi
   if [ -z "$K" ]; then echo "NOTE: no store key for $CAP (only /work/snapmain-<short>/snap of a commit with a table key in $RENT/tables): a capture missing on the pod is not fetched from the network volume"
   else CKEY="$CS-$K"; echo "capture store key $CKEY (fetched when $CAP is not on the pod)"
-    PRE="if [ ! -f \"$CAP/capture.json\" ] && $VOLQ; then bash \"\$W/cache_sync.sh\" snap-fetch $CKEY \"${CAP%/snap}\" > \"\$W/store.log\" 2>&1; echo \"FETCH_RC=\$? \$(date +%s)\" >> \"\$W/times.txt\"; fi"
+    PRE="if [ ! -f \"$CAP/capture.json\" ] && $VOLQ; then vr=0; timeout -k 30 $VT bash \"\$W/cache_sync.sh\" snap-fetch $CKEY \"${CAP%/snap}\" > \"\$W/store.log\" 2>&1 || vr=\$?
+  echo \"FETCH_RC=\$vr \$(date +%s)\" >> \"\$W/times.txt\"
+  if [ \"\$vr\" = 124 ] || [ \"\$vr\" = 137 ]; then echo \"VOLUME_TIMEOUT fetch \$(date +%s)\" >> \"\$W/times.txt\"; rm -rf \"${CAP%/snap}\"/.snapfetch.*
+    echo \"WARNING: the volume fetch of $CKEY timed out after $VT s (rc \$vr)\"; fi
+  if [ ! -f \"$CAP/capture.json\" ]; then echo \"NO_CAPTURE $CAP \$(date +%s)\" >> \"\$W/times.txt\"; exit 1; fi
+fi"
   fi
 fi
 cat > "$O/run.sh" <<EOS

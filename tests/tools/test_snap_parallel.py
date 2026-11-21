@@ -762,11 +762,12 @@ PS_SHIM = """#!/bin/bash
 # Fake uv: sync passes; run writes its pid to <job>/uv.pid, and then: with FAKE_UV_LEAVE starts a
 # sleep it leaves behind (pid in <job>/left.pid) and exits 9; with FAKE_UV_SETSID becomes a
 # sleep in a session of its own; else a sleep of FAKE_UV_S s. FAKE_UV_CAPTURE first writes a
-# complete capture (snap/capture.json, every part ok).
+# complete capture (snap/capture.json, every part ok, each with its two files).
 FAKE_UV = """#!/bin/bash
 [ "$1" = sync ] && exit 0
 echo $$ > "$W/uv.pid"
-if [ -n "$FAKE_UV_CAPTURE" ]; then mkdir -p "$W/snap"; echo '{"parts": {"p1": "ok"}}' > "$W/snap/capture.json"; fi
+if [ -n "$FAKE_UV_CAPTURE" ]; then mkdir -p "$W/snap"; echo '{"parts": {"p1": "ok"}}' > "$W/snap/capture.json"
+  echo states > "$W/snap/p1.pkl.gz"; echo "0  p1" > "$W/snap/p1.sha256"; fi
 if [ -n "$FAKE_UV_LEAVE" ]; then sleep 120 > /dev/null 2>&1 < /dev/null & echo $! > "$W/left.pid"; exit 9; fi
 [ -n "$FAKE_UV_SETSID" ] && exec setsid sleep "$FAKE_UV_S"
 exec sleep "$FAKE_UV_S"
@@ -806,9 +807,14 @@ def pod(tmp_path, snap_dry):
     mem(0)
     procs, pids = [], []
 
-    def job(name, uv_s, vol=None, **extra):
-        r, run_sh = snap_dry("capture", snap_dry.new, name)
+    def job(name, uv_s, vol=None, cap=None, sync=None, **extra):
+        if cap is None:
+            r, run_sh = snap_dry("capture", snap_dry.new, name)
+        else:  # a compare of <cap>, a /work/snapmain-<short>/snap
+            r, run_sh = snap_dry("compare", snap_dry.new, cap, name)
         assert r.returncode == 0, r.stdout + r.stderr
+        if sync is not None:  # a stand-in cache_sync.sh; every volume call times out after 2 s
+            run_sh = run_sh.replace("timeout -k 30 900 ", "timeout -k 2 2 ")
         # Never the real /vol of the pod the tests run on.
         run_sh = run_sh.replace("mountpoint -q /vol 2>/dev/null", "false" if vol is None else "true")
         if vol is not None:
@@ -825,7 +831,8 @@ def pod(tmp_path, snap_dry):
         (d / "run.sh").write_text(run_sh, encoding="utf-8", newline="\n")
         if vol is not None:
             src = ROOT / "tools/ops/day/pod/cache_sync.sh"
-            (d / "cache_sync.sh").write_bytes(src.read_bytes().replace(b"\r", b""))
+            (d / "cache_sync.sh").write_bytes(src.read_bytes().replace(b"\r", b"") if sync is None
+                                              else sync.encode())  # fmt: skip
         env = {**os.environ, "FAKE_UV_S": str(uv_s), "CGROOT": posix(cg), "W": posix(d),
                "POD": posix(work), "FAKEBIN": posix(fake), "MC": posix(tmp_path / "mc"),
                "IDLE_WAIT_S": "300", **extra}  # fmt: skip
@@ -1011,6 +1018,8 @@ def test_run_sh_gate_starts_alone_after_idle_wait_when_memory_stays_high(pod):
                                     r"GB, 0 pack units live", ln) for ln in out)  # fmt: skip
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="podgate finds the live unit by its process "
+                    "group with a procps ps; Git Bash's ps does not give it: Linux only (WSL runner, the pod)")
 def test_run_sh_gate_waits_while_a_pack_unit_is_live(pod):
     pod.mem(200 * GB)
     unit = pod.sleeper()
@@ -1057,6 +1066,9 @@ def test_run_sh_fetches_under_the_lock_before_the_gate(pod, tmp_path):
     stored = vol / "snap" / pod.key
     (stored / "snap").mkdir(parents=True)
     (stored / "snap" / "capture.json").write_text('{"parts": {"p1": "ok"}}')
+    (stored / "snap" / "p1.pkl.gz").write_text("states")
+    (stored / "snap" / "p1.sha256").write_text("0  p1\n")
+    (stored / "KEY").write_text(pod.key + "\n")
     (stored / "times.txt").write_text("CAPTURE_RC=0 1\nALL_DONE\n")
     a = pod.job("snapt-hold", 120)  # no volume: it captures and holds the lock
     assert _until(lambda: _text(a.dir / "uv.pid").strip()), _text(a.dir / "run.out")
@@ -1072,4 +1084,49 @@ def test_run_sh_fetches_under_the_lock_before_the_gate(pod, tmp_path):
                                         "ALL_DONE"], (t, _text(b.dir / "store.log"))  # fmt: skip
     assert "gate wait" not in _text(b.dir / "run.out") and not (b.dir / "uv.pid").exists()
     assert (b.dir / "snap" / "capture.json").is_file()
+    assert not pod.lock.exists()
+
+
+# A stand-in cache_sync.sh whose calls hang: a fetch leaves a partial snap/ first, as a copy cut
+# off mid-way; a store only hangs.
+HANG_SYNC = """#!/bin/bash
+if [ "$1" = snap-fetch ]; then mkdir -p "$3/snap" "$3/.snapfetch.1"; echo half > "$3/snap/partial"; fi
+exec sleep 60
+"""
+
+
+def test_run_sh_captures_after_a_timed_out_fetch_and_records_a_timed_out_store(pod, tmp_path):
+    vol = tmp_path / "vol"
+    vol.mkdir()
+    a = pod.job("snapt-to", 0, vol=vol, sync=HANG_SYNC, FAKE_UV_CAPTURE="1")
+    assert a.wait(timeout=90) == 0, _text(a.dir / "run.out")
+    t = _times(a.dir)
+    assert t[t.index("SNAP_LOCK"):] == ["SNAP_LOCK", "VOLUME_TIMEOUT", "CAPTURE_START", "CAPTURE_RC=0",
+                                        "VOLUME_TIMEOUT", "STORE_RC=124", "ALL_DONE"], t  # fmt: skip
+    vt = [ln.split()[1] for ln in _text(a.dir / "times.txt").splitlines() if ln.startswith("VOLUME_TIMEOUT")]
+    assert vt == ["fetch", "store"]
+    assert not (a.dir / "snap" / "partial").exists() and not list(a.dir.glob(".snapfetch.*"))
+    out = _text(a.dir / "run.out")
+    assert "timed out after 2 s (rc 124): captured instead" in out and "not stored" in out
+    assert not pod.lock.exists()
+
+
+def test_run_sh_compare_stops_with_no_capture_after_a_timed_out_or_failed_fetch(pod, tmp_path):
+    vol = tmp_path / "vol"
+    vol.mkdir()
+    scratch = tmp_path / "scratch" / "rent" / "tables"
+    scratch.mkdir(parents=True)
+    (scratch / "index.txt").write_text(f"{pod.key.split('-')[0]} {'c' * 64}\n")
+    cap = f"/work/snapmain-{pod.key[:7]}/snap"
+    a = pod.job("snapcmp-to-1", 0, vol=vol, cap=cap, sync=HANG_SYNC)
+    assert a.wait(timeout=90) == 1, _text(a.dir / "run.out")
+    t = _times(a.dir)
+    assert t[t.index("SNAP_LOCK"):] == ["SNAP_LOCK", "FETCH_RC=124", "VOLUME_TIMEOUT", "NO_CAPTURE"], t
+    main = pod.work / f"snapmain-{pod.key[:7]}"
+    assert not list(main.glob(".snapfetch.*"))
+    assert not (main / "snap" / "capture.json").exists() and "COMPARE_START" not in t
+    b = pod.job("snapcmp-to-2", 0, vol=vol, cap=cap)  # the real cache_sync.sh: the key is not stored
+    assert b.wait(timeout=90) == 1, _text(b.dir / "run.out")
+    t = _times(b.dir)
+    assert t[t.index("SNAP_LOCK"):] == ["SNAP_LOCK", "FETCH_RC=1", "NO_CAPTURE"], (t, _text(b.dir / "store.log"))
     assert not pod.lock.exists()

@@ -8,19 +8,29 @@
 #   cache_sync.sh publish               copy local entries the volume lacks onto it, then prune
 #   cache_sync.sh prune                 prune the volume (under its lock)
 #   cache_sync.sh snap-publish <capture folder> <key>   store a complete capture under <key>
-#   cache_sync.sh snap-fetch <key> <capture folder>     fetch a stored capture into <folder>/snap
+#   cache_sync.sh snap-fetch <key> <capture folder> [own]  fetch a stored capture into <folder>/snap
 # Every command is a no-op that prints "cache_sync: no volume mounted at <vol>: <cmd> skipped"
 # (exit 0; snap-fetch exits 1, as nothing was fetched) when <vol> is not a mountpoint.
 #
 # Layout on the volume (<vol>, default /vol):
-#   jax/<ver>/<name>-cache   compile cache entries; <ver> = the 16-hex jax_version() folder
-#                            (src/nuzline/jaxcache.py), as in the local cache; JAX keys each entry
-#                            by program, so merging pods' caches is a plain union
-#   jax/<ver>/used-<YYYYMMDD> a pod seeded from or published to <ver> that UTC day
-#   jax/.prune.lock/         the prune lock (mkdir; flock is not relied on over the network mount)
+#   jax/<ver>-<host>/<name>-cache  compile cache entries; <ver> = the 16-hex jax_version() folder
+#                            (src/nuzline/jaxcache.py), as in the local cache; <host> = the host
+#                            tag (12 hex: sha256 of /proc/cpuinfo's first "model name" and its
+#                            sorted "flags"). The entries are compiled XLA CPU executables, and
+#                            JAX's cache key does not hold the host CPU (jax 0.12.0.1,
+#                            jax/_src/cache_key.py get(), lines 93-133: the program, the jaxlib
+#                            version, platform "cpu" and platform_version "cpu" (378-380), XLA_FLAGS,
+#                            compile options, the device topology (270-283), compression), so
+#                            a pod seeds and publishes only entries of its own tag: compiled on an
+#                            identical CPU. JAX keys each entry by program, so merging pods'
+#                            caches of one tag is a plain union. A pod whose cpuinfo has no model
+#                            name or flags has no tag: seed and publish skip.
+#   jax/<ver>-<host>/used-<YYYYMMDD> a pod seeded from or published to it that UTC day
+#   jax/.prune.lock/         the prune lock (mkdir; flock is not relied on over the network mount);
+#                            its owner file holds "<pod> <pid> <epoch>"
 #   snap/<sha40>-<key16>/    a complete capture of main commit <sha40> with tables of table key
 #                            <key16> (tools/ops/table_key.py, first 16 hex): snap/ (what compares
-#                            read), times.txt of the capture, KEY
+#                            read), times.txt of the capture, KEY (= the folder name)
 #   .tmp-* names             a copy in progress; every reader skips them
 # Writes are temp name then rename: an entry is copied to <dir>/.tmp-<pod>-<pid>-<name>, its size
 # checked, then renamed. Two pods publishing one entry write different temp names; the second
@@ -31,22 +41,34 @@
 # jax/_src/compilation_cache.py wrote them); seed checks its local copy the same way before the
 # rename. A failed check skips the entry and prints "skip <name>: <reason>". snap-publish
 # stores only a capture whose times.txt has CAPTURE_RC=0 and whose capture.json lists every part
-# "ok"; snap-fetch checks the copy the same way and against the volume (diff -r).
+# "ok" with both its files (<part>.pkl.gz and <part>.sha256, as tools/snap_compare.py writes
+# them) present and non-empty; snap-fetch checks the stored capture the same way, its KEY file
+# against the folder name, and the copy against the volume (diff -r) and the same way again.
+# snap-fetch into a job's own folder ("own": the capture's run.sh) leaves its times.txt alone;
+# into another folder (a compare's) it writes times.txt anew (the volume's lines, then
+# FETCHED_FROM_VOLUME <key> <epoch>, ALL_DONE) and keeps an earlier one as times.txt.before-fetch.
+# A TERM or INT (timeout, run.sh and setup.sh run every call under timeout -k 30 900) removes this
+# call's temp copies and releases the prune lock it holds, then exits 143.
 # seed: once per pod and <ver> (marker <cache>/.seeded-<ver>), under the local flock
-#   CACHE_SEED_LOCK (/work/.cache_seed.lock), so concurrent setups seed once.
+#   CACHE_SEED_LOCK (/work/.cache_seed.lock, waited for at most 600 s), so concurrent setups seed
+#   once; under it the temp copies of a seed stopped earlier are removed first.
 # prune (also run by publish and snap-publish): under jax/.prune.lock (a lock older than
-#   CACHE_LOCK_STALE_S, 3600 s, is taken over; a held one skips the prune): deletes .tmp-* names
-#   older than CACHE_TMP_STALE_S (3600 s), every jax/<ver> except the most recently used one
-#   once its newest used-<date> is CACHE_KEEP_DAYS (7) days old, then the oldest entries (by
-#   mtime) until jax/ is under CACHE_CAP_BYTES (20 GiB, the cap tests/conftest.py keeps locally),
-#   and every capture but the CACHE_SNAP_KEEP (10) newest. It warns when the volume has under
-#   CACHE_FREE_WARN_GB (3) GB free: grow it (needs the owner).
+#   CACHE_LOCK_STALE_S, 3600 s, is taken over: re-checked to still have the owner and age read
+#   before it is renamed aside, and the renamed one checked again; a held one skips the prune;
+#   released only while its owner file still names this pod and pid): deletes .tmp-* names whose
+#   newest file is older than CACHE_TMP_STALE_S (3600 s; a copy in progress keeps writing
+#   files), every jax/<ver> folder without a host tag (written before tags), per host tag every
+#   jax/<ver>-<host> except its most recently used one once its newest used-<date> is
+#   CACHE_KEEP_DAYS (7) days old, then the oldest entries (by mtime) until jax/ is under
+#   CACHE_CAP_BYTES (20 GiB, the cap tests/conftest.py keeps locally), and every capture but the
+#   CACHE_SNAP_KEEP (10) newest. It warns when the volume has under CACHE_FREE_WARN_GB (3) GB
+#   free: grow it (needs the owner).
 # Knobs (env): CACHE_VOL (/vol), NUZLINE_TEST_COMPILE_CACHE (/work/_jaxcache/jax-tests, the
 #   folder holding the <ver> folders, as unit.sh), CACHE_PY (python3; setup.sh and runner.sh pass
 #   the run's repo/.venv/bin/python), CACHE_JAXVER (seed: the <ver> to seed; setup.sh passes
 #   jax_version() of the run's checkout), CACHE_POD (temp-name tag, default $RUNPOD_POD_ID, else
-#   the hostname), and the ones named above. CACHE_VOL_MOUNTCHECK=0 accepts a plain folder as
-#   the volume (tests only).
+#   the hostname), CACHE_CPUINFO (/proc/cpuinfo, the host tag's source), and the ones named
+#   above. CACHE_VOL_MOUNTCHECK=0 accepts a plain folder as the volume (tests only).
 set -u
 VOL="${CACHE_VOL:-/vol}"; LC="${NUZLINE_TEST_COMPILE_CACHE:-/work/_jaxcache/jax-tests}"
 PY="${CACHE_PY:-python3}"; POD="${CACHE_POD:-${RUNPOD_POD_ID:-$(hostname 2>/dev/null || echo pod)}}"
@@ -59,15 +81,33 @@ J="$VOL/jax"; S="$VOL/snap"
 say() { echo "cache_sync: $*"; }
 vol_ok() { [ -d "$VOL" ] || return 1; [ "${CACHE_VOL_MOUNTCHECK:-1}" = 0 ] && return 0; mountpoint -q "$VOL" 2>/dev/null; }
 ver_ok() { [[ "$1" =~ ^[0-9a-f]{16}$ ]]; }
+vt_ok() { [[ "$1" =~ ^[0-9a-f]{16}-[0-9a-f]{12}$ ]]; }   # <ver>-<host>
 key_ok() { [[ "$1" =~ ^[0-9a-f]{40}-[0-9a-f]{16}$ ]]; }
 size() { stat -c %s "$1" 2>/dev/null; }
+# host_tag: 12 hex of sha256("<model name>\n<sorted flags>\n") from CACHE_CPUINFO's first
+# processor; fails when either line is missing.
+host_tag() { local f="${CACHE_CPUINFO:-/proc/cpuinfo}" m fl
+  m=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' "$f" 2>/dev/null | head -1 | tr -d '\r')
+  fl=$(sed -n 's/^flags[[:space:]]*:[[:space:]]*//p' "$f" 2>/dev/null | head -1 | tr -d '\r' | tr -s ' \t' '\n\n' | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ')
+  [ -n "$m" ] && [ -n "$fl" ] || return 1
+  printf '%s\n%s\n' "$m" "$fl" | sha256sum | cut -c1-12; }
+# newest <path>: the newest mtime (whole seconds) of <path> and everything under it.
+newest() { find "$1" -printf '%T@\n' 2>/dev/null | sort -n | tail -1 | cut -d. -f1; }
+# A TERM or INT (timeout) removes this call's temp copies (TMPS) and releases a prune lock it
+# holds (LOCKED), then exits 143.
+TMPS=(); LOCKED=""
+on_term() { trap '' TERM INT; [ "${#TMPS[@]}" -eq 0 ] || rm -rf -- "${TMPS[@]}"; [ -z "$LOCKED" ] || lock_release
+  say "stopped by a signal: temp copies removed"; exit 143; }
+trap on_term TERM INT
 
 # pyh <cmd> ...: the Python side (stdlib only, any python3).
 #   list <src> <dst>          names of <src>'s entries missing in <dst>
 #   select <src> <dst> <age>  "OK <name>" / "BAD <name> <reason>" for <src>'s entries missing in
 #                             <dst> that are at least <age> s old
 #   verify <file>...          "OK<tab><file>" / "BAD<tab><file><tab><reason>"
-#   capture <snap dir>        exit 0 when capture.json lists parts and every one is "ok"
+#   capture <snap dir>        exit 0 when capture.json lists parts, every one is "ok" and has a
+#                             non-empty <part>.pkl.gz and <part>.sha256; else exit 1, the reason
+#                             on stderr
 #   cap <dir> <bytes>         delete the oldest entries under <dir> until the rest total <bytes>;
 #                             prints the count deleted
 pyh() { "$PY" - "$@" <<'PY'
@@ -156,8 +196,21 @@ elif cmd == "capture":
         with open(os.path.join(args[0], "capture.json"), encoding="utf-8") as f:
             parts = json.load(f).get("parts") or {}
     except (OSError, ValueError, AttributeError):
-        sys.exit(1)
-    sys.exit(0 if parts and all(v == "ok" for v in parts.values()) else 1)
+        sys.exit("capture.json missing or unreadable")
+    if not isinstance(parts, dict) or not parts:
+        sys.exit("capture.json lists no parts")
+    for part, status in sorted(parts.items()):
+        if status != "ok":
+            sys.exit(f"part {part} is {status}")
+        if not part or "/" in part or "\\" in part or part.startswith("."):
+            sys.exit(f"part name {part!r} is not a file name")
+        for suffix in (".pkl.gz", ".sha256"):
+            try:
+                st = os.stat(os.path.join(args[0], part + suffix))
+            except OSError:
+                sys.exit(f"part {part}: {part}{suffix} missing")
+            if not stat.S_ISREG(st.st_mode) or st.st_size == 0:
+                sys.exit(f"part {part}: {part}{suffix} empty or not a file")
 elif cmd == "cap":
     files = []
     for root, _, names in os.walk(args[0]):
@@ -190,17 +243,21 @@ PY
 seed() {
   vol_ok || { say "no volume mounted at $VOL: seed skipped"; return 0; }
   local ver="${CACHE_JAXVER:-}"; ver_ok "$ver" || { say "seed: CACHE_JAXVER '$ver' is not a 16-hex jax version"; return 2; }
-  local src="$J/$ver" dst="$LC/$ver" t0 ok=0 bad=0 names n st p why
+  local ht; ht=$(host_tag) || { say "seed: no model name or flags in ${CACHE_CPUINFO:-/proc/cpuinfo}: no host tag, seed skipped"; return 0; }
+  local src="$J/$ver-$ht" dst="$LC/$ver" t0 ok=0 bad=0 names n st p why
   mkdir -p "$dst" || return 1
   exec 7>> "$SEED_LOCK"
-  flock -w 1800 7 || { say "seed: lock $SEED_LOCK still held after 1800 s: seed skipped"; return 0; }
+  flock -w 600 7 || { say "seed: lock $SEED_LOCK still held after 600 s: seed skipped"; return 0; }
   if [ -f "$LC/.seeded-$ver" ]; then say "seed: $ver already seeded on this pod"; return 0; fi
+  rm -f "$dst"/.*.tmp.*   # copies of a seed stopped earlier (only one seed runs: the lock)
+  say "seed: host tag $ht"
   mkdir -p "$src" && touch "$src/used-$(date -u +%Y%m%d)" || say "seed: cannot write $src (read only?)"
   t0=$(date +%s)
   names=$(pyh list "$src" "$dst") || { say "seed: helper failed ($PY)"; return 1; }
   local tmps=()
   while read -r n; do [ -n "$n" ] || continue
     p="$dst/.$n.tmp.$$"
+    TMPS+=("$p")
     if cp "$src/$n" "$p" 2>/dev/null; then tmps+=("$p"); else rm -f "$p"; bad=$((bad + 1)); say "seed: skip $n: copy failed"; fi
   done <<< "$names"
   if [ "${#tmps[@]}" -gt 0 ]; then
@@ -211,66 +268,90 @@ seed() {
       else rm -f "$p"; bad=$((bad + 1)); say "seed: skip $n: $why (a bad entry on the volume: delete $src/$n while no publish runs)"; fi
     done < <(pyh verify "${tmps[@]}")
   fi
-  rm -f "$dst"/.*.tmp.$$
+  rm -f "$dst"/.*.tmp.$$; TMPS=()
   touch "$LC/.seeded-$ver"
   say "seed done: $ver $ok entries copied, $bad skipped, $(( $(date +%s) - t0 )) s"
 }
 
 publish() {
   vol_ok || { say "no volume mounted at $VOL: publish skipped"; return 0; }
-  local d ver out ok bad st n why tmp any=0
-  for d in "$LC"/*/; do ver=${d%/}; ver=${ver##*/}; ver_ok "$ver" || continue; d=${d%/}; any=1
-    mkdir -p "$J/$ver" || { say "publish: cannot create $J/$ver"; continue; }
-    touch "$J/$ver/used-$(date -u +%Y%m%d)"
-    out=$(pyh select "$d" "$J/$ver" "$MIN_AGE_S") || { say "publish: helper failed ($PY)"; continue; }
+  local d ver out ok bad st n why tmp any=0 ht V
+  if ht=$(host_tag); then
+  for d in "$LC"/*/; do ver=${d%/}; ver=${ver##*/}; ver_ok "$ver" || continue; d=${d%/}; any=1; V="$J/$ver-$ht"
+    mkdir -p "$V" || { say "publish: cannot create $V"; continue; }
+    touch "$V/used-$(date -u +%Y%m%d)"
+    out=$(pyh select "$d" "$V" "$MIN_AGE_S") || { say "publish: helper failed ($PY)"; continue; }
     ok=0; bad=0
     while read -r st n why; do [ -n "$n" ] || continue
       if [ "$st" != OK ]; then bad=$((bad + 1)); say "publish: skip $n: $why"; continue; fi
-      tmp="$J/$ver/.tmp-$POD-$$-$n"
-      if cp "$d/$n" "$tmp" 2>/dev/null && [ "$(size "$tmp")" = "$(size "$d/$n")" ] && mv -f "$tmp" "$J/$ver/$n"; then ok=$((ok + 1))
+      tmp="$V/.tmp-$POD-$$-$n"; TMPS=("$tmp")
+      if cp "$d/$n" "$tmp" 2>/dev/null && [ "$(size "$tmp")" = "$(size "$d/$n")" ] && mv -f "$tmp" "$V/$n"; then ok=$((ok + 1))
       else rm -f "$tmp"; bad=$((bad + 1)); say "publish: skip $n: copy to the volume failed"; fi
+      TMPS=()
     done <<< "$out"
-    say "publish $ver: $ok entries published, $bad skipped"
+    say "publish $ver-$ht: $ok entries published, $bad skipped"
   done
   [ "$any" = 1 ] || say "publish: no local cache folder under $LC"
+  else say "publish: no model name or flags in ${CACHE_CPUINFO:-/proc/cpuinfo}: no host tag, nothing published"; fi
   prune
   say "publish done"
 }
 
-# The prune lock: mkdir is atomic on the mount. A lock older than LOCK_STALE_S (a pod deleted
-# mid-prune) is moved aside by one rename, so only one pod takes it over.
-lock_take() { local L="$J/.prune.lock" age
+# The prune lock: mkdir is atomic on the mount; the owner file ("<pod> <pid> <epoch>") is written
+# at once. A lock older than LOCK_STALE_S (a pod deleted mid-prune) is moved aside by one rename,
+# so only one pod takes it over; right before the rename its owner and mtime are read again and
+# must be the ones that made it stale (else another pod took it over meanwhile: skip), and the
+# renamed folder is checked once more (a fresh lock renamed by a race is put back).
+lock_mine() { echo "$POD $$ $(date +%s)" > "$1/owner"; LOCKED=1; }
+lock_take() { local L="$J/.prune.lock" A="$J/.prune.lock.stale.$POD.$$" m own age
   mkdir -p "$J" || return 1
-  mkdir "$L" 2>/dev/null && return 0
-  age=$(( $(date +%s) - $(stat -c %Y "$L" 2>/dev/null || date +%s) ))
+  if mkdir "$L" 2>/dev/null; then lock_mine "$L"; return 0; fi
+  m=$(stat -c %Y "$L" 2>/dev/null) || m=$(date +%s); own=$(cat "$L/owner" 2>/dev/null)
+  age=$(( $(date +%s) - m ))
   if [ "$age" -lt "$LOCK_STALE_S" ]; then say "prune: lock $L held ($age s old): prune skipped"; return 1; fi
-  if mv -T "$L" "$L.stale.$POD.$$" 2>/dev/null; then rm -rf "$L.stale.$POD.$$"; say "prune: lock was $age s old: taken over"; fi
-  mkdir "$L" 2>/dev/null && return 0
+  if [ "$(stat -c %Y "$L" 2>/dev/null)" != "$m" ] || [ "$(cat "$L/owner" 2>/dev/null)" != "$own" ]; then
+    say "prune: lock $L changed while being taken over: prune skipped"; return 1; fi
+  if mv -T "$L" "$A" 2>/dev/null; then
+    if [ "$(stat -c %Y "$A" 2>/dev/null)" != "$m" ] || [ "$(cat "$A/owner" 2>/dev/null)" != "$own" ]; then
+      mv -T "$A" "$L" 2>/dev/null || rm -rf "$A"
+      say "prune: lock $L was taken by another pod meanwhile: prune skipped"; return 1; fi
+    rm -rf "$A"; say "prune: lock was $age s old (owner ${own:-none}): taken over"; fi
+  if mkdir "$L" 2>/dev/null; then lock_mine "$L"; return 0; fi
   say "prune: lock $L taken by another pod: prune skipped"; return 1; }
+# lock_release: remove the lock only while its owner file still names this pod and pid.
+lock_release() { local L="$J/.prune.lock" o="" p=""
+  { read -r o p _ < "$L/owner"; } 2>/dev/null
+  if [ "$o $p" = "$POD $$" ]; then rm -rf "$L"
+  else say "prune: lock $L no longer names this pod and pid (owner: ${o:-none} ${p}): left to its holder"; fi
+  LOCKED=""; }
 
 prune() {
   vol_ok || { say "no volume mounted at $VOL: prune skipped"; return 0; }
   lock_take || return 0
-  local L="$J/.prune.lock" now cut d v u newest="" newu="" last t gone n=0 free
-  echo "$POD $$ $(date +%s)" > "$L/owner"
+  local now cut d v u h last t gone n=0 free; local -A NEWV=() NEWU=()
   now=$(date +%s)
-  # 1. stale temp names (a copy whose pod died)
+  # 1. stale temp names (a copy whose pod died): judged by the newest file inside, as a capture
+  #    copy in progress keeps writing new files while its folder's own mtime may stay old
   while IFS= read -r t; do [ -n "$t" ] || continue
-    [ $(( now - $(stat -c %Y "$t" 2>/dev/null || echo "$now") )) -ge "$TMP_STALE_S" ] && { rm -rf "$t"; n=$((n + 1)); }
+    u=$(newest "$t"); [ $(( now - ${u:-$now} )) -ge "$TMP_STALE_S" ] && { rm -rf "$t"; n=$((n + 1)); }
   done < <(find "$J" "$S" -mindepth 1 -maxdepth 2 -name '.tmp-*' 2>/dev/null)
   [ "$n" -gt 0 ] && say "prune: $n stale temp names deleted"
-  # 2. jax versions: keep the most recently used; drop the others once unused for KEEP_DAYS
+  # 2. jax folders: an untagged <ver> (written before host tags; no pod seeds it) goes; per host
+  #    tag the most recently used <ver>-<host> stays, the others go once unused for KEEP_DAYS
   cut=$(date -u -d "@$(( now - KEEP_DAYS * 86400 ))" +%Y%m%d)
-  for d in "$J"/*/; do v=${d%/}; v=${v##*/}; ver_ok "$v" || continue
-    last=$(ls "$J/$v" 2>/dev/null | sed -n 's/^used-\([0-9]\{8\}\)$/\1/p' | sort | tail -1)
-    [ -n "$last" ] || last=$(date -u -d "@$(stat -c %Y "$J/$v")" +%Y%m%d)
-    if [ -z "$newest" ] || [[ "$last" > "$newu" ]]; then newest=$v; newu=$last; fi
+  lastused() { local l; l=$(ls "$J/$1" 2>/dev/null | sed -n 's/^used-\([0-9]\{8\}\)$/\1/p' | sort | tail -1)
+    [ -n "$l" ] || l=$(date -u -d "@$(stat -c %Y "$J/$1")" +%Y%m%d); echo "$l"; }
+  for d in "$J"/*/; do v=${d%/}; v=${v##*/}
+    if ver_ok "$v"; then rm -rf "${J:?}/$v"; say "prune: jax folder $v has no host tag (written before host tags): deleted"; continue; fi
+    vt_ok "$v" || continue
+    last=$(lastused "$v"); h=${v#*-}
+    if [ -z "${NEWV[$h]:-}" ] || [[ "$last" > "${NEWU[$h]}" ]]; then NEWV[$h]=$v; NEWU[$h]=$last; fi
     for u in "$J/$v"/used-*; do [ -e "$u" ] && [ "${u##*/used-}" != "$last" ] && rm -f "$u"; done   # older markers
   done
-  for d in "$J"/*/; do v=${d%/}; v=${v##*/}; ver_ok "$v" && [ "$v" != "$newest" ] || continue
-    last=$(ls "$J/$v" 2>/dev/null | sed -n 's/^used-\([0-9]\{8\}\)$/\1/p' | sort | tail -1)
-    [ -n "$last" ] || last=$(date -u -d "@$(stat -c %Y "$J/$v")" +%Y%m%d)
-    if [[ "$last" < "$cut" ]] || [ "$last" = "$cut" ]; then rm -rf "${J:?}/$v"; say "prune: jax version $v deleted (last used $last; newest is $newest)"; fi
+  for d in "$J"/*/; do v=${d%/}; v=${v##*/}; vt_ok "$v" || continue; h=${v#*-}
+    [ "$v" != "${NEWV[$h]:-}" ] || continue
+    last=$(lastused "$v")
+    if [[ "$last" < "$cut" ]] || [ "$last" = "$cut" ]; then rm -rf "${J:?}/$v"; say "prune: jax version $v deleted (last used $last; newest of host $h is ${NEWV[$h]:-})"; fi
   done
   # 3. size cap, oldest entries first
   gone=$(pyh cap "$J" "$CAP_BYTES") && [ "${gone:-0}" -gt 0 ] && say "prune: $gone oldest entries deleted (cap $CAP_BYTES bytes)"
@@ -281,48 +362,58 @@ prune() {
   done < <(ls -dt "$S"/*/ 2>/dev/null)
   free=$(df -Pk "$VOL" 2>/dev/null | awk 'NR == 2 {printf "%d", $4 / 1048576}')
   [ -n "$free" ] && [ "$free" -lt "$FREE_WARN_GB" ] && say "WARNING: volume $VOL has $free GB free (under $FREE_WARN_GB GB): grow it (owner approval)"
-  rm -rf "$L"
+  lock_release
   say "prune done"
 }
 
-capture_ok() { grep -q '^CAPTURE_RC=0 ' "$1/times.txt" 2>/dev/null && pyh capture "$1/snap"; }
+# capture_ok <folder>: CAPTURE_RC=0 in <folder>/times.txt and <folder>/snap a complete capture
+# (pyh capture); else exit 1 and prints the reason.
+capture_ok() { local why
+  grep -q '^CAPTURE_RC=0 ' "$1/times.txt" 2>/dev/null || { echo "no CAPTURE_RC=0 in times.txt"; return 1; }
+  why=$(pyh capture "$1/snap" 2>&1) || { echo "${why:-capture check failed}"; return 1; }; }
 
 snap_publish() {
-  local W="${1:-}" KEY="${2:-}" tmp
+  local W="${1:-}" KEY="${2:-}" tmp why
   vol_ok || { say "no volume mounted at $VOL: snap-publish skipped"; return 0; }
   key_ok "$KEY" || { say "snap-publish: key '$KEY' is not <sha40>-<key16>"; return 2; }
-  capture_ok "$W" || { say "snap-publish: $W is not a complete capture (CAPTURE_RC=0 in times.txt and every part ok in snap/capture.json): not stored"; return 1; }
+  why=$(capture_ok "$W") || { say "snap-publish: $W is not a complete capture ($why): not stored"; return 1; }
   mkdir -p "$S" || return 1
   [ -e "$S/$KEY" ] && { say "snap-publish: $KEY is already on the volume: kept, not overwritten"; return 0; }
-  tmp="$S/.tmp-$POD-$$-$KEY"; rm -rf "$tmp"; mkdir "$tmp" || return 1
-  if ! { cp -r "$W/snap" "$tmp/snap" && cp "$W/times.txt" "$tmp/times.txt" && diff -rq "$W/snap" "$tmp/snap" > /dev/null && echo "$KEY" > "$tmp/KEY"; }; then
-    rm -rf "$tmp"; say "snap-publish: copy to the volume failed"; return 1; fi
-  if mv -T "$tmp" "$S/$KEY" 2>/dev/null; then say "snap-publish: $KEY stored"
-  else rm -rf "$tmp"
+  tmp="$S/.tmp-$POD-$$-$KEY"; TMPS=("$tmp"); rm -rf "$tmp"; mkdir "$tmp" || return 1
+  if ! { cp -r "$W/snap" "$tmp/snap" && cp "$W/times.txt" "$tmp/times.txt" && diff -rq "$W/snap" "$tmp/snap" > /dev/null \
+         && why=$(capture_ok "$tmp") && echo "$KEY" > "$tmp/KEY"; }; then
+    rm -rf "$tmp"; TMPS=(); say "snap-publish: copy to the volume failed${why:+ ($why)}"; return 1; fi
+  if mv -T "$tmp" "$S/$KEY" 2>/dev/null; then TMPS=(); say "snap-publish: $KEY stored"
+  else rm -rf "$tmp"; TMPS=()
     [ -d "$S/$KEY/snap" ] || { say "snap-publish: rename to $S/$KEY failed"; return 1; }
     say "snap-publish: $KEY was stored by another pod meanwhile: kept, not overwritten"; fi
   prune
 }
 
 snap_fetch() {
-  local KEY="${1:-}" DEST="${2:-}" tmp
+  local KEY="${1:-}" DEST="${2:-}" OWN="${3:-}" tmp why k
   vol_ok || { say "no volume mounted at $VOL: snap-fetch skipped"; return 1; }
   key_ok "$KEY" || { say "snap-fetch: key '$KEY' is not <sha40>-<key16>"; return 2; }
   [ -n "$DEST" ] || { say "snap-fetch: no capture folder given"; return 2; }
+  case "$OWN" in ''|own) ;; *) say "snap-fetch: third argument '$OWN' is not 'own'"; return 2;; esac
   [ -f "$DEST/snap/capture.json" ] && { say "snap-fetch: $DEST/snap is already on this pod: not fetched"; return 0; }
   [ -e "$DEST/snap" ] && { say "snap-fetch: $DEST/snap exists without capture.json (an unfinished capture): not fetched"; return 1; }
   [ -d "$S/$KEY/snap" ] || { say "snap-fetch: $KEY is not on the volume"; return 1; }
+  k=$(tr -d ' \r\n' < "$S/$KEY/KEY" 2>/dev/null)
+  [ "$k" = "$KEY" ] || { say "snap-fetch: $S/$KEY/KEY names '${k:-nothing}', not $KEY: not fetched"; return 1; }
+  why=$(capture_ok "$S/$KEY") || { say "snap-fetch: $KEY on the volume is not a complete capture ($why): not fetched"; return 1; }
   mkdir -p "$DEST" || return 1
-  tmp="$DEST/.snapfetch.$$"; rm -rf "$tmp"; mkdir "$tmp" || return 1
-  if ! { cp -r "$S/$KEY/snap" "$tmp/snap" && diff -rq "$S/$KEY/snap" "$tmp/snap" > /dev/null && pyh capture "$tmp/snap"; }; then
-    rm -rf "$tmp"; say "snap-fetch: the copy of $KEY failed or is not a complete capture"; return 1; fi
-  if ! mv -T "$tmp/snap" "$DEST/snap" 2>/dev/null; then rm -rf "$tmp"
+  tmp="$DEST/.snapfetch.$$"; TMPS=("$tmp"); rm -rf "$tmp"; mkdir "$tmp" || return 1
+  if ! { cp -r "$S/$KEY/snap" "$tmp/snap" && diff -rq "$S/$KEY/snap" "$tmp/snap" > /dev/null && why=$(pyh capture "$tmp/snap" 2>&1); }; then
+    rm -rf "$tmp"; TMPS=(); say "snap-fetch: the copy of $KEY failed or is not a complete capture${why:+ ($why)}"; return 1; fi
+  if ! mv -T "$tmp/snap" "$DEST/snap" 2>/dev/null; then rm -rf "$tmp"; TMPS=()
     [ -f "$DEST/snap/capture.json" ] && { say "snap-fetch: $DEST/snap was fetched by another job meanwhile"; return 0; }
     say "snap-fetch: rename to $DEST/snap failed"; return 1; fi
-  if [ ! -f "$DEST/times.txt" ]; then   # a compare's fetch makes the folder a finished capture
+  if [ -z "$OWN" ]; then   # a compare's fetch makes the folder a finished capture; a stale times.txt is kept aside
     { cat "$S/$KEY/times.txt" 2>/dev/null; echo "FETCHED_FROM_VOLUME $KEY $(date +%s)"; echo ALL_DONE; } > "$tmp/times.txt" \
+      && { [ ! -f "$DEST/times.txt" ] || mv -f "$DEST/times.txt" "$DEST/times.txt.before-fetch"; } \
       && mv -f "$tmp/times.txt" "$DEST/times.txt"; fi
-  echo "$KEY" > "$DEST/store_key"; rm -rf "$tmp"
+  echo "$KEY" > "$DEST/store_key"; rm -rf "$tmp"; TMPS=()
   say "snap-fetch: $KEY fetched into $DEST/snap"
 }
 

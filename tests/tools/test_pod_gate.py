@@ -498,9 +498,12 @@ def test_exec_body_script_writes_the_files_byte_for_byte(tmp_path):
         w = tmp_path / str(i)
         w.mkdir()
         (w / "map_count").write_text("1048576\n")
-        script = cmd[2].replace("W=/work/_podcheck;", f"W='{w.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
+        # W=. in the folder: the script leaves $W unquoted (the pod's /work/_podcheck has no
+        # space), and the test folder's path may have one
+        script = cmd[2].replace("W=/work/_podcheck;", "W=.;").replace("bash $W/podcheck.sh", "echo RAN")
         script = script.replace("/proc/sys/vm/max_map_count", f"'{(w / 'map_count').as_posix()}'")
-        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
+        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env(),
+                             cwd=w)  # fmt: skip
         assert run.returncode == 0, (sh, run.stderr)
         assert run.stdout.startswith("RAN /work "), sh
         assert sorted(p.name for p in w.iterdir()) == ["gate.sh", "map_count", "podcheck.sh"], sh
@@ -523,9 +526,11 @@ def test_podcheck_body_refuses_a_low_or_unreadable_max_map_count(tmp_path, value
         mc.write_text(value + "\n")
     for i, sh in enumerate(_posix_shells()):
         w = tmp_path / str(i)
-        script = cmd[2].replace("W=/work/_podcheck;", f"W='{w.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
+        w.mkdir()
+        script = cmd[2].replace("W=/work/_podcheck;", "W=.;").replace("bash $W/podcheck.sh", "echo RAN")
         script = script.replace("/proc/sys/vm/max_map_count", f"'{mc.as_posix()}'")
-        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
+        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env(),
+                             cwd=w)  # fmt: skip
         assert run.returncode == 1, (sh, run.stdout, run.stderr)
         assert run.stdout.strip().splitlines()[-1].startswith("PODCHECK REFUSED vm.max_map_count="), sh
         assert "RAN" not in run.stdout, sh
@@ -553,8 +558,9 @@ def test_exec_body_writes_a_multi_chunk_file_and_an_empty_file_byte_for_byte(tmp
     assert [len(x) for x in cmd[4:]] == [4, 4000, 4000, 1336, 6]
     for i, sh in enumerate(_posix_shells()):
         w = tmp_path / f"w{i}"
-        run = subprocess.run([*sh, script.replace("W=/work/_podcheck;", f"W='{w.as_posix()}';"), *cmd[3:]],
-                             check=False, capture_output=True, text=True, env=_clean_env())
+        w.mkdir()
+        run = subprocess.run([*sh, script.replace("W=/work/_podcheck;", "W=.;"), *cmd[3:]],
+                             check=False, capture_output=True, text=True, env=_clean_env(), cwd=w)  # fmt: skip
         assert run.returncode == 0, (sh, run.stderr)
         assert run.stdout.strip() == "RAN", sh
         assert sorted(p.name for p in w.iterdir()) == ["big", "empty"], sh
