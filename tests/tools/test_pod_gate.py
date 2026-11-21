@@ -424,41 +424,89 @@ def _alive(pid: int) -> bool:
     return bool(r.stdout.strip()) and not r.stdout.strip().startswith("Z")
 
 
+def _launch(script: str) -> None:
+    subprocess.run([BASH, "-c", script], check=True, timeout=30)
+
+
+def _children(pid: int) -> list[int]:
+    out = subprocess.run([BASH, "-c", f"sleep 1; ps -eo pid=,ppid= | awk '$2 == {pid} {{print $1}}'"],
+                         check=True, capture_output=True, text=True).stdout.split()
+    return [int(x) for x in out]
+
+
+def _stop(run: str, root: Path) -> subprocess.CompletedProcess:
+    return subprocess.run([BASH, str(STOP), run, str(root)], check=False, capture_output=True, text=True, timeout=60)
+
+
+Q = "> /dev/null 2>&1 < /dev/null"
+
+
 @pytest.mark.skipif(not _linux_tools(), reason="needs setsid, /proc and a procps ps (the pod)")
-def test_stop_kills_setup_notify_units_and_the_orphaned_memory_loop_but_nothing_else(tmp_path):
+def test_stop_kills_setup_notify_runner_units_and_the_orphaned_memory_loop_but_nothing_else(tmp_path):
     root = tmp_path / "work"
     d = root / "run-s"
     (d / "out" / "run").mkdir(parents=True)
+    (d / "repo").mkdir()
+    (d / "bin").mkdir()
+    (d / "bin" / "runner.sh").write_text("sleep 300 & wait\n", encoding="utf-8", newline="\n")
     (root / ".claims").mkdir()
     (root / ".claims" / "run-s.u_002").write_text("1 9 1\n", encoding="utf-8", newline="\n")
     (root / ".claims" / "run-sx.u_001").write_text("1 9 1\n", encoding="utf-8", newline="\n")
     t = tmp_path
-    q = "> /dev/null 2>&1 < /dev/null"
-    launch = (f"cd '{t}'\n"
-              f"bash -c 'sleep 300 & wait' {q} & echo $! > '{d}/setup.pid'\n"      # setup.sh with a child
-              f"sleep 300 {q} & echo $! > '{d}/notify.pid'\n"                       # notify.sh, relative path
-              f"setsid sleep 300 {q} & echo $! > '{d}/out/run/u_001'\n"             # a unit's group
-              f"(cd '{d}/out' && exec sleep 300) {q} & echo $! > '{t}/memloop.pid'\n"  # the runner's loop, orphaned
-              f"sleep 300 {q} & echo $! > '{t}/bystander.pid'\n")
-    subprocess.run([BASH, "-c", launch], check=True, timeout=30)
-    pid = {n: int((d / f"{n}.pid").read_text()) for n in ("setup", "notify")}
+    _launch(f"cd '{t}'\n"
+            # setup.sh: cwd the run; its child works elsewhere (found only as a descendant)
+            f"(cd '{d}' && exec bash -c \"(cd '{t}' && exec sleep 300) & wait\") {Q} & echo $! > '{d}/setup.pid'\n"
+            # the runner: cwd elsewhere, cmdline names the run's bin/; its child is a descendant
+            f"bash '{d}/bin/runner.sh' {Q} & echo $! > '{d}/runner.pid'\n"
+            f"(cd '{d}' && exec sleep 300) {Q} & echo $! > '{d}/notify.pid'\n"
+            f"(cd '{d}/repo' && exec setsid sleep 300) {Q} & echo $! > '{d}/out/run/u_001'\n"
+            f"(cd '{d}/out' && exec sleep 300) {Q} & echo $! > '{t}/memloop.pid'\n"   # the runner's loop, orphaned
+            f"sleep 300 {Q} & echo $! > '{t}/bystander.pid'\n")
+    pid = {n: int((d / f"{n}.pid").read_text()) for n in ("setup", "runner", "notify")}
     pid["unit"] = int((d / "out/run/u_001").read_text())
     pid["memloop"] = int((t / "memloop.pid").read_text())
-    child = subprocess.run([BASH, "-c", f"sleep 1; ps -eo pid=,ppid= | awk '$2 == {pid['setup']} {{print $1}}'"],
-                           check=True, capture_output=True, text=True).stdout.split()
-    assert child, "setup stand-in has no child"
-    pid["setup_child"] = int(child[0])
+    for n in ("setup", "runner"):
+        kids = _children(pid[n])
+        assert kids, f"{n} stand-in has no child"
+        pid[f"{n}_child"] = kids[0]
     bystander = int((t / "bystander.pid").read_text())
     try:
         assert all(_alive(x) for x in pid.values())
-        r = subprocess.run([BASH, str(STOP), "run-s", str(root)], check=False, capture_output=True, text=True, timeout=60)
-        assert r.stdout.strip().splitlines()[-1] == "STOP_OK run-s", r.stdout
+        r = _stop("run-s", root)
+        assert r.stdout.strip().splitlines()[-1] == "STOP_OK run-s", r.stdout + r.stderr
         assert {n: _alive(x) for n, x in pid.items()} == {n: False for n in pid}
         assert _alive(bystander)
         assert (d / "STOPPED").is_file()
         assert sorted(x.name for x in (root / ".claims").iterdir()) == ["run-sx.u_001"]
     finally:
         subprocess.run([BASH, "-c", f"kill -9 {bystander} {' '.join(map(str, pid.values()))} 2>/dev/null"], check=False)
+
+
+@pytest.mark.skipif(not _linux_tools(), reason="needs setsid, /proc and a procps ps (the pod)")
+def test_stop_skips_stale_pid_files_and_unit_groups_that_name_other_processes(tmp_path):
+    root = tmp_path / "work"
+    d = root / "run-s"
+    (d / "out" / "run").mkdir(parents=True)
+    other = root / "run-s2"                       # a prefix-named run: its processes are not run-s's
+    (other / "bin").mkdir(parents=True)
+    (other / "bin" / "runner.sh").write_text("sleep 300 & wait\n", encoding="utf-8", newline="\n")
+    t = tmp_path
+    _launch(f"cd '{t}'\n"
+            f"sleep 300 {Q} & echo $! > '{d}/setup.pid'\n"                 # setup.sh's pid, reused by a bystander
+            f"setsid sleep 300 {Q} & echo $! > '{d}/out/run/u_001'\n"      # a unit group id naming a bystander's group
+            f"(cd '{other}' && exec bash '{other}/bin/runner.sh') {Q} & echo $! > '{d}/runner.pid'\n")
+    keep = {"setup": int((d / "setup.pid").read_text()), "unit": int((d / "out/run/u_001").read_text()),
+            "other_runner": int((d / "runner.pid").read_text())}
+    keep["other_child"] = _children(keep["other_runner"])[0]
+    try:
+        assert all(_alive(x) for x in keep.values())
+        r = _stop("run-s", root)
+        assert r.stdout.strip().splitlines()[-1] == "STOP_OK run-s", r.stdout + r.stderr
+        assert {n: _alive(x) for n, x in keep.items()} == {n: True for n in keep}
+        for n, src in (("setup", "setup.pid"), ("unit", "out/run/u_001"), ("other_runner", "runner.pid")):
+            assert f"skip {keep[n]} {src}: not this run's" in r.stderr
+    finally:
+        subprocess.run([BASH, "-c", f"kill -9 {' '.join(map(str, keep.values()))} 2>/dev/null"], check=False)
 
 
 def test_stop_refuses_bad_names_and_missing_runs(tmp_path):
