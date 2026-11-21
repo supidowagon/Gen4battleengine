@@ -253,7 +253,8 @@ def test_the_resumed_u_turns_move_end_cures_its_kept_defender_before_the_payout(
     s = with_ability(with_hp(s, 1, 1), 3, AbilityId.LIMBER)
     s = s._replace(status=s.status.at[1, 1].set(Status.PARALYSIS))
     targets = (1, 2, 3, 0)
-    _, paused = play_turn(tables, s, [0, 0, 0, 0], (2, 0, 3, 1), targets)
+    # Battler 3 is paralyzed: its speed is quartered (battle_lib.c:1259-1261), so it goes last.
+    _, paused = play_turn(tables, s, [0, 0, 0, 0], (2, 0, 1, 3), targets)
     assert int(paused.pivot_battler) == 3 and int(paused.hp[1, 0]) == 0
     assert int(paused.status[1, 1]) == Status.PARALYSIS
     out, _ = resume_turn(tables, paused, targets)
