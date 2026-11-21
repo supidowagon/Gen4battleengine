@@ -6,10 +6,10 @@ Environment variables (optional): `NUZLINE_REPO` (default: the main checkout, fo
 
 ## Watching the streams (PowerShell)
 
-- `watchdog.ps1`: per stream, last-commit age and uncommitted files; big Python processes; free RAM; the fast-tier lock (`$NUZLINE_SCRATCH/fast_tier.lock`). Flags: a stream without a commit for 120 min, a process over 12 GB or 150 min, under 3 GB free RAM, a dead or stale lock, and no process plus no commit for 90 min on every stream. `-FixLock` removes a lock whose owner is dead. `-Streams <path>` overrides the stream list.
-- `watch_flags.ps1`: runs the watchdog every `-EveryMin` minutes (default 10) and exits only on a flag for the managing session, or when the lock goes away. Flags that a progressing fast tier explains (lock held and an `ft_*.log` written in the last 150 min) are ignored. `-HoldUntil <time>` silences "has not committed" and "may have stopped" until then.
+- `watchdog.ps1`: per stream, last-commit age and uncommitted files; big Python processes; free RAM; the fast-tier lock (`-Lock`, default `$NUZLINE_SCRATCH/fast_tier.lock`). Flags: a stream without a commit for 120 min, a process over 12 GB or 150 min, under `-MinFreeGB` (default 1) GB free RAM, a dead or stale lock, and no process plus no commit for 90 min on every stream. `-FixLock` removes a lock whose owner is dead. `-Streams <path>` overrides the stream list.
+- `watch_flags.ps1`: runs the watchdog every `-EveryMin` minutes (default 10) and exits only on a flag for the managing session, or when the lock goes away. Flags that a progressing fast tier explains (lock held and an `ft_*.log` written in the last 150 min) are ignored. `-Streams`, `-Lock` and `-MinFreeGB` pass through. `-HoldUntil <time>` silences "has not committed" and "may have stopped" until then.
 
-Stream list: `$NUZLINE_SCRATCH/manager/streams.json`, edited by hand at every stream branch or worktree change. `worktree` and `logs` are relative to the repo; `logs` (optional) is the folder that receives the stream's local `ft_*.log` files.
+Parameters, lock path and the stream list's format: `docs/process.md` section 6. Stream list: `$NUZLINE_SCRATCH/manager/streams.json`, edited by hand at every stream branch or worktree change. `worktree` and `logs` are relative to the repo; `logs` (optional) is the folder that receives the stream's local `ft_*.log` files.
 
 ```json
 [
@@ -30,6 +30,7 @@ Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` sec
 - `day/bootstrap.sh`: pod side, once per pod; apt tools, uv, Python 3.12, runpodctl checksum, decomp clone; ends with `BOOTSTRAP_OK`.
 - `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`, `day/pod/weights.py`, `day/pod/weights.txt` (from HEAD of the checkout that runs it, not from `<commit>`: run it from a checkout at `main`); refuses forbidden files, tables outside `TABLE_ALLOW` and pod scripts that differ from `main`'s; writes `GATE_VERSION`, `POD_SCRIPTS` and `POD_WEIGHTS` into `meta.env`; sends; prints the exec-pod body.
 - `day/podcheck_body.sh`: prints the exec-pod body that runs `day/pod/podcheck.sh` (HEAD's copy, with `gate.sh`) on the pod before a pack: active runs with their `GATE_VERSION` and `POD_SCRIPTS`, memory and limit, claims, `PODCHECK OK` or `PODCHECK MIXED`.
+- `day/stop_body.sh <run>`: prints the exec-pod body that runs `day/pod/stop.sh <run>` (HEAD's copy) on the pod: kills every process of the run (setup, runner, notify, chunks, anything with its working folder in the run), deletes its claims, writes `STOPPED`.
 - `day/collect.sh <run> <code>`: receives a run's `results.tgz` and unpacks it.
 - `day/nightly_files.txt`: the nightly test list.
 - `day/weights_from_agg.py <weights.txt> <agg.txt>...`: prints `weights.txt` with its generated part rebuilt from run results (one line per measured file); DAYBOX.md, Send a run step 2.

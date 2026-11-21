@@ -32,7 +32,7 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 4. The batch's tests run on the test pod while it is in work (CLAUDE.md, Where tests run;
    section 5).
 5. One Opus review agent checks the batch; one fix round fixes its findings. Commits added
-   after a review get their own review before the merge.
+   after a review get their own review before the merge, except as in step 8.
    A new test that asserts over a growing set or a coverage-dependent refusal carries the
    `fullset` marker.
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
@@ -214,8 +214,18 @@ per day is the rate used for estimates.
 
 - `tools/ops/watchdog.ps1` prints, per stream, the age of its last commit and its
   uncommitted files, the Python test processes with memory and run time, free RAM and the
-  fast-tier lock state, and lists flags.
-- `tools/ops/watch_flags.ps1` runs the watchdog every 10 minutes in the background and exits
+  fast-tier lock state, and lists flags. Its paths come from its own checkout (or
+  `NUZLINE_REPO` / `NUZLINE_SCRATCH`) and its parameters: `-Streams` (default
+  `_scratch/manager/streams.json`), `-Lock` (the fast-tier lock, default
+  `_scratch/fast_tier.lock`), `-MinFreeGB` (default 1), `-FixLock` (removes a lock whose owner
+  is dead).
+- The stream list `_scratch/manager/streams.json` (git-ignored) is edited by hand at every
+  stream branch or worktree change: a JSON array, one object per stream, `name`, `branch`,
+  `worktree` (relative to the main checkout) and an optional `logs` (relative folder of the
+  stream's local `ft_*.log` files):
+  `[{"name": "E1", "branch": "claude/e1-example", "worktree": "_scratch/e1/wt", "logs": "_scratch/e1/logs"}]`.
+- `tools/ops/watch_flags.ps1` (same parameters, passed through, plus `-EveryMin` and
+  `-HoldUntil`) runs the watchdog every 10 minutes in the background and exits
   (waking the managing session) only on a flag that a running test tier does not explain.
   `-HoldUntil` silences "has not committed" and "may have stopped" while streams wait on tests.
 - A fallback check runs twice a day (section 7).
@@ -309,9 +319,8 @@ pod work. This section is the source of the handoff procedure; a copy in
   project.
 - runpodctl's key: `_scratch/rent/home/.runpod/config.toml`. The scripts run runpodctl with
   `HOME` set to `_scratch/rent/home` (DAYBOX.md, Paths).
-- The live watch scripts: `_scratch/manager/watch_flags.ps1` and `_scratch/manager/watchdog.ps1`
-  (command line in `_scratch/handoff/MANAGER.md`). The copies under `tools/ops/` are older
-  until synced.
+- The watch scripts: `tools/ops/watch_flags.ps1` and `tools/ops/watchdog.ps1` with the stream
+  list `_scratch/manager/streams.json` (section 6; command line in `_scratch/handoff/MANAGER.md`).
 
 ### What does not travel
 
