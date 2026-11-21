@@ -1,12 +1,15 @@
 # Managing-session watchdog for the Nuzline engine streams. Read-only except for
 # removing a fast-tier lock whose owning process is dead (pass -FixLock).
-# Streams come from a JSON file (default $NUZLINE_SCRATCH\manager\streams.json; format in README.md).
-param([switch]$FixLock, [string]$Streams = '')
+# Streams come from a JSON file (default <scratch>\manager\streams.json; format in docs/process.md
+# section 6). Paths come from the script's own checkout, NUZLINE_REPO / NUZLINE_SCRATCH or the
+# parameters: -Lock (the fast-tier lock, default <scratch>\fast_tier.lock), -MinFreeGB (flag
+# below this much free RAM, default 1).
+param([switch]$FixLock, [string]$Streams = '', [string]$Lock = '', [double]$MinFreeGB = 1)
 
 $repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir) }
 $scratch = if ($env:NUZLINE_SCRATCH) { $env:NUZLINE_SCRATCH } else { Join-Path $repo '_scratch' }
 if (-not $Streams) { $Streams = Join-Path $scratch 'manager\streams.json' }
-$lock = Join-Path $scratch 'fast_tier.lock'
+$lock = if ($Lock) { $Lock } else { Join-Path $scratch 'fast_tier.lock' }
 $flags = @()
 $ages = @()
 $now = Get-Date
@@ -57,7 +60,7 @@ if ($list.Count -and -not $procs -and @($ages | Where-Object { $_ -gt 90 }).Coun
 $os = Get-CimInstance Win32_OperatingSystem
 $free = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
 "free RAM: $free GB"
-if ($free -lt 3) { $flags += "only $free GB RAM free" }
+if ($free -lt $MinFreeGB) { $flags += "only $free GB RAM free" }
 
 # 4. Fast-tier lock
 if (Test-Path $lock) {
