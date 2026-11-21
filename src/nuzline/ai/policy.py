@@ -4951,7 +4951,7 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
         def eval_slot(slot, ctx, flag=flag, run_bit=run_bits[index]):  # EvalMoves (:483-525)
             # E3-B2-15: ``written`` (monSpeedValues) runs on across the slots and the flags
             ctx = flag(c.start_run(c.at_slot(ctx, slot), run_bit))
-            # A MOVE_NONE slot runs no command and scores 0 (:499-501).
+            # A MOVE_NONE slot runs no command and scores 0 (:500-505).
             return ctx._replace(
                 scores=ctx.scores.at[slot].set(jnp.where(ctx.move == 0, 0, ctx.scores[slot]))
             )
@@ -5292,7 +5292,7 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
         equal = jnp.where(has[:, None], hist, 0.0)
         # A slot the pick skips (moves[i] == 0, trainer_ai.c:322) weighs in by its mass only:
         # 1 in a marginal histogram, the slot's probability of the event in an event's. A
-        # MOVE_NONE slot runs no command (:499-501), so it never makes the first compare: mass
+        # MOVE_NONE slot runs no command (:500-505), so it never makes the first compare: mass
         # 0 in the events (f, s) of its own slot s (``_slot_event_histograms``).
         mass = jnp.sum(hist, axis=1, keepdims=True)
         below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, mass)

@@ -1619,20 +1619,25 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
 - E3-B2-30 Main's red tiers on 8c5cd83e (branch claude/e3-slowfix):
   (a) 6c3063e0, tests only: test_trace_to_state's oracle resumes a MoveEnd learn pause (bcp.c:3968) with the same
   actions and outcome, as trace_to_state._apply_turn; test_stage_b_learn's paused root asserts `learn_site`
-  LEARN_MOVE_END (step scans and pauses); test_player_learn allows a pending prompt only from the final turn's
-  battle-ending payout (D8): the host replay `player._replay` of the same run, one turn shorter, holds none; and at
-  least one root/key pair must reach the no-prompt check (review of 8c5cd83e..5639b245).
+  LEARN_MOVE_END (step scans and pauses). test_player_learn (reviews of 8c5cd83e..5639b245 and ..609693aa): each
+  unrefused GREEDY run's final state equals the host replay `player._replay` to its turn count field by field; a run
+  that did not end holds no prompt; a prompt at a finished battle (a newcomer's hazard faint in the replacement
+  passes, where the loop skips its second resolve, D8, player.py:172-174) is the final turn's: the replay one turn
+  shorter holds none; every root reaches one of these learn checks. `_replay` now leaves that prompt at a finished
+  battle as the loop does (it answered it); its callers: `refusal_reason` (reads only the reason; cli.py),
+  tests/search/test_player.py (compares its whole end state with the loop) and test_player_learn.
   (b) 3d6b5fb5, tests only: Tackle's flags carry MIRROR_MOVE (res/moves/tackle/data.json:21-27, E3-B2-2).
   (c) 5639b245, src/nuzline/ai: `AiContext.flag`, `first_cmp`, `inject` hold the script's flag bit (thinkingBitShift,
   trainer_ai.c:307, read at :488; loop :297-309), not its index in the layout's list, so ALLIN keeps the fight's own context (test_allin); the
   bits rise in run order, so every schedule compare keeps its order and no score changes. The exact pick of
-  `_slot_move_distribution` weighs a skipped slot (moves[i] == 0, trainer_ai.c:322; it runs no command, :499-501)
+  `_slot_move_distribution` weighs a skipped slot (moves[i] == 0, trainer_ai.c:322; it runs no command, :500-505)
   by its histogram's mass, not 1: unchanged on marginal histograms (mass 1), corrected on the event histograms of a
   speed-tracking layout (`_tracks_speed`: per-slot sites with POWER_BASED_ON_LOW_SPEED transcribed), where the
   exact sum was above 1 (test_gyro_ball_exact_equals_loose). Kaizo fights it corrects (a Gyro Ball member and a
   member with an empty move slot, data/intermediate_kaizo/trainers.json): Robert (trainer 39, Fantina split; Gyro
   Ball on 208, species 95 with three moves) and Iapetus (trainer 397, Candice split; Gyro Ball on 205, species 91,
-  211, 101 with empty slots). Their prep values change; no snapshot part reads them.
+  211, 101 with empty slots). Their prep values change; no snapshot part reads them. Iapetus is a multi battle
+  (format multi, partner 610, second opponent 400): its values change only once prep runs that format.
   Snapshot compare against the main capture: no part expected to diverge (`--allow-new` empty). The "ai" group runs
   `ai_action_distribution` on the VANILLA layout (per_slot_sites False, ai/layout.py:184-186): no speed tracking;
   the roark parts use Kaizo Roark (trainer 246), whose six members hold no Gyro Ball (move 360) and four moves

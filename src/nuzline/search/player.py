@@ -294,7 +294,9 @@ def _replay(
         reason, after = _passes_reason(tables, sent, player, params, k_policy, 1, layout)
         if reason:
             return reason, state, turns
-        state = _resolve_jit(tables, after)  # the loop's hazard-faint prompts (E3-B2-21)
+        # The loop's hazard-faint prompts (E3-B2-21), left at a finished battle (D8) as the loop
+        # leaves them (``_player_run``).
+        state = after if int(after.over) != 0 else _resolve_jit(tables, after)
     return None, state, max_turns
 
 

@@ -113,32 +113,45 @@ def roots(tables, names):
 
 
 def test_greedy_equals_playout_through_learns(tables, roots):
-    # The GREEDY run resolves each turn's learns (player.py, resolve_learns before
-    # send_replacements) and the root's pending one, so its final state carries no learn prompt,
-    # except one raised by the final turn's battle-ending payout (D8: levelup.learn_prompt tests
-    # over == 0). Such a prompt passes only if the run's state before its final turn holds none:
-    # the host replay of the same run (player._replay, the same key splits) stopped one turn
-    # earlier. The result fields alone cannot see a skipped resolve: every move is given up anyway.
-    # The pending roots also pin the root's opponent replacement and its carried powerMul
-    # (Cranidos at 0, Onix at 20): a run settling them otherwise plays a different battle.
-    checked = 0
+    # The GREEDY run answers each turn's prompts (player.py: resolve_learns after the turn, before
+    # send_replacements, and again after the replacement passes) and the root's pending one. A
+    # prompt survives only from a newcomer's hazard faint in the passes at a finished battle, where
+    # the second resolve is skipped (D8, player.py:172-174). The result fields alone cannot see a
+    # skipped resolve (every move is given up anyway), so each run's final state is checked:
+    # (1) the host replay of the same run (player._replay, the same key splits) to its turn count
+    # equals it field by field, which ties the run to the replay; (2) a run that did not end holds
+    # no prompt; (3) a prompt at a finished battle is the final turn's: the replay one turn
+    # shorter holds none. The pending roots also pin the root's opponent replacement and its
+    # carried powerMul (Cranidos at 0, Onix at 20): a run settling them otherwise plays a
+    # different battle.
+    runs = []
     for root, s, k, want in roots:
-        got, out = _run(tables, s, GREEDY, (), k, TURNS)
+        got, out = jax.device_get(_run(tables, s, GREEDY, (), k, TURNS))
         _same(got, want, root)
         if root.startswith(_window_c_root.__name__):
             # E3-B2-21: no window (c) any more; the settle refuses nothing.
             assert int(got.refused) == 0 and int(want.refused) == 0, root
-        if int(got.refused) or not bool(needs_learn(out)):
-            checked += not int(got.refused)
+        runs.append((root, s, k, got, out))
+    drop_programs()  # the loop program before the replay's turn programs (module docstring)
+    checks = {build.__name__: 0 for build in _ROOTS}
+    for root, s, k, got, out in runs:
+        if int(got.refused):
             continue
-        assert int(got.ended), f"{root}: a learn prompt was left pending"
         turns = int(got.turns)
-        if turns:  # 0: the root's settle ended the battle, its own final step
+        reason, final, n = player_module._replay(tables, s, GREEDY, (), k, TURNS, VANILLA)
+        assert reason is None and n == turns, root
+        for name, a, b in zip(out._fields, out, final, strict=True):
+            assert np.array_equal(np.asarray(a), np.asarray(b)), f"{root}: replay {name}"
+        name = root.split(",")[0]
+        if not int(got.ended):
+            assert not bool(needs_learn(out)), f"{root}: a learn prompt was left pending"
+            checks[name] += 1
+        elif bool(needs_learn(out)) and turns:  # turns 0: the root's settle ended the battle
             reason, before, n = player_module._replay(tables, s, GREEDY, (), k, turns - 1, VANILLA)
             assert reason is None and n == turns - 1 and int(before.over) == 0, root
             assert not bool(needs_learn(before)), f"{root}: a prompt left before the final turn"
-        checked += 1
-    assert checked > 0, "no run reached the no-pending-prompt check"
+            checks[name] += 1
+    assert all(checks.values()), f"roots with no learn check: {checks}"
 
 
 @pytest.mark.fullset
