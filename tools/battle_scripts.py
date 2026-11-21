@@ -9,7 +9,8 @@ in two-trainer doubles, tag battles and beside a walking partner (plan Rulings 2
   map (a map whose script sets ``VAR_PARTNER_TRAINER_ID`` and runs ``SetHasPartner``;
   ``ScrCmd_StartTrainerBattle`` adds the partner whenever ``SystemFlag_CheckHasPartner``
   is set, ``src/scrcmd_trainer.c:133-134``). A lone placed enemy on such a map is a single
-  or double: BATTLE_TYPE_TRAINER (``src/encounter.c:738-739``) ORed with the walking
+  or double: its base type (BATTLE_TYPE_TRAINER, or _TRAINER_DOUBLES for a double header
+  that spots the player, ``src/encounter.c:736-739``) ORed with the walking
   partner's header type, the last trainer ``Trainer_Encounter`` loads
   (``src/trainer_data.c:31-50``). Every structure on such a map carries
   ``walking_partner``.
@@ -51,6 +52,9 @@ UNKNOWN_FORMAT = "unknown"
 # A lone placed enemy on a walking-partner map: internal, never written; ``lone_walk_formats``
 # replaces it with the walking partner's header format.
 WALK_ALONE = "walk_alone"
+# The lone enemy's own header format, carried from ``structure_fields`` to
+# ``lone_walk_formats`` (which removes the key).
+_WALK_HEADER = "_walk_header_format"
 # A partner routine's evaluation stops after this many ops (none in vanilla needs 20).
 _MAX_STEPS = 10_000
 
@@ -295,8 +299,8 @@ def battle_structures(
     * On a header whose script runs ``SetHasPartner``, every placed enemy is fought under
       the walking-partner flag, with the one trainer the script assigns to
       ``VAR_PARTNER_TRAINER_ID``: in a scripted pair it is "multi" beside the partner; a
-      lone placed enemy is BATTLE_TYPE_TRAINER (``src/encounter.c:738-739``) ORed with the
-      walking partner's header type, the last trainer ``Trainer_Encounter`` loads
+      lone placed enemy is its base type (``src/encounter.c:736-739``; ``lone_walk_formats``)
+      ORed with the walking partner's header type, the last trainer ``Trainer_Encounter`` loads
       (``src/trainer_data.c:31-50``): ``WALK_ALONE`` until ``lone_walk_formats`` sets its
       format. Every such structure carries ``walking_partner``, the sorted partner ids.
       Placed enemies with no such trainer, or with several, raise (with several and
@@ -443,24 +447,30 @@ def structure_fields(structure: BattleStructure | None, header_format: str) -> d
             for p in structure.partner
         ],
         "walking_partner": list(structure.walking_partner),
-    }
+    } | ({_WALK_HEADER: header_format} if structure.format == WALK_ALONE else {})
 
 
 def lone_walk_formats(rows: list[dict]) -> None:
-    """Replace each ``WALK_ALONE`` format in place: BATTLE_TYPE_TRAINER
-    (``src/encounter.c:738-739``) ORed with the header type of the last trainer
-    ``Trainer_Encounter`` loads, the walking partner at BATTLER_PLAYER_2
-    (``src/trainer_data.c:31-50``, ``src/encounter.c:751-753``): the partner rows' own
-    header format. Raises when the candidate partners' formats differ or are not
-    single/double."""
+    """Replace each ``WALK_ALONE`` format in place. ``Trainer_Encounter`` ORs the base
+    type with the header type of the last trainer it loads, the walking partner at
+    BATTLER_PLAYER_2 (``src/trainer_data.c:31-50``, ``src/encounter.c:751-753``). The
+    base type is BATTLE_TYPE_TRAINER for e2 = 0 (``src/encounter.c:738-739``: a lone enemy
+    talked to, ``res/field/scripts/scripts_battles.s:37``, or a single-header enemy that
+    spots the player, ``src/trainer_encounter.c:94-102``) and BATTLE_TYPE_TRAINER_DOUBLES
+    for a double-header enemy that spots the player (its own map object twice,
+    ``src/trainer_encounter.c:110-125``, ``src/encounter.c:736-737``). Spotting is the
+    default way a placed trainer is met, so the format is "double" when the enemy's own
+    header or the partner's is double, else "single". Raises when the candidate partners'
+    formats differ or are not single/double."""
     by_id = {r["id"]: r for r in rows}
     for r in rows:
         if r["format"] != WALK_ALONE:
             continue
+        own = r.pop(_WALK_HEADER)
         formats = {by_id[p]["format"] for p in r["walking_partner"]}
         if len(formats) != 1 or not formats <= {"single", "double"}:
             raise ValueError(
                 f"trainer {r['id']}: walking partners {r['walking_partner']} have header "
                 f"formats {sorted(formats)}, not one single/double"
             )
-        r["format"] = formats.pop()
+        r["format"] = "double" if "double" in formats | {own} else "single"

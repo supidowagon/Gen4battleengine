@@ -361,30 +361,40 @@ def test_walking_partner_map():
     assert 9 not in got
 
 
-def _walk_rows(partner_formats):
-    """Row 50 (a double-header lone enemy on a walk map) beside its partner rows."""
+def _walk_rows(partner_formats, own="single"):
+    """Row 50 (a lone enemy with header format ``own`` on a walk map) beside its partner rows."""
     s50 = BattleStructure("walk_alone", None, (), tuple(partner_formats))
-    rows = [{"id": 50, **structure_fields(s50, "double")}]
+    rows = [{"id": 50, **structure_fields(s50, own)}]
     for p, fmt in partner_formats.items():
         rows.append({"id": p, **structure_fields(None, fmt)})
     return rows
 
 
 def test_lone_walk_enemy_takes_the_partners_header_type():
-    # trainer_data.c:31-50: the last trainer loaded decides the header type, and with e2 = 0
-    # and a walking partner that is the partner (encounter.c:751-753); the enemy's own
-    # double header is not used.
+    # trainer_data.c:31-50: the base type is ORed with the last trainer loaded, the walking
+    # partner (encounter.c:751-753); a single-header enemy's base type is BATTLE_TYPE_TRAINER.
     rows = _walk_rows({9: "single"})
     lone_walk_formats(rows)
     assert rows[0]["format"] == "single"
     assert rows[0]["opponent_2"] is None and rows[0]["partner"] == []
     assert rows[0]["walking_partner"] == [9]
+    assert "_walk_header_format" not in rows[0]
     rows = _walk_rows({9: "double"})
     lone_walk_formats(rows)
     assert rows[0]["format"] == "double"
     rows = _walk_rows({9: "single", 10: "double"})
     with pytest.raises(ValueError, match="trainer 50"):
         lone_walk_formats(rows)
+
+
+def test_lone_walk_enemy_with_a_double_header_is_double():
+    # A double-header enemy that spots the player is fought as its own pair
+    # (trainer_encounter.c:110-125): BATTLE_TYPE_TRAINER_DOUBLES (encounter.c:736-737),
+    # ORed with the single partner's header type 0.
+    rows = _walk_rows({9: "single"}, own="double")
+    lone_walk_formats(rows)
+    assert rows[0]["format"] == "double"
+    assert "_walk_header_format" not in rows[0]
 
 
 def test_walk_map_tag_keeps_multi_and_the_walk_ids():

@@ -1305,9 +1305,10 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       override it (``tools/battle_scripts.py``, plan Rulings 2-5): "multi" for an enemy
       of a tag battle or of a scripted pair on a walking-partner map, else
       "double_two_trainer" for an operand of a ``StartTrainerBattle`` with two trainer
-      constants. A lone enemy placed on a walking-partner map takes the walking partner's
-      header format (BATTLE_TYPE_TRAINER, ``src/encounter.c:738-739``, ORed with the last
-      loaded trainer's type, ``src/trainer_data.c:31-50``; ``lone_walk_formats``).
+      constants. A lone enemy placed on a walking-partner map is "double" when its own
+      header or the walking partner's is double, else "single" (its base type,
+      ``src/encounter.c:736-739``, ORed with the last loaded trainer's type,
+      ``src/trainer_data.c:31-50``; ``lone_walk_formats``).
       ``opponent_2`` is the other enemy of that pair or tag battle (else
       null), and ``partner`` the teams the player's partner can field
       ([{``trainer``, ``starter``, ``player_gender``}], a field the team does not
