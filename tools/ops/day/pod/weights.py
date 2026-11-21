@@ -2,7 +2,8 @@
 
 weights.txt lines: "<entry> <GB> <cite...>"; "#" starts a comment. An entry matches a test id
 equal to it or starting with it plus "::", "[" or "/". An id's weight is the GB of its longest
-matching entry, else UNMEASURED_FILE_GB; a unit's weight is the largest weight of its ids. A list
+matching entry (the first of equal entries), else UNMEASURED_FILE_GB; a unit's weight is the
+largest weight of its ids. A list
 line's weight (its "<GB>G" field) raises the weight of every unit cut from that line: such a
 unit weighs max(<GB>, its table weight); a line weight never lowers a measured peak.
 """
@@ -21,6 +22,16 @@ def load(path: Path) -> list[tuple[str, int]]:
     return load_lines(path.read_text(encoding="utf-8").splitlines(), str(path))
 
 
+class Table(list):
+    """load's result: the (entry, GB) list, with a lookup by entry for id_weight."""
+
+    def __init__(self, rows=()):
+        super().__init__(rows)
+        self.by_entry: dict[str, int] = {}
+        for e, g in self:
+            self.by_entry.setdefault(e, g)
+
+
 def load_lines(lines: list[str], where: str = "weights") -> list[tuple[str, int]]:
     table = []
     for n, raw in enumerate(lines, 1):
@@ -30,19 +41,26 @@ def load_lines(lines: list[str], where: str = "weights") -> list[tuple[str, int]
         if len(line) < 2 or not line[1].isdigit() or int(line[1]) < 1:
             raise ValueError(f"{where}:{n}: expected '<entry> <GB> <cite>', got {raw!r}")
         table.append((line[0], int(line[1])))
-    return table
+    return Table(table)
 
 
 def _matches(entry: str, test_id: str) -> bool:
     return test_id == entry or test_id.startswith((entry + "::", entry + "[", entry + "/"))
 
 
+def _prefixes(test_id: str) -> list[str]:
+    """Every entry that _matches test_id: the id, then its prefixes before "::", "[" or "/",
+    longest first."""
+    cut = [i for i, ch in enumerate(test_id) if ch in "[/" or test_id.startswith("::", i)]
+    return [test_id] + [test_id[:i] for i in reversed(cut) if i > 0]
+
+
 def id_weight(test_id: str, table: list[tuple[str, int]]) -> int:
-    best = None
-    for entry, gb in table:
-        if _matches(entry, test_id) and (best is None or len(entry) > len(best[0])):
-            best = (entry, gb)
-    return UNMEASURED_FILE_GB if best is None else best[1]
+    by = table.by_entry if isinstance(table, Table) else Table(table).by_entry
+    for e in _prefixes(test_id):
+        if e in by:
+            return by[e]
+    return UNMEASURED_FILE_GB
 
 
 def unit_weight(ids: list[str], table: list[tuple[str, int]], line_gb: int | None = None) -> int:
