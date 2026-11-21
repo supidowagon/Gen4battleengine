@@ -588,6 +588,9 @@ def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleStat
     level-up's replacement and the player's own Struggle (``MOVE_STRUGGLE``) are recorded as the
     decomp does.
 
+    D45-4a: an encored enemy (``encoredMove != 0``, bcp.c:442-454: the state goes to WAIT, never
+    to MOVE_SELECT_INIT) and a recharging one (battle_lib.c:6228) record nothing.
+
     Ruling D3-1a: the record is made when any enemy battler (1, or 1 and 3 at four battlers)
     takes its FIGHT path, for every party-0 battler (row ``b`` of the record); at four battlers
     the enemy and the recorded battler must have HP (:363), at two neither test applies
@@ -600,6 +603,9 @@ def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleStat
         _, struggling = selected_move(tables, state, e, actions[e])
         locked = locked_slot(state, e) >= 0  # a locked battler picks no command (:335)
         fight_e = (actions[e] < MOVE_ACTIONS) & ~struggling & ~locked
+        # An encored battler's command never opens the move menu (bcp.c:442-454), nor does a
+        # recharging one's (``Battler_CanPickCommand``, battle_lib.c:6228): D45-4a.
+        fight_e = fight_e & (state.encore_move[e] == 0) & (state.recharge[e] == 0)
         if four:
             fight_e = fight_e & (state.hp[party(fmt, e), state.active[e]] > 0)
         fight = fight_e if fight is None else fight | fight_e

@@ -8733,7 +8733,8 @@ def _record_last_moves(tables, s: RefState, actions, choices) -> None:
     """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717) for the turn, as
     ``engine.step._record_last_move`` (ruling D3-1a): when any enemy battler (1, or 1 and 3 at
     four battlers, ``TrainerAI_MainDoubles`` :362-375) takes its FIGHT path (no forced Struggle,
-    bcp.c:433; no locked move, :335), the AI adds ``movePrevByBattler`` of every party-0 battler
+    bcp.c:433; no locked move, :335; not encored, :442-454; not recharging, battle_lib.c:6228:
+    D45-4a), the AI adds ``movePrevByBattler`` of every party-0 battler
     to its list of that battler's moves. At four battlers the enemy and the recorded battler must
     have HP (:363); at two neither test applies (:295). A first free entry unless the move is
     listed or the list is full (:2705-2716; Struggle is recorded too, G-68)."""
@@ -8745,6 +8746,8 @@ def _record_last_moves(tables, s: RefState, actions, choices) -> None:
             _command(actions[e]) == FIGHT
             and not choices[e][1]
             and not choices[e][2]
+            and not s.battlers[e].encore_move  # bcp.c:442-454 (D45-4a)
+            and not s.battlers[e].recharge  # battle_lib.c:6228 (D45-4a)
             and (not four or _active(s, e).hp > 0)
         ):
             fight = True
