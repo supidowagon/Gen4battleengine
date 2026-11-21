@@ -1838,3 +1838,14 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   capsule not in `PokemonSpec`. Dead member: unchanged. A form the new species has no row for becomes form 0
   (`Pokemon_GetFormNarcIndex`, `src/pokemon.c:4929+`).
   Tests: tests/prep/test_growth.py. Not run locally (stream order: no local pytest): for the pod.
+
+- E3-B3-4a GT-4a Carry type (`src/nuzline/prep/gauntlet.py`; `carry_out` and `carry_out_ref` are GT-4b's). No table input changed.
+  `Carry` NamedTuple of numpy arrays, optional leading batch axis R: per slot the design section 7 fields (`present`, species, form,
+  ability_slot, personality, nature, gender, beauty, ball, egg_location, pokerus, exp_boost, ivs, level, exp, evs, stats, hp, status,
+  status_counter, moves, pp, pp_ups, item, friendship) and the section 5 chain fields (bag `[n_items]`, dead, sat_out, deaths_used,
+  swap_left, bag_uses_left (one per Counted option; -1 unlimited), bench `[n_box]` mask, beaten `[n_fights]` mask, partner_set).
+  `exp_boost` and `present` are additions the sheet's table lacks (PokemonSpec round trip; parties of 1-6). Swap plan and growth plan
+  are left out: GT-7 and GT-15 add them. `carry_stats`: `Pokemon_CalcStats` (`src/pokemon.c:564-648`), vectorised, never from battlers.
+  `carry_from_party` ignores a spec's stored stats. Views: `member_spec`, `set_member`; `evolve_carry` runs `growth.evolve` on a
+  member (single row), Shedinja into the first free slot with Poke Ball (`src/evolution.c:736-737`, `:773`).
+  Tests: tests/prep/test_gauntlet_carry.py. Not run locally (no local pytest): for the pod.
