@@ -44,8 +44,10 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
    the targeted run on the merged tip (CLAUDE.md, Merges) on the pod. The `fullset`
    tests are their own pod run (DAYBOX.md: one mark per run). With the tip it sends for
-   these runs the stream sends its `--allow-new` list and the divergences it expects; then
-   the managing session runs the tip's snapshot compare (section 5).
+   these runs the stream sends its `--allow-new` list, which first passes the local
+   pre-check (section 5, Allow-new list; the tip message says it passed), and the
+   divergences it expects; then the managing session runs the tip's snapshot compare
+   (section 5).
 7. The stream sends one message: the final tip, the batch contents with citations, the
    review outcome, the targeted run's results with time and peak memory per test file, and
    its ledger's explanation of every diverged part of the snapshot compare.
@@ -126,6 +128,12 @@ per day is the rate used for estimates.
   hours: one pod per active stream plus one capture pod (section 1). Pod N's id
   is in `_scratch/rent/day<N>/POD_ID_<N>`; pod 1's is in `_scratch/rent/POD_ID`. Each pod
   gets its own pod check before every pack (DAYBOX.md, Send a run step 3).
+  The capture pod is pod 1 (id in `_scratch/rent/POD_ID`), rented like any test pod
+  (`ci-day-big`, Bring-up in DAYBOX.md) in the 256 GB shape, so `snap.sh` runs with
+  `SNAP_GATE_GB` 176 (on a 128 GB pod: 88). When pod 1 is down, the managing session names
+  another up pod the capture pod and writes it in `_scratch/handoff/MANAGER.md`. For the
+  no-idle-pods rule a pending compare counts as queued: a pod holding the capture a sent or
+  expected merge candidate compares against is not idle (`docs/decisions.md`, section 5).
   Read the shape before sending a body: exec
   `{"command":["sh","-c","cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes"],"timeoutSeconds":25}`
   on the pod (cgroup v2's `memory.max`, else cgroup v1's `memory.limit_in_bytes`: some rented
@@ -176,7 +184,12 @@ per day is the rate used for estimates.
   delete an older one only when no compare reads it. A capture is never sent back to a pod:
   one lost with a pod is re-made on the next pod.
 - **Capture pod.** Snapshot captures and compares run on the capture pod only. No pack run
-  is sent to it while a capture or compare is going there. A job runs its parts in parallel
+  is sent to it while a capture or compare is going there. One snapshot job at a time per
+  pod: each job gates only on its own parts, so two at once could overrun memory together.
+  `run.sh` enforces it with a pod-wide lock (`/work/.snaplock`, taken after `uv sync`,
+  released on every exit, a TERM included; a lock whose pid no longer runs a `run.sh` is
+  removed); a second job sent meanwhile waits for it, printing one `lock wait` line a minute
+  (DAYBOX.md, Snapshot compare). A job runs its parts in parallel
   (`SNAP_WORKERS`, default 16, each part its own process; `tools/snap_compare.py`, Workers):
   about 30 minutes for a capture or a compare (estimate: the longest part, `roark.rank`, takes
   15-22 minutes alone; replace it with the first timed parallel run). Serially
@@ -215,7 +228,9 @@ per day is the rate used for estimates.
   is under it, and each part starts only while container memory + the live parts' reserve
   (expected peak minus RSS) + its own expected peak stays at or under it (`snap_compare.py`
   `PART_GB`: 13 GB for a step, jitstep or sample part, 8 rest, 2 ai, 1 gen, 11 `roark.trace`,
-  27 `roark.rank`; the largest peaks of 19 pod logs times about 1.2).
+  27 `roark.rank`; the largest peaks of 19 pod logs times about 1.2). With no part of the job
+  live the next part starts whatever memory reads (container memory counts page cache, which
+  need not fall); a part held by the gate prints `gate wait` about once a minute.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
