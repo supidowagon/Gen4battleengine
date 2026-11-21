@@ -52,6 +52,8 @@ hard_reason() {
       REASON=rom-save-archive-or-binary; return ;;
     *.key|*.pem|*.p12|*.pfx|*.crt|*.asc|*.gpg|.env|.env.*|*.env|local.toml|id_rsa*|id_ed25519*|id_ecdsa*|.netrc|.git-credentials|credentials*|*.b64)
       REASON=key-or-credential; return ;;
+    .gitignore|.gitattributes|.gitmodules)
+      REASON=git-control-file; return ;;  # would change what the state clone tracks or how
   esac
   [ "$size" -gt "$MAX_FILE" ] && { REASON=over-2MB; return; }
   case "$b" in *.log) [ "$size" -gt "$MAX_LOG" ] && REASON=log-over-1MB ;; esac
@@ -217,12 +219,12 @@ fi
 (cd "$STATE" && find . -mindepth 1 -path ./.git -prune -o -type f -printf '%P\n') | sort > "$SEL.have"
 sort "$SEL.keep" > "$SEL.want"
 comm -23 "$SEL.have" "$SEL.want" | (cd "$STATE" && xargs -d '\n' -r rm -f --)
-find "$STATE" -mindepth 1 -path "$STATE/.git" -prune -o -type d -empty -delete
+find "$STATE" -mindepth 1 -depth -type d -empty ! -path "$STATE/.git" ! -path "$STATE/.git/*" -delete
 if [ -s "$SEL.keep" ]; then
   tar -C "$SCRATCH" -cf - --no-recursion -T "$SEL.keep" | tar -C "$STATE" -xf - \
     || { echo "ERROR: copy into $STATE failed" >&2; exit 1; }
 fi
-git -C "$STATE" add -A
+git -C "$STATE" add -A --force
 echo "  re-check of the whole state tree before commit:"
 if ! check_tree "$STATE"; then
   git -C "$STATE" reset -q

@@ -374,7 +374,7 @@ table archives or run outputs.
   `*.pkl`, `*.bin`, ...), keys and credentials (`_scratch/rent/home/.runpod/`, `*.key`,
   `*.pem`, `.env*`, `*.env`, `local.toml`, `*.b64`), files whose content looks like a key or
   token, `rent/out/` and other run outputs, logs over 1 MB, files over 2 MB, anything inside
-  a folder named `backup*`.
+  a folder named `backup*`, copied `.gitignore`, `.gitattributes` and `.gitmodules` files.
 - Restore on a new machine: `git clone <off-site repo> <project folder>` gives every branch
   (`git checkout <branch>`; set `origin` to the public repo again). Then
   `git clone -b scratch-state <off-site repo> _scratch/offsite/state` and copy its files

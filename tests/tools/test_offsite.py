@@ -102,6 +102,9 @@ EXCLUDED = {
     "e1/.env.local": "key-or-credential",
     "e1/meta.env": "key-or-credential",
     "e1/local.toml": "key-or-credential",
+    # git control files (a copied .gitignore would hide files from the state clone)
+    "e2/seg/.gitignore": "git-control-file",
+    "e2/seg/.gitattributes": "git-control-file",
     # content
     "e1/tok_runpod.txt": "secret-like-content",
     "e1/tok_github.md": "secret-like-content",
@@ -188,9 +191,10 @@ def test_check_passes_a_clean_tree_and_names_each_offender(tmp_path: Path):
     _write(state, "e1/wt/.git", "gitdir: elsewhere\n")
     _write(state, "e1/tok.txt", TOKENS["runpod"] + "\n")
     _write(state, "e1/big.txt", "y" * (2 * 1024 * 1024 + 1))
+    _write(state, "e2/.gitattributes", "* filter=lfs\n")
     r = _run("--check", str(state), scratch=tmp_path)
     assert r.returncode == 1
     for frag in ("rom-save-archive-or-binary manager/wb/maylene.sav", "run-output rent/out/x.md",
                  "backup-folder e1/backups/n.md", "nested-repo e1/wt/.git", "secret-like-content e1/tok.txt",
-                 "over-2MB e1/big.txt"):
+                 "over-2MB e1/big.txt", "git-control-file e2/.gitattributes"):
         assert f"OFFENDER {frag}" in r.stdout, frag
