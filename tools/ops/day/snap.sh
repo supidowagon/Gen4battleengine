@@ -132,7 +132,7 @@ W="$W"; printf '%s\n' "$CAP" > "\$W/reads"; cd "\$W/repo"
 $(declare -f cgmem)
 gate() { local b; while b=\$(cgmem current) || { echo "GATE_NO_CGROUP_MEMORY \$(date +%s)" >> "\$W/times.txt"; exit 1; }; [ \$(( b / 1000000000 )) -ge $GATE ]; do echo "gate wait \$(date +%T)"; sleep 30; done; }
 echo "START \$(date +%s)" > "\$W/times.txt"
-m=\$(cat /proc/sys/vm/max_map_count 2>/dev/null); [ "\${m:-0}" -ge 1048576 ] 2>/dev/null || { echo "MAP_COUNT_LOW \${m:-none} \$(date +%s)" >> "\$W/times.txt"; exit 1; }
+m=\$(tr -dc 0-9 < /proc/sys/vm/max_map_count 2>/dev/null); [ "\${m:-0}" -ge 1048576 ] 2>/dev/null || { echo "MAP_COUNT_LOW \${m:-none} \$(date +%s)" >> "\$W/times.txt"; exit 1; }
 (uv sync --frozen -q) > "\$W/sync.log" 2>&1; rc=\$?; echo "SYNC_RC=\$rc \$(date +%s)" >> "\$W/times.txt"; [ "\$rc" = 0 ] || exit 1
 gate; echo "${JOB}_START \$(date +%s)" >> "\$W/times.txt"
 $CMD; echo "${JOB}_RC=\$? \$(date +%s)" >> "\$W/times.txt"
