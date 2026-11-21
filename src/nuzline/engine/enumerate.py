@@ -2991,13 +2991,21 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # now, or anywhere in the party when it can lose HP first (it leaves after a hit, a hazard).
     setters = foes(uses_move & _any_of(effect, (_E.SPIKES, _E.STEALTH_ROCK)))
     leaving = switch | enters
-    # The replacement's choices (ReplaceFainted, bcp.c:4081-4140): never the partner's active slot
-    # of a shared party (DOUBLES, bcp.c:4096-4107; ``actions.replacement_bench``), plus the own
-    # active one when it can leave (it is on the bench by the replacement).
-    bench = jnp.stack([replacement_bench(state, b) for b in range(fmt.B)]) | (
-        leaving[:, None] & (slots == state.active[:, None])
-    )
-    hurt = (hazards | setters | leaving)[:, None]
+    # The replacement's choices (ReplaceFainted, bcp.c:4081-4140): never the partner's slot of a
+    # shared party as it stands at the replacement (``selectedPartySlot[i ^ 2]``, bcp.c:4096-4107;
+    # ``actions.replacement_bench`` reads the turn's start), plus the own active slot when it can
+    # leave, and at B = 4 the partner's active slot when the partner leaves (a switch or a foe's
+    # Roar; both are on the bench by the end-of-turn replacement). A leaving holder can be hit
+    # first (before a priority -6 Roar), so it counts as hurt. A U-turn / Baton Pass pauses at its
+    # party list (subscript_show_party_list.s, ``pivot_battler``): the resumed call reads its own
+    # state, so its laws are recomputed there.
+    own = leaving[:, None] & (slots == state.active[:, None])
+    if fmt.B == 4:
+        mate = sides ^ 2
+        shared = (party(fmt, mate) == rows)[:, None]
+        own = own | (shared & leaving[mate][:, None] & (slots == state.active[mate][:, None]))
+    bench = jnp.stack([replacement_bench(state, b) for b in range(fmt.B)]) | own
+    hurt = (hazards | setters | leaving)[:, None] | own
     rep = live & jnp.any(bench & (pinched_b | (holds_b & hurt)), axis=1)
     # The count: fixed at 5 unless a stat can reach +6 before the eating.
     five = jnp.asarray([int(x) for x in STARF_STATS], _I32)

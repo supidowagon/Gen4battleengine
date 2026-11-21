@@ -31,6 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import confusion_damage
 from nuzline.engine.enumerate import outcome_laws
 from nuzline.engine.format import DOUBLES
@@ -115,3 +116,19 @@ def test_a_b4_haze_lets_a_non_participant_eat_its_starf_with_entry_0(tables, nam
     relevant = laws.relevant.starf.tolist()
     assert relevant[0] == [True, False, False, False]
     assert relevant[1] == relevant[2] == relevant[3] == [False] * 4
+
+
+def test_a_partner_holder_that_switches_out_is_on_the_replacement_bench(tables, names):
+    """DOUBLES, shared party: battler 0's active Pokemon holds a Starf Berry at its pinch and
+    switches out; battler 2 (1 HP) can fall to battler 1's Tackle. At the end-of-turn replacement
+    ReplaceFainted excludes the partner's slot as it stands then (``selectedPartySlot[i ^ 2]``,
+    bcp.c:4096-4107), so battler 2 can send in the holder, which reads battler 2's replacement
+    draw (column 1): ``relevant.starf[2][1]``. The Haze test above keeps row 2 all False."""
+    s = _all_moves(four(tables, names, DOUBLES), names, "Swords Dance")
+    s = with_moves(s, names, 1, ["Tackle"])
+    s = _set_item(s, 0, names.item("Starf Berry"))
+    s = with_hp(s, 0, int(s.max_hp[0, 0]) // 4)
+    s = with_hp(s, 2, 1)
+    actions = jnp.asarray([MOVE_ACTIONS + 2, 0, 0, 0], jnp.int32)
+    laws = jax.tree.map(np.asarray, outcome_laws(tables, s, actions))
+    assert bool(laws.relevant.starf[2][1])
