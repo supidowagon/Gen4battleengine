@@ -124,10 +124,20 @@ per day is the rate used for estimates.
   on the pod.
 - **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
   sends a newer tip only after the previous run's result is back, and that tip's list holds
-  only the lines new since the previous list, the test files changed since the previous
-  run's tip (`git diff --name-only <previous tip> <tip> -- tests`) and the files that failed
-  or errored in the previous run. The managing session
-  holds any other request until the run is back.
+  only:
+  - the lines new since the previous list;
+  - every test file changed since the previous run's tip:
+    `git diff --name-only --diff-filter=d <previous tip> <tip> -- ':(glob)tests/**/test_*.py'`
+    (the `:(glob)` form also matches `tests/test_*.py`; the plain `'tests/**/test_*.py'`
+    does not);
+  - every file the previous run counted as a failure by the Completeness rule below
+    (failed, errored, crashed, killed three times, collect failed, incomplete).
+  Each such file keeps the ids per chunk, `A` flag and weight of its line in the stream's
+  previous list (a file with no line there: the ids per chunk of Chunking below). When a
+  non-test file under `tests/` changed (`git diff --name-only <previous tip> <tip> -- tests`:
+  helpers, `conftest.py`, golden data), the list also holds every previous-list file that
+  can import or read it; when unsure, the whole previous list. The managing session holds
+  any other request until the run is back.
 - **Snapshot capture of `main`.** After every push of `main` the managing session starts
   one capture of the new tip on a test pod, in `/work/snapmain-<short sha>` (seeds 0-199,
   about 90 minutes; commands: `tools/ops/day/snap.sh`, DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
@@ -150,21 +160,23 @@ per day is the rate used for estimates.
   runs with `MAXP` lowered by 2.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
-  files, about 40 for other files. Every chunk has an expected peak: its heaviest id in
-  `tools/ops/day/pod/weights.txt` (measured peaks, each citing its run; 12 GB for an id the
-  table lacks: a chunk grows to 8-12 GB after it starts), raised to the list line's `<GB>G`
-  field when that is larger. Start a chunk only
-  while container memory (`/sys/fs/cgroup/memory.current`) plus the unreached expected peaks
-  of every live chunk on the pod (all runs) plus its own expected peak stays under `GATE_GB`,
-  and run at most `MAXP` chunks at once across all runs on the pod (Test pod above: 88 GB and
-  10, or 176 GB and 20). A chunk with no other live chunk on the pod starts while memory is
-  under `GATE_GB`, whatever its expected peak. Heavy tests need no hand placement: list them
-  with their weights and the runner keeps them apart. Near `KILL_GB` (118 or 236 GB) kill
-  this run's newest chunk and queue it again, at most twice per chunk; a third kill counts
-  as a failure. Never signal PID 1.
+  files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
+  median 7 GB, 90th percentile 12 GB, 99th 24 GB, largest 92 GB. Every chunk has an expected peak: its heaviest id in
+  `tools/ops/day/pod/weights.txt` (every file and test measured over 12 GB, each citing its
+  run; 20 GB for an id the table lacks), raised to the list line's `<GB>G` field when that is
+  larger. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`) plus
+  the unreached expected peaks of every live chunk on the pod (all runs) plus its own
+  expected peak stays under `GATE_GB`, and run at most `MAXP` chunks at once across all runs
+  on the pod (Test pod above: 88 GB and 10, or 176 GB and 20). With no other live chunk on
+  the pod a chunk starts when memory is under `GATE_GB` and memory plus its expected peak is
+  under `KILL_GB`; one whose expected peak alone reaches `KILL_GB` starts alone at once, and
+  one kept out only by memory no chunk holds starts after `IDLE_WAIT_S` (300 s). Heavy tests
+  need no hand placement: list them with their weights and the runner keeps them apart.
+  Near `KILL_GB` (118 or 236 GB) kill this run's newest chunk and queue it again, at most
+  twice per chunk; a third kill counts as a failure. Never signal PID 1.
 - **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed
-  equals its collected count. A file whose totals differ, a file that failed to collect and
-  a chunk that crashed count as failures.
+  equals its collected count. A file whose totals differ, a file that failed to collect, a
+  chunk that crashed and a chunk killed three times count as failures.
 - Only the managing session rents, uses and deletes pods. Use generic names. Verify every
   delete with a pod listing. Each spending cap is the user's explicit approval; anything
   larger or longer needs a new approval.

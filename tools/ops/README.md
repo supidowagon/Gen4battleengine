@@ -24,7 +24,7 @@ Stream list: `$NUZLINE_SCRATCH/manager/streams.json`, edited by hand at every st
 Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` section 5.
 
 - `common.sh`: sourced by the PC-side scripts; main checkout and scratch paths, the table upload rules (`TABLE_ALLOW`, `TABLE_DENY`), run-name check.
-- `build_tables.sh --here | <commit>`: builds the vanilla and Kaizo tables in place, or for a commit in a temporary worktree packed into `_scratch/rent/tables/tables_k<key16>.tar.xz` (only `TABLE_ALLOW` files) and linked as `_scratch/rent/tables_<short>.tar.xz`; when `table_key.py`'s key already has an archive the build is skipped (`tables_<short>.key` and `tables/index.txt` record commit and key). Local inputs come from the main checkout. `NUZLINE_PY` selects an existing venv's python; default `uv run --group rom python`.
+- `build_tables.sh --here | <commit>`: builds the vanilla and Kaizo tables in place, or for a commit in a temporary worktree packed into `_scratch/rent/tables/tables_k<key16>.tar.xz` (only `TABLE_ALLOW` files) and copied to `_scratch/rent/tables_<short>.tar.xz`; when `table_key.py`'s key already has an archive the build is skipped (`tables_<short>.key` and `tables/index.txt` record commit and key). Local inputs come from the main checkout. `NUZLINE_PY` selects an existing venv's python; default `uv run --group rom python`.
 - `nightly_brief.md`: the brief for the nightly run.
 - `day/push_bin.sh`: once per pod (safe to repeat); sends `day/bootstrap.sh` and prints the exec-pod body that runs it in `/work/_bin/new`.
 - `day/bootstrap.sh`: pod side, once per pod; apt tools, uv, Python 3.12, runpodctl checksum, decomp clone; ends with `BOOTSTRAP_OK`.
@@ -33,7 +33,8 @@ Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` sec
 - `day/nightly_files.txt`: the nightly test list.
 - `day/pod/setup.sh`: checkout, tables, env, collection, chunked units, each unit's expected peak (`out/<unit>.w`); starts the runner.
 - `day/pod/weights.py`, `day/pod/weights.txt`: list-line parsing and each unit's expected peak; the tracked table of measured peaks of heavy tests and files, each with the run it was measured in.
-- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate, the expected-peak gate (container memory + the unreached expected peaks of every live unit on the pod + the next unit's expected peak under `GATE_GB`; with no live unit on the pod a unit starts whatever its expected peak, still only while memory is under `GATE_GB`) and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
+- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate, the expected-peak gate (container memory + the unreached expected peaks of every live unit on the pod + the next unit's expected peak under `GATE_GB`; with no live unit on the pod: memory under `GATE_GB` and memory + expected peak under `KILL_GB`, a unit that can never fit alone at once, or after `IDLE_WAIT_S`), checked and started under the pod-wide lock `RUNNER_LOCK`, and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
+- `day/pod/gate.sh`: sourced by `runner.sh`; the gate's arithmetic (`wgb`, `podgate`, `admit`).
 - `day/pod/unit.sh`: one pytest process over one unit's ids.
 - `day/pod/status.sh`: progress, memory, collection failures, failing units, other active runs.
 - `day/pod/notify.sh`: started by the exec-pod body before `setup.sh`; offers the first-failure beacon and the results under the run's codes `WATCH_F` and `WATCH_D`.
