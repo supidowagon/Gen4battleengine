@@ -1,6 +1,6 @@
-"""D3-1a: the AI's record (ability, held item, moves seen) is kept for every party-0 battler,
-keyed by its active slot: battlers 0 and 2 in DOUBLES and TWO_TRAINERS, battler 0 in MULTI
-(trainer_ai.c:362-375, battle_script.c:11806, battle_lib.c:2151-2153). JAX against reference,
+"""D3-1a: the AI's record (ability, held item, moves seen) is written for every party-0 battler,
+in its battler's row (sheet D45-1): battlers 0 and 2 in DOUBLES and TWO_TRAINERS, battler 0 in
+MULTI (trainer_ai.c:362-375, battle_script.c:11806, battle_lib.c:2151-2153). JAX against reference,
 by direct calls where ``step`` cannot reach battler 2 yet."""
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def test_ability_tag_battler_2_doubles(tables, names):
     out = know_ability(s, 2, slot, True)
     r = to_ref(s)
     ref._know_ability(r, 2)
-    assert _known(out)[slot] != 0
+    assert _known(out)[2] != 0
     assert _known(out) == r.ai_ability_known
     assert _known(know_ability(s, 1, int(s.active[1]), True)) == _known(s)  # the enemy: nothing
 
@@ -48,7 +48,7 @@ def test_ability_tag_battler_2_multi_writes_nothing(tables, names):
     ref._know_ability(r, 2)
     assert _known(out) == _known(s) == r.ai_ability_known
     out0 = know_ability(with_ability(s, 0, AbilityId.INTIMIDATE), 0, int(s.active[0]), True)
-    assert _known(out0)[int(s.active[0])] != 0  # battler 0 is party 0 in MULTI
+    assert _known(out0)[0] != 0  # battler 0 is party 0 in MULTI
 
 
 def test_item_record_battler_2(tables, names):
@@ -59,27 +59,27 @@ def test_item_record_battler_2(tables, names):
         r = to_ref(s)
         ref._reveal_item(r, 2)
         assert np.asarray(out.ai_item_known).tolist() == r.ai_item_known
-        assert (int(out.ai_item_known[slot]) == ITEM) == kept
+        assert (int(out.ai_item_known[2]) == ITEM) == kept
         # forget clears it again (and touches nothing it did not write)
         gone = forget_item(out, 2, slot, True)
         ref._forget_item(r, 2)
         assert np.asarray(gone.ai_item_known).tolist() == r.ai_item_known
-        assert int(gone.ai_item_known[slot]) == 0
+        assert int(gone.ai_item_known[2]) == 0
 
 
-def test_switch_in_clears_battler_2_slot(tables, names):
-    for fmt, cleared in ((DOUBLES, True), (MULTI, False)):
+def test_switch_in_clears_battler_2_row(tables, names):
+    """UpdateAfterSwitch clears any battler's three rows (battle_lib.c:2151-2153), D45-1 rule 3."""
+    for fmt in (DOUBLES, MULTI):
         s = four(tables, names, fmt)
-        slot = int(s.active[2])
         s = s._replace(
-            ai_seen_moves=s.ai_seen_moves.at[slot, 0].set(5),
-            ai_ability_known=s.ai_ability_known.at[slot].set(7),
-            ai_item_known=s.ai_item_known.at[slot].set(ITEM),
+            ai_seen_moves=s.ai_seen_moves.at[2, 0].set(5),
+            ai_ability_known=s.ai_ability_known.at[2].set(7),
+            ai_item_known=s.ai_item_known.at[2].set(ITEM),
         )
-        out = _forget(s, 2, slot)
-        assert (int(out.ai_ability_known[slot]) == 0) == cleared
-        assert (int(out.ai_item_known[slot]) == 0) == cleared
-        assert (int(out.ai_seen_moves[slot, 0]) == 0) == cleared
+        out = _forget(s, 2, True)
+        assert int(out.ai_ability_known[2]) == 0
+        assert int(out.ai_item_known[2]) == 0
+        assert int(out.ai_seen_moves[2, 0]) == 0
 
 
 def _record(tables, s, acts):
@@ -102,12 +102,12 @@ def _with_last_moves(s, names):
 def test_record_both_player_battlers(tables, names):
     s = _with_last_moves(four(tables, names, DOUBLES), names)
     seen = _record(tables, s, [0, MOVE_ACTIONS + 2, 0, 0])  # 1 switches, 3 fights
-    assert seen[int(s.active[0]), 0] == names.move("Tackle")
-    assert seen[int(s.active[2]), 0] == names.move("Curse")
-    # the record is keyed by the player's party slot; battler 1 is the enemy, so its last move
-    # lands nowhere: only the two player rows hold anything, one move each
-    rows = {int(s.active[0]), int(s.active[2])}
-    assert len(rows) == 2
+    assert seen[0, 0] == names.move("Tackle")
+    assert seen[2, 0] == names.move("Curse")
+    # the record is keyed by battler; battler 1 is the enemy, so its last move lands nowhere:
+    # only the two player rows hold anything, one move each (the writes of the enemy rows come
+    # with D45-4)
+    rows = {0, 2}
     assert all(not seen[i].any() for i in range(seen.shape[0]) if i not in rows)
     assert all(int((seen[i] != 0).sum()) == 1 for i in rows)
 
@@ -115,8 +115,8 @@ def test_record_both_player_battlers(tables, names):
 def test_record_skips_a_battler_without_hp(tables, names):
     s = _with_last_moves(with_hp(four(tables, names, DOUBLES), 2, 0), names)
     seen = _record(tables, s, [0, MOVE_ACTIONS + 2, 0, 0])
-    assert seen[int(s.active[0]), 0] == names.move("Tackle")
-    assert not seen[int(s.active[2])].any()
+    assert seen[0, 0] == names.move("Tackle")
+    assert not seen[2].any()
 
 
 def test_record_needs_an_enemy_on_its_fight_path(tables, names):

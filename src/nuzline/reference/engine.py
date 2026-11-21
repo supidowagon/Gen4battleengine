@@ -521,14 +521,14 @@ def _reveal_item(s: RefState, side: int) -> None:
     ``BattleAI_SetHeldItem`` (:12119-12122). The AI reads the other side's only, so only the
     party-0 battler's is kept (ruling D3-1a)."""
     if _party(_fmt(s), side) == 0:
-        s.ai_item_known[s.battlers[side].active] = _active(s, side).item
+        s.ai_item_known[side] = _active(s, side).item  # row of battler ``side`` (D45-1)
 
 
 def _forget_item(s: RefState, side: int) -> None:
     """``side``'s active Pokemon lost its item: the removal's ``BattleMon_CopyToParty``
     clears the AI's record (``BattleAI_ClearKnownItem``, lib.c:1819-1823)."""
     if _party(_fmt(s), side) == 0:
-        s.ai_item_known[s.battlers[side].active] = 0
+        s.ai_item_known[side] = 0
 
 
 def _remove_item(s: RefState, side: int) -> None:
@@ -713,14 +713,13 @@ def _personal_types(tables, mon: RefPokemon) -> list[int]:
 
 def _know_ability(s: RefState, b: int) -> None:
     """``BattleAI_SetAbility`` (battle_script.c:12106-12109): the AI records the decomp id of
-    battler ``b``'s current ability (``ai_ability_known``, keyed by its party slot), 0 for one the
-    engine does not name (G-69); only for a party-0 battler (ruling D3-1a). Raw:
+    battler ``b``'s current ability (``ai_ability_known[b]``, the row of battler ``b``), 0 for one
+    the engine does not name (G-69); only for a party-0 battler (ruling D3-1a). Raw:
     BattleMessage_AbilityTag reads ``BattleMon.ability`` (script.c:11805)."""
     if _party(_fmt(s), b) != 0:
         return
-    slot = s.battlers[b].active
-    named = ABILITY_DECOMP_IDS.get(s.parties[0].mons[slot].ability, 0)
-    s.ai_ability_known[slot] = named if named > 0 else -1
+    named = ABILITY_DECOMP_IDS.get(_active(s, b).ability, 0)
+    s.ai_ability_known[b] = named if named > 0 else -1
 
 
 @contextmanager
@@ -783,10 +782,10 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
     if not foe_mon.hp or foe.semi_invulnerable or foe.transformed:
         return False
     fresh = not sd.transformed
-    if _party(_fmt(s), side) == 0 and s.ai_ability_known[s.battlers[side].active] < 0:
+    if _party(_fmt(s), side) == 0 and s.ai_ability_known[side] < 0:
         # the record of an ability the engine does not name settles to its id (effects._transform;
         # raw, the AI's record of BattleMon.ability, script.c:11805)
-        s.ai_ability_known[s.battlers[side].active] = _decomp_ability(tables, mon)
+        s.ai_ability_known[side] = _decomp_ability(tables, mon)
     keep = [not fresh or sd.mimic_slots >> k & 1 for k in range(len(mon.moves))]
     if fresh:
         sd.shadow_species, sd.shadow_form = mon.species, mon.form
@@ -2123,12 +2122,21 @@ def ref_damage_table(tables, state: RefState, atk_side: int, move: int, crit: bo
 # --------------------------------------------------------------------------- faints
 
 
+def _forget_record(s: RefState, b: int) -> None:
+    """``BattleAI_ClearKnownMoves`` / ``Ability`` / ``Item`` of battler ``b``
+    (battle_lib.c:7711-7738): its three record rows to 0 (sheet D45-1)."""
+    s.ai_seen_moves[b] = [0] * len(s.ai_seen_moves[b])
+    s.ai_ability_known[b] = 0
+    s.ai_item_known[b] = 0
+
+
 def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     """``BattleSystem_CleanupFaintedMon`` (lib.c:2156): the fainted battler's stat
     stages, ``statusVolatile``, ``moveEffectsMask`` and ``moveEffectsData`` are
     cleared, ``fakeOutTurnNumber = totalTurns + 1`` (lib.c:2195), ``moveHit`` and
     ``movePrevByBattler`` reset (lib.c:2199); what it is the source of ends: the Bind it put
-    on a foe (lib.c:2179) and the foe's infatuation (:2174-2176)."""
+    on a foe (lib.c:2179) and the foe's infatuation (:2174-2176); the AI's record of the battler
+    is cleared last (lib.c:2223-2225)."""
     _restore_types(turn.tables, s, side)
     _reset_battler(s.battlers[side])
     _clear_copied(s, side)
@@ -2139,6 +2147,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     s.battlers[side].fake_out_turn = turn.entry_turn
     s.battlers[side].truant = turn.entry_turn & 1  # lib.c:2197
     _source_leaves(s, side, faint=True)
+    _forget_record(s, side)  # lib.c:2223-2225
 
 
 # What Baton Pass keeps (BattleSystem_UpdateAfterSwitch, lib.c:2078-2079, :2107; condition.h:72,
@@ -3278,7 +3287,7 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> bool:
                     # "{0}'s {1} prevents poisoning!" (subscript_poison.s:80-82,
                     # _badly_poison.s:93-103): BattleAI_SetAbility (script.c:11806).
                     if _party(_fmt(s), side) == 0:
-                        s.ai_ability_known[sd.active] = ability  # the decomp id the message names
+                        s.ai_ability_known[side] = ability  # the decomp id the message names
                 # subscript_poison.s:29 / _badly_poison.s:46: CheckSubstitute, silent (a Baton
                 # Pass newcomer keeps the substitute, B10-4).
                 # Then the side's Safeguard (poison :41, badly_poison :55), B10-7.
@@ -3853,12 +3862,9 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
         newcomer.item = 0
     sd.fake_out_turn = turn.entry_turn
     sd.truant = turn.entry_turn & 1  # lib.c:2119
-    # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (a party-0
-    # battler's only, ruling D3-1a).
-    if _party(_fmt(s), side) == 0:
-        s.ai_seen_moves[slot] = [0] * len(s.ai_seen_moves[slot])
-        s.ai_ability_known[slot] = 0
-        s.ai_item_known[slot] = 0
+    # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item, any battler
+    # (sheet D45-1 rule 3).
+    _forget_record(s, side)
     _source_leaves(s, side, baton)
 
 
@@ -6301,8 +6307,7 @@ def _reveal_redirect(s: RefState, tables, holder: int) -> None:
     for a player's Pokemon (D2-12 rule 10)."""
     if _party_of(s, holder) is s.parties[0]:
         mon = _active(s, holder)
-        slot = s.battlers[holder].active
-        s.ai_ability_known[slot] = ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
+        s.ai_ability_known[holder] = ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
 
 
 def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
@@ -8743,7 +8748,7 @@ def _record_last_moves(tables, s: RefState, actions, choices) -> None:
         if _party(_fmt(s), b) != 0 or (four and _active(s, b).hp <= 0):
             continue
         player = s.battlers[b]
-        _record_seen_move(s.ai_seen_moves[player.active], player.last_move)
+        _record_seen_move(s.ai_seen_moves[b], player.last_move)
 
 
 def ref_step(
@@ -9205,8 +9210,14 @@ def _stale_known_item(s: RefState, snaps: list[tuple[int, int, bool, int]], foug
     lib.c:1819-1823)."""
     for b, slot, knocked, hp in snaps:
         mon = s.parties[0].mons[slot]
-        if knocked and mon.item == 0 and (mon.hp != hp or b == fought):
-            s.ai_item_known[slot] = 0
+        # row b is the Pokemon now in b (D45-1 rule 7)
+        if (
+            knocked
+            and mon.item == 0
+            and (mon.hp != hp or b == fought)
+            and s.battlers[b].active == slot
+        ):
+            s.ai_item_known[b] = 0
 
 
 def _carry_flags(turn: _Turn, s: RefState) -> None:

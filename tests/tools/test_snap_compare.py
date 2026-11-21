@@ -827,6 +827,50 @@ def test_leech_seed_recipient_is_the_opposite_battler_where_seeded(rows):
     assert any("leech_seed_recipient" in name for name in sc.UPGRADED)
 
 
+def _old_record(batch=()):
+    """An older capture's AI record by player party slot, with ``active`` and ``hp``."""
+    s = {
+        "ai_seen_moves": np.full((*batch, 6, 4), 3, np.int16),
+        "ai_item_known": np.full((*batch, 6), 3, np.int16),
+        "ai_ability_known": np.full((*batch, 6), 3, np.int16),
+        "active": np.zeros((*batch, 2), np.int8),
+        "hp": np.zeros((*batch, 2, 6), np.int16),
+    }
+    return s
+
+
+def test_ai_record_by_battler_upgrade(rows):
+    """D45-1: row 0 = the old row of active[0] while it has HP, row 1 = 0; batched states row by
+    row; a B = 4 state raises; a new-layout state runs no row."""
+    row = sc.UPGRADES[-1]
+    assert row.ledger == "D45-1"
+    s = _old_record()
+    s["active"][:] = (2, 1)
+    s["hp"][0, 2] = 10
+    s["ai_seen_moves"][2] = (5, 6, 0, 0)
+    s["ai_item_known"][2] = 9
+    s["ai_ability_known"][2] = 7
+    new = sc.upgrade_fields("state", s)
+    assert new["ai_seen_moves"].tolist() == [[5, 6, 0, 0], [0, 0, 0, 0]]
+    assert new["ai_item_known"].tolist() == [9, 0] and new["ai_ability_known"].tolist() == [7, 0]
+    assert new["ai_seen_moves"].dtype == np.int16 and "hp" in new and "active" in new
+    s["hp"][0, 2] = 0
+    new = sc.upgrade_fields("state", s)
+    assert not any(np.asarray(new[f]).any() for f in sc.UPGRADES[-1].writes)
+    batch = _old_record((3,))
+    batch["active"][:] = (1, 0)
+    batch["hp"][:, 0, 1] = (4, 0, 4)
+    batch["ai_item_known"][:, 1] = (11, 12, 13)
+    got = sc.upgrade_fields("state", batch, batched=True)
+    assert got["ai_item_known"].tolist() == [[11, 0], [0, 0], [13, 0]]
+    assert got["ai_seen_moves"].shape == (3, 2, 4)
+    assert row.lead(new) is None  # a new-layout dict ((2, 4)): no row
+    four = _old_record()
+    four["active"] = np.zeros(4, np.int8)
+    with pytest.raises(ValueError, match="B = 2"):
+        sc._ai_record_by_battler(four, (), None)
+
+
 def test_camouflage_reads_the_tables_of_the_states_game(monkeypatch):
     """Review G MUST: the camouflage row compares a battler's types with the personal row of
     the game its state belongs to: a species whose types a game changed (here Kaizo's Pikachu

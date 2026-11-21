@@ -431,7 +431,7 @@ three structs has a row.
   (`step._restore_transform`, `_restore_moves`) or the player's battle ends; a fainted one keeps the
   copy until its replacement enters (the exp payout reads its copied species, :2216). A level-up
   reloads the battler's own stats, level and HP, not its moves (battle_lib.c:169-194):
-  `levelup.party_identity`. `ai_ability_known` is `battlerAbilities`: the decomp id the AI
+  `levelup.party_identity`. `ai_ability_known` is `battlerAbilities[b]`: the decomp id the AI
   recorded, 0 none, -1 known but not named by the engine (settled to its id by a Transform).
 - **formNum -> `form_num`** (H-5, per battler, `BattleMon.formNum`, battle_mon.h:79): the party's form at the
   send-out (`BattleSystem_InitBattleMon`, battle_lib.c:132: `initial_arrays` for the leads, `step._switch_in`
@@ -454,10 +454,14 @@ three structs has a row.
   Spite (E3-B2-4, `effects._spite`) takes `min(4, ppCur)` from the BattleMon's slot of the target's
   `last_move` (BtlCmd_TrySpite, battle_script.c:4990-5016): it writes `pp` only, so a Mimic slot's
   `shadow_pp` stays (`BattleMon_CopyToParty` skips it).
-- **aiContext**: `battlerMoves` (moves the AI has seen, as move ids in first-free order,
+- **aiContext**: per battler (`battlerMoves[MAX_BATTLERS][4]`, `battlerAbilities[MAX_BATTLERS]`,
+  `battlerHeldItems[MAX_BATTLERS]`, ai_context.h:27-29; kept where `state.ai_record_kept`: B = 4
+  every battler, B = 2 battler 0 (sheet D45-1 rule 6); read through `state.ai_record_moves /
+  ability / item(state, b)`, 0 for `b >= B`; cleared on entry and on a faint, battle_lib.c:2151-2153,
+  :2223-2225, `step._forget`). `battlerMoves` (moves the AI has seen, as move ids in first-free order,
   `TrainerAI_RecordLastMove`, trainer_ai.c:2705-2716) -> `ai_seen_moves`,
   `battlerHeldItems` (the player's held items a message named, E2 batch 7) -> `ai_item_known`
-  (per player party slot, an item id; set by `effects.reveal_item` where an item tag of
+  (an item id; set by `effects.reveal_item` where an item tag of
   `BTLSCR_ATTACKER` / `DEFENDER` / `MSG_BATTLER_TEMP` names it, battle_script.c:11726-11745:
   Leftovers and Black Sludge at the turn end, Sticky Barb's damage, Shell Bell's heal; cleared by
   `effects.forget_item` when the item goes, battle_lib.c:1819-1823, and on entry, :2153),

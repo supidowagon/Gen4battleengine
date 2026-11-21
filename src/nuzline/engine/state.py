@@ -113,12 +113,14 @@ Encodings:
   (battle_script.c:5039-5070) and a bag sleep cure (battle_system.c:469-472) clear it; a
   volatile, not Baton-passed (condition.h:72-76), not copied by Transform (battle_mon.h:115
   lies past ``ability``, battle_script.c:5346-5348).
-* ``ai_item_known`` is ``aiContext.battlerHeldItems`` of the player's party slot: the held item
+* ``ai_item_known`` is ``aiContext.battlerHeldItems[b]`` of battler ``b`` (ai_context.h:27-29;
+  kept where ``ai_record_kept``, sheet D45-1): the held item
   a battle message named (``BattleAI_SetHeldItem``, battle_script.c:11726-11745, :12119-12122;
   ``effects.reveal_item``), 0 when none. It is cleared when the Pokemon loses its item (every
   removal runs ``BattleMon_CopyToParty``, battle_lib.c:1819-1823; ``effects.forget_item``) and
-  when it enters (``BattleSystem_UpdateAfterSwitch``, :2153; ``step._forget``). The AI reads it
-  for the other side's battlers only (trainer_ai.c:1901-1934), so the opponent's is not kept.
+  when it enters (``BattleSystem_UpdateAfterSwitch``, :2153) or faints
+  (``BattleSystem_CleanupFaintedMon``, :2223-2225; ``step._forget``). The AI reads it for the
+  other side's battlers only (trainer_ai.c:1901-1934), so at B = 2 the opponent's is not kept.
 * E2 batch 7, the state the trainer AI reads (rulings B7-n). ``ingrain`` is the active battler's
   ``MOVE_EFFECT_INGRAIN`` (moves.h:18), 0/1. ``mean_look`` is its ``VOLATILE_CONDITION_MEAN_LOOK``
   (condition.h:58), 0/1, and ``mean_look_target`` its ``MoveEffectsData.meanLookTarget``
@@ -211,7 +213,7 @@ Encodings:
   level-up's learn writes the party only (:10168-10176) and ``ReloadPokemon`` reloads the other
   slots (:183-191), and the next ``InitBattleMon`` brings the party's back (``step._restore_moves``
   on leaving, ``moveEffectsData`` is cleared, :2100-2104). ``ai_seen_moves`` holds
-  ``battlerMoves`` as move ids (``TrainerAI_RecordLastMove``, trainer_ai.c:2705-2716): a slot's
+  ``battlerMoves[b]`` of battler ``b`` (kept where ``ai_record_kept``) as move ids (``TrainerAI_RecordLastMove``, trainer_ai.c:2705-2716): a slot's
   move can change under Mimic, so the record cannot be flags.
 * E1 trial batch (G-69, Transform). ``transformed`` is VOLATILE_CONDITION_TRANSFORM: the active slot's
   species, form, stats, IVs, ability slot / form, types, ability, moves and PP are then the copied
@@ -219,7 +221,7 @@ Encodings:
   the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot, ``mimic_slots`` all four).
   They are restored on leaving like the Mimic shadow (``step._restore_transform``), not volatile: a
   fainted battler keeps the copy until its replacement enters (the exp payout reads it). ``truant`` is
-  ``MoveEffectsData.truant``. ``ai_ability_known`` is ``battlerAbilities`` as the decomp ability id.
+  ``MoveEffectsData.truant``. ``ai_ability_known`` is ``battlerAbilities[b]`` as the decomp ability id.
 * ``trainer_items`` / ``trainer_item_count`` are ``aiContext.trainerItems[battler >> 1]`` /
   ``trainerItemCounts[battler >> 1]`` (the bag's size at battle start, never decremented), held
   on the opposing battler ``b`` whose ``b >> 1`` it is (1 -> bag 0, 3 -> bag 1): one bag per
@@ -623,11 +625,11 @@ class BattleState(NamedTuple):
     over: jnp.ndarray  # int8
     winner: jnp.ndarray  # int8
     player_faints: jnp.ndarray  # int8
-    # AI knowledge of the player
-    # int16[6,4], battlerMoves of the player's slot: move ids in first-free order (G-68)
+    # The AI's record, per battler (ai_context.h:27-29; sheet D45-1; rows kept where ai_record_kept)
+    # int16[B,4], battlerMoves[b]: move ids in first-free order (G-68)
     ai_seen_moves: jnp.ndarray
-    ai_item_known: jnp.ndarray  # int16[6], battlerHeldItems: the item id a message named, 0 none
-    # int16[6], battlerAbilities: the decomp ability id a message named, 0 = none (G-69)
+    ai_item_known: jnp.ndarray  # int16[B], battlerHeldItems[b]: the item id a message named, 0 none
+    # int16[B], battlerAbilities[b]: the decomp ability id a message named, 0 = none (G-69)
     ai_ability_known: jnp.ndarray
     # experience (K3d-exp, design §2.1; see the module docstring)
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
@@ -763,7 +765,7 @@ class BattleState(NamedTuple):
 
 def record_seen_move(row, move):
     """``TrainerAI_RecordLastMove``'s list update (trainer_ai.c:2705-2716) on one battler's
-    ``battlerMoves`` ``row`` (``ai_seen_moves[slot]``, move ids in first-free order): ``move``
+    ``battlerMoves`` ``row`` (``ai_seen_moves[b]``, move ids in first-free order): ``move``
     goes into the first empty entry unless the list already holds it or is full; MOVE_NONE
     matches the first empty entry and records nothing (G-68)."""
     row = jnp.asarray(row)
@@ -772,6 +774,60 @@ def record_seen_move(row, move):
     add = ~jnp.any(row == move) & jnp.any(free) & (move != 0)
     first = jnp.arange(row.shape[0]) == jnp.argmax(free)
     return jnp.where(add & first, move, row)
+
+
+def ai_record_kept(fmt: Format, b) -> jnp.ndarray:
+    """bool: battler ``b``'s record row is one some trainer-AI battler reads, so the engine keeps it
+    (sheet D45-1 rule 6, manager ruling Q1): every battler at B = 4; at B = 2 the player's battler
+    (party 0) only: the AI battler 1 reads its own record never (trainer_ai.c:1179, :1908, :1925)."""
+    if fmt.B == 4:
+        return jnp.asarray(True)
+    return party(fmt, jnp.asarray(b, jnp.int32)) == 0
+
+
+def _record_row(rows, b):
+    n = rows.shape[0]
+    b = jnp.asarray(b, jnp.int32)
+    row = rows[jnp.clip(b, 0, n - 1)]
+    return jnp.where(b < n, row, jnp.zeros_like(row))
+
+
+def ai_record_moves(state, b):
+    """``aiContext.battlerMoves[b]`` (ai_context.h:27-29), int16[MOVES]; zeros for a battler the
+    format lacks (``b >= B``: InitAI's zeros, sheet D45-1 rule 6)."""
+    return _record_row(state.ai_seen_moves, b)
+
+
+def ai_record_ability(state, b):
+    """``aiContext.battlerAbilities[b]`` (ai_context.h:28), int16; 0 for ``b >= B`` (rule 6)."""
+    return _record_row(state.ai_ability_known, b)
+
+
+def ai_record_item(state, b):
+    """``aiContext.battlerHeldItems[b]`` (ai_context.h:29), int16; 0 for ``b >= B`` (rule 6)."""
+    return _record_row(state.ai_item_known, b)
+
+
+def ai_record_write(state, field: str, b, mon, value, cond) -> BattleState:
+    """``field[b] = value`` where ``cond`` and battler ``b`` holds party slot ``mon`` (sheet D45-1
+    rule 7: the record is of the Pokemon now in ``b``; a write naming a benched slot is masked)."""
+    rows = getattr(state, field)
+    b = jnp.asarray(b, jnp.int32)
+    on = jnp.asarray(cond) & (state.active[b] == mon)
+    return state._replace(
+        **{field: rows.at[b].set(jnp.where(on, value, rows[b]).astype(rows.dtype))}
+    )
+
+
+def ai_record_clear(state, b, cond) -> BattleState:
+    """Battler ``b``'s three record rows to 0 where ``cond``: ``BattleSystem_UpdateAfterSwitch``
+    (battle_lib.c:2151-2153) and ``BattleSystem_CleanupFaintedMon`` (:2223-2225), any battler."""
+    b = jnp.asarray(b, jnp.int32)
+    out = {}
+    for field in ("ai_seen_moves", "ai_ability_known", "ai_item_known"):
+        rows = getattr(state, field)
+        out[field] = rows.at[b].set(jnp.where(cond, 0, rows[b]).astype(rows.dtype))
+    return state._replace(**out)
 
 
 def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
@@ -1079,9 +1135,9 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),
     "player_faints": (_FIELD, np.int8),
-    "ai_seen_moves": ((SLOTS, MOVES), np.int16),
-    "ai_item_known": ((SLOTS,), np.int16),
-    "ai_ability_known": ((SLOTS,), np.int16),
+    "ai_seen_moves": ((*_BATTLER, MOVES), np.int16),
+    "ai_item_known": (_BATTLER, np.int16),
+    "ai_ability_known": (_BATTLER, np.int16),
     "exp": ((SLOTS,), np.int32),
     "evs": ((*_MON, 6), np.int16),
     "nature": (_MON, np.int8),

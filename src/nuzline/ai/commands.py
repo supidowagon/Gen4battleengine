@@ -91,7 +91,15 @@ from nuzline.engine.order import (
     compare_speed,
     effective_speed,
 )
-from nuzline.engine.state import MOVES, BattleState, held_item, record_seen_move
+from nuzline.engine.state import (
+    MOVES,
+    BattleState,
+    ai_record_ability,
+    ai_record_item,
+    ai_record_moves,
+    held_item,
+    record_seen_move,
+)
 
 _I32 = jnp.int32
 
@@ -1828,7 +1836,7 @@ def _defender_abilities(tables: Tables, state: BattleState):
     species = state.species[0, d].astype(_I32)
     # Raw battleMons[].ability (:1185-1188, :1230-1233), not Battler_Ability.
     current = decomp_abilities(tables, state)[0, d]
-    recorded = state.ai_ability_known[d].astype(_I32)  # -1: known, not named by the engine
+    recorded = ai_record_ability(state, 0).astype(_I32)  # -1: known, not named by the engine
     suppressed = state.ability_suppressed[0] != 0
     true = jnp.where(suppressed, 0, jnp.where(recorded > 0, recorded, current))
     known = suppressed | (recorded != 0) | jnp.isin(current, _TRAPPING)
@@ -1886,12 +1894,11 @@ def new_context(
     ``ability_guess``); a per-slot layout resolves each guessing read from its own draw
     (``load_battler_ability``), and ``player_ability`` is -1.
 
-    The seen moves are the stored ``ai_seen_moves`` plus the player's pending
+    The seen moves are the stored ``ai_seen_moves`` row of battler 0 plus the player's pending
     ``last_move``: ``TrainerAI_MainSingles`` runs ``TrainerAI_RecordLastMove`` (:295)
     before scoring, so the scores already know the move the player used last turn;
     ``step`` commits it to ``ai_seen_moves`` when the AI fights."""
-    d = state.active[0]
-    seen = record_seen_move(state.ai_seen_moves[d], state.last_move[0]).astype(_I32)
+    seen = record_seen_move(ai_record_moves(state, 0), state.last_move[0]).astype(_I32)
     scores = jnp.where(usable_moves(tables, state, 1), 100, 0).astype(_I32)
     false = jnp.asarray(False)
     slotted = jnp.ndim(outcome.script_rolls) == 2
@@ -2175,12 +2182,12 @@ ITEM_SHINY_STONE = 107  # Basic_CheckMetalBurst (script.s:1169, :1176; generated
 def _held_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:
     """The battler's held item as the AI sees it for ``IfHeldItemEqualTo`` (trainer_ai.c:
     1915-1934): its own side's true ``heldItem``; the other side's
-    ``aiContext.battlerHeldItems`` (``BattleState.ai_item_known`` of the active slot, the
+    ``aiContext.battlerHeldItems`` (``BattleState.ai_item_known`` of the battler, the
     item a message named, 0 none)."""
     state, side = ctx.state, _side(battler)
     if side == _side(Battler.ATTACKER):
         return state.item[_row(state, side), state.active[side]].astype(_I32)
-    return state.ai_item_known[state.active[side]].astype(_I32)
+    return ai_record_item(state, side).astype(_I32)
 
 
 def if_held_item_equal_to(ctx: AiContext, battler: Battler, item: int) -> AiContext:

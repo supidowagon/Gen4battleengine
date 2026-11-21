@@ -19,6 +19,7 @@ from nuzline.ai.policy import (
     ai_scores,
 )
 from nuzline.ai.switching import switching_refusals
+from nuzline.engine.format import SINGLES
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 from tests.ai.fixtures import CRANIDOS, outcome, trace_a, trace_e, trace_f, versus
 from tests.strategies import draw_seen_moves, supported_state
@@ -66,8 +67,9 @@ def roark_states(draw, tables, names) -> BattleState:
     bag = draw(st.lists(st.sampled_from([0, names.item("Potion")]), min_size=count, max_size=count))
     a["trainer_items"][1] = bag + [0] * (BAG_SLOTS - count)
     a["trainer_item_count"][1] = count
-    draw_seen_moves(draw, a)
+    draw_seen_moves(draw, a, SINGLES)
     a["ai_ability_known"][...] = _flags(draw, a["ai_ability_known"].shape)
+    a["ai_ability_known"][1] = 0  # the AI battler's own row is not kept at B = 2 (D45-1 rule 6)
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 

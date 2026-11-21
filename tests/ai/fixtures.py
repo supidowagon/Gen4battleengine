@@ -147,9 +147,10 @@ TRACED = [
 
 
 def know_ability(tables, s, slot: int = 0):
-    """``s`` where the AI has recorded the player's party ``slot`` ability as the one it holds
-    (``BattleAI_SetAbility``, ``ai_ability_known`` as the decomp id, G-69)."""
+    """``s`` where the AI has recorded the ability of the player's party ``slot``, the one battler
+    0 holds, as the one it holds (``BattleAI_SetAbility``, ``ai_ability_known[0]`` as the decomp
+    id, G-69)."""
     from nuzline.engine.damage import decomp_abilities
 
     record = int(decomp_abilities(tables, s)[0, slot])
-    return s._replace(ai_ability_known=s.ai_ability_known.at[slot].set(record))
+    return s._replace(ai_ability_known=s.ai_ability_known.at[0].set(record))

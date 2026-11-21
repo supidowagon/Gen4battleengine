@@ -421,7 +421,7 @@ def test_pressure_switch_in_reveals_it_to_the_ai(tables, names):
     )
     assert int(s.ai_ability_known[0]) == 0
     out = assert_matches_reference(tables, s, (SWITCH_TO_1, 0), O)
-    assert int(out.active[0]) == 1 and int(out.ai_ability_known[1]) != 0
+    assert int(out.active[0]) == 1 and int(out.ai_ability_known[0]) != 0
 
 
 # --- Status guards: Synchronize and Leaf Guard (G-12 .. G-17) -----------------------------
@@ -625,7 +625,7 @@ def test_synchronize_after_u_turn_into_toxic_spikes(tables, names):
         out = assert_matches_reference(tables, paused, tuple(acts), O)
         assert int(out.active[0]) == 1 and int(out.status[0, 1]) == own
         assert int(out.status[1, 0]) == Status.POISON
-        assert int(out.ai_ability_known[1]) != 0
+        assert int(out.ai_ability_known[0]) != 0
 
 
 @pytest.mark.parametrize(

@@ -352,6 +352,8 @@ from nuzline.engine.state import (
     STAGE_MAX,
     STAGE_MIN,
     BattleState,
+    ai_record_ability,
+    ai_record_write,
     battler_ability,
     field_index,
     held_item,
@@ -2350,7 +2352,7 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     keep = masked | ~fresh  # party values saved already: Mimic's, or a first Transform's
     # The AI's record of the user's own ability settles to its id now: the copy changes what a
     # "known, unnamed" record (-1) would read (``decomp_ability_id``), G-69.
-    record = state.ai_ability_known[user].astype(_I32)
+    record = ai_record_ability(state, side).astype(_I32)
     # Raw: the record is BattleAI_SetAbility's BattleMon.ability (battle_script.c:11805-11806).
     own_id = decomp_abilities(tables, state)[party(fmt, side), user]
     settled = jnp.where(cond & (party(fmt, side) == 0) & (record < 0), own_id, record)
@@ -2361,7 +2363,7 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     foe_moves = state.moves[pf, target]
     copy_pp = jnp.minimum(tables.move_pp[foe_moves].astype(_I32), MIMIC_PP_CAP)
     own = (party(fmt, side), user)
-    return state._replace(
+    state = state._replace(
         shadow_moves=put(
             state.shadow_moves, side, jnp.where(keep, state.shadow_moves[side], state.moves[own])
         ),
@@ -2428,10 +2430,8 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         weather_announced=put(state.weather_announced, side, 0),
         intimidate_announced=put(state.intimidate_announced, side, 0),
         download_announced=put(state.download_announced, side, 0),
-        ai_ability_known=state.ai_ability_known.at[user].set(
-            settled.astype(state.ai_ability_known.dtype)
-        ),
     )
+    return ai_record_write(state, "ai_ability_known", side, user, settled, True)
 
 
 def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2650,14 +2650,14 @@ def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndar
 
 def know_ability(state: BattleState, side, slot, cond) -> BattleState:
     """A message tags the ability of ``side``'s party ``slot`` (``BattleAI_SetAbility``,
-    battle_script.c:11806): the AI knows it, for a party-0 battler (ruling D3-1a)."""
+    battle_script.c:11806): the AI knows it, in the row of battler ``side`` while it holds
+    ``slot``, for a party-0 battler (ruling D3-1a)."""
     on = jnp.asarray(cond) & (party(format_of(state), jnp.asarray(side, _I32)) == 0)
     # Raw: BattleMessage_AbilityTag reads BattleMon.ability (battle_script.c:11805).
     record = decomp_ability_id(
         state.ability[party(format_of(state), jnp.asarray(side, _I32)), slot]
     )
-    known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
-    return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
+    return ai_record_write(state, "ai_ability_known", side, slot, record, on)
 
 
 def _yawn(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3615,11 +3615,8 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> tuple[BattleState
         sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     )
     stopped = reached & ~poison_type & blocks
-    known = jnp.where(stopped & (party(fmt, side) == 0), ability, state.ai_ability_known[mon])
-    state = state._replace(
-        ai_ability_known=state.ai_ability_known.at[mon].set(
-            known.astype(state.ai_ability_known.dtype)
-        )
+    state = ai_record_write(
+        state, "ai_ability_known", side, mon, ability, stopped & (party(fmt, side) == 0)
     )
     poisoned = (
         reached
@@ -3910,14 +3907,13 @@ def reveal_item(state: BattleState, side, mon, cond) -> BattleState:
     ``cond``: ``BattleMessage_ItemTag`` (battle_script.c:11726-11745) runs
     ``BattleAI_SetHeldItem`` (:12119-12122) for an item tag of ``BTLSCR_ATTACKER``,
     ``BTLSCR_DEFENDER`` or ``BTLSCR_MSG_BATTLER_TEMP`` (not ``BTLSCR_MSG_TEMP``, which names
-    ``msgItemTemp``), so ``ai_item_known[mon]`` becomes the item. Only a party-0 battler's
+    ``msgItemTemp``), so ``ai_item_known[side]`` (the row of battler ``side``, written while it holds ``mon``)
+    becomes the item. Only a party-0 battler's
     (ruling D3-1a) is kept: ``AICmd_IfHeldItemEqualTo`` and ``AICmd_LoadHeldItemEffect``
     (trainer_ai.c:1901-1934) read ``battlerHeldItems`` for the other side's battlers only."""
     fmt = format_of(state)
     on = jnp.asarray(cond) & (party(fmt, jnp.asarray(side, _I32)) == 0)
-    known = state.ai_item_known
-    value = jnp.where(on, state.item[party(fmt, side), mon], known[mon]).astype(known.dtype)
-    return state._replace(ai_item_known=known.at[mon].set(value))
+    return ai_record_write(state, "ai_item_known", side, mon, state.item[party(fmt, side), mon], on)
 
 
 def forget_item(state: BattleState, side, mon, cond) -> BattleState:
@@ -3928,10 +3924,7 @@ def forget_item(state: BattleState, side, mon, cond) -> BattleState:
     (``BattleAI_ClearKnownItem``, battle_lib.c:1819-1823, :7735-7738). A party-0 battler
     only (ruling D3-1a, as ``reveal_item``)."""
     on = jnp.asarray(cond) & (party(format_of(state), jnp.asarray(side, _I32)) == 0)
-    known = state.ai_item_known
-    return state._replace(
-        ai_item_known=known.at[mon].set(jnp.where(on, 0, known[mon]).astype(known.dtype))
-    )
+    return ai_record_write(state, "ai_item_known", side, mon, 0, on)
 
 
 def apply_move_effect(

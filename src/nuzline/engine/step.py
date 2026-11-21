@@ -43,7 +43,7 @@ Implemented so far: the opponent's bag items (``engine.bag``, ``_use_trainer_ite
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 ``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``), the
 AI's knowledge of the player (``last_move``: ``_use_move``, ``_pursuit_hit``;
-``ai_seen_moves``: ``_record_last_move``, ``_forget``; ``ai_ability_known``:
+``ai_seen_moves``: ``_record_last_move``, ``_forget`` (entry and faint); ``ai_ability_known``:
 ``hooks.reveal_ability``, ``_forget``),
 switching (with Natural Cure; Roar's drag takes the same path, ``_use_move``) and the switch-in hooks
 (``hooks.on_switch_in``: Stealth Rock, Intimidate, berries), damaging moves, the
@@ -307,6 +307,9 @@ from nuzline.engine.state import (
     TURN_SCRATCH,
     VOLATILE_FIELDS,
     BattleState,
+    ai_record_clear,
+    ai_record_moves,
+    ai_record_write,
     battler_ability,
     clear_copied,
     field_index,
@@ -586,7 +589,7 @@ def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleStat
     decomp does.
 
     Ruling D3-1a: the record is made when any enemy battler (1, or 1 and 3 at four battlers)
-    takes its FIGHT path, for every party-0 battler (keyed by ``active[b]``); at four battlers
+    takes its FIGHT path, for every party-0 battler (row ``b`` of the record); at four battlers
     the enemy and the recorded battler must have HP (:363), at two neither test applies
     (:295)."""
     fmt = format_of(state)
@@ -608,28 +611,17 @@ def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleStat
         on = fight
         if four:
             on = on & (state.hp[0, mon] > 0)
-        seen = state.ai_seen_moves
-        row = jnp.where(on, record_seen_move(seen[mon], pending), seen[mon]).astype(seen.dtype)
-        state = state._replace(ai_seen_moves=seen.at[mon].set(row))
+        seen = ai_record_moves(state, b)
+        state = ai_record_write(state, "ai_seen_moves", b, mon, record_seen_move(seen, pending), on)
     return state
 
 
-def _forget(state: BattleState, side, slot) -> BattleState:
-    """The AI forgets what it knew about the player's party ``slot`` when it enters
-    (``BattleSystem_UpdateAfterSwitch`` clears the battler's known moves, ability and held
-    item, battle_lib.c:2151-2153); nothing for a battler outside party 0 (ruling D3-1a)."""
-    on = party(format_of(state), jnp.asarray(side, _I32)) == 0
-    return state._replace(
-        ai_seen_moves=state.ai_seen_moves.at[slot].set(
-            jnp.where(on, 0, state.ai_seen_moves[slot]).astype(state.ai_seen_moves.dtype)
-        ),
-        ai_ability_known=state.ai_ability_known.at[slot].set(
-            jnp.where(on, 0, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
-        ),
-        ai_item_known=state.ai_item_known.at[slot].set(
-            jnp.where(on, 0, state.ai_item_known[slot]).astype(state.ai_item_known.dtype)
-        ),
-    )
+def _forget(state: BattleState, side, cond) -> BattleState:
+    """The AI forgets what it knew about battler ``side`` where ``cond``:
+    ``BattleSystem_UpdateAfterSwitch`` (entry, battle_lib.c:2151-2153) and
+    ``BattleSystem_CleanupFaintedMon`` (faint, :2223-2225) clear the battler's known moves,
+    ability and held item, any battler (sheet D45-1 rules 3-4)."""
+    return ai_record_clear(state, side, cond)
 
 
 def _restore_transform(state: BattleState, side, cond) -> BattleState:
@@ -767,7 +759,7 @@ def _switch_in(
     (``_restore_types``), stages and volatiles reset, the effects the
     outgoing Pokemon is the source of end (``_source_leaves``: the Bind it put on the other
     side, the other side's infatuation), ``fake_out_turn`` becomes ``entry_turn`` and the AI
-    forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
+    forgets the battler's record (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
     Then the send-out updates the participation mask (``_flag_exp``). ``baton``: a Baton Pass
     switch (``_reset_battler``)."""
     state = _restore_transform(state, side, True)
@@ -787,7 +779,7 @@ def _switch_in(
     # keeps that). Reached with an item only at B = 4: a partner's Knock Off on the same slot
     # number (D3 fix B); at B = 2 the bit is the newcomer's own, set with its item removed.
     state = _set_mon(state, "item", side, slot, 0, knocked_off_at(state, side, slot))
-    state = _forget(state, side, slot)
+    state = _forget(state, side, True)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
     return _flag_exp(_source_leaves(state, side, True, baton), side)
@@ -3782,7 +3774,8 @@ def _faint_check(
     ``move_hit``, :2199), ``fake_out_turn`` becomes ``entry_turn`` (:2195; by default
     ``turn + 1``, the value inside ``step``), and the effects it is the source of end
     (``_source_leaves``: the Bind on the other side, :2179, and its infatuation,
-    :2174-2176); its Camouflage types are restored (``_restore_types``). Every newly fainted Pokemon also loses its status condition and counter: the
+    :2174-2176), and the AI's record of the battler (``_forget``, :2223-2225); its Camouflage
+    types are restored (``_restore_types``). Every newly fainted Pokemon also loses its status condition and counter: the
     decomp writes ``status = 0`` for a Pokemon with no HP (battle_controller.c:1482-1486)."""
     fmt = format_of(before)
     entry_turn = after.turn + 1 if entry_turn is None else entry_turn
@@ -3825,6 +3818,8 @@ def _faint_check(
         after = _reset_battler(after, side, active_fainted)
         after = _entered(after, side, entry_turn, active_fainted)
         after = _source_leaves(after, side, active_fainted, faint=True)
+        # The AI's record of the battler goes last (battle_lib.c:2223-2225, sheet D45-1 rule 4).
+        after = _forget(after, side, active_fainted)
         # CleanupFaintedMon zeroes the battler's turnFlags (battle_lib.c:2190-2193), B13-17;
         # helpingHand among them (D3 fix B).
         after = after._replace(

@@ -178,7 +178,7 @@ def test_limber_cures_a_paralyzed_newcomer(tables, names):
     s = _ability(roark_state(tables, names), 0, 1, AbilityId.LIMBER)
     s = s.with_status(0, 1, Status.PARALYSIS)
     out = _jit_step(tables, s, A(SWITCH_TO_1, "Leer", s, names), empty_outcome())
-    assert int(out.status[0, 1]) == Status.NONE and int(out.ai_ability_known[1]) != 0
+    assert int(out.status[0, 1]) == Status.NONE and int(out.ai_ability_known[0]) != 0
 
 
 # --- Adaptability and Solid Rock ------------------------------------------------------

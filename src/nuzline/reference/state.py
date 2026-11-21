@@ -235,8 +235,10 @@ class RefState:
     over: int
     winner: int
     player_faints: int
+    # The AI's record per battler (ai_context.h:27-29, sheet D45-1): battlerMoves[b] / battlerHeldItems[b]
+    # (item ids) / battlerAbilities[b], length B
     ai_seen_moves: list[list[int]]
-    ai_item_known: list[int]  # battlerHeldItems of the player's slots (item ids)
+    ai_item_known: list[int]
     ai_ability_known: list[int]
     # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask: an int at B = 2
     # (entry 0), a list of 2 at B = 4 (entry (b >> 1) & 1 of enemy battler b).
