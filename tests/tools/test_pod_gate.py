@@ -204,45 +204,80 @@ def _units(root: Path, specs: list[tuple[int, float]]) -> tuple[str, str]:
     return " ".join(f"'{f}'" for f in files), "ps() { printf '%s\n' " + " ".join(rows) + "; }"
 
 
-def test_podgate_reserves_every_heavy_gap_and_only_the_largest_light_gaps(tmp_path):
-    # heavy (w >= 40): gaps 72, 50, 0 (over its weight); light: gaps 24, 20, 14, 5, 0
+ENV256 = "NO_W_FILE_GB=12 MAXP=18 GATE_GB=200 KILL_GB=236 IDLE_WAIT_S=300"
+
+
+def test_podgate_reserves_every_heavy_gap_and_the_larger_light_reserve(tmp_path):
+    # heavy (w >= 40): gaps 72, 50, 0 (over its weight); light: gaps 24, 20, 14, 5, 0;
+    # light floor: 75 % of 92 GB weight - 30 GB RSS = 39
     args, fake = _units(tmp_path, [(82, 10), (60, 10), (45, 50), (30, 6), (26, 6), (20, 6), (11, 6), (5, 6)])
-    assert _run(f"{fake}\npodgate {args}") == "8 166"                          # 72 + 50 + 24 + 20
-    assert _run(f"{fake}\nRESERVE_TOP=3; podgate {args}") == "8 180"           # + 14
-    assert _run(f"{fake}\nRESERVE_TOP=0; podgate {args}") == "8 122"           # heavy gaps only
+    assert _run(f"{fake}\npodgate {args}") == "8 166"                          # 72 + 50 + top 2 (44)
+    assert _run(f"{fake}\nRESERVE_TOP=3; podgate {args}") == "8 180"           # top 3 (58)
+    assert _run(f"{fake}\nRESERVE_TOP=0; podgate {args}") == "8 161"           # the floor (39)
+    assert _run(f"{fake}\nRESERVE_TOP=0; RESERVE_PCT=0; podgate {args}") == "8 122"   # heavy gaps only
     assert _run(f"{fake}\nRESERVE_FULL_GB=0; podgate {args}") == "8 185"       # every gap: the old sum
-    assert _run(f"{fake}\nRESERVE_FULL_GB=999; podgate {args}") == "8 122"     # top 2 of all: 72 + 50
+    assert _run(f"{fake}\nRESERVE_FULL_GB=999; podgate {args}") == "8 122"     # all light: top 2 (122) > floor (110)
 
 
-def test_17_live_units_of_379_gb_weight_admit_the_next_unit(tmp_path):
-    # Pod 3, 21 Nov: 17 live units, weight sum 379 GB, ran without a kill. Early in their lives
-    # (6 GB each, 10 GB of other memory) the old sum of every gap held the pod; now two light
-    # gaps are reserved: 112 + 48 + 12 < 176 (and < 200).
+def test_a_unit_of_exactly_reserve_full_gb_is_heavy(tmp_path):
+    args, fake = _units(tmp_path, [(40, 10), (39, 10)])
+    # heavy 40: its gap 30 + floor 75 % of 39 - 10 = 19.25: 50 (as light: floor 39.25, 40)
+    assert _run(f"{fake}\nRESERVE_TOP=0; podgate {args}") == "2 50"
+
+
+@pytest.mark.parametrize("knob", ["RESERVE_TOP=x", "RESERVE_TOP=-1", "RESERVE_PCT=0.75", "RESERVE_FULL_GB=4O"])
+def test_a_bad_reserve_knob_fails_loudly(tmp_path, knob):
+    args, fake = _units(tmp_path, [(20, 6)])
+    script = f"set -u; NO_W_FILE_GB=12; . '{GATE.as_posix()}'\n{fake}\n{knob}; podgate {args}"
+    r = subprocess.run([BASH, "-c", script], capture_output=True, text=True, check=False, env=_clean_env())
+    name, value = knob.split("=")
+    assert (r.returncode, r.stdout) == (2, "")
+    assert r.stderr.strip() == f"ERROR: {name} '{value}' is not a whole number"
+
+
+def test_18_chunks_of_one_30_gb_file_hold_the_18th(tmp_path):
+    # 17 live chunks of tests/search/test_playout.py (30 GB each) early in their lives (6 GB each,
+    # 10 GB other): they grow in step, so 510 GB of weight cannot share a 256 GB pod. The floor,
+    # 75 % of 510 - 102 = 281, holds the 18th; the top 2 gaps alone (48) would admit it (190 < 200).
+    args, fake = _units(tmp_path, [(30, 6)] * 17)
+    live, res = _run(f"{fake}\npodgate {args}").split()
+    assert (live, res) == ("17", "281")
+    assert _run(f"admit 17 {res} 112 30 0", ENV256) == "hold"
+    _, top_only = _run(f"{fake}\nRESERVE_PCT=0; podgate {args}").split()
+    assert _run(f"admit 17 {top_only} 112 30 0", ENV256) == "start"
+
+
+def test_17_live_units_of_379_gb_weight_hold_and_12_of_220_gb_admit(tmp_path):
+    # Pod 3, 21 Nov: 17 live units, weight sum 379 GB. Early in their lives (6 GB each, 10 GB of
+    # other memory) the floor, 75 % of 379 - 102 = 183, holds the pod: 112 + 183 + 12 >= 200.
     weights = [30, 30] + [21] * 11 + [22] * 4
     assert sum(weights) == 379
     args, fake = _units(tmp_path, [(w, 6) for w in weights])
     live, res = _run(f"{fake}\npodgate {args}").split()
-    assert (live, res) == ("17", "48")
-    for gate in (176, 200):
-        env = f"NO_W_FILE_GB=12 MAXP=18 GATE_GB={gate} KILL_GB=236 IDLE_WAIT_S=300"
-        assert _run(f"admit 17 {res} 112 12 0", env) == "start"
-    _, old = _run(f"{fake}\nRESERVE_FULL_GB=0; podgate {args}").split()   # the old formula
-    assert old == "277"
-    assert _run(f"admit 17 {old} 112 12 0", "NO_W_FILE_GB=12 MAXP=18 GATE_GB=200 KILL_GB=236 IDLE_WAIT_S=300") == "hold"
+    assert (live, res) == ("17", "183")
+    assert _run(f"admit 17 {res} 112 12 0", ENV256) == "hold"
+    # 12 units of 220 GB: floor 75 % of 220 - 72 = 93; 82 + 93 + 12 = 187 < 200 starts the 13th
+    args, fake = _units(tmp_path / "b", [(w, 6) for w in [30, 30] + [16] * 10])
+    live, res = _run(f"{fake}\npodgate {args}").split()
+    assert (live, res) == ("12", "93")
+    assert _run(f"admit 12 {res} 82 12 0", ENV256) == "start"
+    # the old sum of every gap (148) held that pod too
+    _, old = _run(f"{fake}\nRESERVE_FULL_GB=0; podgate {args}").split()
+    assert old == "148"
+    assert _run(f"admit 12 {old} 82 12 0", ENV256) == "hold"
 
 
 def test_a_heavy_unit_keeps_its_whole_reserve(tmp_path):
-    env = "NO_W_FILE_GB=12 MAXP=18 GATE_GB=200 KILL_GB=236 IDLE_WAIT_S=300"
     # an 80 GB head at 150 GB of real memory holds, even with nothing reserved
-    assert _run("admit 10 0 150 80 0", env) == "hold"
-    assert _run("admit 10 0 100 80 0", env) == "start"    # 180 < 200
-    # once started (4 GB used) it reserves its whole gap, with no light gap reserved at all
+    assert _run("admit 10 0 150 80 0", ENV256) == "hold"
+    assert _run("admit 10 0 100 80 0", ENV256) == "start"    # 180 < 200
+    # once started (4 GB used) it reserves its whole gap, with no light reserve at all
     args, fake = _units(tmp_path, [(80, 4), (20, 6), (20, 6)])
-    assert _run(f"{fake}\nRESERVE_TOP=0; podgate {args}") == "3 76"
+    assert _run(f"{fake}\nRESERVE_TOP=0; RESERVE_PCT=0; podgate {args}") == "3 76"
     _, res = _run(f"{fake}\npodgate {args}").split()
-    assert res == "104"
-    assert _run(f"admit 3 {res} 60 35 0", env) == "start"    # 199
-    assert _run(f"admit 3 {res} 60 36 0", env) == "hold"     # 200
+    assert res == "104"                                      # 76 + top 2 (28) > floor (18)
+    assert _run(f"admit 3 {res} 60 35 0", ENV256) == "start"    # 199
+    assert _run(f"admit 3 {res} 60 36 0", ENV256) == "hold"     # 200
 
 
 def test_another_runs_claim_lets_a_unit_start_only_beside_it(tmp_path):
