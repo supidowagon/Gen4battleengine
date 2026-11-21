@@ -281,6 +281,8 @@ from nuzline.engine.order import (
     is_switch,
     me_first_copy,
     player_second,
+    qc_recycle,
+    qc_transfer,
     record_speeds,
     resort_action_order,
     resort_claw_flags,
@@ -856,22 +858,27 @@ def _send_out(
     baton=False,
     trace_pick=None,
     speed_order=None,
-) -> BattleState:
+) -> tuple[BattleState, jnp.ndarray]:
     """A switch action, or Roar's drag (``_use_move``): ``_switch_out``, ``_switch_in``, the
     entry hazards, then (``effects``, static ``False`` or a traced flag) the rest of
     ``hooks.on_switch_in`` (Trace, weather, Intimidate, berries). The party list of a U-turn or
     Baton Pass runs only the hazards (subscript_show_party_list.s:22; the rest comes at
-    ``_use_move``'s ``TRIGGER_SWITCH_IN_EFFECTS``, as Roar's drag does)."""
+    ``_use_move``'s ``TRIGGER_SWITCH_IN_EFFECTS``, as Roar's drag does). Also returns the
+    ``stopped`` of ``effects.entry_hazards`` (the newcomer's Toxic Spikes block)."""
     entered = _switch_in(tables, _switch_out(state, side), side, slot, state.turn + 1, baton)
-    hazards = entry_hazards(tables, entered, side)
+    hazards, stopped = entry_hazards(tables, entered, side)
     if effects is False:
-        return hazards
+        return hazards, stopped
     if format_of(state).B == 4:  # D3-13: the states over the action's order
         order = jnp.arange(4) if speed_order is None else speed_order
-        return _where(
-            effects, _entry_states(tables, hazards, side, order, None, trace_pick), hazards
+        return (
+            _where(effects, _entry_states(tables, hazards, side, order, None, trace_pick), hazards),
+            stopped,
         )
-    return _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
+    return (
+        _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards),
+        stopped,
+    )
 
 
 def _alive_mask(state: BattleState) -> jnp.ndarray:
@@ -2121,7 +2128,10 @@ def _use_move(
     pre_drag = state
     # subscript_force_target_to_switch_or_flee.s:11-12: the target's status cure before the switch.
     state = _restore_status_on_switch(tables, state, target_side, dragged)
-    state = _where(dragged, _send_out(tables, state, target_side, drag_slot, effects=False), state)
+    sent, _drag_stopped = _send_out(tables, state, target_side, drag_slot, effects=False)
+    # _drag_stopped: the newcomer's Toxic Spikes block (effects.entry_hazards), valid only where
+    # ``dragged``; E2 D6-21 reads it (no_more_work |= dragged & _drag_stopped, E3-B2-32).
+    state = _where(dragged, sent, state)
     # The drag's Toxic Spikes poisoned the newcomer (subscript_hazards_check.s:14-28): its status
     # subscript set SYSCTL_TRY_SYNCHRONIZE_STATUS with the newcomer, the new defender, as
     # sideEffectMon (BtlCmd_CheckToxicSpikes, battle_script.c:7640-7641; ruling G-13).
@@ -2205,6 +2215,18 @@ def _use_move(
         move_type,
         state.types[party(fmt, target_side), target],
         identified(tables, state, side, target_side),
+    )
+    # BattleControllerPlayer_CheckTypeChart (bcp.c:2350-2357) runs the chart for Thunder Wave, the
+    # only power-0 move it takes (move_param[m, 1], effect_map.TYPE_CHART_STATUS_MOVES): a 0x row
+    # (or LEVITATED / MAGNET_RISE, a Ground moveType only, battle_lib.c:2600-2608) is
+    # MOVE_STATUS_INEFFECTIVE (battle_lib.c:7551-7552), in DID_NOT_HIT: subscript_missed.s and
+    # LOOP_FAINTED (bcp.c:3325-3328), no AfterMoveEffects; NO_EFFECTS for conversion2 and the
+    # Metronome count (E3-B2-33).
+    tw_immune = (
+        connected
+        & (tables.move_effect[used] == EffectId.STATUS_FOE)
+        & (tables.move_param[used, 1] != 0)
+        & ((chart == 0) | ground_immune(tables, state, side, target_side, move_type))
     )
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, run hit, miss or Protect alike once the
     # move passed the no-target check, for a move with power that is not RANGE_USER /
@@ -2394,7 +2416,7 @@ def _use_move(
     rock = resumed & (state_in.ts_damaged != 0) & (outcome.flinch_item[side, 0] != 0)
     state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~tgt_moved)
     items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
-    items_full = items_full & ~baton_failed & ~guarded
+    items_full = items_full & ~baton_failed & ~guarded & ~tw_immune
     # Conversion 2 (subscript_conversion_2.s:5, :12-14): TryConversion2's failure jump sets
     # MOVE_STATUS_FAILED at the ON_HIT, so no AfterMoveEffects. The jump skips only the
     # subscript's own attack message: CheckMoveFailure (bcp.c:3311-3327) then runs
@@ -3379,7 +3401,10 @@ def _act(
     mode = jnp.asarray(mode, _I32)
     resumed = mode == MODE_RESUME
     baton = resumed & (tables.move_effect[state.ts_used] == EffectId.BATON_PASS)
-    entered = _send_out(
+    # _entry_stopped: the newcomer's Toxic Spikes block; meaningful only where ``resumed`` (a U-turn's
+    # or Baton Pass's list); E2 D6-20 hands it to the resumed tail beside ``entry_poisoned``
+    # (E3-B2-32).
+    entered, _entry_stopped = _send_out(
         tables,
         state,
         side,
@@ -4595,7 +4620,8 @@ def _execute_actions(
         "ts_ran": lran,
         "ts_move_cur": jnp.where(pivot_stopped, 0, read["move_cur"]),
         "ts_eot": jnp.zeros((fmt.B,), _I32),
-        "ts_qc": jnp.asarray(outcome.quick_claw) != 0,
+        # Only the bits the rest of the turn can read (qc_readable, E3-B2-31).
+        "ts_qc": (jnp.asarray(outcome.quick_claw) != 0) & qc_readable(tables, state),
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")
@@ -5758,7 +5784,7 @@ def step_events(
         "ts_speed_order": jnp.zeros_like(scratch["ts_speed_order"]),
         "ts_cursor": jnp.where(f_prompt, format_of(state).B, c_pos),
         "ts_eot": sides,
-        "ts_qc": jnp.asarray(outcome.quick_claw) != 0,
+        "ts_qc": (jnp.asarray(outcome.quick_claw) != 0) & qc_readable(tables, paused),
     }
     paused = paused._replace(
         **{
@@ -5871,6 +5897,40 @@ def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     down = state.hp[rows, state.active] == 0
     bench = jnp.stack([jnp.any(holds[b] & replacement_bench(state, b)) for b in range(fmt.B)])
     return (state.over == 0) & (active | (down & bench))
+
+
+def qc_readable(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the battler's ``speedRand`` bit can still be read in the rest of a paused
+    turn or by the next turn (E3-B2-31), so a pause stores it in ``ts_qc``. Every reader is
+    ``BattleSystem_CompareBattlerSpeed``: the BranchActions sort after each action
+    (bcp.c:888, the turn end's ``monSpeedOrder``), the Trick Room re-sort after a MoveEnd
+    (bcp.c:3990-3992, ``SortMonActionOrder`` battle_lib.c:7275-7302), then ``qc_kept``'s readers.
+    It reads ``speedRand`` only for a battler holding ``HOLD_EFFECT_SOMETIMES_PRIORITY``
+    (:1278-1279, :1345), and a fainted battler only against another fainted one (:1205-1211).
+    So the bit is read when the battler's party has a living Quick Claw holder or its active
+    holds one (fainted or not, as ``order.quick_claw_active`` reads it), when its
+    ``recycleItem`` is a Quick Claw (``qc_recycle``: Recycle gives it back), or when it can
+    still take one (``qc_transfer``): a battle knowing an item-transfer move and a living holder
+    in any party but the battler's own (the defender of Thief, or the attacker of a Trick that
+    gives it away; the foe's, or a tag-battle ally's, whose attacker is not blocked: only side 1
+    is, battle_script.c:5102-5104, :6345-6346; a bench holder can still enter by a pivot's party
+    list before a later action). An AI attacker's steal or swap fails outside the Frontier
+    (same lines); the rule keeps the bit for both sides (over-keeping only splits states). The
+    raw item, as ``qc_kept``. Every such holder was living, and every ``recycleItem`` set, at
+    the turn's start, where ``enumerate``'s ``quick_claw`` law draws the bit under the same rule
+    (a Fling this turn stores the Quick Claw its battler held then). Else it is 0, an unread
+    value, so paused states that differ only in it are one state."""
+    fmt = format_of(state)
+    battlers = jnp.arange(fmt.B)
+    rows = party(fmt, battlers)  # each battler's party
+    holds = tables.item_effect[state.item] == ItemId.QUICK_CLAW  # [P, 6]
+    alive = (state.species != 0) & (state.hp > 0)
+    on_field = jnp.arange(state.hp.shape[1])[None, :] == state.active[:, None]
+    own = jnp.any((holds & alive)[rows] | (holds[rows] & on_field), axis=1)
+    living = jnp.any(holds & alive, axis=1)  # per party
+    others = jnp.arange(state.hp.shape[0])[None, :] != rows[:, None]  # [B, P]
+    elsewhere = jnp.any(others & living[None, :], axis=1)
+    return own | qc_recycle(tables, state) | (qc_transfer(tables, state) & elsewhere)
 
 
 def _keep_quick_claw(tables: Tables, state: BattleState, qc) -> BattleState:
@@ -6097,7 +6157,7 @@ def replace(
     fmt = format_of(state)
     entered = _switch_in(tables, state, side, slot, state.turn)
     effects = jnp.asarray(effects, bool)
-    hazards = entry_hazards(tables, entered, side)  # hooks.on_switch_in's first part
+    hazards, _ = entry_hazards(tables, entered, side)  # hooks.on_switch_in's first part
     arrived = _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
     out = _faint_check(tables, entered, arrived, entry_turn=state.turn)
     waits = ~effects & (out.hp[party(fmt, side), out.active[side]] > 0) & (out.over == 0)
@@ -6165,7 +6225,7 @@ def replace_round(tables: Tables, state: BattleState, picks, trace_pick=None) ->
     for b in range(fmt.B):
         has = picks[b] >= 0
         entered = _switch_in(tables, out, b, jnp.maximum(picks[b], 0), state.turn)
-        hazards = entry_hazards(tables, entered, b)
+        hazards, _ = entry_hazards(tables, entered, b)
         out = _where(
             has, _faint_check(tables, entered, hazards, entry_turn=state.turn, decide=False), out
         )

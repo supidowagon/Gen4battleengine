@@ -6,7 +6,7 @@ import struct
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.battle_scripts import structure_fields
+from tools.battle_scripts import lone_walk_formats, structure_fields
 from tools.extract_decomp import _constants
 from tools.rom.readers import ReaderError, symbol_bytes
 from tools.rom.readers.maps import rom_battle_structures
@@ -96,8 +96,8 @@ def read_trainers(
 ) -> list[dict]:
     """``trainers.json`` rows. ``start_conditions[id]`` is supplied by the caller.
 
-    ``format`` is the header's ``battleType``, overridden with ``opponent_2`` and
-    ``partner`` by the battle structures of the map scripts (``rom_battle_structures``,
+    ``format`` is the header's ``battleType``, overridden with ``opponent_2``, ``partner``
+    and ``walking_partner`` by the battle structures of the map scripts (``rom_battle_structures``,
     as ``extract_decomp.extract_trainers`` does; the map headers come from
     ``maps.map_header_rows``, per game code).
 
@@ -196,4 +196,5 @@ def read_trainers(
                 "start_condition": start_conditions[tid],
             }
         )
+    lone_walk_formats(out)
     return out

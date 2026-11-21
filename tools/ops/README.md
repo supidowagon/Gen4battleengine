@@ -19,6 +19,10 @@ Parameters, lock path and the stream list's format: `docs/process.md` section 6.
 ]
 ```
 
+## Off-site copy (Git Bash on the PC)
+
+- `offsite.sh [--dry-run]`: pushes every local branch to the private remote `offsite` and mirrors the allow-listed state files under `_scratch/` into `_scratch/offsite/state/` (branch `scratch-state`), re-checked against the hard exclusions before each commit. `--list` prints the selection, `--check <dir>` checks a folder. Refuses (exit 2) a push URL that names `origin`, a repo `gh` does not report private, a mirror setting; exit 4 on a rejected branch or failed push. What it holds, the refusals and how to restore: `docs/process.md` section 12, Off-site copy.
+
 ## Test pod and nightly (Git Bash on the PC, bash on the pod)
 
 Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` section 5.
@@ -36,7 +40,7 @@ Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` sec
 - `day/weights_from_agg.py <weights.txt> <agg.txt>...`: prints `weights.txt` with its generated part rebuilt from run results (one line per measured file); DAYBOX.md, Send a run step 2.
 - `day/pod/setup.sh`: checkout, tables, env, collection, chunked units, each unit's expected peak (`out/<unit>.w`); starts the runner.
 - `day/pod/weights.py`, `day/pod/weights.txt`: list-line parsing and each unit's expected peak; the tracked table of measured peaks of heavy tests and files, each with the run it was measured in.
-- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate, the expected-peak gate (container memory + the unreached expected peaks of every live unit on the pod + the next unit's expected peak under `GATE_GB`; with no live unit on the pod: memory under `GATE_GB` and memory + expected peak under `KILL_GB`, a unit that can never fit alone at once, or after `IDLE_WAIT_S`), checked and started under the pod-wide lock `RUNNER_LOCK`; a head that does not fit lets a later unit of its run that fits start, and after `CLAIM_S` claims the pod so other runs start nothing until it has started, and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
+- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate, the expected-peak gate (container memory + the reserve + the next unit's expected peak under `GATE_GB`; the reserve: every gap, expected peak minus RSS, of a live unit on the pod weighing `RESERVE_FULL_GB` or more, and for the lighter ones the larger of their `RESERVE_TOP` largest gaps and `RESERVE_PCT` % of their weight sum minus their RSS; with no live unit on the pod: memory under `GATE_GB` and memory + expected peak under `KILL_GB`, a unit that can never fit alone at once, or after `IDLE_WAIT_S`), checked and started under the pod-wide lock `RUNNER_LOCK`; a head that does not fit lets a later unit of its run that fits start, and after `CLAIM_S` claims the pod so other runs start only units that fit beside it until it has started, and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
 - `day/pod/gate.sh`: sourced by `runner.sh`, `setup.sh`, `status.sh`, `agg.sh`, `podcheck.sh`; the gate's arithmetic and claims (`wgb`, `podgate`, `admit`, `choose`, `claim_state`, `claim_write`, `unit_overdue`) and `cgmem`, the container memory reader (cgroup v2, else v1).
 - `day/pod/podcheck.sh`: the pod check (`day/podcheck_body.sh`).
 - `day/pod/unit.sh`: one pytest process over one unit's ids.

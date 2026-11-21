@@ -128,7 +128,12 @@ of the turn:
   active). Relevant when side ``s`` has a living Quick Claw holder anywhere in its party:
   the active, the Pokemon it switches in, or a bench Pokemon that a replacement can send in
   (sound, not tight: the replacement needs the active to faint this turn, which is not
-  judged here). The turn's own order reads ``BattleState.qc_roll`` (``action_order``), so
+  judged here), or, while a Pokemon of the battle knows an item-transfer move
+  (``order.qc_transfer``: Thief, Covet, Trick, Switcheroo), a living holder in any other
+  party (the foe's, or a tag-battle ally's), whose Quick Claw that move can put on ``s``'s
+  battler in this turn, or a Quick Claw in ``s``'s ``recycleItem`` (a flung one, which a
+  Recycle this turn gives back, ``order.qc_recycle``; a pause keeps the bit by the same rule,
+  ``step.qc_readable``). The turn's own order reads ``BattleState.qc_roll`` (``action_order``), so
   every order-conditioned read above already sees Quick Claw through ``Reads.first``.
 * ``flinch_item[s, i]``: King's Rock / Razor Fang's roll on hit ``i`` of ``s``'s damaging
   move with ``MOVE_FLAG_TRIGGERS_KINGS_ROCK`` while ``s``'s active Pokemon holds one
@@ -309,6 +314,8 @@ from nuzline.engine.order import (
     mirror_call,
     mirror_copied,
     move_effects,
+    qc_recycle,
+    qc_transfer,
     sealed_state,
     selected_move,
     takeover_possible,
@@ -2566,13 +2573,19 @@ def outcome_laws(
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
 
-    # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party.
+    # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party, a
+    # Quick Claw in the battler's recycleItem (order.qc_recycle: Recycle gives it back this
+    # turn), or, when an item-transfer move is known (order.qc_transfer), a living holder in any
+    # other party (the foe's, a tag-battle ally's): Thief or Trick can put it on the battler in
+    # this turn (step.qc_readable).
     claw = tables.item_effect[state.item] == ItemId.QUICK_CLAW
-    quick_claw = (
-        live
-        & jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)[
-            party(fmt, jnp.arange(fmt.B))
-        ]
+    living_claw = jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)  # per party
+    rows_b = party(fmt, jnp.arange(fmt.B))
+    own_claw = living_claw[rows_b]
+    others = jnp.arange(living_claw.shape[0])[None, :] != rows_b[:, None]  # [B, P]
+    other_claw = jnp.any(others & living_claw[None, :], axis=1)
+    quick_claw = live & (
+        own_claw | qc_recycle(tables, state) | (qc_transfer(tables, state) & other_claw)
     )
     # Acupressure (B12-9): BtlCmd_BoostRandomStatBy2 reads the count of its defender's stats
     # below +6 at the move (battle_script.c:8943-8950; effects.defender_side, the user in
@@ -2609,10 +2622,12 @@ def outcome_laws(
         acu_loose = jnp.ones_like(acu_loose)
     if loose:
         # The brute force: both sides' draws whenever a Quick Claw is anywhere in the battle
-        # (either party, any HP), holder or not. With no Quick Claw at all nothing can read
+        # (either party, any HP), holder or not, or in any battler's recycleItem (a flung one
+        # Recycle gives back, order.qc_recycle). With no Quick Claw at all nothing can read
         # speedRand (battle_lib.c:1278 tests the item first), and drawing it there anyway
         # would only multiply every other brute force past the width cap.
-        quick_claw = jnp.broadcast_to(live & jnp.any(claw & (state.species != 0)), (fmt.B,))
+        anywhere = jnp.any(claw & (state.species != 0)) | jnp.any(qc_recycle(tables, state))
+        quick_claw = jnp.broadcast_to(live & anywhere, (fmt.B,))
 
     starf_draw, starf_loose = _starf_reads(
         tables, state, actions, uses_move, effect, params, dragged, loose

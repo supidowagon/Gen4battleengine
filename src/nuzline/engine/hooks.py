@@ -1117,7 +1117,9 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     meets an active battler that announced its weather ability at its own entry. Two newcomers'
     weather abilities meet only at a double KO's replacements (``playout.replacement_pass``)
     and at the battle start (``battle_start``), ruling G-26."""
-    return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
+    return switch_in_effects(
+        tables, entry_hazards(tables, state, jnp.asarray(side, _I32))[0], side
+    )
 
 
 def form_change(tables: Tables, state: BattleState, cond=True) -> BattleState:

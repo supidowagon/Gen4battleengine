@@ -51,7 +51,7 @@ BAD = ["tests/x.py 1 G", "tests/x.py 1 85", "tests/x.py 1 0G", "tests/x.py 1 85G
 
 
 def test_list_lines_parse_and_pack_accepts_exactly_the_same_lines():
-    m = re.search(r"^LINE='(.*)'$", (ROOT / "tools/ops/day/pack.sh").read_text(encoding="utf-8"), re.M)
+    m = re.search(r"^LINE='(.*)'$", (ROOT / "tools/ops/day/pack.sh").read_text(encoding="utf-8"), re.MULTILINE)
     line_re = re.compile(m.group(1).replace("[:space:]", r"\s"))
     for line, want in LINES.items():
         assert w.parse_line(line) == want
@@ -67,4 +67,17 @@ def test_tracked_defaults_load_with_one_entry_per_id():
     entries = [e for e, _ in table]
     assert len(entries) == len(set(entries))
     assert all(e.startswith("tests/") and gb >= 1 for e, gb in table)
-    assert w.id_weight("tests/search/test_stage_b_budget.py::test_protected_line_matches_exhaustive", table) > 80
+    assert w.id_weight("tests/prep/test_search.py::test_team_phase_halving", table) > 80
+
+
+def test_the_entry_index_finds_what_the_longest_match_finds():
+    table = w.load_lines([f"{e} {g} r" for e, g in TABLE] + ["tests/search/test_x.py::test_big[3] 95 r",
+                                                          "tests/search 99 r"])   # a repeat: the first wins
+    for test_id in ("tests/search/test_x.py::test_big[3]", "tests/search/test_x.py::test_big[4]",
+                    "tests/search/test_x.py::test_big", "tests/search/sub/test_q.py::t", "tests/search",
+                    "tests/searcher/test_z.py::t", "tests/search/test_x.py::test_big[3]::inner"):
+        linear = max((e for e, _ in table if w._matches(e, test_id)), key=len, default=None)
+        want = w.UNMEASURED_FILE_GB if linear is None else next(g for e, g in table if e == linear)
+        assert w.id_weight(test_id, table) == want == w.id_weight(test_id, list(table)), test_id
+    assert w.id_weight("tests/search/test_x.py::test_big[3]", table) == 95
+    assert w.id_weight("tests/search/test_y.py::t", table) == 20

@@ -103,6 +103,7 @@ LISTED = [
     "nuzline.engine.ids.MIMIC_FORBIDDEN",  # EXEMPT: code move ids (_CODE_MOVE_IDS)
     "nuzline.ai.layout.COPIER_EFFECTS",  # EXEMPT: keyed by decomp effect id
     "nuzline.engine.ids.CHATTER_CHANCES",  # EXEMPT: Chatter's chance per cry parameter
+    "nuzline.engine.ids.ITEM_TRANSFER_EFFECTS",  # EXEMPT: keyed by decomp effect id
     # EXEMPT: decomp AI-script encodings
     "nuzline.ai.commands.Battler",
     "nuzline.ai.commands.LoadType",

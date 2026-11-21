@@ -117,9 +117,9 @@ by each split, replacing option A's upper bound.
   removed from data/kaizo/start_conditions.json.
 - The four Gardenia Eterna Forest rows (202, 203, 411, 413): no source pairs them (ROM sight
   pairing only runs on a calc/sheet claim; calc singles; sheet solo spots). They stay four
-  battles. Open rule question for the managing session: encounter.c:730-740 gives a lone
-  enemy beside a walking partner BATTLE_TYPE_TRAINER (not a tag battle), while K2a Ruling 3
-  makes every enemy on a partner map `multi`.
+  battles. Rule question (encounter.c:730-740 gives a lone enemy beside a walking partner
+  BATTLE_TYPE_TRAINER, while K2a Ruling 3 made every enemy on a partner map `multi`): settled
+  by E3-B2-34 (the four are singles).
 - Totals: 387 battles (275 singles, 37 doubles, 32 two-trainer, 43 multi); union 520.
 
 ## Batch 6: join safety and wording (2026-11-14)
@@ -212,6 +212,18 @@ Each is open; close it with its ruling.
    `slowStartTurnNumber` to totalTurns + 1 and clear `slowStartAnnounced` / `slowStartFinished`
    for a battler that receives Slow Start (ability 112). Not modelled: Slow Start is an
    unsupported ability, so no battler holds it. Model these lines with the Slow Start group.
+
+9. Walking-partner heal: a row with `walking_partner` is placed on a map whose script can set the
+   partner, so it may be fought under the partner flag. `SetHasPartner` runs only in the escort's own
+   script (Eterna Forest: coord event `EternaForest_CoordEvent_CherylStartFollowing`,
+   scripts_eterna_forest.s:27, reaching `SetVar VAR_PARTNER_TRAINER_ID` / `SetHasPartner` at :57-58;
+   `ClearHasPartner` at :90, :209). The post-win full heal (encounter.c:197-199) applies only while the
+   escort is active, which is a run input, not a table fact. E4-P prep consumes it: with the escort
+   active, the next fight's start state is full HP/PP/status.
+10. Sight-pair setting: whether to engage a walk-map or off-map lone trainer together with a neighbour
+   who can see the same step (VS2, trainer_encounter.c:94-106) is a play choice (manager ruling 21 Nov).
+   Add it as a run setting: default single; a pair gives multi beside the walking partner (or
+   double_two_trainer off a walk map). It is not a data field.
 
 Checked, no change (batch 1 gate round): Trace retries at every move end (battle_lib.c:3718-3737,
 `hooks.move_end_switch_in`), so with two Trace holders a Worry Seed or Skill Swap can make one
@@ -1616,3 +1628,228 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/engine/test_e3_batch2.py (powerMul after a learn resume, the kept Quick Claw draw, each turn-end counter
   drops once over a pause at each learn site). Snapshot: states captured at a pause carry `ts_qc` and the turn-end
   countdowns; no other class.
+- E3-B2-30 Main's red tiers on 8c5cd83e (branch claude/e3-slowfix):
+  (a) 6c3063e0, tests only: test_trace_to_state's oracle resumes a MoveEnd learn pause (bcp.c:3968) with the same
+  actions and outcome, as trace_to_state._apply_turn; test_stage_b_learn's paused root asserts `learn_site`
+  LEARN_MOVE_END (step scans and pauses). test_player_learn (reviews of 8c5cd83e..5639b245, ..609693aa and
+  ..184489c6): each unrefused GREEDY run's final state equals the host replay `player._replay` to its turn count field
+  by field, and every root has such a run; a run that did not end holds no learn work; work at a finished battle is
+  the final turn's: the replay one turn shorter holds none. Roots added: test_learn.py's `_window_c` (a hazard faint
+  in the passes, the battle goes on: the resolve after the passes) and the Bonsly-last state (the hazard faint ends
+  the battle: the work stays). `_replay` leaves that work at a finished battle as the loop does; its callers:
+  `refusal_reason` (reads only the reason; cli.py), tests/search/test_player.py (compares its whole end state with
+  the loop) and test_player_learn.
+  (b) 3d6b5fb5, tests only: Tackle's flags carry MIRROR_MOVE (res/moves/tackle/data.json:21-27, E3-B2-2).
+  (c) 5639b245, src/nuzline/ai: `AiContext.flag`, `first_cmp`, `inject` hold the script's flag bit (thinkingBitShift,
+  trainer_ai.c:307, read at :488; loop :297-309), not its index in the layout's list, so ALLIN keeps the fight's own context (test_allin); the
+  bits rise in run order, so every schedule compare keeps its order and no score changes. The exact pick of
+  `_slot_move_distribution` weighs a skipped slot (moves[i] == 0, trainer_ai.c:322; it runs no command, :500-505)
+  by its histogram's mass, not 1: unchanged on marginal histograms (mass 1), corrected on the event histograms of a
+  speed-tracking layout (`_tracks_speed`: per-slot sites with POWER_BASED_ON_LOW_SPEED transcribed), where the
+  exact sum was above 1 (test_gyro_ball_exact_equals_loose). Kaizo fights it corrects (a Gyro Ball member and a
+  member with an empty move slot, data/intermediate_kaizo/trainers.json): Robert (trainer 39, Fantina split; Gyro
+  Ball on 208, species 95 with three moves) and Iapetus (trainer 397, Candice split; Gyro Ball on 205, species 91,
+  211, 101 with empty slots). Their prep values change; no snapshot part reads them. Iapetus is a multi battle
+  (format multi, partner 610, second opponent 400): its values change only once prep runs that format.
+  Snapshot compare against the main capture: no part expected to diverge (`--allow-new` empty). The "ai" group runs
+  `ai_action_distribution` on the VANILLA layout (per_slot_sites False, ai/layout.py:184-186): no speed tracking;
+  the roark parts use Kaizo Roark (trainer 246), whose six members hold no Gyro Ball (move 360) and four moves
+  each: no speed tracking and no skipped slot. No snapshot part records AiContext fields.
+  (d) src/nuzline/search (review of ..184489c6), D8 made uniform: learn work survives only at a finished battle, from
+  the turn itself, from a newcomer's hazard faint in `send_replacements` or the passes, or from the root's settle send
+  and passes; the resolve before the replacements now keeps it there too (player.py, `playout.finish_turn`,
+  `_replay`), as the one after them did, for the growth plan (gauntlet-design.md G1, step 0). The game answers every
+  payout's prompt inside GetExpTask (battle_script.c:10003-10197, `taskData` NULL at :10197), which WaitGetExpTask
+  waits for (:2340-2348; subscript_grant_exp.s StartGetExpTask/WaitGetExpTask) before CheckBattleOver
+  (bcp.c:1845-1847). The root's hazard-faint work (`step.replace` marks it, no scan) is now resolved after the root's
+  settle and passes (`player._player_run`, `playout._resolve_pending`, both replays): TurnEnd answers it before the
+  next turn (bcp.c:1844-1856); left, turn 1's policy read the unscanned move list and its first MoveEnd `learn_prompt`
+  (step.py:3792) scanned it mid-turn.
+  Snapshot: `resolve_learns` runs `advance_learns`, which also auto-learns into an empty move slot at the move's base
+  PP (`_advance_once`, levelup.py:383-392). (1) Work kept at a finished battle: the final `learn_level` / `learn_cursor` (formerly given
+  up) and, where the kept scan would have filled an empty slot, the final `moves` / `pp` and the result's `pp_left`
+  (`playout._resources_left`, playout.py:186-193); `observe` reads `learn_*` as 0 once `over` is set (observe.py:347-348). (2) The root's
+  hazard-faint work resolved before turn 1: turn 1's policy reads the filled slot, so every result field (`won`,
+  `turns`, `hp_left`, `pp_left`, `deaths`, ...) of a playout or player run from such a root can differ.
+  (e) Review of 8bbcf05c..40c318aa, tests pinning (d): test_learn.py `hazard_settle_root` (the root's settle sends
+  Bonsly into Stealth Rock, Prinplup L19 with an empty slot: `_resolve_pending`, the player loop at 0 turns and
+  `_replay` at 0 turns all hold no learn work and BubbleBeam in slot 3) and `perish_root` (turn 1's Perish Song faint,
+  bcp.c:1791-1820, ends the battle at TurnEnd's payout, bcp.c:1846, which `step` leaves unscanned: `_future_sight`
+  ends in `pay_exp`, step.py:4878, and `step_events` runs no `learn_prompt` after it; `finish_turn`, the loop at
+  TURNS and `_replay` keep learn_level 13 and no auto-learn). So the guard at the first resolve after a turn
+  (player.py:174, playout.py:456, `_replay`) is reached and kept: the other payouts inside `step` scan
+  (`learn_prompt`, step.py:3793, :4691, :4761), TurnEnd's does not, and D8 keeps a finished battle's work
+  uniformly. Both tests assert fixed values; reverting either resolve change fails one of them.
+  Keeping learn work at a finished battle is the project's ruling D8 (the growth plan reads it), not a decomp rule:
+  the game answers every prompt inside GetExpTask before CheckBattleOver, so no learn work outlives its battle there.
+- E3-B2-31 The slow tier's red test_damage_classes_equal_bruteforce_generated on 8c5cd83e (branch claude/e3-slowfix):
+  a pause (MoveEnd learn, bcp.c:3968; LEARN_FIELD / LEARN_MON; an E2 party list) stored every side's raw speedRand
+  bit in `ts_qc`. The brute force draws `quick_claw` for every side when any Quick Claw exists; the exact law only for
+  a side with a living holder in its party (enumerate.py `quick_claw`), so a foe with no holder split the brute
+  force's paused children by an unread bit (E1's repro state: children differ in `ts_qc` alone). Rule: the draw is
+  made once per turn (bcp.c:853-857); every reader is BattleSystem_CompareBattlerSpeed: BranchActions' sort after
+  each action (bcp.c:888; the turn end's monSpeedOrder), the Trick Room re-sort after MoveEnd (bcp.c:3990-3992,
+  SortMonActionOrder battle_lib.c:7275-7302), the next turn's readers (`step.qc_kept`). It reads speedRand only for
+  a battler holding HOLD_EFFECT_SOMETIMES_PRIORITY (battle_lib.c:1278-1279, :1345), a fainted one only against
+  another fainted one (:1205-1211). A battler gains a held item in a turn only by Thief / Covet (BtlCmd_TryStealItem, battle_script.c:5093-5126)
+  and Trick / Switcheroo (BtlCmd_TrySwapItems, :6336-6360), between the attacker and the defender on the field;
+  Knock Off removes (:6620-6628), RemoveItem consumes the own item (:8972-8979), Recycle restores the attacker's own
+  (:9000-9012), Pickup runs after the battle (:7781). Metronome and Assist never call them (sCannotMetronomeMoves,
+  battle_lib.c:7152-7179; Move_CanBeMetronomed :7194-7210, read at battle_script.c:4554 and :6430); every other
+  caller takes a move a party Pokemon knows. So a pause keeps battler b's bit when b's party has a living Quick
+  Claw holder, b's active holds one, fainted or not (as order.quick_claw_active reads it; raw item, as qc_kept), or
+  a Pokemon of the battle knows an ITEM_TRANSFER_EFFECTS move (`order.qc_transfer`, decomp effects 105 / 177 by
+  `move_ai_effect`) and an opposing party has a living holder (a bench holder can still enter by a pivot's party
+  list before the Thief); an AI attacker's steal or swap fails (battle_script.c:5102-5104, :6345-6346), kept anyway
+  (over-keeping only splits states). Else 0. The exact law (`enumerate`'s `quick_claw`) draws b's bit by the same
+  rule at the turn's start, where every such holder was living; the pause rule is within it, so the exact
+  enumeration still equals the brute force. `step.qc_readable` at both JAX stops (`_execute_actions`,
+  `step_events`), `reference._qc_readable` in `_write_scratch`; generic over B (`side_of`). Today coverage refuses
+  effects 105 / 177 (no EffectId), so `qc_transfer` is false in every accepted state.
+  Tests: tests/engine/test_e3_batch2.py::test_a_learn_pause_stores_only_the_readable_speed_rand_bits (five cases,
+  the foe's bench holder with and without Thief known), its brute force twin (slow)
+  ::test_a_learn_pause_quick_claw_law_equals_the_bruteforce,
+  ::test_a_turn_end_learn_pause_stores_only_the_readable_speed_rand_bits (LEARN_FIELD, LEARN_MON, both engines),
+  ::test_a_party_list_pause_keeps_the_bit_of_a_side_that_can_take_the_foes_quick_claw (the foe's living active
+  holder, with and without Thief known).
+  Snapshot compare against the main capture: no layout change, no UPGRADES row, `--allow-new` empty. Expected
+  divergence: `ts_qc` of an output state at a pause (pivot_battler or learn_site != 0), 1 -> 0 at a side with no
+  living Quick Claw holder in its party and none on its active (step, jitstep, the reference output). The rest
+  parts (enumerate_turn) do not change: the exact law draws `quick_claw` only where it is true (enumerate.py
+  `outcome_laws`), so main's children already held 0 there. A saved paused input's unread bit changes no output:
+  nothing reads it.
+  Compare explained (fde6c6d3 against the main 81c47f2c capture; 3baff50b has the same src delta, the main 7698de58
+  merge adds only the game_constants EXEMPT row): 90 ok, 32 diverged, all E3-B2-31; ai, gen, rest, sample,
+  roark.trace and roark.rank identical; E3-B2-30, (b) and (c) diverge nothing (no input has a Quick Claw in
+  `recycle_item`, none knows effect 105 / 177). Cause: the pause stores only readable `ts_qc` bits, 1 -> 0 at a side
+  with no Quick Claw holder. Segment 0's outcome draws a free bit per battler (tests/strategies.py `any_outcome`
+  :2522, `quick_claw=_flag(sides)` :2543), and a segment 0 that pauses stores it. Each part's first diff is
+  `ts_qc` alone (`.ref_step` for step, `.jit_step` for jitstep); the rows were rebuilt through `ref_step` with
+  `_qc_readable` as built and forced true:
+
+  | parts (.step, .jitstep) | first diff | pause | outcome.quick_claw | dropped |
+  |---|---|---|---|---|
+  | 0-9 | s7 t1 ts_qc[0] | learn_site 3 | [1, 0] | b0 (Cubone 104) |
+  | 10-19 | s10 t2 ts_qc[1] | pivot 2 | [0, 1] | b1 (Electrike 309) |
+  | 40-49 | s49 t3 ts_qc[1] | learn_site 3 | [0, 1] | b1 (Clamperl 366) |
+  | 50-59 | s59 t3 ts_qc[0] | pivot 1 | [1, 0] | b0 (Venonat 48) |
+  | 70-79 | s70 t4 ts_qc[0] | learn_site 1 | [1, 1] | both |
+  | 80-89 | s81 t2 ts_qc[0] | pivot 1 | [1, 1] | both |
+  | 90-99 | s99 t1 ts_qc[0] | learn_site 3 | [1, 1] | both |
+  | 110-119 | s112 t1 ts_qc[1] | learn_site 3 | [0, 1] | b1 (Dialga 483) |
+  | 120-129 | s125 t2 ts_qc[1] | learn_site 1 | [0, 1] | b1 (Camerupt 323) |
+  | 130-139 | s137 t2 ts_qc[0] | learn_site 3 | [1, 0] | b0 (Shinx 403) |
+  | 140-149 | s141 t4 ts_qc[0] | learn_site 1 | [1, 0] | b0 (Shinx 403) |
+  | 150-159 | s154 t4 ts_qc[1] | pivot 2 | [1, 1] | b1 (Meowth 52); b0 kept (party slot 3 Prinplup 394, hp 12, holds one) |
+  | 160-169 | s167 t3 ts_qc[0] | learn_site 1 | [1, 1] | both |
+  | 170-179 | s170 t3 ts_qc[0] | pivot 1 | [1, 1] | both |
+  | 180-189 | s188 t3 ts_qc[1] | learn_site 1 | [0, 1] | b1 (Chansey 113) |
+  | 190-199 | s194 t1 ts_qc[0] | learn_site 3 | [1, 1] | both |
+
+  "both": neither side holds one; the first diff is index 0. Proof: throwaway 149f6df2 (from 3baff50b, never
+  merged) reverts only the three `ts_qc` write sites to main's raw draw; its closing compare ended `compare: ok`,
+  122 parts ok, 0 diverged. The 3baff50b compare log was never fetched: the cause rests on the fde6c6d3 log, the
+  throwaway's `ok` and claude/e3-nmw 871be9de's compare against the main 7698de58 capture, which diverges in the
+  same 32 parts.
+  (b) Review of d9c68dfb. (1) Recycle: Fling ends in `RemoveItem BTLSCR_ATTACKER` (effect_script_0233.s:18), which
+  stores the flung item, a Quick Claw included (flingPower 80, res/items/data/quick_claw.json:20), in
+  `recycleItem[battler]` (battle_script.c:8978); `BtlCmd_TryRecycle` gives it back (:9000-9012, effect_script_0184.s:
+  5-7; step.py `recycle`, the reference's Recycle block, reference/engine.py:6071-6077), so a Recycle on a later turn puts a Quick Claw on the battler before
+  that turn's end sort, which reads that turn's bit. `recycleItem` is written only there (grep: battle_script.c:8978,
+  :9007), so it outlives a switch, and Recycle needs no moveset: it is not in sCannotMetronomeMoves (battle_lib.c:
+  7152-7179), so Metronome calls it, as Assist, Sleep Talk, Mimic, Sketch, Copycat and Mirror Move can. Rule: b's bit
+  is also kept and drawn when b's `recycle_item` is a Quick Claw (`order.qc_recycle`, no move test), in
+  `step.qc_readable`, `reference._qc_readable` and enumerate's `quick_claw`. A Fling of this turn sets it from the
+  Quick Claw b held at the turn's start, so the law (read there) already drew it. Every other path that puts or
+  takes a held item, checked: Thief / Covet (`BtlCmd_TryStealItem` :5093-5126, subscript_steal_item.s:14-16) and
+  Trick / Switcheroo (`BtlCmd_TrySwapItems` :6336-6360, subscript_exchange_items.s:19-22) can give a Quick Claw
+  mid-turn (`qc_transfer`); Recycle can (above); Sticky Barb moves only itself (HOLD_EFFECT_DMG_USER_CONTACT_XFR,
+  battle_lib.c:5385-5396, :7377-7384), no; Knock Off removes (:6620-6628), no; Bug Bite / Pluck eat the defender's
+  berry (subscript_pluck_check.s:6, RemoveItem), Natural Gift (effect_script_0222.s:8) and the eaten berries consume
+  the own item, no; Pickup runs after the battle (`BtlCmd_GenerateEndOfBattleItem` :7781-7797), no. (2) Tag battles:
+  only a side-1 attacker's steal or swap is blocked (:5102-5104, :6345-6346), so a side-0 battler can Thief or Trick
+  its ally, another party in a tag battle. `elsewhere` (step, reference) and `other_claw` (enumerate) now count a
+  living holder in any party but b's own; singles is unchanged (the other party is the foe's). (3) Doubles gap,
+  owner: E2 (multi exp and learn, M5), reported 21 Nov; on no backlog yet: a partner that learns Thief, Covet, Trick or
+  Switcheroo at a MoveEnd pause re-reads its slot for its pending action (STATE.md, mid-turn learn prompts;
+  FightCommand :1889-1895), but the turn's law and the pause read the moves of the turn's start, so its bit can be
+  dropped. Unreachable today: coverage refuses every format but singles and refuses a learnable move whose effect is
+  UNSUPPORTED (`learnable_moves` through `move_effect_line`, coverage.py), which Thief, Covet, Trick and Switcheroo
+  are (move_effect UNSUPPORTED, move_ai_effect 105 / 177). The exact fix (the law and the pause also count the
+  moves learnable this turn) belongs with doubles exp. (4) Coverage: any Pokemon of the fight (either party) that
+  knows or can learn Thief, Covet, Trick or Switcheroo is refused (`_check_party` grades every move, coverage.py
+  `move_effect_line`; EffectId UNSUPPORTED), so `qc_transfer` is false in every accepted state and the tag-battle
+  change diverges nothing. Recycle (EffectId.RECYCLE) and Fling (EffectId.FLING) are accepted.
+  Tests: test_e3_batch2.py::test_a_learn_pause_stores_only_the_readable_speed_rand_bits[foe bench, flung claw]
+  (the pause, both engines; its brute force twin, slow, gains the case), test_quick_claw.py
+  ::test_a_flung_quick_claw_keeps_the_bit_recycle_can_read (slow: a real Fling, then the law draws the bit and
+  Recycle restores the claw, both engines), ::test_a_tag_battle_ally_holder_keeps_the_bit_when_thief_is_known
+  (MULTI, ally holder in party 2, step and reference).
+  Expected snapshot divergence beyond the above: only states whose `recycle_item` is a Quick Claw (a flung Quick
+  Claw, no held one left in the party): `ts_qc` at a pause there 0 -> the drawn bit, and enumerate_turn's children
+  of their turns split by `quick_claw` (twice as many, probabilities 1/5 and 4/5). None if no snapshot part flings a
+  Quick Claw.
+  (c) Review of 7c07c614: the brute force (`outcome_laws(loose=True)`) also draws every bit when any battler's
+  `recycle_item` is a Quick Claw (`order.qc_recycle`), so it stays a superset of the exact law with no holder left
+  (test_quick_claw.py::test_a_flung_quick_claw_recycle_turn_equals_the_bruteforce, slow, failed before the fix).
+- E3-B2-32 `effects.entry_hazards` returns `(state, stopped)`: `stopped` is MOVE_STATUS_NO_MORE_WORK of the Toxic
+  Spikes block (subscript_hazards_check.s:5-28; subscript_poison.s:5-10 -> :127, subscript_badly_poison.s:5-10 -> :140):
+  not Magic Guard, grounded, layers, not a Poison type (battle_script.c:7643-7647), and the plain Immunity or Leaf Guard
+  in sun without a weather lock (battle_script.c:9195-9206), tested before any status, type, substitute or Safeguard
+  test. Reference `_entry_hazards` returns the same bool. `step._send_out` returns the pair; Roar's drag
+  (`drag_stopped`) and `_act`'s list (`entry_stopped`) keep it for E2 D6-21 / D6-20; `replace`, `replace_round`,
+  `hooks.on_switch_in` and the reference `_switch`, `ref_replace`, `ref_replace_round` drop it. No behaviour change;
+  snapshot: no divergence. Tests: tests/engine/test_e3_nmw.py (the flag in both engines, Leaf Guard in sun, Immunity,
+  a burned Leaf Guard newcomer, controls without sun and under Cloud Nine).
+- E3-B2-33 Thunder Wave on a 0x chart (BattleControllerPlayer_CheckTypeChart, bcp.c:2350-2357: the only power-0 move
+  it takes; MOVE_STATUS_INEFFECTIVE, battle_lib.c:7551-7552; DID_NOT_HIT -> subscript_missed.s, LOOP_FAINTED,
+  bcp.c:3325-3328) has no AfterMoveEffects and NO_EFFECTS: `step` `tw_immune` (STATUS_FOE, `move_param[m, 1]`, chart 0
+  or `ground_immune`) ends `items_full`; reference `full = full or tw_immune`. Before: only the paralysis was blocked
+  (`play_hit` `type_ok`). The defender's conversion2 record is cleared (bcp.c:4531-4535), so its Conversion 2 fails; a
+  held Metronome's repeat count drops (battle_lib.c:6181-6197). noEffect (bcp.c:2367-2368) not modelled: its readers
+  need an Uproar / Thrash lock (bcp.c:1525, :1551). Snapshot: conv2 fields of a Thunder Waved Ground defender, its
+  later Conversion 2, and metronome_turns of a Metronome holder repeating Thunder Wave into Ground; item order within
+  the action only. Tests: tests/engine/test_e3_nmw.py (E1 sheet T3 and a landing control).
+  TABLE INPUT: yes (src/nuzline/engine and src/nuzline/reference changed).
+
+- E3-B2-34 Lone enemies on walking-partner maps are singles (sheet partnerfix/sheet.md; decomp 579d2d5c6; no move, no
+  table array). Rule: every field-script battle goes through `ScrCmd_StartTrainerBattle`, which passes
+  `partner = VAR_PARTNER_TRAINER_ID` while `SystemFlag_CheckHasPartner` is set (scrcmd_trainer.c:124-140, :133-135;
+  `ScrCmd_StartTagBattle` reaches the same `Encounter_NewVsTrainer`, :154). `Encounter_NewVsTrainer` (encounter.c:725-758)
+  gives TAG_DOUBLES / TRAINER_WITH_AI_PARTNER for e2 != 0 and e1 != e2 (:730-735), TRAINER_DOUBLES for e1 == e2
+  (:736-737), else BATTLE_TYPE_TRAINER (:738-739); trainerIDs[1] = e1, [3] = e2, [2] = partner (:751-753).
+  `Trainer_Encounter` ORs the header type of the last trainer it loads (trainer_data.c:31-50): with e2 = 0 and a
+  walking partner that is the partner, and every partner header is type 0. So a lone enemy, talked to
+  (scripts_battles.s:8-37, `StartTrainerBattle VAR_0x8004` at :37) or spotted alone with a single header
+  (trainer_encounter.c:99-101 -> scripts_battles.s:131-142), is TRAINER | the partner's header type: a single (two
+  battlers; Cheryl's party is built and unused). A lone enemy whose own header is double and that spots the player is
+  fought with its own map object twice (trainer_encounter.c:110-125), e1 == e2, TRAINER_DOUBLES (encounter.c:736-737),
+  the enemy loaded last (trainer_data.c:50): a double. Talked to, the same enemy is a single. The code
+  (`lone_walk_formats`) picks the spotted case: double when the enemy's own header (or the partner's) is double, else
+  single; Kaizo 561 Perdita (header double, placed on 264 beside Buck 611) is double in the ROM-level table. A scripted pair, a tag, or a sight pair (VS2, trainer_encounter.c:94-106; `hasTwoAliveMons` forced
+  TRUE under the flag, src/overlay005/field_control.c:181-186; scripts_battles.s:192-213) is multi. Contrast, off a walk map: 846
+  Worker Conrad (header double, fought alone) is TRAINER | its own header (the enemy is the last one loaded,
+  trainer_data.c:50), so double; ours stands. After a won fight with the flag set `Party_HealAllMembers` runs
+  (encounter.c:197-199, in `FieldTask_Encounter` :160; the trainer path through `StartEncounter` :223).
+  Built: new row field `walking_partner` (sorted partner ids the walk map's script assigns to VAR_PARTNER_TRAINER_ID;
+  `[]` off a walk map): `BattleStructure.walking_partner`, `Trainer.walking_partner` (`load_trainers` refuses a table
+  without it), the internal format `walk_alone` and `lone_walk_formats` (tools/battle_scripts.py; called from
+  extract_decomp and the ROM trainers reader). A walk-map tag keeps multi and the ids only when its script is on the
+  walk map itself (Kaizo 435/436, 749/750, 835/836, 387/405, 420/427; 562/572, 581/606, 582/583 get `[]`).
+  `tools/kaizo/resolve.py`: a sight pair of a lone walk enemy resolves to multi with the partner from `walking_partner`
+  (several ids: `None`, calc fills it, as 282/286/419/426), a user format answer that is not multi drops the walking
+  partner (no heal assumed), a multi answer with no named partner takes it from `walking_partner`;
+  `rows_trainers.py` compares the ROM single of such a trainer as multi beside the sight pair.
+  Rows changed (multi -> single): vanilla 56 (Eterna Forest 201-206, 395, 398; Victory Road 1F room 2 373, 386, 389, 390,
+  393, 394, 396, 397, 399, 400, 446, 447, 499, 500; Stark Mountain room 2 556, 561, 562, 569-572, 579-582, 584, 586, 589,
+  590, 606; Wayward Cave 1F 379, 380, 383, 443, 450, 454, 455, 458, 459, 496; Iron Island B2F left 372, 388, 392, 445, 452,
+  453, 505, 506; 835/836 stay multi), Kaizo built 14 (202, 203, 411, 413; 570, 571, 579, 580, 584, 586, 589, 590; 679; 675;
+  checked against the built tables: exactly these format changes). Kaizo ROM level: 69 rows (the 14, the 52 sight-pair
+  members, which resolve back to multi, and the user-answered 556, 561, 569). Pairing is a play choice, not data
+  (manager ruling 21 Nov): the default is single (Owed 10). Kaizo 561 Perdita (header double, user answer double) and
+  556/569 stay the user's answers. Deleted resolutions (data/kaizo/resolutions.toml): the `format` and
+  `partner_present` entries for 202, 203, 411, 413 (ROM single now agrees with calc single; a stale one fails the
+  build, crosscheck.py:17, :200). Backlog regenerated: Gardenia multi 43 -> 39, split multi rows 82 -> 78, singles
+  +4. docs/kaizo/pipeline.md rule 10 updated. Owed lines closed: none. Owed lines added: 9 (walking-partner heal,
+  encounter.c:197-199) and 10 (sight-pair setting). Not built: the heal's consumer (E4-P). Doubles (section 5, item 3):
+  the ids, not a yes/no. The table key changes (data tables rebuilt).

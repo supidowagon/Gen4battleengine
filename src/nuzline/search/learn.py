@@ -60,7 +60,10 @@ def settle_learns(tables: Tables, state: BattleState, send, carried_mul):
     and ``replace_mul`` cleared afterwards, as ``replacement_pass`` does. ``send`` is
     ``playout.send_replacements``. ``refused`` (``bool``): that send refused (learn work never
     refuses since E3-B2-21: the prompt pauses the turn). A one-pass ``while_loop``, so a batch
-    where no row needs the send runs none."""
+    where no row needs the send runs none. A newcomer the send's hazards faint leaves learn work
+    (``step.replace`` marks it, no scan), as the root's player passes after it can: the caller
+    resolves both after those passes, before the first turn (``player._player_run``,
+    ``playout._resolve_pending``; a finished battle keeps it, ruling D8)."""
     state = resolve_learns(tables, state)
 
     def cond(carry):
@@ -87,7 +90,8 @@ def settle_reason(tables: Tables, state: BattleState, send_reason, carried_mul):
     opponent needs a replacement and the player does not, ``send_reason``
     (``playout._send_reason``, the concrete ``send_replacements``) with the carried
     ``powerMul`` (``carried_mul``) and ``replace_mul`` cleared after it. ``reason`` is that
-    send's refusal, else ``None``."""
+    send's refusal, else ``None``. The send's learn work is left, as ``settle_learns`` leaves
+    it."""
     state = _resolve_jit(tables, state)
     need = needs_replacement(state)
     if int(need[1]) == 1 and int(need[0]) == 0:

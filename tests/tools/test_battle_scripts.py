@@ -11,6 +11,7 @@ from tools.battle_scripts import (
     BattleStructure,
     Op,
     battle_structures,
+    lone_walk_formats,
     partner_variants,
     script_enemies,
     structure_fields,
@@ -299,6 +300,7 @@ def test_tag_battle_partner_var_without_a_call_unknown_when_allowed():
         "format": "multi",
         "opponent_2": 41,
         "partner": None,
+        "walking_partner": [],
     }
 
 
@@ -314,7 +316,11 @@ def test_conflicting_partner_claims_unknown_when_allowed():
     with pytest.raises(ValueError, match=r"partner ids \[800, 801\], not one"):
         battle_structures({"A": ops}, {"A": {40, 41}})
     got = battle_structures({"A": ops}, {"A": {40, 41}}, unknown_partner=True)
-    assert got == {40: BattleStructure("multi", 41, None), 41: BattleStructure("multi", 40, None)}
+    both = (800, 801)  # the tags are in the walk map's own script: fought under the flag
+    assert got == {
+        40: BattleStructure("multi", 41, None, both),
+        41: BattleStructure("multi", 40, None, both),
+    }
     pairs = [Op("StartTrainerBattle", (40, 41)), Op("StartTrainerBattle", (40, 42))]
     with pytest.raises(ValueError, match="trainer 40 is claimed"):
         battle_structures({"A": pairs}, {}, unknown_partner=True)
@@ -345,12 +351,79 @@ def test_walking_partner_map():
     ]
     got = battle_structures({"A": ops}, {"A": {5, 6, 50}})
     riley = (PartnerVariant(9, None, None),)
+    # A lone enemy (50) is BATTLE_TYPE_TRAINER ORed with the partner's header type
+    # (encounter.c:738-739, trainer_data.c:31-50), not a multi; the pair stays multi.
     assert got == {
-        5: BattleStructure("multi", 6, riley),
-        6: BattleStructure("multi", 5, riley),
-        50: BattleStructure("multi", None, riley),
+        5: BattleStructure("multi", 6, riley, (9,)),
+        6: BattleStructure("multi", 5, riley, (9,)),
+        50: BattleStructure("walk_alone", None, (), (9,)),
     }
     assert 9 not in got
+
+
+def _walk_rows(partner_formats, own="single"):
+    """Row 50 (a lone enemy with header format ``own`` on a walk map) beside its partner rows."""
+    s50 = BattleStructure("walk_alone", None, (), tuple(partner_formats))
+    rows = [{"id": 50, **structure_fields(s50, own)}]
+    for p, fmt in partner_formats.items():
+        rows.append({"id": p, **structure_fields(None, fmt)})
+    return rows
+
+
+def test_lone_walk_enemy_takes_the_partners_header_type():
+    # trainer_data.c:31-50: the base type is ORed with the last trainer loaded, the walking
+    # partner (encounter.c:751-753); a single-header enemy's base type is BATTLE_TYPE_TRAINER.
+    rows = _walk_rows({9: "single"})
+    lone_walk_formats(rows)
+    assert rows[0]["format"] == "single"
+    assert rows[0]["opponent_2"] is None and rows[0]["partner"] == []
+    assert rows[0]["walking_partner"] == [9]
+    assert "_walk_header_format" not in rows[0]
+    rows = _walk_rows({9: "double"})
+    lone_walk_formats(rows)
+    assert rows[0]["format"] == "double"
+    rows = _walk_rows({9: "single", 10: "double"})
+    with pytest.raises(ValueError, match="trainer 50"):
+        lone_walk_formats(rows)
+
+
+def test_lone_walk_enemy_with_a_double_header_is_double():
+    # A double-header enemy that spots the player is fought as its own pair
+    # (trainer_encounter.c:110-125): BATTLE_TYPE_TRAINER_DOUBLES (encounter.c:736-737),
+    # ORed with the single partner's header type 0.
+    rows = _walk_rows({9: "single"}, own="double")
+    lone_walk_formats(rows)
+    assert rows[0]["format"] == "double"
+    assert "_walk_header_format" not in rows[0]
+
+
+def test_walk_map_tag_keeps_multi_and_the_walk_ids():
+    # The walk map runs the tag itself: fought under the flag (scrcmd_trainer.c:133-135).
+    walk = [
+        Op("SetVar", (PARTNER_VAR, 9)),
+        Op("SetHasPartner", ()),
+        Op("SetVar", (V, 3)),
+        Op("StartTagBattle", (V, 40, 41)),
+    ]
+    got = battle_structures({"A": walk}, {"A": {40, 41}}, unknown_partner=True)
+    assert got[40] == BattleStructure("multi", 41, None, (9,))
+    # The same tag in another map's script, the enemy only placed on the walk map: not under it.
+    tag = [Op("SetVar", (V, 3)), Op("StartTagBattle", (V, 40, 41))]
+    walk = [Op("SetVar", (PARTNER_VAR, 9)), Op("SetHasPartner", ())]
+    got = battle_structures({"A": walk, "B": tag}, {"A": {40}}, unknown_partner=True)
+    assert got[40] == BattleStructure("multi", 41, None, ())
+
+
+def test_scripted_pair_on_walk_map_is_multi():
+    ops = [
+        Op("SetVar", (PARTNER_VAR, 9)),
+        Op("SetHasPartner", ()),
+        Op("StartTrainerBattle", (5, 6)),
+    ]
+    got = battle_structures({"A": ops}, {"A": {5, 6}})
+    riley = (PartnerVariant(9, None, None),)
+    assert got[5] == BattleStructure("multi", 6, riley, (9,))
+    assert got[6] == BattleStructure("multi", 5, riley, (9,))
 
 
 def test_placed_enemies_off_a_partner_map_are_single():
@@ -368,6 +441,16 @@ def test_tag_enemy_on_two_partner_maps_raises():
     walk = [Op("SetVar", (PARTNER_VAR, 9)), Op("SetHasPartner", ())]
     with pytest.raises(ValueError, match="trainer 40"):
         battle_structures({"A": [Op("StartTagBattle", (3, 40, 41))], "B": walk}, {"B": {40}})
+
+
+@pytest.mark.parametrize("unknown_partner", [False, True])
+def test_enemy_on_two_walk_maps_with_different_partners_raises(unknown_partner):
+    # Each map's script sets its own VAR_PARTNER_TRAINER_ID (scrcmd_trainer.c:133-135):
+    # which partner walks when 50 is fought is not in the scripts.
+    a = [Op("SetVar", (PARTNER_VAR, 9)), Op("SetHasPartner", ())]
+    b = [Op("SetVar", (PARTNER_VAR, 10)), Op("SetHasPartner", ())]
+    with pytest.raises(ValueError, match=r"trainer 50 .*maps \['A', 'B'\].*\[\[9\], \[10\]\]"):
+        battle_structures({"A": a, "B": b}, {"A": {50}, "B": {50}}, unknown_partner=unknown_partner)
 
 
 @pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")

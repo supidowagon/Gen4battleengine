@@ -94,34 +94,6 @@ evidence = "rom: d_test.narc map header 93 (HEARTHOME_CITY_DP_GYM_ELEVATOR_ROOM_
 
 [[resolution]]
 table = "trainers"
-keys = [
-  "202 Galactic Mercury #2",
-  "203 Galactic Venus #2",
-  "411 Galactic Puck #1",
-  "413 Galactic Trinculo #1",
-]
-field = "format"
-pkcalc = "single"
-use = "rom"
-reason = "placed enemies on Eterna Forest, whose script makes Cheryl the walking partner, are fought beside her (K2a Ruling 3); PKCalc lists them as singles and the sheet makes no claim"
-evidence = "rom: scr_seq 219 (map header 203 ETERNA_FOREST) runs SetHasPartner with VAR_PARTNER_TRAINER_ID 608 Cheryl; zone events 201 place 202, 203, 411, 413 on that map (rom_trainer_maps.json: header 203 only)"
-
-[[resolution]]
-table = "trainers"
-keys = [
-  "202 Galactic Mercury #2",
-  "203 Galactic Venus #2",
-  "411 Galactic Puck #1",
-  "413 Galactic Trinculo #1",
-]
-field = "partner_present"
-pkcalc = false
-use = "rom"
-reason = "the same walking-partner multi: Cheryl fights beside the player (K2a Ruling 3); PKCalc lists no partner"
-evidence = "rom: scr_seq 219 (map header 203 ETERNA_FOREST) SetHasPartner, partner 608 Cheryl (trainers.json partner)"
-
-[[resolution]]
-table = "trainers"
 keys = ["846 Worker Conrad"]
 field = "format"
 pkcalc = "single"

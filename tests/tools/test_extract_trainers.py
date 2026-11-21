@@ -122,8 +122,13 @@ def test_battle_structures(trainers):
         by["TRAINER_BUG_CATCHER_JACK"],
         by["TRAINER_CHERYL_ETERNA_FOREST"],
     )  # Eterna Forest
-    assert jack["format"] == "multi"
-    assert jack["partner"] == [{"trainer": cheryl["id"], "starter": None, "player_gender": None}]
+    # A lone placed enemy on a walking-partner map is BATTLE_TYPE_TRAINER ORed with the
+    # partner's header type (encounter.c:738-739, trainer_data.c:31-50): Cheryl's is single.
+    assert jack["format"] == "single"
+    assert jack["partner"] == []
+    assert jack["walking_partner"] == [cheryl["id"]]
+    # The scripted pair on Riley's map stays multi, and carries the walking partner.
+    assert g1["walking_partner"] == g2["walking_partner"] == [riley["id"]]
     for partner in (cheryl, riley):  # Ruling 3: partners are not placed enemies
         assert (partner["format"], partner["partner"], partner["opponent_2"]) == (
             "single",

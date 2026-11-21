@@ -4497,6 +4497,19 @@ def _flags(layout: AiLayout) -> tuple:
     return tuple(script for _, script in _flag_scripts(layout))
 
 
+def _flag_bits(layout: AiLayout) -> tuple:
+    """The flag bits of ``_flags(layout)`` in run order (AI_CONTEXT.thinkingBitShift,
+    trainer_ai.c:307, read at :488): ``AiContext.flag``, ``first_cmp`` and ``inject`` count in
+    bits."""
+    return tuple(bit for bit, _ in _flag_scripts(layout))
+
+
+def _schedules(layout: AiLayout) -> jnp.ndarray:
+    """``int32[n + 1]``: the injected schedules of a layout's ``n`` flag scripts, schedule k
+    making the runs of scripts k.. start written: their bits, then ``NO_COMPARE`` (none)."""
+    return jnp.asarray((*_flag_bits(layout), c.NO_COMPARE), _I32)
+
+
 def _flag_scripts(layout: AiLayout) -> tuple:
     """``((bit, script), ...)``: ``_flags`` with each script's flag bit."""
     scripts = {
@@ -4926,13 +4939,14 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
     draws as in the fight's own layout (E1 Ruling R4)."""
     ctx = ctx._replace(slot=jnp.asarray(0, _I32))
     pairs = _flag_scripts(layout) if flags is None else tuple((None, f) for f in flags)
-    for index, (bit, flag) in enumerate(pairs):  # trainer_ai.c:297-310
+    run_bits = _flag_bits(layout)  # ``flags`` is a prefix of ``_flags(layout)``: same bits
+    for index, (bit, flag) in enumerate(pairs):  # trainer_ai.c:297-309
         # The slots in a loop, not unrolled: one copy of each flag script in the program.
 
-        def eval_slot(slot, ctx, flag=flag, index=index):  # TrainerAI_EvalMoves (:483-525)
+        def eval_slot(slot, ctx, flag=flag, run_bit=run_bits[index]):  # EvalMoves (:483-525)
             # E3-B2-15: ``written`` (monSpeedValues) runs on across the slots and the flags
-            ctx = flag(c.start_run(c.at_slot(ctx, slot), index))
-            # A MOVE_NONE slot runs no command and scores 0 (:499-501).
+            ctx = flag(c.start_run(c.at_slot(ctx, slot), run_bit))
+            # A MOVE_NONE slot runs no command and scores 0 (:500-505).
             return ctx._replace(
                 scores=ctx.scores.at[slot].set(jnp.where(ctx.move == 0, 0, ctx.scores[slot]))
             )
@@ -5271,7 +5285,12 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
 
     def pick(hist):
         equal = jnp.where(has[:, None], hist, 0.0)
-        below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, 1.0)
+        # A slot the pick skips (moves[i] == 0, trainer_ai.c:322) weighs in by its mass only:
+        # 1 in a marginal histogram, the slot's probability of the event in an event's. A
+        # MOVE_NONE slot runs no command (:500-505), so it never makes the first compare: mass
+        # 0 in the events (f, s) of its own slot s (``_slot_event_histograms``).
+        mass = jnp.sum(hist, axis=1, keepdims=True)
+        below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, mass)
         picked = []
         for slot in range(MOVES):
             others = [j for j in range(MOVES) if j != slot]
@@ -5339,9 +5358,8 @@ def _path_records(tables: Tables, state: BattleState, layout: AiLayout):
         return ctx.missing_read, ctx.reads
 
     if _tracks_speed(layout):  # a path can differ with the injected schedule: every one counts
-        n = len(_flag_scripts(layout))
         missing, reads = jax.vmap(lambda k: jax.vmap(lambda o: one(o, k))(outcomes))(
-            jnp.arange(n + 1, dtype=_I32)
+            _schedules(layout)
         )
         return missing.reshape(-1), reads.reshape(-1, MOVES)
     return jax.vmap(one)(outcomes)
@@ -5392,11 +5410,11 @@ def _tracks_speed(layout: AiLayout) -> bool:
 def _slot_event_scorings(tables: Tables, state: BattleState, layout: AiLayout):
     """``(n, scores int32[n + 1, P, MOVES], weight float32[n + 1, P, MOVES], first int32[P,
     MOVES])`` of a layout that tracks monSpeedValues: the scoring of every local bit pattern p
-    (``_pattern_outcomes``) under each injected schedule ``tau`` in 0..n (``n`` flag scripts): a
-    script run of flag index f starts with ``written`` = f >= tau, so ``tau = n`` is "no run
-    starts after a compare", ``tau = 0`` "every run does". ``first[p, m]``: under ``tau = n`` the
-    least flag index at which slot m's pattern p made a speed compare (``commands.NO_COMPARE``:
-    none)."""
+    (``_pattern_outcomes``) under each injected schedule ``tau`` in 0..n (``n`` flag scripts,
+    ``_schedules``): the runs of script index tau on start with ``written``, so ``tau = n`` is
+    "no run starts after a compare", ``tau = 0`` "every run does". ``first[p, m]``: under
+    ``tau = n`` the least flag bit at which slot m's pattern p made a speed compare
+    (``commands.NO_COMPARE``: none)."""
     _, outcomes = _pattern_outcomes(layout)
     refused = _refused(tables, state, layout).scoring
     n = len(_flag_scripts(layout))
@@ -5408,7 +5426,7 @@ def _slot_event_scorings(tables: Tables, state: BattleState, layout: AiLayout):
         return scores, jnp.where(keep, ctx.weight, 0.0), ctx.first_cmp
 
     scores, weight, first = jax.vmap(lambda tau: jax.vmap(lambda o: one(o, tau))(outcomes))(
-        jnp.arange(n + 1, dtype=_I32)
+        _schedules(layout)
     )
     return n, scores, weight, first[n]
 
@@ -5431,6 +5449,7 @@ def _slot_event_histograms(tables: Tables, state: BattleState, layout: AiLayout)
     probability the product over the slots of their masses. ``bad``: a reachable score outside
     the s8 range 0-127."""
     n, scores, weight, first = _slot_event_scorings(tables, state, layout)
+    bits = _flag_bits(layout)
     values = jnp.clip(scores, 0, _SCORE_VALUES - 1)
     events = [(f, s) for f in range(n) for s in range(MOVES)] + [None]
     hists = []
@@ -5441,14 +5460,15 @@ def _slot_event_histograms(tables: Tables, state: BattleState, layout: AiLayout)
             if event is None:
                 tau, cond = n, first[:, m] == c.NO_COMPARE
             else:
-                f, s = event
+                f, s = event  # f: the script index, bits[f] its flag bit (``first``)
                 tau = f + 1 if m <= s else f
+                b = bits[f]
                 cond = (
-                    (first[:, m] > f)
+                    (first[:, m] > b)
                     if m < s
-                    else (first[:, m] == f)
+                    else (first[:, m] == b)
                     if m == s
-                    else (first[:, m] >= f)
+                    else (first[:, m] >= b)
                 )
             w = jnp.where(cond, weight[tau, :, m], 0.0)
             rows.append(jnp.zeros(_SCORE_VALUES, jnp.float32).at[values[tau, :, m]].add(w))
