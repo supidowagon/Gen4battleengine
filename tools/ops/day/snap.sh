@@ -22,7 +22,7 @@
 #   without ALL_DONE), CAPTURE_START or COMPARE_START, CAPTURE_RC=<n> <epoch> or
 #   COMPARE_RC=<n> <epoch>, ALL_DONE.
 #   Env: SNAP_GATE_GB (default 88): run.sh starts the capture or compare only while container
-#   memory is under it; pass the pod's GATE_GB (176 on a 256 GB pod). Memory is read by pod/gate.sh's
+#   memory is under it; pass the shape's SNAP_GATE_GB (176 on a 256 GB pod). Memory is read by pod/gate.sh's
 #   cgmem (cgroup v2, else v1), copied into run.sh; with neither readable times.txt ends
 #   GATE_NO_CGROUP_MEMORY <epoch>, without ALL_DONE.
 # fetch: receives what the pod sends (DAYBOX.md "Snapshot compare", Fetch) into
