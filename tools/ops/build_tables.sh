@@ -46,6 +46,7 @@ else
   C=$(git -C "$REPO" rev-parse --short "$ARG^{commit}"); MODE=commit
   B="$RENT/wt_$C"; JC="$RENT/wt-cache_$C"; mkdir -p "$RENT"
   cleanup() {  # unlink first; delete the worktree only once no link is left in it
+    [ -n "${KA:-}" ] && rm -f "$KA.tmp.$$"   # a failed or interrupted tar leaves no partial archive
     cd "$RENT"; unlink_decomp || return 1
     [ -e "$B/external/pokeplatinum" ] && [ -z "$LINKED" ] && { echo "ERROR: $B/external/pokeplatinum still present; not deleting $B"; return 1; }
     if [ -e "$B" ]; then git -C "$REPO" worktree remove --force "$B" 2>/dev/null || rm -rf "$B"; fi
@@ -55,7 +56,7 @@ else
     [ -e "$B/external/pokeplatinum" ] && LINKED="$B/external/pokeplatinum"
     cleanup
   fi
-  trap cleanup EXIT
+  trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM HUP   # a signal runs cleanup too
   git -C "$REPO" worktree add --detach "$B" "$C"
   export NUZLINE_CACHE_DIR="$JC"
 fi
