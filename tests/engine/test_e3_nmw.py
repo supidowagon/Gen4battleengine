@@ -83,6 +83,21 @@ def test_thunder_wave_that_lands_records_for_conversion_2(tables, names):
     assert [int(x) for x in got.types[0, 0]] == [Type.GRASS, Type.GRASS]
 
 
+def test_thunder_wave_into_a_ground_defender_takes_back_the_metronome_count(tables, names):
+    """E3-B2-33: the Thunder Wave user holds Metronome (the item) and has used the move twice;
+    BeforeMove's update (battle_lib.c:6160-6178) counts the third use, then the 0x chart result
+    (MOVE_STATUS_INEFFECTIVE, in NO_EFFECTS) makes BattleSystem_VerifyMetronomeCount take it
+    back (battle_lib.c:6181-6197, at UpdateMoveBuffers bcp.c:3957): the count ends at 2."""
+    s, out = _thunder_wave_fight(tables, names, "Geodude")
+    s = s._replace(
+        item=s.item.at[1, 0].set(names.item("Metronome")),
+        metronome_move=s.metronome_move.at[1].set(names.move("Thunder Wave")),
+        metronome_turns=s.metronome_turns.at[1].set(2),
+    )
+    got = assert_matches_reference(tables, s, A("Conversion 2", "Thunder Wave", s, names), out)
+    assert int(got.metronome_turns[1]) == 2
+
+
 def _hazard_state(t, n, newcomer, slot, weather, layers, foe, foe_slot, burned, poison_typed):
     s = make_state(
         t,
@@ -107,6 +122,29 @@ _HAZARD_CASES = (
     ("Tangela", 1, Weather.NONE, 1, "Pikachu", 0, False, False, False, Status.POISON),
     ("Tangela", 1, Weather.SUN, 1, "Psyduck", 1, False, False, False, Status.POISON),
 )
+
+
+def test_entry_hazards_airborne_immunity_newcomer_is_not_stopped(tables, names):
+    """The `down &` term of the Toxic Spikes block: an Immunity Snorlax made Flying type is off
+    the ground, so subscript_hazards_check.s skips the spikes and nothing sets NO_MORE_WORK
+    (subscript_poison.s:5-10 is never reached); it stays unpoisoned and the layer stays."""
+    t, n = tables, names
+    s = _hazard_state(t, n, "Snorlax", 0, Weather.NONE, 1, "Pikachu", 0, False, False)
+    s = s._replace(types=s.types.at[0, 1, :].set(Type.FLYING))
+    out, stopped = _send_out(t, s, 0, 1, effects=False)
+    assert not bool(stopped)
+    assert int(out.status[0, 1]) == Status.NONE
+    assert int(out.toxic_spikes[0]) == 1
+
+    r = to_ref(s)
+    turn = _Turn(to_numpy(t), None, entry_turn=r.turn, battler_count=2)
+    _enter(turn, r, 0, 1)
+    _send_out_exp(r, 0)
+    assert _entry_hazards(turn, r, 0) is False
+
+    sw = assert_matches_reference(t, s, jnp.array([5, 0], jnp.int32), empty_outcome())
+    assert int(sw.active[0]) == 1
+    assert int(sw.status[0, 1]) == Status.NONE
 
 
 def test_entry_hazards_return_the_toxic_spikes_block(tables, names):

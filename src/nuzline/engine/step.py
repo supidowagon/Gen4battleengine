@@ -829,8 +829,8 @@ def _send_out(
     entry hazards, then (``effects``, static ``False`` or a traced flag) the rest of
     ``hooks.on_switch_in`` (Trace, weather, Intimidate, berries). The party list of a U-turn or
     Baton Pass runs only the hazards (subscript_show_party_list.s:22; the rest comes at
-    ``_use_move``'s ``TRIGGER_SWITCH_IN_EFFECTS``, as Roar's drag does). Also returns `effects.entry_hazards`' `stopped` (the newcomer's Toxic
-    Spikes block)."""
+    ``_use_move``'s ``TRIGGER_SWITCH_IN_EFFECTS``, as Roar's drag does). Also returns the
+    ``stopped`` of ``effects.entry_hazards`` (the newcomer's Toxic Spikes block)."""
     entered = _switch_in(tables, _switch_out(state, side), side, slot, state.turn + 1, baton)
     hazards, stopped = entry_hazards(tables, entered, side)
     if effects is False:
@@ -2069,9 +2069,9 @@ def _use_move(
     roar_failed = (roar & ~dragged) | anchored
     drag_slot = roar_slot(eligible, outcome.roar_target[side])
     pre_drag = state
-    sent, drag_stopped = _send_out(tables, state, target_side, drag_slot, effects=False)  # noqa: RUF059
-    # drag_stopped: the newcomer's Toxic Spikes block (effects.entry_hazards), valid only where
-    # ``dragged``; E2 D6-21 reads it (no_more_work |= dragged & drag_stopped, E3-B2-32).
+    sent, _drag_stopped = _send_out(tables, state, target_side, drag_slot, effects=False)
+    # _drag_stopped: the newcomer's Toxic Spikes block (effects.entry_hazards), valid only where
+    # ``dragged``; E2 D6-21 reads it (no_more_work |= dragged & _drag_stopped, E3-B2-32).
     state = _where(dragged, sent, state)
     # The drag's Toxic Spikes poisoned the newcomer (subscript_hazards_check.s:14-28): its status
     # subscript set SYSCTL_TRY_SYNCHRONIZE_STATUS with the newcomer, the new defender, as
@@ -3275,10 +3275,10 @@ def _act(
     mode = jnp.asarray(mode, _I32)
     resumed = mode == MODE_RESUME
     baton = resumed & (tables.move_effect[state.ts_used] == EffectId.BATON_PASS)
-    # entry_stopped: the newcomer's Toxic Spikes block; meaningful only where ``resumed`` (a U-turn's
+    # _entry_stopped: the newcomer's Toxic Spikes block; meaningful only where ``resumed`` (a U-turn's
     # or Baton Pass's list); E2 D6-20 hands it to the resumed tail beside ``entry_poisoned``
     # (E3-B2-32).
-    entered, entry_stopped = _send_out(  # noqa: RUF059
+    entered, _entry_stopped = _send_out(
         tables,
         state,
         side,

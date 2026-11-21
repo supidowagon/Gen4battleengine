@@ -7046,8 +7046,8 @@ def _roar(turn: _Turn, s: RefState, side: int, foe: int) -> bool:
     _enter(turn, s, foe, slot)
     turn.dragged[foe] = slot + 1
     _send_out_exp(s, foe)  # PokemonSendOut BTLSCR_DEFENDER (:22)
-    # drag_stopped: the newcomer's Toxic Spikes block, read by E2 D6-21 (E3-B2-32).
-    drag_stopped = _entry_hazards(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)  # noqa: F841
+    # _drag_stopped: the newcomer's Toxic Spikes block, read by E2 D6-21 (E3-B2-32).
+    _drag_stopped = _entry_hazards(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)
     # AfterMoveEffects: its Synchronize step (bcp.c:3665) before the switch-in effects (:3672).
     _synchronize(turn, s, side, foe)
     _switch_in_effects(turn, s, foe)
@@ -9290,9 +9290,9 @@ def _resume(
         out.status_counter = 0
     _enter(turn, s, side, actions[side] - MOVE_ACTIONS, baton)
     _send_out_exp(s, side)  # :18
-    # entry_stopped: the newcomer's Toxic Spikes block; E2 D6-20 hands it to the resumed tail
+    # _entry_stopped: the newcomer's Toxic Spikes block; E2 D6-20 hands it to the resumed tail
     # beside entry_poisoned (E3-B2-32).
-    entry_stopped = _entry_hazards(turn, s, side)  # :22  # noqa: F841
+    _entry_stopped = _entry_hazards(turn, s, side)  # :22
     _faint_check(turn, s, decide=False)  # :23-24: no CheckBattleOver until MoveEnd (SF2 (a2))
     # AfterMoveMessage's King's Rock with the newcomer's item (bcp.c:4630-4650).
     o = turn.outcome
