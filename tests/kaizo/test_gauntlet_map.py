@@ -317,6 +317,15 @@ def test_clock_collision_blocks_and_talk_and_coord_are_recorded():
     assert set(r.talk) == {3} and r.coords == {8: (4, 4)}
 
 
+def test_a_fight_coord_stops_the_gym_walk_until_its_fight_is_won():
+    corridor = Area(67, {(x, 0): 0 for x in range(4)}, coords=(Coord(8, 2, 0, 1, 1, 0, 0),))
+    zero = [[0] * CLOCK_SIDE**2] * CLOCK_STATES, [[0] * FOUNTAIN_WIDTH] * CLOCK_STATES
+    r = gym_reach(corridor, zero, 0, (0, 0))
+    assert r.coords == {8: (2, 0)} and (3, 0) not in r.seen
+    won = gym_reach(corridor, zero, 0, (0, 0), {8})
+    assert won.coords == {} and (3, 0) in won.seen
+
+
 # --- ROM-backed (slow) ----------------------------------------------------------------------------
 
 
@@ -418,18 +427,18 @@ def test_the_eterna_gym_sequence_over_the_clock_states(rom_files, decomp):
     maps = RomMaps(rom_files)
     a = maps.area(GYM_HEADER, masked=False)
     tables = eterna_clock_tables(decomp)
-    door, front = (11, 26), (11, 25)
+    door = (11, 27)  # the south warp entrance (tile behaviour 0x65): arrival and leave tile
     r0 = gym_reach(a, tables, 0, door)
     assert r0.coords == {} and 0 in r0.talk and not {3, 4} & set(r0.talk)  # only the guide
     r1 = gym_reach(a, tables, 1, door)
     assert set(r1.coords) == {7} and 3 not in r1.talk and 4 not in r1.talk  # only 324
-    r2 = gym_reach(a, tables, 2, r1.coords[7])
-    assert (8 in r2.coords or 3 in r2.talk) and 4 not in r2.talk and front not in r2.seen
+    r2 = gym_reach(a, tables, 2, r1.coords[7], {7})
+    assert (8 in r2.coords or 3 in r2.talk) and 4 not in r2.talk and door not in r2.seen
     where = r2.coords[8] if 8 in r2.coords else r2.talk[3]
-    r2b = gym_reach(a, tables, 2, where)
-    assert 4 in r2b.talk and front not in r2b.seen  # 259 won: 260 reachable, the door not
-    r3 = gym_reach(a, tables, 3, r2b.talk[4])
-    assert front in r3.seen and 1 in r3.talk  # 260 won: the door and the leader
+    r2b = gym_reach(a, tables, 2, where, {7, 8})
+    assert 4 in r2b.talk and door not in r2b.seen  # 259 won: 260 reachable, the door not
+    r3 = gym_reach(a, tables, 3, r2b.talk[4], {7, 8})
+    assert door in r3.seen and 1 in r3.talk  # 260 won: the door and the leader
 
 
 @pytest.mark.slow

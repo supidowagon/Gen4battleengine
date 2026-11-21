@@ -88,6 +88,7 @@ TILES_PER_SIDE = 32  # MAP_TILES_COUNT_X / _Z, :9-10
 COLLISION = 0x8000  # TERRAIN_ATTRIBUTES_COLLISION_MASK, :22
 BEHAVIOUR_MASK = 0xFF  # TERRAIN_ATTRIBUTES_TILE_BEHAVIOR_MASK, :27
 INVALID_LAND = 0xFFFF  # INVALID_LAND_DATA_ID, :14
+WARP_ENTRANCE_SOUTH = 0x65  # TILE_BEHAVIOR_WARP_ENTRANCE_SOUTH, map_tile_behaviors.h:112
 DOOR = 0x69  # TILE_BEHAVIOR_DOOR, include/constants/field/map_tile_behaviors.h:116
 TABLE = 0x80  # TILE_BEHAVIOR_TABLE, :139
 PC_TILE = 0x83  # TILE_BEHAVIOR_PC, :142
@@ -818,10 +819,21 @@ class GymReach(NamedTuple):
 
 
 def gym_reach(
-    area: Area, tables: tuple[list[list[int]], list[list[int]]], state: int, start: tuple[int, int]
+    area: Area,
+    tables: tuple[list[list[int]], list[list[int]]],
+    state: int,
+    start: tuple[int, int],
+    passed: Collection[int] = (),
 ) -> GymReach:
     """The tiles, talkable objects and coord events reachable in clock ``state`` from ``start``
-    (``gym.js`` ``reach``): the clock and fountain collision and the hour-hand jump tile."""
+    (``gym.js`` ``reach``): the clock and fountain collision and the hour-hand jump tile.
+
+    A coord tile runs its script when entered (var 0 always matches, ``sub_0203CC14``,
+    ``src/unk_0203C954.c:218``): one whose script is not in ``passed`` starts its fight there,
+    so it is recorded and the walk does not go on from it (``gym.js`` walked on, which let
+    state 2 reach obj 4 past the coord (3, 13)). A script in ``passed`` (its fight won) is a
+    message only: scr 73 entry 7 fights while 0x40AE <= 1 (@475-481), entry 8 while <= 2
+    (@597-603), and each win raises 0x40AE past its gate (facts-final, Eterna Gym)."""
     clock, fountain = tables
     x0, z0 = CLOCK_ORIGIN
 
@@ -858,10 +870,11 @@ def gym_reach(
             if (nx, nz) in seen:
                 continue
             seen.add((nx, nz))
-            queue.append((nx, nz))
-            for c in area.coords:
-                if c.covers(nx, nz):
-                    coords.setdefault(c.script, (nx, nz))
+            fights = [c.script for c in area.coords if c.covers(nx, nz) and c.script not in passed]
+            for script in fights:
+                coords.setdefault(script, (nx, nz))
+            if not fights:
+                queue.append((nx, nz))
     return GymReach(frozenset(seen), talk, coords)
 
 
@@ -871,13 +884,21 @@ def gym_facts(maps: RomMaps, decomp: Path) -> dict:
     reach as the clock advances (after the first win over 324 and after 260)."""
     area = maps.area(GYM_HEADER, masked=False)
     tables = eterna_clock_tables(decomp)
+    # The way in and out: the south warp entrance (11, 27), rom header 67 warp 0 -> header 65,
+    # tile behaviour 0x65. The player arrives on it and leaves by a push south from it
+    # (``Field_CheckMapTransition``, ``src/overlay005/field_control.c:609-612``), so it is both
+    # the start and the tile a leave needs.
     door = next(
-        (w for w in area.warps if area.tiles.get((w.x, w.z), 0) & BEHAVIOUR_MASK == DOOR), None
+        (
+            w
+            for w in area.warps
+            if area.tiles.get((w.x, w.z), 0) & BEHAVIOUR_MASK == WARP_ENTRANCE_SOUTH
+        ),
+        None,
     )
     if door is None:
-        raise MapReadError("the gym has no door warp")
-    start = (door.x, door.z)
-    front = (door.x, door.z - 1)
+        raise MapReadError("the gym has no south warp entrance")
+    start = front = (door.x, door.z)
     r0 = gym_reach(area, tables, 0, start)
     fight_objects = {obj for _, obj, _ in GYM_FIGHTS.values() if obj is not None}
     if r0.coords or fight_objects & set(r0.talk):
@@ -890,7 +911,8 @@ def gym_facts(maps: RomMaps, decomp: Path) -> dict:
         if len(done) == len(GYM_FIGHTS):
             orders[done] = doors
             return
-        reach = gym_reach(area, tables, clock, pos)
+        won = {s for f, (s, _, _) in GYM_FIGHTS.items() if f in done and s is not None}
+        reach = gym_reach(area, tables, clock, pos, won)
         for fight, (script, obj, step) in GYM_FIGHTS.items():
             if fight in done:
                 continue
@@ -900,7 +922,10 @@ def gym_facts(maps: RomMaps, decomp: Path) -> dict:
                 where = reach.talk[obj]
             else:
                 continue
-            after = gym_reach(area, tables, clock + step, where)
+            won = {
+                s for f, (s, _, _) in GYM_FIGHTS.items() if f in (*done, fight) and s is not None
+            }
+            after = gym_reach(area, tables, clock + step, where, won)
             rec(clock + step, where, (*done, fight), [*doors, front in after.seen])
 
     rec(1, start, (), [])
