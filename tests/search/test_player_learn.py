@@ -112,7 +112,8 @@ def roots(tables, names):
 
 
 def test_greedy_equals_playout_through_learns(tables, roots):
-    # The GREEDY run's final state carries no learn prompt: the loop resolves each turn's
+    # The GREEDY run's final state carries no learn prompt unless the battle ended (D8): the loop
+    # resolves each turn's
     # learns (player.py, resolve_learns before send_replacements) and the root's pending one.
     # The result fields alone cannot see a skipped resolve: every move is given up anyway.
     # The pending roots also pin the root's opponent replacement and its carried powerMul
@@ -123,7 +124,8 @@ def test_greedy_equals_playout_through_learns(tables, roots):
         if root.startswith(_window_c_root.__name__):
             # E3-B2-21: no window (c) any more; the settle refuses nothing.
             assert int(got.refused) == 0 and int(want.refused) == 0, root
-        if not int(got.refused):
+        # A battle-ending payout leaves its prompt (D8: levelup.learn_prompt tests over == 0).
+        if not int(got.refused) and not int(got.ended):
             assert not bool(needs_learn(out)), f"{root}: a learn prompt was left pending"
 
 

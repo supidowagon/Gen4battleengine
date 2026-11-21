@@ -23,7 +23,7 @@ from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.damage import PRESENT_HEAL, confusion_damage, damage_for_roll
 from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status
-from nuzline.engine.levelup import GIVE_UP, advance_learns, learn
+from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, needs_learn
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -274,7 +274,7 @@ def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY, start
     is ``(actions, outcome)``, ``(actions, outcome, player_slots)`` or ``(actions, outcome,
     player_slots, learn_choices)``: the slots the player sends in, in order, for a fainted
     active Pokemon at the turn's end, and the answers to the turn's learn-move prompts
-    (``levelup.learn``, after ``advance_learns``, before the replacements). ``start`` edits
+    (``_answer_and_resume``, before the replacements). ``start`` edits
     the turn-0 state (fields the first record carries, such as HP and status)."""
     trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
     player = load_party(party, names)
@@ -285,10 +285,9 @@ def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY, start
     for turn, (actions, outcome, *rest) in enumerate(script):
         sent, learns = (*rest, (), ())[:2]
         records += _move_events(tables, state, actions, outcome, turn)
-        state = _step(tables, state, jnp.asarray(actions, jnp.int32), outcome)
-        state = advance_learns(tables, state)
-        for choice in learns:
-            state = learn(tables, state, choice)
+        acts = jnp.asarray(actions, jnp.int32)
+        state = _step(tables, state, acts, outcome)
+        state = _answer_and_resume(tables, state, acts, outcome, list(learns))
         for slot in sent:
             assert needs_replacement(state)[0]
             state = replace(tables, state, 0, slot)
@@ -299,6 +298,23 @@ def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY, start
         states.append(state)
     records[-1]["command"] = 41  # the last record is written at BATTLE_CONTROL_RESULT
     return records, states
+
+
+def _answer_and_resume(tables, state, acts, outcome, learns):
+    """``state`` after ``step`` with the turn's prompts answered in order (``learns``): a prompt
+    that pauses the turn (``learn_site``, E3-B2-21: MoveEnd's payout, bcp.c:3968) is answered and
+    the same turn resumes with the same actions and outcome; TurnEnd's prompts (bcp.c:1846) are
+    answered unpaused, before ReplaceFainted (:1848). As ``trace_to_state._apply_turn``, a prompt
+    with no answer left stops the turn there."""
+    for _ in range(8):
+        state = advance_learns(tables, state)
+        while learns and bool(needs_learn(state)):
+            state = learn(tables, state, learns.pop(0))
+        # Done, or a prompt with no answer left: the turn stays there (as _apply_turn).
+        if not int(state.learn_site) or bool(needs_learn(state)):
+            return state
+        state = _step(tables, state, acts, outcome)
+    raise AssertionError("more than eight learn pauses in one turn")
 
 
 def _write_raw(path: Path, records: list[dict]) -> Path:
