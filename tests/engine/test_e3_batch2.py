@@ -1190,11 +1190,13 @@ def test_a_skill_swap_into_wonder_guard_fails_and_swaps_nothing(tables, names):
     Monferno keeps Blaze, the Shedinja keeps Wonder Guard and neither ``truant`` changes; against a
     Geodude the same Skill Swap exchanges the abilities. CheckMoveFailure sends the failure to
     subscript_missed.s with commandNext LOOP_FAINTED (battle_controller_player.c:3324-3327),
-    skipping AfterMoveEffects. That skip has no item-visible effect on this path: the item states
-    there (bcp.c:3672, :3684, :3691, :3730) are repeated by MoveEnd's TriggerEffectOnSwitch
-    (bcp.c:3973, battle_lib.c:4151-4165), and TRIGGER_ITEMS_ON_HIT (bcp.c:3698, battle_lib.c:
-    5370-5430), which MoveEnd does not repeat, cannot fire without damage. Both boards are reachable:
-    natural abilities, full HP, the faster Monferno by its own stats."""
+    skipping AfterMoveEffects. That skip has no observable effect on this path: its switch-in pass
+    (bcp.c:3672) and held-item states (TriggerHeldItem :3684-3694, whose hold effects all sit in
+    TriggerHeldItemOnStatus, battle_lib.c:4576 vs :4967; HELD_ITEM_STATUS :3730-3745) are repeated
+    by MoveEnd's TriggerEffectOnSwitch (bcp.c:3973, battle_lib.c:4151-4165), and the others need a
+    charge, an inflicted status, a hit or damage, which a failed Skill Swap does not make (:3641,
+    :3665-3668, :3698-3702, :3710). Both boards are reachable: natural abilities, full HP, the
+    faster Monferno by its own stats."""
     t, n = tables, names
     for foe, foe_move in (("Geodude", "Defense Curl"), ("Shedinja", "Harden")):
         s = make_state(
