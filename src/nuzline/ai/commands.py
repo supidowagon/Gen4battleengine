@@ -1238,7 +1238,7 @@ MOVE_IDS = {
     "Surf": 57,
     "Lava Plume": 436,
 }
-# TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:7102-7114) compares the id
+# TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:6737) compares the id
 # (trainer_ai.c:834-844); Kaizo's move on id 222 is Bulldoze and takes the same block.
 MOVE_MAGNITUDE = 222
 SOUND_MOVES = tuple(

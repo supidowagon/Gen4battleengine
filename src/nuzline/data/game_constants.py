@@ -731,9 +731,10 @@ CONSTANTS: tuple[Constant, ...] = (
     # slot (Kaizo's 149 is Triple Axel and still takes MOVE_PSYWAVE's case), so they are
     # name-checked against vanilla only.
     *_table("nuzline.ai.commands.MOVE_TYPE_MOVES", "move", _P, _MOVE_TYPE_MOVES),
-    # TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:7102-7114) compares the id
-    # (ai.c:834-844); Kaizo's 222 is Bulldoze and takes the same block (E4-A0).
+    # TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:6737) compares the id
+    # (ai.c:834-844); Kaizo's 222 is Bulldoze and takes the same block (E4-A0): each policy pins its game's name.
     Constant("nuzline.ai.commands.MOVE_MAGNITUDE", "move", 222, "Magnitude", _P),
+    Constant("nuzline.ai.commands.MOVE_MAGNITUDE", "move", 222, "Bulldoze", _K),
     *_table("nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES", "move", _P, _COPYCAT_ENCOURAGED_MOVES),
     # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the
     # decomp tests Levitate a second time, which never matches (quirk).
