@@ -141,6 +141,12 @@ AI_HP_READERS: dict[str, str] = {
     "_use_item": "opponent",
     "_post_ko": "opponent",
     "_layout": "opponent",
+    # E4-A0: IfMoveKnown / IfMoveNotKnown on ATTACKER_PARTNER test that battler's curHP != 0
+    # (trainer_ai.c:1650-1653, :1707), the AI's side
+    "_knows": "opponent",
+    # E4-A0: LoadBattlerSpeedRank's CompareBattlerSpeed short-circuits on a dead battler
+    # (battle_lib.c:1204-1211): HP > 0 only
+    "load_battler_speed_rank": "alive",
 }
 
 _STATUS_BLOCKING_TYPES = {

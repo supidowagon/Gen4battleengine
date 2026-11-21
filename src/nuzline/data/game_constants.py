@@ -162,6 +162,22 @@ _AI_MOVE_IDS = {
     "Earthquake": 89,
     "Earth Power": 414,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
+    # E4-A0: TagStrategy_Main's IfMoveEqualTo / IfMoveKnown ids (script.s:6732-6752, :6867,
+    # :7102-7114, :7150-7193, :7215-7337); id 222 is Kaizo's Bulldoze (moves.json row 222).
+    "Skill Swap": 285,
+    "Magnitude": 222,
+    "Future Sight": 248,
+    "Doom Desire": 353,
+    "Rain Dance": 240,
+    "Sunny Day": 241,
+    "Hail": 258,
+    "Sandstorm": 201,
+    "Gravity": 356,
+    "Follow Me": 266,
+    "Helping Hand": 270,
+    "Discharge": 435,
+    "Surf": 57,
+    "Lava Plume": 436,
 }
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
 # model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
@@ -300,6 +316,14 @@ CONSTANTS: tuple[Constant, ...] = (
             # E3-B2-1: Basic_FlingPoison / _FlingBurn AttackerChecks (script.s:1235-1278).
             "Klutz": 103,
             "Guts": 62,
+            # E4-A0: TagStrategy_Main's ability tests (script.s:6754-6916, :7195-7213, :7215-7337).
+            "Dry Skin": 87,
+            "Snow Cloak": 81,
+            "Sand Veil": 8,
+            "Pure Power": 74,
+            "Huge Power": 37,
+            "Lightning Rod": 31,
+            "Storm Drain": 114,
         },
     ),
     *_table(
