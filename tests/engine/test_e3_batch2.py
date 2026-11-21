@@ -3629,7 +3629,8 @@ def test_a_learn_pause_stores_only_the_readable_speed_rand_bits(tables, names, h
     # (Bonsly, which the foe's replacement can send in), or a Quick Claw in the player's
     # recycleItem (a flung one, which Recycle gives back, battle_script.c:9000-9012,
     # order.qc_recycle). Paused states that differ only in an unread bit are one state (the
-    # brute force check is the slow test below).
+    # brute force check is the slow test below; Bonsly's claw draws its bits there, so the
+    # recycleItem-only law is checked by test_quick_claw's Recycle brute force).
     from nuzline.engine.levelup import LEARN_MOVE_END
 
     s, acts = _qc_pause_state(tables, names, holder)

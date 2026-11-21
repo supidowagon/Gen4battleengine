@@ -1743,3 +1743,6 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Claw, no held one left in the party): `ts_qc` at a pause there 0 -> the drawn bit, and enumerate_turn's children
   of their turns split by `quick_claw` (twice as many, probabilities 1/5 and 4/5). None if no snapshot part flings a
   Quick Claw.
+  (c) Review of 7c07c614: the brute force (`outcome_laws(loose=True)`) also draws every bit when any battler's
+  `recycle_item` is a Quick Claw (`order.qc_recycle`), so it stays a superset of the exact law with no holder left
+  (test_quick_claw.py::test_a_flung_quick_claw_recycle_turn_equals_the_bruteforce, slow, failed before the fix).

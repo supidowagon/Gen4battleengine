@@ -2533,10 +2533,12 @@ def outcome_laws(
         acu_loose = jnp.ones_like(acu_loose)
     if loose:
         # The brute force: both sides' draws whenever a Quick Claw is anywhere in the battle
-        # (either party, any HP), holder or not. With no Quick Claw at all nothing can read
+        # (either party, any HP), holder or not, or in any battler's recycleItem (a flung one
+        # Recycle gives back, order.qc_recycle). With no Quick Claw at all nothing can read
         # speedRand (battle_lib.c:1278 tests the item first), and drawing it there anyway
         # would only multiply every other brute force past the width cap.
-        quick_claw = jnp.broadcast_to(live & jnp.any(claw & (state.species != 0)), (fmt.B,))
+        anywhere = jnp.any(claw & (state.species != 0)) | jnp.any(qc_recycle(tables, state))
+        quick_claw = jnp.broadcast_to(live & anywhere, (fmt.B,))
 
     starf_draw, starf_loose = _starf_reads(
         tables, state, actions, uses_move, effect, params, dragged, loose

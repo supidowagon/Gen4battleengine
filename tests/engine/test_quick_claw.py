@@ -524,6 +524,23 @@ def test_a_flung_quick_claw_keeps_the_bit_recycle_can_read(tables, names):
     assert int(back.item[0, 0]) == claw
 
 
+# Slow: Recycle compiles its own step and brute-force programs.
+@pytest.mark.slow
+def test_a_flung_quick_claw_recycle_turn_equals_the_bruteforce(tables, names):
+    # E3-B2-31(b)(1): no Pokemon holds a Quick Claw, the flung one sits in Monferno's
+    # recycleItem (RemoveItem, battle_script.c:8978) and Monferno uses Recycle (:9000-9012):
+    # the brute force must draw its speedRand bit too, as the exact law does (order.qc_recycle).
+    claw = names.item("Quick Claw")
+    s = _state(tables, names, holders=(), mine=["Recycle"], opp=["Growl"])
+    s = s._replace(
+        recycle_item=s.recycle_item.at[0].set(claw), lucky_chant=s.lucky_chant.at[:].set(5)
+    )
+    assert not bool(jnp.any(tables.item_effect[s.item] == ItemId.QUICK_CLAW))
+    acts = A("Recycle", "Growl", s, names)
+    width, brute = assert_equals_bruteforce(tables, s, acts)
+    assert width <= brute
+
+
 def test_a_tag_battle_ally_holder_keeps_the_bit_when_thief_is_known(tables, names):
     # E3-B2-31(b)(2): only a side-1 attacker's steal or swap is blocked (battle_script.c:
     # 5102-5104, :6345-6346), so battler 0 can Thief its tag-battle ally (battler 2, party 2)
