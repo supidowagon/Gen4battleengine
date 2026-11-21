@@ -88,6 +88,7 @@ from nuzline.engine.order import (
     CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
+    TIE_PAIRS,
     action_order,
     assist_candidates,
     call_kind,
@@ -219,6 +220,21 @@ class Outcome(NamedTuple):
     # holder and its fire number this step (``BattleState.ts_trace_fires``); read only at B = 4
     # (``targets.trace_target``), D2-16 / ruling D2-5. Its sample key is 47.
     trace_pick: jnp.ndarray
+    # int8[TIE_PAIRS[B]]: pair p's ``RandNext() & 1`` of CalcTurnOrder's position loop (bcp.c:773-786;
+    # ``order.PAIRS``), D3-3; read only where the pair's compare draws it (``order.action_order_reads``).
+    # Size 0 at B = 2, where ``speed_tie`` is the one pair's bit. No tie bit is ever stored in the
+    # state. Its sample key is 52 (49 is ``conv2``'s, 50 the Mirror Move pick's).
+    order_tie: jnp.ndarray
+    # int8[B + 1, TIE_PAIRS[B]]: the position-loop bits of the BranchActions sorts (D3-4: row = the
+    # acting battler) and of the end-of-turn sort (D3-11: row B); size 0 at B = 2. Key 53.
+    sort_tie: jnp.ndarray
+    # int8[B, TIE_PAIRS[B]]: the position-loop bits of the re-sort a Trick Room's MoveEnd runs
+    # (``SortMonActionOrder``, bcp.c:3991, lib.c:7276-7300; D3-18): row b = the re-sort after
+    # battler b's Trick Room (at most one per battler per turn), column p = the p-th position pair
+    # (``order.PAIRS``); read only where that compare draws it (``order.resort_action_order``).
+    # Size 0 at B = 2 (the order is not re-sorted there, the flags are ``order.resort_claw_flags``'s).
+    # Its sample key is 54.
+    resort_tie: jnp.ndarray
 
 
 def empty_outcome(fmt: Format = SINGLES) -> Outcome:
@@ -262,6 +278,9 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         call_target_draw=sides,
         bide_target_draw=sides,
         trace_pick=jnp.zeros((fmt.B, TRACE_FIRES), _I8),
+        order_tie=jnp.zeros((TIE_PAIRS[fmt.B],), _I8),
+        sort_tie=jnp.zeros((fmt.B + 1, TIE_PAIRS[fmt.B]), _I8),
+        resort_tie=jnp.zeros((fmt.B, TIE_PAIRS[fmt.B]), _I8),
     )
 
 
@@ -1788,7 +1807,10 @@ def moved_mask(state: BattleState) -> jnp.ndarray:
     """``bool[B]``: Battler_MovedThisTurn of a paused turn's battlers, or no action still to play:
     the actions before the cursor (``ts_acted``), each pursuer TryPursuit ended
     (battle_script.c:6931; ``ts_pursued``, the bitmask ``1 << pursuer`` of every pursuer,
-    battle_script.c:6884-6935, subscript_pursuit.s:82), and (SF2 (j)) each battler whose active Pokemon has 0 HP. A U-turn that KOs
+    battle_script.c:6884-6935, subscript_pursuit.s:82), each battler a Roar dragged a Pokemon
+    into this turn (``ts_dragged``: UpdateAfterSwitch sets its PICK_COMMAND to MOVE_END,
+    battle_lib.c:2053; D3-10, every B: no B = 2 pause has one, the dragged battler never acts),
+    and (SF2 (j)) each battler whose active Pokemon has 0 HP. A U-turn that KOs
     its defender with a bench left opens the list with the defender at 0 HP and not yet MOVE_END:
     TryFaintMon (subscript_update_hp.s:17; battle_script.c:1763-1777) and the U-turn script
     (subscript_attack_then_switch_out.s:5, :6, :14-34, :37-47, :54, :71; a 0-HP battler cannot
@@ -1806,7 +1828,7 @@ def moved_mask(state: BattleState) -> jnp.ndarray:
     bits = (state.ts_pursued.astype(_I32) >> jnp.arange(fmt.B)) & 1
     sides = jnp.arange(fmt.B)
     fainted = state.hp[party(fmt, sides), state.active[sides].astype(_I32)] == 0
-    return (state.ts_acted != 0) | (bits != 0) | fainted
+    return (state.ts_acted != 0) | (bits != 0) | (state.ts_dragged != 0) | fainted
 
 
 def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState, jnp.ndarray]:
@@ -2218,7 +2240,25 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
 
     roar_counts = roar_inputs(state, actions)[1]
     roar_la, roar_ld = roar_levels(state, actions)
-    speed_tie = draw(5, (), 2)  # battle_lib.c:1445, RandNext() & 1
+    # battle_lib.c:1445, RandNext() & 1. At B = 4 the order's bits are ``order_tie`` (D3-3): 0 here.
+    speed_tie = draw(5, (), 2) if fmt.B == 2 else jnp.zeros((), _I32)
+    # Every pair's bit, read or not (the tie policy, ledger D3-3). Nothing is drawn at B = 2.
+    pairs = TIE_PAIRS[fmt.B]
+    order_tie = (
+        jax.random.randint(jax.random.fold_in(key, 52), (pairs,), 0, 2, dtype=_I32)
+        if pairs
+        else jnp.zeros((0,), _I32)
+    )
+    sort_tie = (
+        jax.random.randint(jax.random.fold_in(key, 53), (fmt.B + 1, pairs), 0, 2, dtype=_I32)
+        if pairs
+        else jnp.zeros((fmt.B + 1, 0), _I32)
+    )
+    resort_tie = (
+        jax.random.randint(jax.random.fold_in(key, 54), (fmt.B, pairs), 0, 2, dtype=_I32)
+        if pairs
+        else jnp.zeros((fmt.B, 0), _I32)
+    )
     chosen = jnp.stack(
         [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
     )
@@ -2226,7 +2266,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     # Nature Power and the invokers draw for their called move (order.called_move, used_moves):
     # its accuracy, crit odds, effect chance and secondary effect are the called move's. Copycat's
     # call follows this outcome's order (the foe's move before it, or the turn-start movePrev).
-    tie_outcome = empty_outcome(fmt)._replace(speed_tie=speed_tie)
+    tie_outcome = empty_outcome(fmt)._replace(speed_tie=speed_tie, order_tie=order_tie)
     first = action_order(tables, state, actions, tie_outcome)[0]
     fight = ~is_switch(actions) & ~is_item(actions)
     after_foe = jnp.stack([(first == _foe(side)) & fight[_foe(side)] for side in range(fmt.B)])
@@ -2262,7 +2302,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         )
         == 0,
         # BattleSystem_SortMonSpeedOrder (battle_lib.c:3364) on equal speed: RandNext() & 1.
-        end_speed_tie=draw(12, (), 2),
+        end_speed_tie=draw(12, (), 2) if fmt.B == 2 else jnp.zeros((), _I32),
         # BtlCmd_CalcMagnitude (battle_script.c:5820-5852): rand % 100 mapped to the
         # level; ShedSkin (battle_lib.c:3567-3575): RandNext() % 10 < 3. Drawn from
         # fold_in keys so every field above keeps its samples.
@@ -2352,6 +2392,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         starf=jax.random.randint(
             jax.random.fold_in(key, 48), (fmt.B, 4), 0, STARF_DRAWS, dtype=_I32
         ),
+        order_tie=order_tie,
+        sort_tie=sort_tie,
+        resort_tie=resort_tie,
         # Conversion 2's pick (battle_script.c:4783-4817): for each battler and recorded type the
         # first eligible row of the ``% 112`` retry loop (``damage.conv2_pick``) read at the
         # turn-start types (a battler's types change only by its own action: E3-B2-3). Key 49

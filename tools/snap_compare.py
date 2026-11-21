@@ -127,7 +127,8 @@ sums them. Today's rows: ``starf_roll`` (B,) -> (B, 3) and ``Outcome.starf`` (B,
 (G-4, G-11); ``party_ability``, ``nightmare``, ``starf_taken`` = 0 (F-O2, G-31, G-27);
 ``camouflage`` from the old types against the personal rows of the part's own game (Kaizo for
 "roark.trace", vanilla for every other part: ``Ctx.tables_for``; G-20); ``acid_rain`` dropped,
-no successor (G-12, G-13); ``learn_pin``, ``exp_refused`` dropped, no successor (E3-B2-21).
+no successor (G-12, G-13); ``learn_pin``, ``exp_refused`` dropped, no successor (E3-B2-21);
+``leech_seed_recipient`` = 1 + (b ^ 1) where ``leech_seed[b]`` (D3-11b).
 
 Outputs (states, Outcomes, events, reference outputs) are flattened to "path" -> (kind, dtype,
 shape, bytes) entries keyed by name. compare checks the entries present on both sides byte for
@@ -658,6 +659,17 @@ def _camouflage(a, lead, tables):
     return {"camouflage": out}
 
 
+def _leech_seed_recipient(a, lead, tables):
+    """``leech_seed_recipient`` (D3-11b) of an older commit's state: 1 + (b ^ 1) where
+    ``leech_seed[b]``, every older Leech Seed having been set by the opposite battler (singles:
+    subscript_leech_seed_start.s:14-15 ORs the attacker's battler into the defender's mask)."""
+    import numpy as np
+
+    seeded = np.asarray(a["leech_seed"]) != 0
+    b = np.arange(seeded.shape[-1])
+    return {"leech_seed_recipient": np.where(seeded, 1 + (b ^ 1), 0).astype(np.int8)}
+
+
 _I1, _I2 = "|i1", "<i2"
 _MON_READS = tuple(
     (f, d, ("P", 6))
@@ -683,6 +695,7 @@ UPGRADES = (
     dropped("state", "acid_rain", _I1, (), "G-12, G-13", "E2's interim Acid Rain guard flag (main 08a57000, SF2 (f)); batch G models the write in field_mask and removed the flag"),
     dropped("state", "learn_pin", _I1, (), "E3-B2-21", "1 + the selected slot a deferred learn masked (main 08a57000); the prompt now pauses at the payout, before the slot is re-read (review b2 #6): learn_site is a pause site, not a slot, and 0 at every saved point"),
     dropped("state", "exp_refused", _I1, (), "E3-B2-21", "main's sticky window (c) refusal code; the payout's prompt now pauses the turn, so learn work never refuses (review b2 #6)"),
+    derive("state", (("leech_seed", _I1, ("B",)),), ("leech_seed_recipient",), _leech_seed_recipient, "D3-11b", "older Leech Seeds were set by the opposite battler: 1 + (b ^ 1) where seeded", ("leech_seed",)),
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}

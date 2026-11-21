@@ -48,7 +48,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
-from nuzline.engine.format import format_of, party
+from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
     GRAVITY_MOVES,
@@ -120,14 +120,14 @@ def choice_locked(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 def move_imprisoned(state: BattleState, side, move) -> jnp.ndarray:
     """``bool`` (the shape of ``move``): ``Move_Imprisoned`` (battle_lib.c:3316-3338): a battler
     of the other side has ``MOVE_EFFECT_IMPRISON`` and knows ``move`` (the loop over battlers,
-    doubles convention 4; battler b is on side b in singles)."""
+    :3323-3324: the side test, so never the partner)."""
     fmt = format_of(state)
     move = jnp.asarray(move, jnp.int32)
     out = jnp.zeros(move.shape, bool)
     for battler in range(state.active.shape[0]):
         known = state.moves[party(fmt, battler), state.active[battler]].astype(jnp.int32)
         holds = jnp.any(move[..., None] == known, axis=-1)
-        sealing = (jnp.asarray(side) != battler) & (state.imprison[battler] != 0)
+        sealing = (side_of(jnp.asarray(side)) != side_of(battler)) & (state.imprison[battler] != 0)
         out = out | (sealing & holds & (move != 0))
     return out
 
@@ -137,7 +137,8 @@ def imprisoning_foe(state: BattleState, side) -> jnp.ndarray:
     ``Move_Imprisoned``, battle_lib.c:3325-3326)."""
     out = jnp.bool_(False)
     for battler in range(state.active.shape[0]):
-        out = out | ((jnp.asarray(side) != battler) & (state.imprison[battler] != 0))
+        other = side_of(jnp.asarray(side)) != side_of(battler)
+        out = out | (other & (state.imprison[battler] != 0))
     return out
 
 
@@ -185,14 +186,11 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 
 def legal_replacements(state: BattleState, side) -> jnp.ndarray:
     """``bool[6]``: party slots ``side`` may send in, non-active, non-empty and not
-    fainted."""
-    fmt = format_of(state)
-    slots = jnp.arange(SLOTS)
-    return (
-        (slots != state.active[side])
-        & (state.species[party(fmt, side)] > 0)
-        & (state.hp[party(fmt, side)] > 0)
-    )
+    fainted and, at B = 4 where the partner draws from the same party, not the partner's active
+    slot (``BattleSystem_AnyReplacementMons``, battle_lib.c:3125-3180, :3142-3157: the same
+    ``replacement_bench`` set, which is the party list's legal picks: D3-10). At B = 2 a party is
+    one battler's: the singles set."""
+    return replacement_bench(state, side)
 
 
 def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
@@ -294,9 +292,45 @@ def decision_actions(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 def _present(state: BattleState, b) -> jnp.ndarray:
     """``bool``: battler ``b``'s active Pokemon has HP (the engine's form of "not in
-    ``battlersSwitchingMask``" at a command point, bcp.c:4108-4111, :4132-4135; D2-1 rule 5)."""
+    ``battlersSwitchingMask``" at a command point, bcp.c:4108-4111, :4132-4135; D2-1 rule 5).
+    Equals ``~absent_now`` at a command point (D3-2 rule 2); it is also read at a singles
+    replacement point, where a fainted battler with a bench is not absent, so it is not
+    replaced by ``absent_now``."""
     fmt = format_of(state)
     return state.hp[party(fmt, b), state.active[b]] > 0
+
+
+def replacement_bench(state: BattleState, b) -> jnp.ndarray:
+    """``bool[SLOTS]``: the party slots battler ``b`` could send in at a replacement
+    (ReplaceFainted, bcp.c:4081-4140; party menu display.c:4481-4492): a Pokemon with HP
+    (``species != 0``, ``hp > 0``) that is not ``b``'s own active slot and, where the partner
+    draws from the same party (DOUBLES, and TWO_TRAINERS' player side), not the partner's
+    active slot either (bcp.c:4096-4107). The shared-party test is static on the format
+    (D3-12 build item 1)."""
+    fmt = format_of(state)
+    p = party(fmt, b)
+    slots = jnp.arange(SLOTS)
+    bench = (state.species[p] != 0) & (state.hp[p] > 0) & (slots != state.active[b])
+    if fmt.B == 4:
+        shared = party(fmt, b ^ 2) == p
+        bench = bench & ~(shared & (slots == state.active[b ^ 2]))
+    return bench
+
+
+def absent_now(state: BattleState, b) -> jnp.ndarray:
+    """``bool``: battler ``b`` is absent: its active Pokemon has 0 HP and ``replacement_bench``
+    is empty. The one absence test of D3 (D3-2, D3-10, D3-11, D3-12, the payout).
+
+    No empty-slot field (battlersSwitchingMask, bcp.c:330-333, :4109-4111): this predicate
+    equals the mask because no slot is refilled in battle. Premise, a design rule: the player
+    uses no bag item in battle (docs/design.md:19); the only in-battle party-HP raise is a bag
+    revive (src/battle/battle_system.c:665-710). Trainers never revive: the AI's item tests need
+    its own active's curHP (trainer_ai.c:4100-4101, :4111-4113), the AI partner uses none
+    (trainer_ai.c:4069-4073), and no vanilla or Kaizo trainer bag holds item 28, 29 or 37. If
+    design.md:19 changes, the engine needs the decomp's mask as a field."""
+    fmt = format_of(state)
+    down = state.hp[party(fmt, b), state.active[b]] == 0
+    return down & ~jnp.any(replacement_bench(state, b))
 
 
 def selection_range(tables: Tables, state: BattleState, b, slot) -> jnp.ndarray:

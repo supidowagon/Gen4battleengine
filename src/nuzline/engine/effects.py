@@ -144,7 +144,8 @@ many are real). Decomp sources:
   (no HP check, battle_lib.c:1519-1524) running ``subscript_pluck.s``: ``hooks.pluck_berry``
   (after every other effect function: each move has one effect).
 * Leech Seed: ``subscript_leech_seed_start.s``: Grass types and already seeded
-  targets are immune. The end-of-turn drain is in ``step``.
+  targets are immune; the recipient is the user's battler (``leech_seed_recipient``, :14-15).
+  The end-of-turn drain is in ``step``.
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Fire power while any active battler has it.
 * Light Screen, Reflect: ``effect_script_0035.s`` / ``_0065.s`` (``BtlCmd_TryLightScreen``,
@@ -292,7 +293,7 @@ from nuzline.engine.damage import (
     wonder_guarded,
 )
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.format import format_of, party, side_of
+from nuzline.engine.format import format_of, party, party_sides, side_of
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
@@ -354,6 +355,7 @@ from nuzline.engine.state import (
     battler_ability,
     field_index,
     held_item,
+    knocked_off_at,
 )
 from nuzline.engine.targets import NO_DEFENDER
 
@@ -381,7 +383,7 @@ class _Hit(NamedTuple):
     effective: jnp.ndarray  # ... and was not ineffective (damage > 0, or a passed type gate)
     proc: jnp.ndarray  # the secondary applies on this hit (its roll, or certain)
     dealt: jnp.ndarray  # HP the target lost on this hit
-    target_moved: jnp.ndarray  # the target has already acted this turn
+    target_moved: jnp.ndarray  # D3-6 Fact A: the defender's PICK_COMMAND is MOVE_END (lib.c:5365)
     move: jnp.ndarray  # the move's id
     target_ignorable: jnp.ndarray  # target's ability as the attacker sees it (Mold Breaker)
     contact_proc: jnp.ndarray  # the target's contact-ability roll for this hit
@@ -831,22 +833,25 @@ def _present(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "hp", (h.target_side, h.target), healed, cond)
 
 
-def recovers_at_full_hp(tables, state: BattleState, side, move, outcome: Outcome) -> jnp.ndarray:
+def recovers_at_full_hp(
+    tables, state: BattleState, side, move, outcome: Outcome, target_side=None
+) -> jnp.ndarray:
     """``bool``: ``side``'s ``move``, if it lands, runs ``subscript_recover_hp.s`` on a
     recipient at full HP: Recover on its user (``subscript_recover_half_max_hp.s:16``),
     Present's heal on its target (``subscript_present_heal.s:9``). That subscript's ``_036``
     ("HP is full!") sets ``MOVE_STATUS_NO_MORE_WORK``, so
     ``BattleControllerPlayer_CheckMoveFailure`` (bcp.c:3313-3315) jumps to
     ``LOOP_SPREAD_MOVES`` and the move's ``AfterMoveEffects`` (bcp.c:3638-3769: the attacker's
-    and defender's held items, ``HELD_ITEM_STATUS``) never run (``step._use_move``)."""
+    and defender's held items, ``HELD_ITEM_STATUS``) never run (``step._use_move``).
+    ``target_side``: the action's defender (Present's BTLSCR_DEFENDER, effect_script_0122.s);
+    default the battler across."""
     fmt = format_of(state)
     side = jnp.asarray(side, _I32)
+    foe = _foe(side) if target_side is None else jnp.asarray(target_side, _I32)
     effect = tables.move_effect[jnp.asarray(move, _I32)]
-    user, target = state.active[side], state.active[_foe(side)]
+    user, target = state.active[side], state.active[foe]
     user_full = state.hp[party(fmt, side), user] == state.max_hp[party(fmt, side), user]
-    target_full = (
-        state.hp[party(fmt, _foe(side)), target] == state.max_hp[party(fmt, _foe(side)), target]
-    )
+    target_full = state.hp[party(fmt, foe), target] == state.max_hp[party(fmt, foe), target]
     heal = (effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)
     # Roost runs the same subscript (subscript_roost.s:10), and so does the weather heal
     # (subscript_present_heal.s:9, B12-13).
@@ -2348,7 +2353,7 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     record = state.ai_ability_known[user].astype(_I32)
     # Raw: the record is BattleAI_SetAbility's BattleMon.ability (battle_script.c:11805-11806).
     own_id = decomp_abilities(tables, state)[party(fmt, side), user]
-    settled = jnp.where(cond & (side == 0) & (record < 0), own_id, record)
+    settled = jnp.where(cond & (party(fmt, side) == 0) & (record < 0), own_id, record)
 
     def put(arr, index, value):
         return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
@@ -2508,14 +2513,15 @@ def imprison_fails(state: BattleState, side) -> jnp.ndarray:
     """``bool``: ``BtlCmd_TryImprison`` jumps to failure (battle_script.c:6692-6693, :6721-6722):
     ``side``'s battler already has ``MOVE_EFFECT_IMPRISON``, or none of its moves is a move of a
     battler of the other side (the loop over battlers, :6697-6716: their ``battleMons`` moves,
-    whatever their HP; doubles convention 4, battler b is on side b in singles)."""
+    whatever their HP; the user's partner is on its own side and does not count)."""
     fmt = format_of(state)
     own = state.moves[party(fmt, side), state.active[side]].astype(_I32)
     shared = jnp.bool_(False)
     for battler in range(state.active.shape[0]):
         theirs = state.moves[party(fmt, battler), state.active[battler]].astype(_I32)
         match = (own[:, None] == theirs[None, :]) & (own[:, None] != 0) & (theirs[None, :] != 0)
-        shared = shared | ((jnp.asarray(side) != battler) & jnp.any(match))
+        other_side = side_of(jnp.asarray(side)) != side_of(battler)
+        shared = shared | (other_side & jnp.any(match))
     return (state.imprison[side] != 0) | ~shared
 
 
@@ -2644,8 +2650,8 @@ def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndar
 
 def know_ability(state: BattleState, side, slot, cond) -> BattleState:
     """A message tags the ability of ``side``'s party ``slot`` (``BattleAI_SetAbility``,
-    battle_script.c:11806): the AI knows it, for the player's side."""
-    on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
+    battle_script.c:11806): the AI knows it, for a party-0 battler (ruling D3-1a)."""
+    on = jnp.asarray(cond) & (party(format_of(state), jnp.asarray(side, _I32)) == 0)
     # Raw: BattleMessage_AbilityTag reads BattleMon.ability (battle_script.c:11805).
     record = decomp_ability_id(
         state.ability[party(format_of(state), jnp.asarray(side, _I32)), slot]
@@ -2827,7 +2833,9 @@ def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
     was not MOVE_STATUS_NO_EFFECTS, battle_lib.c:1524-1529), B10-6. The subscript ends with
     nothing done for a defender behind a substitute (:5, ``h.shielded``), with Multitype
     (:6, its BATTLEMON_ABILITY), holding the Griseous Orb (:7) or with its quickClaw (:8,
-    ``foe_claw``) or custapBerry (:9, ``foe_custap``) flag set; then BtlCmd_TryKnockOff
+    ``foe_claw``) or custapBerry (:9, ``foe_custap``) flag set (D3-6 Fact C: the flags stand until
+    the holder's own move starts or a Pokemon enters its slot; the caller passes them as carried,
+    with no ``moved`` term); then BtlCmd_TryKnockOff
     (battle_script.c:6608-6632): no item does nothing; an ignorable Sticky Hold keeps it (its
     C-built "made ineffective" message tags nothing for the AI); else heldItem = ITEM_NONE and
     the slot's knockedOffItemsMask bit (:6626-6627). Neither RemoveItem nor CopyToParty runs: the
@@ -2854,6 +2862,23 @@ def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
         & (item != 0)
         & ~sticky
     )
+    # The bit is the defender SIDE's (``sideConditions[defending]``, :6627): every party of the
+    # side sends slot ``h.target`` under it, so each one's party item freezes where the bit is new
+    # (UpdatePartyMon skips the item from now on, battle_io_command.c:590-592; D3 fix B): its item
+    # now, which for the defender is the item Knock Off takes. A party whose slot ``h.target`` is
+    # active elsewhere keeps its battle item until it is loaded again (InitBattleMon,
+    # battle_lib.c:161, ``step._switch_in``). B = 2: one party per side, the defender's.
+    fmt_sides = party_sides(fmt)
+    fresh = cond & ~knocked_off_at(state, h.target_side, h.target)
+    defending = side_of(jnp.asarray(h.target_side, _I32))
+    for p in range(fmt.P):
+        mine = fresh & (defending == fmt_sides[p])
+        kept = jnp.where(mine, state.item[p, h.target], state.knocked_item[p, h.target])
+        state = state._replace(
+            knocked_item=state.knocked_item.at[p, h.target].set(
+                kept.astype(state.knocked_item.dtype)
+            )
+        )
     state = _set(state, "item", (h.target_side, h.target), 0, cond)
     return _set(state, "knocked_off", (h.target_side, h.target), 1, cond)
 
@@ -2867,7 +2892,8 @@ def embargo_fails(tables, state: BattleState, target_side, foe_claw=False, foe_c
     (:6, CheckSubstitute; the script's own test, effect_script_0232.s:5, is the same), with
     Multitype (:7, its BATTLEMON_ABILITY), already under Embargo (:8, embargoTurns), holding the
     Griseous Orb (:9, its BATTLEMON_HELD_ITEM: the raw item) or with its quickClaw (:10,
-    ``foe_claw``) or custapBerry (:11, ``foe_custap``) flag set (B13-31)."""
+    ``foe_claw``) or custapBerry (:11, ``foe_custap``) flag set (B13-31; D3-6 Fact C: the carried
+    flags, no ``moved`` term)."""
     fmt = format_of(state)
     target_side = jnp.asarray(target_side, _I32)
     target = state.active[target_side]
@@ -2908,6 +2934,8 @@ def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & ~grass
         & (state.leech_seed[h.target_side] == 0)
     )
+    # subscript_leech_seed_start.s:14-15: the recipient is the battler that used the move.
+    state = _set(state, "leech_seed_recipient", h.target_side, 1 + h.side, cond)
     return _set(state, "leech_seed", h.target_side, 1, cond)
 
 
@@ -3391,8 +3419,9 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
         & _alive(state, side, user)
         & (state.item[party(fmt, side), user] == 0)
         & contact
-        # :5390-5391: not a knocked-off attacker, not Knock Off itself (B10-6).
-        & (state.knocked_off[party(fmt, side), user] == 0)
+        # :5390-5391: not an attacker whose side has its slot's knockedOffItemsMask bit, not
+        # Knock Off itself (B10-6; the side's bit, D3 fix B).
+        & ~knocked_off_at(state, side, user)
         & (move != MOVE_KNOCK_OFF)
     )
     state = _set(state, "item", (side, user), barb, on)
@@ -3468,8 +3497,9 @@ def sticky_barb_ready(tables: Tables, state: BattleState, side, foe, move) -> jn
         & _alive(state, side, user)
         & (state.item[party(fmt, side), user] == 0)
         & contact
-        # TriggerHeldItemOnPivotMove (battle_lib.c:7380): not a knocked-off attacker (B10-6).
-        & (state.knocked_off[party(fmt, side), user] == 0)
+        # TriggerHeldItemOnPivotMove (battle_lib.c:7380): not an attacker whose side has its
+        # slot's knockedOffItemsMask bit (B10-6; the side's bit, D3 fix B).
+        & ~knocked_off_at(state, side, user)
     )
 
 
@@ -3573,7 +3603,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
         sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     )
     stopped = reached & ~poison_type & blocks
-    known = jnp.where(stopped & (side == 0), ability, state.ai_ability_known[mon])
+    known = jnp.where(stopped & (party(fmt, side) == 0), ability, state.ai_ability_known[mon])
     state = state._replace(
         ai_ability_known=state.ai_ability_known.at[mon].set(
             known.astype(state.ai_ability_known.dtype)
@@ -3867,11 +3897,11 @@ def reveal_item(state: BattleState, side, mon, cond) -> BattleState:
     ``cond``: ``BattleMessage_ItemTag`` (battle_script.c:11726-11745) runs
     ``BattleAI_SetHeldItem`` (:12119-12122) for an item tag of ``BTLSCR_ATTACKER``,
     ``BTLSCR_DEFENDER`` or ``BTLSCR_MSG_BATTLER_TEMP`` (not ``BTLSCR_MSG_TEMP``, which names
-    ``msgItemTemp``), so ``ai_item_known[mon]`` becomes the item. Only the player's
-    (``side`` 0) is kept: ``AICmd_IfHeldItemEqualTo`` and ``AICmd_LoadHeldItemEffect``
+    ``msgItemTemp``), so ``ai_item_known[mon]`` becomes the item. Only a party-0 battler's
+    (ruling D3-1a) is kept: ``AICmd_IfHeldItemEqualTo`` and ``AICmd_LoadHeldItemEffect``
     (trainer_ai.c:1901-1934) read ``battlerHeldItems`` for the other side's battlers only."""
     fmt = format_of(state)
-    on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
+    on = jnp.asarray(cond) & (party(fmt, jnp.asarray(side, _I32)) == 0)
     known = state.ai_item_known
     value = jnp.where(on, state.item[party(fmt, side), mon], known[mon]).astype(known.dtype)
     return state._replace(ai_item_known=known.at[mon].set(value))
@@ -3882,9 +3912,9 @@ def forget_item(state: BattleState, side, mon, cond) -> BattleState:
     path (``BtlCmd_RemoveItem``, battle_script.c:8979-8981; ``UpdateMonData`` setting
     ``BATTLEMON_HELD_ITEM``, :3077-3078, as subscript_transfer_sticky_barb.s:7 does) runs
     ``BattleMon_CopyToParty``, which clears the AI's record of a battler holding nothing
-    (``BattleAI_ClearKnownItem``, battle_lib.c:1819-1823, :7735-7738). Player only
-    (``reveal_item``)."""
-    on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
+    (``BattleAI_ClearKnownItem``, battle_lib.c:1819-1823, :7735-7738). A party-0 battler
+    only (ruling D3-1a, as ``reveal_item``)."""
+    on = jnp.asarray(cond) & (party(format_of(state), jnp.asarray(side, _I32)) == 0)
     known = state.ai_item_known
     return state._replace(
         ai_item_known=known.at[mon].set(jnp.where(on, 0, known[mon]).astype(known.dtype))
@@ -4000,7 +4030,7 @@ def play_hit(
     takes the substitute down only when it breaks (``substituteHP <= damage``) and otherwise
     leaves its HP as it was (no ``UpdateMonData`` on that path), sets no flag and skips the
     on-hit ability and items and ``SYSCTL_MOVE_HIT`` (it goes to :158). ``grudge_slot``: with
-    ``pursuit_switch``, the pursuer's selected slot (the one Pursuit spent) for the TryGrudge of
+    ``pursuit_switch``, the pursuer's selected slot (moveSlot, not the PP slot) for the TryGrudge of
     subscript_pursuit.s:85 (subscript_faint_check_destiny_bond.s:28), which runs after the Destiny
     Bond take-down and before the contact ability (:86-87).
 
@@ -4116,7 +4146,10 @@ def play_hit(
     # hit itself (singles follow-up (ii)); its one reader, Bide's release (bcp.c:2700-2705), needs
     # storedDamage, which subscript_bide_start.s zeroes and only the foe's hits during Bide add to
     # (bcp.c:3357, :3407, each also setting lastHitByBattler), so it reads the foe either way.
-    if fmt.B == 4:
+    # Pursuit's hit on a switcher is not the controller's UpdateHP: subscript_pursuit.s:36 calls
+    # BATTLE_SUBSCRIPT_UPDATE_HP, and bcp.c:3357 is the only lastHitByBattler write, so it
+    # writes nothing (D3-1 note).
+    if fmt.B == 4 and not pursuit_switch:
         state = _set(state, "last_hit_by", target_side, side + 1, update_hp)
     # bcp.c:3359-3378: a substitute takes battleCtx->damage (before False Swipe's cap) and
     # UpdateHP returns early; `real`: the rest of UpdateHP runs on the defender's HP.

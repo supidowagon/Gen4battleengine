@@ -214,7 +214,7 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
 from nuzline.engine import targets
-from nuzline.engine.actions import imprisoning_foe
+from nuzline.engine.actions import absent_now, imprisoning_foe, replacement_bench
 from nuzline.engine.damage import (
     NUM_TYPES,
     PHYSICAL,
@@ -288,6 +288,7 @@ from nuzline.engine.order import (
     CALL_SLEEP_TALK,
     MIRROR_SELF_RANGES,
     MOVE_ACTIONS,
+    TIE_PAIRS,
     action_order,
     assist_candidates,
     call_kind,
@@ -303,6 +304,7 @@ from nuzline.engine.order import (
     is_item,
     is_switch,
     me_first_copy,
+    me_first_target,
     metronome_weights,
     mirror_call,
     mirror_copied,
@@ -2489,7 +2491,15 @@ def outcome_laws(
         )
         for side in range(fmt.B)
     ]
-    (speed0, ok0), (speed1, ok1) = speeds
+    # BattleSystem_SortMonSpeedOrder (battle_lib.c:3364-3382) compares every pair j < k of the
+    # maxBattlers (:3372-3375): a tie of any two battlers' end speeds is a tie roll.
+    pair_tie = jnp.bool_(False)
+    for j in range(fmt.B):
+        for k in range(j + 1, fmt.B):
+            (speed_j, ok_j), (speed_k, ok_k) = speeds[j], speeds[k]
+            pair_tie = pair_tie | jnp.any(
+                ok_j[:, None] & ok_k[None, :] & (speed_j[:, None] == speed_k[None, :])
+            )
     # B13-31: a foe's Embargo can hide a side's Choice Scarf (CompareBattlerSpeed's
     # Battler_HeldItemEffect, battle_lib.c:1248) before the turn end's sort, a speed the grid
     # does not follow: the tie draw is then always enumerated (over-approximate, sound).
@@ -2497,9 +2507,7 @@ def outcome_laws(
     speed_item = tables.item_effect[held_items(state)]
     scarf = (speed_item == ItemId.CHOICE_SCARF) | (speed_item == ItemId.QUICK_POWDER)
     embargo_speed = jnp.any(scarf & foes(uses_move & (effect == _E.EMBARGO)))
-    end_speed_tie = live & (
-        jnp.any(ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])) | embargo_speed
-    )
+    end_speed_tie = live & (pair_tie | embargo_speed)
     # A Trace holder on the field at the turn's end (the active or incoming one, or one a drag
     # brings in) may have copied a speed ability (Swift Swim, Quick Feet) the grid does not
     # follow, or Shed Skin: both reads are kept (over-approximate).
@@ -2617,6 +2625,14 @@ def outcome_laws(
         axis=1,
     )[party(fmt, jnp.arange(fmt.B))]
 
+    on_field = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
+    order_tie_live = live & (fmt.B == 4) & (jnp.sum(on_field.astype(jnp.int32)) >= 2)
+
+    # bcp.c:1759-1764: a battler in battlersSwitchingMask is skipped by the Future Sight pass, so
+    # its count never fires (``step._future_sight`` skips it by ``absent_now``, D3-11); B = 2: no
+    # battler is absent while the battle is live, so this is all True.
+    present_now = jnp.stack([~absent_now(state, b) for b in range(fmt.B)])
+
     def branch_relevant(m: dict) -> Outcome:
         return Outcome(
             speed_tie=speed_tie,
@@ -2645,7 +2661,7 @@ def outcome_laws(
             call=jnp.zeros((fmt.B,), bool),  # stamped per call variant (enumerate_turn), not drawn
             # The Future Sight hit of this turn's end on side d's battler: its count is 1 now
             # (step._future_sight; read when the battler has HP then, over-approximate).
-            future_hit=live & (state.future_timer == 1),
+            future_hit=live & present_now & (state.future_timer == 1),
             # Yawn's sleep of this turn's end: a count of 1 now reaches 0 there (a Yawn of this
             # turn sets 2; over-approximate: the sleep may still be blocked).
             yawn_sleep=live & (state.yawn == 1),
@@ -2655,7 +2671,7 @@ def outcome_laws(
             focus_band=m["focus_band"],
             # The Future Sight hit's Focus Band roll: future_hit's gate, a living holder in the
             # party (the battler on the field at the turn's end), G-1.
-            future_band=live & (state.future_timer == 1) & band_party,
+            future_band=live & present_now & (state.future_timer == 1) & band_party,
             berry_confusion=m["berry_confusion"],
             chatter=m["chatter"],
             conv2=m["conv2"],
@@ -2672,6 +2688,15 @@ def outcome_laws(
                 (jnp.any(state.ability == AbilityId.TRACE) & (fmt.B == 4))[None, None],
                 (fmt.B, TRACE_FIRES),
             ),
+            # D3-3: CalcTurnOrder's pair bits and the sorts' (``order_tie``, ``sort_tie``), B = 4
+            # only. Over-approximate (D6-D7 marginalize the unread ones): every element while two
+            # battlers have HP, since which battlers meet at a position pair depends on the swaps.
+            order_tie=jnp.broadcast_to(order_tie_live, (TIE_PAIRS[fmt.B],)),
+            sort_tie=jnp.broadcast_to(order_tie_live, (fmt.B + 1, TIE_PAIRS[fmt.B])),
+            # D3-18: a Trick Room's MoveEnd re-sort (``resort_tie``), B = 4 only, over-approximate:
+            # every element while the battle is live (which battlers meet at a position pair
+            # depends on the order the turn had reached).
+            resort_tie=jnp.broadcast_to(live & (fmt.B == 4), (fmt.B, TIE_PAIRS[fmt.B])),
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -3051,8 +3076,21 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # now, or anywhere in the party when it can lose HP first (it leaves after a hit, a hazard).
     setters = foes(uses_move & _any_of(effect, (_E.SPIKES, _E.STEALTH_ROCK)))
     leaving = switch | enters
-    bench = (slots != state.active[:, None]) | leaving[:, None]
-    hurt = (hazards | setters | leaving)[:, None]
+    # The replacement's choices (ReplaceFainted, bcp.c:4081-4140): never the partner's slot of a
+    # shared party as it stands at the replacement (``selectedPartySlot[i ^ 2]``, bcp.c:4096-4107;
+    # ``actions.replacement_bench`` reads the turn's start), plus the own active slot when it can
+    # leave, and at B = 4 the partner's active slot when the partner leaves (a switch or a foe's
+    # Roar; both are on the bench by the end-of-turn replacement). A leaving holder can be hit
+    # first (before a priority -6 Roar), so it counts as hurt. A U-turn / Baton Pass pauses at its
+    # party list (subscript_show_party_list.s, ``pivot_battler``): the resumed call reads its own
+    # state, so its laws are recomputed there.
+    own = leaving[:, None] & (slots == state.active[:, None])
+    if fmt.B == 4:
+        mate = sides ^ 2
+        shared = (party(fmt, mate) == rows)[:, None]
+        own = own | (shared & leaving[mate][:, None] & (slots == state.active[mate][:, None]))
+    bench = jnp.stack([replacement_bench(state, b) for b in range(fmt.B)]) | own
+    hurt = (hazards | setters | leaving)[:, None] | own
     rep = live & jnp.any(bench & (pinched_b | (holds_b & hurt)), axis=1)
     # The count: fixed at 5 unless a stat can reach +6 before the eating.
     five = jnp.asarray([int(x) for x in STARF_STATS], _I32)
@@ -3413,6 +3451,12 @@ _LAWS = {
     "call_target_draw": _coin,
     "bide_target_draw": _coin,
     "trace_pick": _coin,
+    # CalcTurnOrder's and the sorts' RandNext() & 1 (lib.c:1405-1445), B = 4 only (D3-3, D3-4).
+    "order_tie": _coin,
+    "sort_tie": _coin,
+    # A Trick Room's MoveEnd re-sort's RandNext() & 1 (lib.c:7276-7300 -> :1405-1445), B = 4
+    # only (D3-18).
+    "resort_tie": _coin,
 }
 
 
@@ -4280,10 +4324,22 @@ class CallLaws(NamedTuple):
 
 
 def _side_call_law(
-    tables: Tables, state: BattleState, side: int, chosen, kind, foe_chosen, foe_uses_move
+    tables: Tables,
+    state: BattleState,
+    side: int,
+    chosen,
+    kind,
+    foe_chosen,
+    foe_uses_move,
+    copy_from=None,
+    chosen_all=None,
+    uses_all=None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(weight int32[CALL_VALUES], called int32[CALL_VALUES])``: the call law of ``side``'s
-    move ``chosen`` of invoker kind ``kind``, read with ``state`` (``call_laws``)."""
+    move ``chosen`` of invoker kind ``kind``, read with ``state`` (``call_laws``). Me First copies
+    the move of ``copy_from``, its action's defender (``order.me_first_target``; default the foe
+    with ``foe_chosen`` / ``foe_uses_move``); ``chosen_all`` / ``uses_all`` are every battler's
+    chosen move and whether it fights."""
     values = jnp.arange(CALL_VALUES, dtype=_I32)
     talk_w = (values < SLEEP_TALK_VALUES).astype(_I32)
     talk = jax.vmap(lambda v: invoked_move(tables, state, side, chosen, v))(values)
@@ -4319,8 +4375,12 @@ def _side_call_law(
     )
     # Me First (E3-2-3): value 0, its target has not acted (it copies the target's chosen move),
     # value 1, it has (the call fails).
+    if copy_from is None:
+        first_from, first_move, first_fights = _foe(side), foe_chosen, foe_uses_move
+    else:
+        first_from, first_move, first_fights = copy_from, chosen_all[copy_from], uses_all[copy_from]
     first_called = jnp.where(
-        values == 0, me_first_copy(tables, state, _foe(side), foe_chosen, foe_uses_move), 0
+        values == 0, me_first_copy(tables, state, first_from, first_move, first_fights), 0
     )
     # Mirror Move (E3-B2-2): value 0, the foe has not recorded a move for it this turn (it calls
     # its turn-start moveCopied), value 1, the foe's move before it did (the foe's chosen move when
@@ -4445,9 +4505,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     g_weights, g_called = [], []
     for side in range(fmt.B):
         foe = _foe(side)
+        mf = me_first_target(tables, state, side, chosen[side])
         weight, call = _side_call_law(
-            tables, state, side, chosen[side], kinds[side], chosen[foe], uses_move[foe]
-        )
+            tables, state, side, chosen[side], kinds[side], chosen[foe], uses_move[foe],
+            mf, chosen, uses_move,
+        )  # fmt: skip
         weights.append(weight)
         called.append(call)
         hyp = disabled_state(state, jnp.arange(fmt.B) == side)
@@ -4462,13 +4524,15 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         seals.append(jnp.where(can_seal[side], seal, call))
         took = encored_state(tables, state, jnp.arange(fmt.B) == side)
         t_weight, t_call = _side_call_law(
-            tables, took, side, encored[side], taken_kinds[side], chosen[foe], uses_move[foe]
-        )
+            tables, took, side, encored[side], taken_kinds[side], chosen[foe], uses_move[foe],
+            mf, chosen, uses_move,
+        )  # fmt: skip
         t_weights.append(t_weight)
         t_called.append(t_call)
         g_weight, g_call = _side_call_law(
-            tables, heavy, side, chosen[side], kinds[side], chosen[foe], uses_move[foe]
-        )
+            tables, heavy, side, chosen[side], kinds[side], chosen[foe], uses_move[foe],
+            mf, chosen, uses_move,
+        )  # fmt: skip
         g_weights.append(g_weight)
         g_called.append(jnp.where(can_gravity[side], g_call, call))
     return CallLaws(

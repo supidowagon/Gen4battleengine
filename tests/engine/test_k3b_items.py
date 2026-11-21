@@ -284,7 +284,10 @@ def test_big_root_boosts_drain(tables, names):
 def test_big_root_boosts_leech_seed(tables, names):
     s = roark_state(tables, names, player_moves=["Leech Seed"])
     s = _item(s, 0, 0, "Big Root", names).replace_hp(0, 0, 10)
-    s = s._replace(leech_seed=s.leech_seed.at[1].set(1))
+    s = s._replace(
+        leech_seed=s.leech_seed.at[1].set(1),
+        leech_seed_recipient=s.leech_seed_recipient.at[1].set(1),  # seeded by battler 0
+    )
     out = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), empty_outcome())
     lost = max(int(s.max_hp[1, 0]) // 8, 1)
     assert int(out.hp[1, 0]) == int(s.hp[1, 0]) - lost

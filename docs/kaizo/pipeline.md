@@ -240,9 +240,6 @@ Experience refusals (coverage category `experience`: `coverage.exp_refusals`,
 
 - a player Pokemon below level 100 whose exp multiplier is unresolved (`exp_boost` 0: a
   party not read from a save with its trainer, so the original-trainer test cannot run);
-- a player Pokemon holding Exp. Share, Lucky Egg, a Power item, Macho Brace or Soothe Bell
-  while any Pokemon in the fight has an item-moving move: the payout reads the party's item,
-  which a battle item change leaves behind (ruling D9);
 - a player Pokemon that can level, with a nonzero egg location, in a fight with Return or
   Frustration (the friendship bonus reads the battle map; ruling D6);
 - a player Pokemon that can level and could use Transform, Mimic or Power Trick (the

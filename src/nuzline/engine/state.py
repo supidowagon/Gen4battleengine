@@ -267,22 +267,27 @@ Encodings:
   replacement), ``war_swaps`` holds its bits: bit ``tie + 2 * qc[0] + 4 * qc[1]`` set where the
   sort puts the player second, so its weather stays (``hooks.order_swaps``). The draw that
   settles it (``step.resolve_war``: the root chance node, a playout's next turn, the tree's
-  replacement children) then clears it; 0 otherwise, so states merge.
+  replacement children) then clears it; 0 otherwise, so states merge. A B = 2 field: 0 and unread
+  at B = 4 (the B = 4 entry points take the sort's draws as inputs, ``switch_in.show_battle_mon4``
+  with its ``ties``, D3-13; no fixed-width field holds a four-battler sort's 1024 draws).
 * ``entry_pending`` (E1 Gardenia review, ruling G-32): per battler, 1 while a battler that a
   replacement's party list sent in (subscript_show_party_list.s:22-24: the hazards and a faint
   check only) still waits for ``ShowBattleMon``'s switch-in states (battle_controller_player.c:
   256, ``BattleSystem_TriggerEffectOnSwitch``: its BattleMon ``traceAnnounced``,
   ``weatherAbilityAnnounced``, ``intimidateAnnounced``, ``downloadAnnounced`` all clear) while
   the player sends in another Pokemon first: at a double KO whose player newcomer fainted on the
-  entry hazards (``search.playout.replacement_pass``). Else 0, so states merge.
+  entry hazards (``search.playout.replacement_pass``). At B = 4 ``step.replace_round`` sets it for
+  every living newcomer of the round until ShowBattleMon (``switch_in.show_battle_mon4``, D3-13),
+  and ``initial_arrays`` for every living lead of a four-battler start state. Else 0, so states
+  merge.
 * Experience (K3d-exp; ``STATE.md`` "Experience"): ``exp`` is the player party's
   ``MON_DATA_EXPERIENCE``; ``evs`` (``ids.Stat`` order, like ``ivs``) and ``nature`` feed the
   level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
-  ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask[0]`` as a
-  bitmask over the player's party slots: ``1 << lead`` at the start, then written by every
-  send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
-  scan) are 0 until the payout and the learn resolve set them. E3-B2-21: a payout's learn prompt
-  pauses the turn
+  ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask`` as a
+  bitmask over the player's party slots, one entry per enemy battler at B = 4 (D3-8b): the
+  player's leads at the start, then written by every send-out (``step._switch_in``).
+  ``learn_level`` / ``learn_cursor`` (the pending learnset scan) are 0 until the payout and the
+  learn resolve set them. E3-B2-21: a payout's learn prompt pauses the turn
   (``learn_site``, ``levelup.LEARN_*``), with the scratch ``ts_ran``, ``ts_move_cur``,
   ``ts_eot`` and ``ts_qc``; all 0 between turns (``STATE.md`` "Mid-turn learn prompts").
 * E2 batch 13 (B13-29, B13-30). ``embargo`` is the active battler's
@@ -359,7 +364,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.format import SINGLES, Format, format_of, party, side_of
+from nuzline.engine.format import MULTI, SINGLES, Format, format_of, party, party_sides, side_of
 from nuzline.engine.ids import (
     CHATTER_CHANCES,
     GRAVITY_TURNS,
@@ -402,8 +407,16 @@ class BattleState(NamedTuple):
     ability_form: jnp.ndarray  # int8, the form whose personal row ability_slot indexes
     item: jnp.ndarray  # int16
     item_consumed: jnp.ndarray  # int16, id of the last item consumed
-    # int8, the slot's bit of its side's knockedOffItemsMask (battle_script.c:6627), B10-6
+    # int8[S, 6], per SIDE: bit k of the side's SideConditions.knockedOffItemsMask, set by a
+    # Knock Off on any battler of the side whose selectedPartySlot is k (battle_context.h:49;
+    # battle_script.c:6627). Every party of the side shares it: a MULTI partner's slot k too
+    # (D3 fix B). Read with the battler's own slot (``knocked_off_at``)
     knocked_off: jnp.ndarray
+    # int16[P, 6], the held item the party Pokemon keeps while its side's ``knocked_off`` bit is set:
+    # its item when the bit was set (the item Knock Off removed, for the knocked Pokemon), never
+    # written to the party after that (battle_io_command.c:590-592); 0 otherwise. The exp payout
+    # reads the party item (``party_held_item``), D9
+    knocked_item: jnp.ndarray
     moves: jnp.ndarray  # int16[P,6,4]
     pp: jnp.ndarray  # int8[P,6,4]
     pp_ups: jnp.ndarray  # int8[P,6,4], BattleMon.ppUps (E1 Batch D)
@@ -426,6 +439,14 @@ class BattleState(NamedTuple):
     stages: jnp.ndarray  # int8[B,8], index ids.Stat, 0 = neutral
     confusion: jnp.ndarray  # int8, turns left
     leech_seed: jnp.ndarray  # int8
+    # int8, MOVE_EFFECT_LEECH_SEED_RECIPIENT (moves.h:8-10, :40; bits 0-1 of moveEffectsMask), the
+    # battler that used Leech Seed, as ``1 + battler`` (doubles convention 3), 0 = not seeded;
+    # nonzero exactly when ``leech_seed`` is. Written with it (subscript_leech_seed_start.s:14-15
+    # ORs BTLVAR_ATTACKER into the defender's mask). Cleared only by a switch without Baton Pass
+    # (battle_lib.c:2071) and a faint (:2166); Baton Pass keeps it (:2076; moves.h:46). Nothing
+    # clears it when the seeder leaves or faints (battle_lib.c:2056-2098, :2168-2183): the drain
+    # reads the CURRENT occupant of that battler slot (bcp.c:1378-1391, ``step._leech_seed_check``).
+    leech_seed_recipient: jnp.ndarray
     substitute_hp: jnp.ndarray  # int16
     taunt: jnp.ndarray  # int8, turns left
     torment: jnp.ndarray  # int8, VOLATILE_CONDITION_TORMENT (bit 31; no turn count), E3-2-1
@@ -612,7 +633,9 @@ class BattleState(NamedTuple):
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
     evs: jnp.ndarray  # int16[P,6,6], ids.Stat order
     nature: jnp.ndarray  # int8[P,6]
-    exp_mask: jnp.ndarray  # int8, sideGetExpMask[0]: bit = player party slot
+    # int8 at B = 2 (sideGetExpMask[0]); int8[2] at B = 4, sideGetExpMask[(b >> 1) & 1] for enemy
+    # battler b (battle_context.h:176; lib.c:1458, :1470); bit = player party slot
+    exp_mask: jnp.ndarray
     exp_boost: jnp.ndarray  # int16[6], 100 / 150 / 170 percent, 0 = unresolved
     pokerus: jnp.ndarray  # int8[6], 1 = the Pokerus byte is nonzero
     friend_bonus: jnp.ndarray  # int8[6], 1 = caught in a Luxury Ball
@@ -633,7 +656,7 @@ class BattleState(NamedTuple):
     ts_eot: jnp.ndarray  # int8[B], monSpeedOrder of the turn end, sorted before the pause
     ts_qc: jnp.ndarray  # int8[B], the turn's speedRand draw (Quick Claw), kept for the next turn
     ts_acted: jnp.ndarray  # int8[B], the battler's action is over (Battler_MovedThisTurn)
-    # int8[B], battlerActionOrder (written from order.action_order's [2] until D6-D7)
+    # int8[B], battlerActionOrder (written from order.action_order's [B] order, D3-3)
     ts_order: jnp.ndarray
     ts_actions: jnp.ndarray  # int8[B], the turn's actions as chosen
     ts_move: jnp.ndarray  # int16[B], each battler's move fixed at selection (selected_move)
@@ -642,8 +665,8 @@ class BattleState(NamedTuple):
     ts_item: jnp.ndarray  # int16[B], the bag item picked
     ts_custap: jnp.ndarray  # int8[B], moveEffectsData.custapBerry from the turn order
     ts_claw: jnp.ndarray  # int8[B], moveEffectsData.quickClaw from the turn order (B10-6)
-    # int8, bitmask of the battlers whose action a Pursuit ended (bit b = battler b), written
-    # |= 1 << pursuer by both engines
+    # int8, bitmask, bit b = battler b's PICK_COMMAND set MOVE_END by TryPursuit (script.c:6931),
+    # written |= 1 << pursuer by both engines (D3-9)
     ts_pursued: jnp.ndarray
     ts_protect_ok: jnp.ndarray  # int8[B], turnFlags.protecting
     ts_endure_ok: jnp.ndarray  # int8[B], turnFlags.enduring (Endure, G-65)
@@ -653,6 +676,12 @@ class BattleState(NamedTuple):
     ts_used: jnp.ndarray  # int16, the paused action's moveCur
     ts_damaged: jnp.ndarray  # int8, its defender's physical / specialDamageTaken != 0
     ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
+    # int8, 1 + battleCtx->defender of the paused action, 0 = BATTLER_NONE; written at B = 4 only
+    # (D3-10: the resumed tail reads the defender FightCommand fixed, not a new pick)
+    ts_defender: jnp.ndarray
+    # int8[B], the paused action's monSpeedOrder (BattleSystem_SortMonSpeedOrder's result before
+    # that action, kept to its MoveEnd, D3-4 rule 7); written at B = 4 only
+    ts_speed_order: jnp.ndarray
     # int8, moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE as the paused or chased action's tail
     # reads it (Enigma Berry): the stopping hit's, or the last Pursuit's (SF2 (i))
     ts_se: jnp.ndarray
@@ -682,6 +711,10 @@ class BattleState(NamedTuple):
     # int8[B], the Trace fires of the battler's slot in this step (D2-16, ruling D2-5): the index
     # into ``Outcome.trace_pick``; written at B = 4 only, 0 between turns
     ts_trace_fires: jnp.ndarray
+    # int8[B], turnFlags.helpingHand (battle_context.h:61): set on the partner by a Helping Hand
+    # that worked (BtlCmd_TryHelpingHand, battle_script.c:6291-6314; B = 4 only), cleared by
+    # CleanupFaintedMon (battle_lib.c:2190-2193) and SetupNextTurn (:2231): 0 between turns
+    ts_helping_hand: jnp.ndarray
     # int8[B], battlerActions[b][1] (D2-1): the battler chosen as the target, kept across turns
     chosen_target: jnp.ndarray
     # int8[B], 1 + BattleContext.lastHitByBattler[b] (D2-14; bcp.c:3347, :3357): the battler that
@@ -762,6 +795,7 @@ def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
 VOLATILE_FIELDS = (
     "confusion",
     "leech_seed",
+    "leech_seed_recipient",
     "substitute_hp",
     "taunt",
     "torment",
@@ -854,6 +888,7 @@ VOLATILE_FIELDS = (
 BATON_PASSED_FIELDS = (
     "confusion",
     "leech_seed",
+    "leech_seed_recipient",
     "substitute_hp",
     "water_sport",
     "mud_sport",
@@ -881,6 +916,9 @@ BATON_PASSED_FIELDS = (
 # A shape key names its leading axes: "P" parties, "B" battlers, "S" sides; ``layout(fmt)``
 # fills them in.
 _MON, _BATTLER, _PARTY, _SIDE, _FIELD = ("P", SLOTS), ("B",), ("P",), ("S",), ()
+# "E": the enemy position ``(b >> 1) & 1`` of an enemy battler ``b`` (``sideGetExpMask``'s index,
+# battle_lib.c:1458): 2 at B = 4, dropped at B = 2 (``layout``), where the field is a scalar.
+_EXP = ("E",)
 _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "species": (_MON, np.int16),
     "form": (_MON, np.int8),
@@ -894,7 +932,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ability_form": (_MON, np.int8),
     "item": (_MON, np.int16),
     "item_consumed": (_MON, np.int16),
-    "knocked_off": (_MON, np.int8),
+    "knocked_off": ((*_SIDE, SLOTS), np.int8),
+    "knocked_item": (_MON, np.int16),
     "moves": ((*_MON, MOVES), np.int16),
     "pp": ((*_MON, MOVES), np.int8),
     "pp_ups": ((*_MON, MOVES), np.int8),
@@ -909,6 +948,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "stages": ((*_BATTLER, 8), np.int8),
     "confusion": (_BATTLER, np.int8),
     "leech_seed": (_BATTLER, np.int8),
+    "leech_seed_recipient": (_BATTLER, np.int8),
     "substitute_hp": (_BATTLER, np.int16),
     "taunt": (_BATTLER, np.int8),
     "torment": (_BATTLER, np.int8),
@@ -1040,7 +1080,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "exp": ((SLOTS,), np.int32),
     "evs": ((*_MON, 6), np.int16),
     "nature": (_MON, np.int8),
-    "exp_mask": (_FIELD, np.int8),
+    "exp_mask": (_EXP, np.int8),
     "exp_boost": ((SLOTS,), np.int16),
     "pokerus": ((SLOTS,), np.int8),
     "friend_bonus": ((SLOTS,), np.int8),
@@ -1075,6 +1115,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_used": (_FIELD, np.int16),
     "ts_damaged": (_FIELD, np.int8),
     "ts_dealt": (_FIELD, np.int16),
+    "ts_defender": (_FIELD, np.int8),
+    "ts_speed_order": (_BATTLER, np.int8),
     "ts_se": (_FIELD, np.int8),
     "ts_alive": (_PARTY, np.int8),
     "ts_power_mul": (_FIELD, np.int8),
@@ -1086,6 +1128,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_grudge": (_BATTLER, np.int8),
     "ts_follow_me": (_SIDE, np.int8),
     "ts_trace_fires": (_BATTLER, np.int8),
+    "ts_helping_hand": (_BATTLER, np.int8),
     "chosen_target": (_BATTLER, np.int8),
     "last_hit_by": (_BATTLER, np.int8),
 }
@@ -1093,9 +1136,12 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
 
 def layout(fmt: Format) -> dict[str, tuple[tuple[int, ...], type]]:
     """Shape and storage dtype of every field of a ``fmt`` fight, in ``BattleState`` order."""
-    dims = {"P": fmt.P, "B": fmt.B, "S": SIDES}
+    dims = {"P": fmt.P, "B": fmt.B, "S": SIDES, "E": 2}
     return {
-        name: (tuple(dims.get(d, d) for d in shape), dtype)  # type: ignore[arg-type]
+        name: (
+            tuple(dims.get(d, d) for d in shape if not (d == "E" and fmt.B == 2)),  # type: ignore[arg-type]
+            dtype,
+        )
         for name, (shape, dtype) in _KEYS.items()
     }
 
@@ -1177,6 +1223,44 @@ def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
         (state.embargo[side] != 0) & (slot == active)
     )
     return jnp.where(hidden, 0, state.item[row, slot].astype(jnp.int32))
+
+
+def party_held_item(state: BattleState, party, slot=None) -> jnp.ndarray:
+    """``int16``: the held item of party ``party`` slot ``slot`` (arrays broadcast), i.e. the
+    party Pokemon's ``MON_DATA_HELD_ITEM`` that the exp payout reads (battle_script.c:2210, :9706,
+    :10226; D9), which is not always the BattleMon's ``item``. Every battle item change reaches
+    the party through ``BattleMon_CopyToParty`` (battle_lib.c:1819-1823; UpdateMonData,
+    battle_script.c:3078, :3407; RemoveItem, :8981), except where the party's side has the slot's
+    ``knockedOffItemsMask`` bit: UpdatePartyMon then skips the item (battle_io_command.c:590-592;
+    the side's mask, battle_controller.c:1472), so from the bit on the party keeps the item it had
+    then (``knocked_item``: the item Knock Off removed, for the knocked Pokemon) for the rest of
+    the battle. So: ``knocked_item`` while the side's ``knocked_off`` bit is set, else ``item``.
+    The bit is per side (D3 fix B): a MULTI partner's slot ``k`` Knock Off freezes party 0's slot
+    ``k`` too. B = 2: a set bit is its own knocked Pokemon's, whose ``knocked_item`` is nonzero
+    (Knock Off needs a held item); a drawn knocked-off user (tests/strategies.py) holds nothing
+    and has no ``recycle_item``, and the mask stops every other way back to an item, so ``item``
+    is 0 too: the value is the old rule's (``knocked_item`` only where it is nonzero).
+    ``slot=None`` with a Python int ``party``: the whole party row (``int16[SLOTS]``) by static
+    slices, no gather (the exp payout's read, kept small for ``test_pay_exp_stays_small``)."""
+    if slot is None:
+        side = party_sides(format_of(state))[party]
+        return jnp.where(state.knocked_off[side] != 0, state.knocked_item[party], state.item[party])
+    sides = jnp.asarray(party_sides(format_of(state)))[party]
+    return jnp.where(
+        state.knocked_off[sides, slot] != 0,
+        state.knocked_item[party, slot],
+        state.item[party, slot],
+    )
+
+
+def knocked_off_at(state: BattleState, b, slot=None) -> jnp.ndarray:
+    """``bool``: battler ``b``'s side has the ``knockedOffItemsMask`` bit of its party ``slot``
+    (default its active one, ``selectedPartySlot[b]``): ``sideConditions[side].knockedOffItemsMask
+    & FlagIndex(selectedPartySlot[b])`` (battle_lib.c:161, :3059, :5390, :7380; battle_script.c:
+    5105, 6348-6349)."""
+    b = jnp.asarray(b, jnp.int32)
+    slot = state.active[b] if slot is None else slot
+    return state.knocked_off[side_of(b), slot] != 0
 
 
 def held_items(state: BattleState) -> jnp.ndarray:
@@ -1343,7 +1427,10 @@ def initial_arrays(
     battle-start ``PokemonSlideIn`` of the enemy (clear, then flag) and of the player (flag)
     (subscript_start_encounter.s:84, :91; ``BtlCmd_PokemonSlideIn``, battle_script.c:465-466,
     :474-475) leave the player lead's bit (``BattleSystem_FlagBattlerExpGain``,
-    battle_lib.c:1461-1479). The learn fields start at 0."""
+    battle_lib.c:1461-1479). At B = 4 (D3-8b) both entries (one per enemy battler) hold the bits
+    of the player battlers' leads: battler 0's, and battler 2's unless the format is ``MULTI``
+    (the loop stops after player battler 0 for ``BATTLE_TYPE_TRAINER_WITH_AI_PARTNER``,
+    battle_lib.c:1475-1477). The learn fields start at 0."""
     if len(parties) != fmt.P:
         raise ValueError(f"a {fmt.B}-battler fight has {fmt.P} parties, got {len(parties)}")
     if leads is None:
@@ -1369,7 +1456,10 @@ def initial_arrays(
             raise ValueError(
                 f"side {side}: two battlers lead from one slot ({[leads[b] for b in own]})"
             )
-    a["exp_mask"][...] = 1 << leads[0]
+    bits = 1 << leads[0]
+    if fmt.B == 4 and fmt != MULTI:
+        bits |= 1 << leads[2]
+    a["exp_mask"][...] = bits
     # D2-1 rule 8: the game's zero is never read (every battler selects on turn 1); b ^ 1 keeps
     # a hand-built state's lock on today's defender.
     a["chosen_target"][...] = np.arange(fmt.B) ^ 1
@@ -1384,6 +1474,12 @@ def initial_arrays(
             raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
         a["trainer_items"][b, : len(bag)] = bag
         a["trainer_item_count"][b] = len(bag)
+    if fmt.B == 4:
+        # D3-13: a four-battler start state has not run ShowBattleMon: every living lead waits for
+        # its switch-in states (``switch_in.show_battle_mon4``; ``step.sample_root`` runs them).
+        # (B = 2: ``make_state`` runs ``hooks.battle_start`` at once.)
+        for b in range(fmt.B):
+            a["entry_pending"][b] = int(a["hp"][fmt.party_of[b], leads[b]] > 0)
     if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
         raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")
     a["terrain"][...] = terrain

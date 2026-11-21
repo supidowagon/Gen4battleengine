@@ -29,12 +29,24 @@ from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import TERRAIN_NAMES, IntermediateData
 from nuzline.engine.actions import (
     MOVE_ACTIONS,
+    decision_pairs,
     legal_actions,
+    legal_choices,
     legal_opponent_actions,
     legal_replacements,
 )
 from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.damage import STATUS as STATUS_CATEGORY
+from nuzline.engine.format import (
+    DOUBLES,
+    MULTI,
+    SINGLES,
+    TWO_TRAINERS,
+    Format,
+    format_of,
+    party,
+)
+from nuzline.engine.hooks import battle_start
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
     MOVE_MIMIC,
@@ -54,6 +66,7 @@ from nuzline.engine.ids import (
     Weather,
     clean_field_mask,
 )
+from nuzline.engine.order import TIE_PAIRS
 from nuzline.engine.outcome import MAX_HITS, Outcome, read_chance
 from nuzline.engine.state import (
     BAG_SLOTS,
@@ -62,6 +75,7 @@ from nuzline.engine.state import (
     STAGE_MAX,
     STAGE_MIN,
     BattleState,
+    initial_arrays,
     make_state,
 )
 from nuzline.engine.stats import calc_stats
@@ -1606,6 +1620,7 @@ def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: N
                 a["status_counter"][side, active] = 0
             elif kind == 1:
                 a["leech_seed"][side] = 1
+                a["leech_seed_recipient"][side] = 1 + (side ^ 1)
             elif kind == 2:
                 a["trapped"][side] = rnd.randint(2, _BIND_MAX)
                 a["trap_move"][side] = names.move("Bind")
@@ -2133,9 +2148,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     move_pp = np.asarray(tables.move_pp)
     turn = draw(st.integers(0, 50))
     a["turn"][...] = turn  # read by _draw_batch3 (Truant)
-    for side, (party, active) in enumerate(parties):
+    for side, (team, active) in enumerate(parties):
         a["active"][side] = active
-        for slot in range(len(party)):
+        for slot in range(len(team)):
             for k, move in enumerate(a["moves"][side, slot]):
                 if move:
                     a["pp"][side, slot, k] = draw(st.integers(0, int(move_pp[move])))
@@ -2149,6 +2164,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         a["trapped"][side] = trapped
         a["trap_move"][side] = draw(st.sampled_from(trap_moves.tolist())) if trapped else 0
         a["leech_seed"][side] = draw(st.integers(0, 1))
+        a["leech_seed_recipient"][side] = (1 + (side ^ 1)) * a["leech_seed"][side]
         a["water_sport"][side] = draw(st.integers(0, 1))
         a["mud_sport"][side] = draw(st.integers(0, 1))
         a["aqua_ring"][side] = draw(st.integers(0, 1))
@@ -2270,10 +2286,16 @@ def _draw_exp(draw, tables: Tables, a: dict) -> None:
     """The player's experience block (K3d-exp): each Pokemon's ``exp`` anywhere in its level
     (``[base(L), base(L + 1))``), its ``exp_boost`` (100 / 150 / 170), ``pokerus`` and
     ``friend_bonus``; ``exp_mask`` is the active slot plus any other living slots (the
-    participants since the foe's entry); the learn fields stay 0."""
+    participants since the foe's entry); at B = 4 each of its two entries (one per enemy
+    battler) holds the active slots of the player battlers (battler 2's unless MULTI) plus any
+    other living slots; the learn fields stay 0."""
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
     living = (a["species"][0] > 0) & (a["hp"][0] > 0)
-    mask = 1 << int(a["active"][0])
+    four = a["exp_mask"].ndim == 1
+    base = 1 << int(a["active"][0])
+    if four and len(a["species"]) != 4:  # not MULTI: battler 2 sends from party 0
+        base |= 1 << int(a["active"][2])
+    masks = [base] * (2 if four else 1)
     for slot in np.flatnonzero(a["species"][0]):
         row = table[rates[a["species"][0, slot]]]
         level = int(a["level"][0, slot])
@@ -2281,9 +2303,10 @@ def _draw_exp(draw, tables: Tables, a: dict) -> None:
         a["exp_boost"][slot] = draw(st.sampled_from((100, 150, 170)))
         a["pokerus"][slot] = draw(st.integers(0, 1))
         a["friend_bonus"][slot] = draw(st.integers(0, 1))
-        if living[slot] and draw(st.booleans()):
-            mask |= 1 << int(slot)
-    a["exp_mask"][...] = mask
+        for k in range(len(masks)):
+            if living[slot] and draw(st.booleans()):
+                masks[k] |= 1 << int(slot)
+    a["exp_mask"][...] = masks if four else masks[0]
 
 
 @st.composite
@@ -2456,9 +2479,18 @@ RARE_EFFECTS = (
 def pivot_actions(draw, state: BattleState, actions) -> jnp.ndarray:
     """E2 batch 6: the actions that resume ``state`` paused at a party list: the pivoting side's
     switch to any legal replacement (the engine takes any; the AI's pick is the search's), the
-    other side's as before (``step`` reads the scratch's)."""
+    other side's as before (``step`` reads the scratch's). At B = 4 (D3-1, rule 7) the pivoting
+    battler's pick leaves out the actives of the battlers sending from its party: the party
+    list offers no slot a partner stands on (``AnyReplacementMons``, battle_lib.c:3142-3157)."""
     side = int(state.pivot_battler) - 1
-    slots = np.flatnonzero(np.asarray(legal_replacements(state, side))).tolist()
+    mask = np.asarray(legal_replacements(state, side))
+    fmt = format_of(state)
+    if fmt.B == 4:
+        mine = party(fmt, side)
+        for other in range(fmt.B):
+            if other != side and party(fmt, other) == mine:
+                mask = mask & (np.arange(SLOTS) != int(state.active[other]))
+    slots = np.flatnonzero(mask).tolist()
     acts = np.array(actions)
     acts[side] = MOVE_ACTIONS + draw(st.sampled_from(slots))
     return jnp.asarray(acts, jnp.int32)
@@ -2475,6 +2507,13 @@ def _flag(shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
     return _ints(0, 1, shape)
 
 
+def _tie_bits(shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
+    """Bits of shape ``shape``; a size-0 shape (B = 2) is a constant, no draw is consumed."""
+    if int(np.prod(shape, dtype=int)) == 0:
+        return st.just(jnp.zeros(shape, jnp.int8))
+    return _flag(shape)
+
+
 @st.composite
 def targets_for(draw, state: BattleState) -> jnp.ndarray:
     """``int8[B]``: each battler's chosen target (D2-1), a battler 0..B-1. At B = 2 ``step``
@@ -2483,10 +2522,11 @@ def targets_for(draw, state: BattleState) -> jnp.ndarray:
     return jnp.asarray([draw(st.integers(0, count - 1)) for _ in range(count)], jnp.int8)
 
 
-def any_outcome() -> st.SearchStrategy[Outcome]:
+def any_outcome(fmt: Format = SINGLES) -> st.SearchStrategy[Outcome]:
     """Every ``Outcome`` field uniform over its range (``hit``: either flag-only or any
-    class value)."""
-    hits, sides = (2, MAX_HITS), (2,)
+    class value), with the shapes of ``outcome.empty_outcome(fmt)`` (the leading battler axis is
+    ``fmt.B``); the default is the singles draw."""
+    hits, sides = (fmt.B, MAX_HITS), (fmt.B,)
     return st.builds(
         Outcome,
         speed_tie=_flag(()),
@@ -2516,14 +2556,14 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         roar_target=_ints(0, 4, sides),
         # An invoker's draw: Sleep Talk's value, Metronome's candidate rank (taken modulo
         # their counts, order.invoked_move).
-        call=st.lists(st.integers(0, 500), min_size=2, max_size=2).map(
+        call=st.lists(st.integers(0, 500), min_size=fmt.B, max_size=fmt.B).map(
             lambda v: jnp.asarray(np.asarray(v, np.int16))
         ),
         # The Future Sight hit's roll: a flag or any class value (1-100), like ``hit``.
         future_hit=st.one_of(_flag(sides), _ints(0, 100, sides)),
         yawn_sleep=_ints(2, 5, sides),
         # Acupressure's RandNext() value in [0, 420), read modulo the live count (B12-9).
-        acupressure=st.lists(st.integers(0, 419), min_size=2, max_size=2).map(
+        acupressure=st.lists(st.integers(0, 419), min_size=fmt.B, max_size=fmt.B).map(
             lambda v: jnp.asarray(np.asarray(v, np.int16))
         ),
         focus_band=_flag(hits),
@@ -2532,13 +2572,198 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         chatter=_flag(sides),
         # Conversion 2's pick per battler and recorded type: any type id (``damage.conv2_choice``
         # falls back to the first eligible row for a draw that is not eligible).
-        conv2=_ints(0, 17, (2, 18)),
-        starf=_ints(0, 59, (2, 4)),
+        conv2=_ints(0, 17, (fmt.B, 18)),
+        starf=_ints(0, 59, (fmt.B, 4)),
         target_draw=_flag(sides),
         call_target_draw=_flag(sides),
         bide_target_draw=_flag(sides),
-        trace_pick=_flag((2, 5)),
+        trace_pick=_flag((fmt.B, 5)),
+        # D3-3: the position loops' tie bits (size 0 at B = 2: nothing drawn).
+        order_tie=_tie_bits((TIE_PAIRS[fmt.B],)),
+        sort_tie=_tie_bits((fmt.B + 1, TIE_PAIRS[fmt.B])),
+        # D3-18: the Trick Room re-sort's bits, row = the battler whose Trick Room it follows.
+        resort_tie=_tie_bits((fmt.B, TIE_PAIRS[fmt.B])),
     )
+
+
+# --- D3-1: the four-battler draw (ruling D2-3) --------------------------------------------------
+
+
+def _party_side(fmt: Format, p: int) -> int:
+    """The side of party ``p``: the side of the battlers that send from it."""
+    return next(b for b in range(fmt.B) if fmt.party_of[b] == p) & 1
+
+
+def _live_lead(draw, tables: Tables, spec: PokemonSpec) -> PokemonSpec:
+    """``spec`` with HP >= 1 (a lead on the field), as ``_party`` does for its active."""
+    if spec.current_hp != 0:
+        return spec
+    max_hp = _max_hp(tables, spec.species, spec.ivs, spec.evs, spec.level, spec.nature)
+    status = int(draw(st.sampled_from(list(Status))))
+    return replace(spec, current_hp=draw(st.integers(1, max_hp)), status=status)
+
+
+def _draw_battler(draw, tables: Tables, a: dict, fmt: Format, b: int) -> None:
+    """Battler ``b``'s own draws on the arrays ``a`` of a ``fmt`` state: its active Pokemon's
+    stat stages, confusion, Taunt, ``last_move`` (none, one of its own moves or Struggle),
+    Disable (a move of the active and its turns) and ``fake_out_turn`` (0 to ``turn + 1``), each
+    in the battler's own [B] slot; and, for the battlers 0 and 1 (one per side), the side's
+    Reflect, Light Screen, Tailwind and Stealth Rock in the side's [2] slot (``side_of(b)``).
+    The party-slot draws (PP, status counters) are ``four_state``'s, over every slot of every
+    party."""
+    p, active, side = party(fmt, b), int(a["active"][b]), b & 1
+    turn = int(a["turn"][()])
+    a["stages"][b, Stat.ATK :] = draw(
+        st.lists(st.integers(STAGE_MIN, STAGE_MAX), min_size=7, max_size=7)
+    )
+    a["confusion"][b] = draw(st.integers(0, _CONFUSION_MAX))
+    a["taunt"][b] = draw(st.integers(0, _TAUNT_MAX))
+    a["fake_out_turn"][b] = draw(st.integers(0, turn + 1))
+    own_moves = [int(m) for m in a["moves"][p, active] if m]
+    a["last_move"][b] = draw(st.sampled_from([0, *own_moves, MOVE_STRUGGLE]))
+    disabled = draw(st.sampled_from([0, *own_moves]))
+    a["disabled_move"][b] = disabled
+    turns = draw(st.integers(0, _DISABLE_MAX))
+    a["disable_turns"][b] = turns if disabled else 0
+    if b < 2:
+        a["stealth_rock"][side] = draw(st.integers(0, 1))
+        a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
+        a["light_screen"][side] = draw(st.integers(0, _TIMER_MAX))
+        a["tailwind"][side] = draw(st.integers(0, _TIMER_MAX))
+
+
+@st.composite
+def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) -> BattleState:
+    """A mid-battle state of a four-battler fight (``fmt``: DOUBLES, TWO_TRAINERS or MULTI,
+    drawn when None): ``fmt.P`` parties of 1-6 Pokemon (a shared party has at least two), each
+    battler's lead on its own slot (no two battlers of a party share one), random PP, status
+    counters, stages, confusion, Taunt, ``last_move``, Disable, ``fake_out_turn``, the sides'
+    screens, Tailwind and Stealth Rock, weather and its timer, Trick Room, Gravity, the turn,
+    the enemy battlers' bags (``trainer_items[b]``, ruling D1-5; the player's are empty), the
+    AI's knowledge of the player and the player's experience block, as ``supported_state``
+    draws them. Per side, one battler is absent (0 HP, D3-1 rule 3) with probability 1/4 for
+    battler ``side``, 1/4 for battler ``side + 2``, and none with probability 1/2: only a
+    battler whose party has no living Pokemon off the field, so the party's other living
+    Pokemon are the actives of the battlers sending from it; every other battler is alive,
+    so each side has a living battler (rule 4)."""
+    if fmt is None:
+        fmt = draw(st.sampled_from((DOUBLES, TWO_TRAINERS, MULTI)))
+    owners = [[b for b in range(fmt.B) if fmt.party_of[b] == p] for p in range(fmt.P)]
+    parties: list[list[PokemonSpec]] = []
+    leads = [0] * fmt.B
+    for p in range(fmt.P):
+        members = list(draw(_party(tables, names))[0])
+        assume(len(members) >= len(owners[p]))
+        slots = draw(
+            st.lists(
+                st.integers(0, len(members) - 1),
+                unique=True,
+                min_size=len(owners[p]),
+                max_size=len(owners[p]),
+            )
+        )
+        for b, slot in zip(owners[p], slots, strict=True):
+            leads[b] = slot
+            members[slot] = _live_lead(draw, tables, members[slot])
+        parties.append(members)
+    absent: list[int] = []
+    for side in (0, 1):
+        absence = draw(st.sampled_from((None, "low", "high", "high")))
+        if absence is not None:
+            b = side if absence == "low" else side + 2
+            p = fmt.party_of[b]
+            held = {leads[c] for c in owners[p]}
+            for slot, mon in enumerate(parties[p]):
+                if slot not in held:
+                    parties[p][slot] = replace(mon, current_hp=0, status=int(Status.NONE))
+            absent.append(b)
+    for p in range(fmt.P):  # coverage refuses a Selfdestruct facing a Defense below 8
+        foes = [
+            m
+            for q in range(fmt.P)
+            if _party_side(fmt, q) != _party_side(fmt, p)
+            for m in parties[q]
+        ]
+        foe_defense = low_defense(tables, foes)
+        moves = [m for mon in parties[p] for m in mon.moves if m]
+        assume(not any(halved_defense_line(tables, m, foe_defense) for m in moves))
+    arrays = initial_arrays(fmt, tables, parties, leads=tuple(leads), opp2_items=())
+    s = battle_start(tables, BattleState(**{k: jnp.asarray(v) for k, v in arrays.items()}))
+    a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
+    a["entry_pending"][...] = 0  # the leads' checks ran (hooks.battle_start): nothing waits (D3-13)
+    for b in absent:  # 0 HP after the lead's switch-in checks ran: nothing is left to send
+        a["hp"][fmt.party_of[b], leads[b]] = 0
+        a["status"][fmt.party_of[b], leads[b]] = Status.NONE
+    move_pp = np.asarray(tables.move_pp)
+    turn = draw(st.integers(0, 50))
+    a["turn"][...] = turn
+    for p in range(fmt.P):
+        for slot in range(len(parties[p])):
+            for k, move in enumerate(a["moves"][p, slot]):
+                if move:
+                    a["pp"][p, slot, k] = draw(st.integers(0, int(move_pp[move])))
+            a["status_counter"][p, slot] = _status_counter(draw, int(a["status"][p, slot]))
+    for b in range(fmt.B):
+        _draw_battler(draw, tables, a, fmt, b)
+    for b in (1, 3):  # the enemy battlers' bags (the player's stay empty)
+        count = draw(st.integers(0, BAG_SLOTS))
+        bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
+        a["trainer_items"][b] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
+        a["trainer_item_count"][b] = count
+    weather = _drawn_weather(a) or draw(st.sampled_from(list(Weather)))
+    timed = weather not in (Weather.NONE, Weather.FOG)
+    timer = draw(st.integers(0, 8)) if timed else 0
+    trick_room = draw(st.integers(0, _TIMER_MAX))
+    gravity = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
+    draw_seen_moves(draw, a)
+    flags = draw(st.lists(st.integers(0, 1), min_size=SLOTS, max_size=SLOTS))
+    a["ai_ability_known"][...] = np.reshape(flags, a["ai_ability_known"].shape)
+    known = draw(st.lists(st.booleans(), min_size=SLOTS, max_size=SLOTS))
+    a["ai_item_known"][...] = np.where(known, a["item"][0], 0)
+    fainted = (a["species"][0] > 0) & (a["hp"][0] == 0)
+    a["player_faints"][...] = int(np.sum(fainted))
+    a["deaths"][...] = fainted
+    a["faint_budget"][...] = draw(st.integers(0, MAX_DEATH_BUDGET))
+    living = (a["species"][0] > 0) & (a["hp"][0] > 0)
+    a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
+    a["replace_mul"][...] = 0
+    _draw_exp(draw, tables, a)
+    # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
+    a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
+    a["weather_turns"][...] = timer
+    return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+
+
+@st.composite
+def legal_actions_four(draw, tables: Tables, state: BattleState):
+    """``(int32[B], int8[B])``: each battler's action and chosen target (D3-1 rule 5), a pair of
+    ``actions.legal_choices``. The pair of battlers sharing a party takes one joint draw: the
+    player's from ``decision_pairs``, the enemy's (DOUBLES) from the same two lists without two
+    switches to one slot (``aiSwitchedPartySlot``, trainer_ai.c:3439-3440). Battlers of separate
+    parties (TWO_TRAINERS' enemy, MULTI's all four, battler 2 the AI's partner) draw from
+    ``legal_choices`` alone; an absent battler has only ``[0, b]``."""
+    fmt = format_of(state)
+    choices = [np.argwhere(np.asarray(legal_choices(tables, state, b))) for b in range(fmt.B)]
+    acts = np.zeros(fmt.B, np.int32)
+    targets = np.arange(fmt.B, dtype=np.int8)
+    for lead in (0, 1):
+        mate = lead + 2
+        if fmt.party_of[lead] != fmt.party_of[mate]:
+            for b in (lead, mate):
+                acts[b], targets[b] = choices[b][draw(st.integers(0, len(choices[b]) - 1))]
+            continue
+        if lead == 0:
+            pairs = [tuple(x) for x in np.argwhere(np.asarray(decision_pairs(tables, state)))]
+        else:
+            pairs = [
+                (*x, *y)
+                for x in choices[lead]
+                for y in choices[mate]
+                if not (x[0] >= MOVE_ACTIONS and x[0] == y[0])
+            ]
+        a0, t0, a2, t2 = (int(v) for v in draw(st.sampled_from(pairs)))
+        acts[lead], targets[lead], acts[mate], targets[mate] = a0, t0, a2, t2
+    return jnp.asarray(acts, jnp.int32), jnp.asarray(targets, jnp.int8)
 
 
 # Moves whose outcome laws the enumeration tests need (tests/engine/test_enumerate.py):
