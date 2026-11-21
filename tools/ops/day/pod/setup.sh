@@ -21,9 +21,11 @@ D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; set +x; . ./meta.env; unset WATCH_
 printf 'GATE_VERSION=%s\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\n' "${GATE_VERSION:-}" "${POD_SCRIPTS:-}" "${POD_WEIGHTS:-}" > "$D/gate.env"   # podcheck.sh reads it
 # run.env: every knob the exec-pod body's env set (RUN_ENV_NAMES; never the beacon codes, which
 # live in meta.env only), as "export NAME=<value>" lines, so a runner restart repeats them
-# (DAYBOX.md, Housekeeping, "Restart a runner"). A knob left unset is not written.
+# (DAYBOX.md, Housekeeping, "Restart a runner"). A knob left unset is not written. Values are in
+# POSIX single quotes (a ' as '\''), so sh (dash, the restart body's shell) and bash read them alike.
 RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_S RUNNER_LOCK CLAIM_S CLAIMS CLAIM_MAX_S UNIT_MAX_S WORK DUR COLLECTP WATCH_HOURS WARMUP WARMUP_S NUZLINE_TEST_COMPILE_CACHE NUZLINE_HYPOTHESIS_PROFILE NUZLINE_REQUIRE_NODE CGROOT"
-for n in $RUN_ENV_NAMES; do if [ -n "${!n+x}" ]; then printf 'export %s=%q\n' "$n" "${!n}"; fi; done > "$D/run.env"
+for n in $RUN_ENV_NAMES; do if [ -n "${!n+x}" ]; then
+  printf "export %s='%s'\n" "$n" "$(printf '%s' "${!n}" | sed "s/'/'\\\\''/g")"; fi; done > "$D/run.env"
 . "$D/bin/gate.sh"   # cgmem: container memory, cgroup v2 or v1
 MARK="${MARK:-not slow and not fullset}"   # pack.sh writes MARK into meta.env; this default is the same
 echo $$ > "$D/setup.pid"; SETUP_DONE=0

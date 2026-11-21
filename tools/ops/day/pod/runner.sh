@@ -38,7 +38,7 @@
 # measured files and 12 GB is the 90th percentile of 7183 measured units),
 # IDLE_WAIT_S (300), RUNNER_LOCK (/work/.runner.lock), CLAIM_S (120), CLAIMS (/work/.claims),
 # CLAIM_MAX_S (3600: a claim whose pid is alive but no runner, a reused pid, is deleted once
-# older, "claim-expired"; a dead runner's claim goes at once; a live runner's claim never expires
+# older, "claim-expired"; a dead runner's claim goes at once, "claim-dead"; a live runner's claim never expires
 # by time; this runner's own lost claim lets its head be gated again with a fresh hold timer),
 # UNIT_MAX_S (21600: measured unit walls reach 10080 s on uncontended pods; a unit running longer
 # is killed with rc 96, listed in timedout.txt, a failure), WORK (/work: the folder whose runs the
@@ -158,7 +158,8 @@ while :; do
     [ "$cl" = claim ] && [ "$cs" = none ] && { claim_write "$RUN" "$u" "$w" "$now"; claimed=$u
       echo "$now claim $u: held $(( now - h0t )) s, weight ${w} GB; other new-script runners start nothing until it starts"; }
     flock -u 8
-    [ "${held:-}" != "$u $a" ] && { held="$u $a"
+    ho=""; [ "$cs" = other ] && ho=$cu   # a new claim owner reprints the hold line
+    [ "${held:-}" != "$u $a $ho" ] && { held="$u $a $ho"
       echo "$now $a $u: mem ${mem} + reserve ${pres} + weight ${w} GB; GATE_GB ${GATE_GB} KILL_GB ${KILL_GB}, ${plive} units live$([ "$cs" = other ] && echo ", claim $cu is older")"; }
   fi
   sleep 10

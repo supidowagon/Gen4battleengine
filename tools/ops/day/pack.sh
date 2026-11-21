@@ -46,6 +46,7 @@ DIRTY=$(git -C "$TOP" status --porcelain -- tools/ops/day/pod)
 [ -z "$DIRTY" ] || refuse "uncommitted changes in tools/ops/day/pod; commit them first" "$DIRTY"
 OPS=$(git -C "$TOP" rev-parse HEAD)
 pod_main_check "$TOP"
+[ "${PACK_OFF_MAIN_POD:-}" = 1 ] && echo "WARNING: PACK_OFF_MAIN_POD=1: the pod scripts come from HEAD $(git -C "$TOP" rev-parse --short HEAD), not checked against main; a road test of an ops branch only, stated in its report"
 [ -f "$LIST" ] || refuse "no such test list" "$LIST"
 
 mkdir -p "$P/bin"

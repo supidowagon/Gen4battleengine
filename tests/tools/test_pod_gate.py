@@ -177,7 +177,8 @@ def test_a_dead_or_zombie_claimant_is_ignored_and_deleted(tmp_path):
     b = _run_dir(tmp_path, "run-b", [("u_001", 9)])
     _in(b, claims, "CLAIM_PID=5001 claim_write run-a u_001 30 1000; CLAIM_PID=5002 claim_write run-c u_004 30 1001")
     (claims / "run-d.u_002").write_text("garbage\n", encoding="utf-8", newline="\n")
-    assert _in(b, claims, "claim_state run-b", {5002: "Z"}) == "none"
+    got = _in(b, claims, "claim_state run-b 2> err.txt; cat err.txt", {5002: "Z"}).splitlines()
+    assert got == ["none", "2000 claim-dead run-a.u_001 pid 5001 age 1000 s", "2000 claim-dead run-c.u_004 pid 5002 age 999 s"]
     assert sorted(p.name for p in claims.iterdir()) == []
 
 
@@ -408,10 +409,13 @@ def test_pack_refuses_pod_scripts_that_differ_from_main(tmp_path):
     assert "run it from a checkout at main (the main checkout)" in r.stdout
     assert "merge" not in r.stdout
     # the override, and a checkout at main, pass the check and stop at the next one
-    assert "REFUSED: no such test list" in pack(PACK_OFF_MAIN_POD="1").stdout
+    off = pack(PACK_OFF_MAIN_POD="1").stdout
+    assert "REFUSED: no such test list" in off
+    assert sum(x.startswith("WARNING: PACK_OFF_MAIN_POD=1") for x in off.splitlines()) == 1
     _git(repo, "checkout", "-q", "main")
     r = pack()
     assert (r.returncode, "REFUSED: no such test list" in r.stdout) == (3, True)
+    assert "WARNING" not in r.stdout
 
 
 def test_setup_writes_gate_env_without_the_beacon_codes(tmp_path):
@@ -422,7 +426,7 @@ def test_setup_writes_gate_env_without_the_beacon_codes(tmp_path):
     (d / "meta.env").write_text("COMMIT=x\nGATE_VERSION=2\nPOD_SCRIPTS=abc\nPOD_WEIGHTS=def\nWATCH_F=secretf\nWATCH_D=secretd\n",
                                 encoding="utf-8", newline="\n")
     # no cgroup memory file: setup stops right after writing gate.env
-    knobs = "GATE_GB=176 MAXP=18 SPACING=4 RUNMAXP=6 WARMUP=none NUZLINE_HYPOTHESIS_PROFILE=explore DUR='40 x'"
+    knobs = "GATE_GB=176 MAXP=18 SPACING=4 RUNMAXP=6 WARMUP=\"it's x\" NUZLINE_HYPOTHESIS_PROFILE=explore DUR='40 x'"
     r = subprocess.run([BASH, "-c", f"{knobs} CGROOT='{(tmp_path / 'nocg').as_posix()}' bash '{(d / 'bin/setup.sh').as_posix()}'"],
                        check=False, capture_output=True, text=True, env=_clean_env())
     assert r.returncode != 0
@@ -431,8 +435,11 @@ def test_setup_writes_gate_env_without_the_beacon_codes(tmp_path):
     assert "secret" not in env and "WATCH" not in env
     show = (f". '{(d / 'run.env').as_posix()}'; echo \"$GATE_GB|$MAXP|$SPACING|$RUNMAXP|$WARMUP|"
             f"$NUZLINE_HYPOTHESIS_PROFILE|$DUR|${{KILL_GB:-unset}}\"")
-    got = subprocess.run([BASH, "-c", show], check=True, capture_output=True, text=True, env=_clean_env())
-    assert got.stdout.strip() == "176|18|4|6|none|explore|40 x|unset"
+    # POSIX quoting: the restart body sources run.env under sh (dash on the pod)
+    shells = [[BASH, "-c"], [BASH, "--posix", "-c"]] + ([[shutil.which("dash"), "-c"]] if shutil.which("dash") else [])
+    for sh in shells:
+        got = subprocess.run([*sh, show], check=True, capture_output=True, text=True, env=_clean_env())
+        assert got.stdout.strip() == "176|18|4|6|it's x|explore|40 x|unset", sh
     assert "ERROR: no cgroup memory file" in r.stdout
     assert "SETUP_FAILED" in r.stdout
     assert "secret" not in r.stdout + r.stderr

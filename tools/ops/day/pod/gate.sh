@@ -76,16 +76,18 @@ claim_write() { mkdir -p "$CLAIMS"; local t="$CLAIMS/.$1.$2.tmp"
   echo "$4 $3 ${CLAIM_PID:-$$}" > "$t" && mv -f "$t" "$CLAIMS/$1.$2"; }
 claim_drop() { rm -f "$CLAIMS/$1.$2"; }
 # claim_state <run>: "none" | "mine <unit>" | "other <run>.<unit>" for the oldest live claim;
-# deletes on the way malformed claims, claims whose pid is dead (or a zombie) and claims whose pid
-# is alive but no runner (runnerpid: a reused pid) once older than CLAIM_MAX_S (logged "<epoch>
-# claim-expired <name> age <s> s" on stderr). A live runner's claim never expires by time: it
-# ends when that runner starts the claimed unit or dies.
+# deletes on the way malformed claims, claims whose pid is dead (or a zombie: logged "<epoch>
+# claim-dead <name> pid <pid> age <s> s" on stderr) and claims whose pid is alive but no runner
+# (runnerpid: a reused pid) once older than CLAIM_MAX_S (logged "<epoch> claim-expired <name> age
+# <s> s" on stderr). A live runner's claim never expires by time: it ends when that runner starts
+# the claimed unit or dies.
 claim_state() {
   local c n e w p best="" be=""
   for c in "$CLAIMS"/*; do [ -f "$c" ] || continue; n=${c##*/}
     read -r e w p < "$c" 2>/dev/null || { rm -f "$c"; continue; }
     case "$e" in ''|*[!0-9]*) rm -f "$c"; continue;; esac
-    pidlive "$p" || { rm -f "$c"; continue; }
+    pidlive "$p" || { rm -f "$c"
+      echo "${NOW:-$(date +%s)} claim-dead $n pid $p age $(( ${NOW:-$(date +%s)} - e )) s" >&2; continue; }
     if ! runnerpid "$p" && [ $(( ${NOW:-$(date +%s)} - e )) -gt "${CLAIM_MAX_S:-3600}" ]; then rm -f "$c"
       echo "${NOW:-$(date +%s)} claim-expired $n age $(( ${NOW:-$(date +%s)} - e )) s" >&2; continue; fi
     if [ -z "$best" ] || [ "$e" -lt "$be" ] || { [ "$e" -eq "$be" ] && [[ "$n" < "$best" ]]; }; then best=$n; be=$e; fi
