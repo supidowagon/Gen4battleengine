@@ -1,5 +1,6 @@
 """tools/ops/day/pod/gate.sh: runner.sh's start-gate arithmetic, run in bash with a fake ps."""
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -171,15 +172,23 @@ def test_podgate_counts_a_unit_that_has_not_called_setsid_yet(tmp_path):
     assert _run(f"{fake_z}\npodgate '{f}'") == "0 0"
 
 
-def test_an_expired_claim_is_deleted_and_logged_and_the_next_one_wins(tmp_path):
+# runnerpid stand-in: pids 6001 and 6002 run runner.sh; 6003 is alive but a reused pid.
+RUNNERS = "runnerpid() { case \"$1\" in 6001|6002) return 0;; esac; return 1; }\n"
+
+
+def test_only_a_reused_pids_claim_expires_by_time_a_live_runners_never(tmp_path):
     claims = tmp_path / "claims"
     b = _run_dir(tmp_path, "run-b", [("u_001", 9)])
-    live = {6001: "S", 6002: "S"}
-    _in(b, claims, "CLAIM_PID=6001 claim_write run-a u_001 30 1000; CLAIM_PID=6002 claim_write run-b u_001 9 4000", live)
-    script = "NOW=4601 CLAIM_MAX_S=3600 claim_state run-b 2> err.txt; cat err.txt"
-    assert _in(b, claims, script, live).splitlines() == ["mine u_001", "4601 claim-expired run-a.u_001 age 3601 s"]
-    assert sorted(p.name for p in claims.iterdir()) == ["run-b.u_001"]
-    assert _in(b, claims, "NOW=4600 CLAIM_MAX_S=3600 claim_state run-a", live) == "other run-b.u_001"
+    live = {6001: "S", 6002: "S", 6003: "S"}
+    _in(b, claims, "CLAIM_PID=6001 claim_write run-a u_001 30 1000; CLAIM_PID=6002 claim_write run-b u_001 9 4000; "
+        "CLAIM_PID=6003 claim_write run-c u_002 30 900", live)
+    # at 4500 the reused pid's claim is 3600 s old, not older than CLAIM_MAX_S: it still wins
+    assert _in(b, claims, RUNNERS + "NOW=4500 CLAIM_MAX_S=3600 claim_state run-b", live) == "other run-c.u_002"
+    script = RUNNERS + "NOW=4501 CLAIM_MAX_S=3600 claim_state run-b 2> err.txt; cat err.txt"
+    assert _in(b, claims, script, live).splitlines() == ["other run-a.u_001", "4501 claim-expired run-c.u_002 age 3601 s"]
+    # run-a's runner is alive: its 3601 s old claim stays and stays the oldest
+    assert sorted(p.name for p in claims.iterdir()) == ["run-a.u_001", "run-b.u_001"]
+    assert _in(b, claims, RUNNERS + "NOW=99999 CLAIM_MAX_S=3600 claim_state run-a", live) == "mine u_001"
 
 
 PODCHECK = GATE.parent / "podcheck.sh"
@@ -216,19 +225,21 @@ def test_unit_overdue_counts_from_the_start_file(tmp_path):
 
 
 def _podcheck(root: Path, pids: dict[int, str], cg: Path, want: str = "") -> tuple[int, list[str]]:
+    """want: podcheck.sh's arguments after <root> (POD_SCRIPTS, POD_WEIGHTS)."""
     script = (f"{_fake_ps(pids)}\nexport -f ps\nCGROOT='{cg.as_posix()}' bash '{PODCHECK.as_posix()}' "
               f"'{root.as_posix()}' {want}")
     r = subprocess.run([BASH, "-c", script], check=False, capture_output=True, text=True)
     return r.returncode, r.stdout.strip().splitlines()
 
 
-def _pod_run(root: Path, name: str, runner_pid: int | None, scripts: str | None, pending: int) -> Path:
+def _pod_run(root: Path, name: str, runner_pid: int | None, scripts: str | None, pending: int,
+             weights: str = "c" * 64) -> Path:
     d = root / name
     (d / "out" / "run").mkdir(parents=True)
     if runner_pid is not None:
         (d / "runner.pid").write_text(f"{runner_pid}\n", encoding="utf-8", newline="\n")
     if scripts is not None:
-        (d / "gate.env").write_text(f"GATE_VERSION=2\nPOD_SCRIPTS={scripts}\n", encoding="utf-8", newline="\n")
+        (d / "gate.env").write_text(f"GATE_VERSION=2\nPOD_SCRIPTS={scripts}\nPOD_WEIGHTS={weights}\n", encoding="utf-8", newline="\n")
     (d / "out" / "pending.txt").write_text("".join(f"u_{i:03d} tests/x.py\n" for i in range(pending)), encoding="utf-8", newline="\n")
     (d / "meta.env").write_text("WATCH_F=secretcode\n", encoding="utf-8", newline="\n")
     return d
@@ -240,17 +251,17 @@ B = "b" * 64
 
 def test_podcheck_lists_runs_gate_versions_memory_and_claims(tmp_path):
     root = tmp_path / "work"
-    _pod_run(root, "new-a", 7001, A, 3)
-    _pod_run(root, "done-b", 7002, B, 0)          # runner gone: not active
-    _pod_run(root, "_podcheck", 7001, None, 0)    # tool folders are skipped
+    _pod_run(root, "new-a", 9000001, A, 3)
+    _pod_run(root, "done-b", 9000002, B, 0)          # runner gone: not active
+    _pod_run(root, "_podcheck", 9000001, None, 0)    # tool folders are skipped
     (root / ".claims").mkdir(parents=True)
-    (root / ".claims" / "new-a.u_004").write_text("1 30 7001\n", encoding="utf-8", newline="\n")
+    (root / ".claims" / "new-a.u_004").write_text("1 30 9000001\n", encoding="utf-8", newline="\n")
     cg = _cg(tmp_path, {"memory.current": "94000000000", "memory.max": "137438953472"})
-    rc, out = _podcheck(root, {7001: "S"}, cg, A)
+    rc, out = _podcheck(root, {9000001: "S"}, cg, A)
     assert rc == 0
     assert out[0] == "run new-a gate=2 scripts=aaaaaaaaaaaa runner=alive live=0 pending=3"
     assert out[1] == "memory 94 GB limit 137 GB"
-    assert out[2].startswith("claim new-a.u_004 age ") and out[2].endswith(" s weight 30 GB runner alive")
+    assert out[2].startswith("claim new-a.u_004 age ") and out[2].endswith(" s weight 30 GB runner not-runner")
     assert out[-1] == "PODCHECK OK"
     assert not any("secretcode" in x for x in out)
 
@@ -265,16 +276,27 @@ def test_podcheck_reads_cgroup_v1_and_an_unlimited_limit(tmp_path):
 
 def test_podcheck_fails_on_an_active_old_script_or_other_script_run(tmp_path):
     root = tmp_path / "work"
-    _pod_run(root, "new-a", 7001, A, 1)
-    _pod_run(root, "old-c", 7003, None, 5)
-    _pod_run(root, "other-d", 7004, B, 2)
+    _pod_run(root, "new-a", 9000001, A, 1)
+    _pod_run(root, "old-c", 9000003, None, 5)
+    _pod_run(root, "other-d", 9000004, B, 2)
     cg = _cg(tmp_path, {"memory.current": "0"})
-    rc, out = _podcheck(root, {7001: "S", 7003: "S", 7004: "S"}, cg, A)
+    rc, out = _podcheck(root, {9000001: "S", 9000003: "S", 9000004: "S"}, cg, A)
     assert rc == 1
     assert "run old-c gate=old scripts=old runner=alive live=0 pending=5" in out
     assert out[-1] == "PODCHECK MIXED old=old-c other=other-d"
-    rc, out = _podcheck(root, {7001: "S", 7004: "S"}, cg)   # no POD_SCRIPTS given: only old ones count
+    rc, out = _podcheck(root, {9000001: "S", 9000004: "S"}, cg)   # no POD_SCRIPTS given: only old ones count
     assert (rc, out[-1]) == (0, "PODCHECK OK")
+
+
+def test_podcheck_reports_other_weights_on_their_own_line_not_as_mixed(tmp_path):
+    root = tmp_path / "work"
+    _pod_run(root, "new-a", 9000001, A, 1)
+    _pod_run(root, "new-e", 9000005, A, 1, weights="d" * 64)
+    cg = _cg(tmp_path, {"memory.current": "0"})
+    rc, out = _podcheck(root, {9000001: "S", 9000005: "S"}, cg, f"{A} {'c' * 64}")
+    assert rc == 0
+    assert "weights other=new-e" in out
+    assert out[-1] == "PODCHECK OK"
 
 
 BODY = ROOT / "tools" / "ops" / "day" / "podcheck_body.sh"
@@ -284,7 +306,8 @@ def test_podcheck_body_carries_heads_gate_and_podcheck_and_their_sum():
     import base64
     import json
     import re
-    r = subprocess.run([BASH, BODY.as_posix()], check=False, capture_output=True, text=True, cwd=ROOT)
+    env = {**os.environ, "PACK_OFF_MAIN_POD": "1"}   # this checkout may be an ops branch
+    r = subprocess.run([BASH, BODY.as_posix()], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
     if "REFUSED: uncommitted changes" in r.stdout:
         pytest.skip("tools/ops/day/pod has uncommitted changes")
     assert r.returncode == 0, r.stdout + r.stderr
@@ -295,4 +318,91 @@ def test_podcheck_body_carries_heads_gate_and_podcheck_and_their_sum():
     for b64, name in parts:
         head = subprocess.run(["git", "show", f"HEAD:tools/ops/day/pod/{name}"], check=True, capture_output=True, cwd=ROOT).stdout
         assert base64.b64decode(b64) == head.replace(b"\r", b"")
-    assert re.search(r"bash /work/_podcheck/podcheck.sh /work [0-9a-f]{64}$", cmd)
+    assert re.search(r"bash /work/_podcheck/podcheck.sh /work [0-9a-f]{64} [0-9a-f]{64}$", cmd)
+
+
+
+# pack.sh's main check, in a throwaway repo holding only the scripts it needs before that check.
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@localhost", "-c", "core.autocrlf=false",
+                    *args], check=True, capture_output=True)
+
+
+def test_pack_refuses_pod_scripts_that_differ_from_main(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "tools/ops/day/pod").mkdir(parents=True)
+    for rel in ("tools/ops/common.sh", "tools/ops/day/pack.sh"):
+        (repo / rel).write_bytes((ROOT / rel).read_bytes().replace(b"\r", b""))
+    (repo / "tools/ops/day/pod/a.sh").write_text("echo 1\n", encoding="utf-8", newline="\n")
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "main")
+    _git(repo, "checkout", "-qb", "ops")
+    (repo / "tools/ops/day/pod/a.sh").write_text("echo 2\n", encoding="utf-8", newline="\n")
+    _git(repo, "commit", "-qam", "ops")
+    env = {k: v for k, v in os.environ.items() if k not in ("NUZLINE_REPO", "NUZLINE_SCRATCH", "PACK_OFF_MAIN_POD")}
+
+    def pack(**extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run([BASH, "tools/ops/day/pack.sh", "HEAD", "t.tar.xz", "r1", "nolist.txt"], check=False,
+                              capture_output=True, text=True, cwd=repo, env={**env, **extra})
+
+    r = pack()
+    assert r.returncode == 3
+    assert "REFUSED: tools/ops/day/pod at this checkout's HEAD differs from main's" in r.stdout
+    assert "run it from a checkout at main (the main checkout)" in r.stdout
+    assert "merge" not in r.stdout
+    # the override, and a checkout at main, pass the check and stop at the next one
+    assert "REFUSED: no such test list" in pack(PACK_OFF_MAIN_POD="1").stdout
+    _git(repo, "checkout", "-q", "main")
+    r = pack()
+    assert (r.returncode, "REFUSED: no such test list" in r.stdout) == (3, True)
+
+
+def test_setup_writes_gate_env_without_the_beacon_codes(tmp_path):
+    d = tmp_path / "run1"
+    (d / "bin").mkdir(parents=True)
+    for n in ("setup.sh", "gate.sh"):
+        (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
+    (d / "meta.env").write_text("COMMIT=x\nGATE_VERSION=2\nPOD_SCRIPTS=abc\nPOD_WEIGHTS=def\nWATCH_F=secretf\nWATCH_D=secretd\n",
+                                encoding="utf-8", newline="\n")
+    # no cgroup memory file: setup stops right after writing gate.env
+    r = subprocess.run([BASH, "-c", f"CGROOT='{(tmp_path / 'nocg').as_posix()}' bash '{(d / 'bin/setup.sh').as_posix()}'"],
+                       check=False, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert (d / "gate.env").read_text(encoding="utf-8") == "GATE_VERSION=2\nPOD_SCRIPTS=abc\nPOD_WEIGHTS=def\n"
+    assert "ERROR: no cgroup memory file" in r.stdout
+    assert "SETUP_FAILED" in r.stdout
+    assert "secret" not in r.stdout + r.stderr
+
+
+def _linux_tools() -> bool:
+    if BASH is None:
+        return False
+    r = subprocess.run([BASH, "-c", "command -v setsid flock >/dev/null && ps -eo pid=,pgid=,stat= >/dev/null"],
+                       check=False, capture_output=True)
+    return r.returncode == 0
+
+
+@pytest.mark.skipif(not _linux_tools(), reason="needs setsid, flock and a procps ps (the pod)")
+def test_runner_kills_a_unit_over_unit_max_s_with_rc_96(tmp_path):
+    work = tmp_path / "work"
+    d = work / "run-t"
+    (d / "bin").mkdir(parents=True)
+    (d / "out").mkdir()
+    for n in ("runner.sh", "gate.sh"):
+        (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
+    # a unit that never ends: it writes its start time like unit.sh and sleeps
+    (d / "bin" / "unit.sh").write_text('u="$1"; O="$(cd "$(dirname "$0")/.." && pwd)/out"\n'
+                                       'date +%s > "$O/$u.start"; exec sleep 300\n', encoding="utf-8", newline="\n")
+    (d / "out" / "queue.txt").write_text("u_001 tests/x.py\n", encoding="utf-8", newline="\n")
+    (d / "out" / "u_001.w").write_text("1\n", encoding="utf-8", newline="\n")
+    cg = _cg(tmp_path, {"memory.current": "1000000000"})
+    env = (f"CGROOT='{cg}' WORK='{work}' RUNNER_LOCK='{tmp_path / 'lock'}' CLAIMS='{tmp_path / 'claims'}' "
+           "WARMUP=none SPACING=0 UNIT_MAX_S=2")
+    log = d / "runner.log"
+    subprocess.run([BASH, "-c", f"{env} bash '{d / 'bin/runner.sh'}' > '{log}' 2>&1"], check=True, timeout=120)
+    o = d / "out"
+    assert (o / "u_001.rc").read_text(encoding="utf-8").strip() == "96"
+    assert (o / "timedout.txt").read_text(encoding="utf-8").split() == ["u_001"]
+    assert (o / "DONE").is_file()
+    assert "TIMEOUT u_001: over UNIT_MAX_S 2 s, killed: rc 96" in log.read_text(encoding="utf-8")

@@ -37,9 +37,12 @@
 # unit without a .w file, a run packed before weights; those runs are mostly fast-tier chunks of
 # measured files and 12 GB is the 90th percentile of 7183 measured units),
 # IDLE_WAIT_S (300), RUNNER_LOCK (/work/.runner.lock), CLAIM_S (120), CLAIMS (/work/.claims),
-# CLAIM_MAX_S (3600: an older claim is deleted, "claim-expired", and its unit is gated normally
-# with a fresh hold timer), UNIT_MAX_S (14400: measured unit walls reach 10080 s; a unit running
-# longer is killed with rc 96, listed in timedout.txt, a failure), WARMUP, WARMUP_S (900).
+# CLAIM_MAX_S (3600: a claim whose pid is alive but no runner, a reused pid, is deleted once
+# older, "claim-expired"; a dead runner's claim goes at once; a live runner's claim never expires
+# by time; this runner's own lost claim lets its head be gated again with a fresh hold timer),
+# UNIT_MAX_S (21600: measured unit walls reach 10080 s on uncontended pods; a unit running longer
+# is killed with rc 96, listed in timedout.txt, a failure), WORK (/work: the folder whose runs the
+# pod-wide gate counts), WARMUP, WARMUP_S (900).
 # Warm-up: when queue.txt has a tests/engine unit, one pytest process over the node id WARMUP
 # (default tests/engine/test_step_basic.py::test_miss_deals_no_damage, which compiles step; none
 # turns it off) runs alone first (unit.sh --warmup, files in out/warmup/), so step is compiled once
@@ -52,7 +55,7 @@ D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
 GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; RUNMAXP="${RUNMAXP:-$MAXP}"; SPACING="${SPACING:-4}"; KILL_GB="${KILL_GB:-118}"
 NO_W_FILE_GB="${DEFAULT_WEIGHT_GB:-12}"; IDLE_WAIT_S="${IDLE_WAIT_S:-300}"; LOCK="${RUNNER_LOCK:-/work/.runner.lock}"
 CLAIMS="${CLAIMS:-/work/.claims}"; CLAIM_S="${CLAIM_S:-120}"; CLAIM_MAX_S="${CLAIM_MAX_S:-3600}"; RUN=$(basename "$D")
-UNIT_MAX_S="${UNIT_MAX_S:-14400}"
+UNIT_MAX_S="${UNIT_MAX_S:-21600}"; WORK="${WORK:-/work}"
 cd "$O"; mkdir -p run
 . "$D/bin/gate.sh"   # cgmem, wgb, podgate, admit, choose, claims, unit_overdue
 memgb() { local b; b=$(cgmem current) || return 1; echo $(( b / 1000000000 )); }
@@ -133,7 +136,7 @@ while :; do
   fi
   if [ "$npend" -gt 0 ] && [ "$mem" -lt "$GATE_GB" ] && [ "$nrun" -lt "$RUNMAXP" ]; then
     flock -w 120 8 || { echo "$(date +%s) gate lock $LOCK still held after 120 s"; continue; }
-    now=$(date +%s); mem=$(memgb) || { flock -u 8; nomem; }; read -r plive pres <<< "$(podgate /work/*/out/run/* /work/*/*/out/run/*)"
+    now=$(date +%s); mem=$(memgb) || { flock -u 8; nomem; }; read -r plive pres <<< "$(podgate "$WORK"/*/out/run/* "$WORK"/*/*/out/run/*)"
     read -r u f < pending.txt; w=$(wgb "$u.w")
     [ "$plive" -eq 0 ] || idle0=""; [ "$plive" -eq 0 ] && [ -z "${idle0:-}" ] && idle0=$now
     waited=$(( now - ${idle0:-$now} ))
