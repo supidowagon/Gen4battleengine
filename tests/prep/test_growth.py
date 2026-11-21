@@ -10,25 +10,47 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from nuzline.data import tables as table_data
-from nuzline.data.gauntlet import Origin, Resolved, Settings
+from nuzline.data.gauntlet import Origin, Resolved, Settings, Swap
 from nuzline.data.learnsets import Learnsets
 from nuzline.data.spec import PokemonSpec
+from nuzline.engine.ids import EffectId, ItemParam
 from nuzline.engine.state import spec_stats
+from nuzline.prep.gauntlet import carry_from_party
 from nuzline.prep.growth import (
+    BASE_PLAN,
+    BATTLE_RESULT_CAPTURED_MON,
+    BATTLE_RESULT_PLAYER_FLED,
+    BATTLE_RESULT_WIN,
     EVO_CLASS_BY_ITEM,
     EVO_CLASS_BY_LEVEL,
     EVO_CLASS_BY_TRADE,
     EVO_CLASS_UNUSED_02,
     HOLD_EFFECT_NO_EVOLVE,
     ITEM_POKE_BALL,
+    MAX_GROWTH_PLANS,
     MAX_PARTY_SIZE,
     SPECIES_KADABRA,
+    EvolutionGap,
+    GrowthPlan,
+    evolution_prompt,
     evolution_target,
     evolve,
+    evolve_dominates,
+    give_up_only,
+    growth_plans,
+    learn_offers,
+    member_options,
+    member_plan_count,
+    member_plans,
+    post_battle_prompts,
+    rare_candy,
+    resolve_post_battle,
+    use_stone,
 )
 
 DECOMP = Path("external/pokeplatinum")
@@ -705,3 +727,543 @@ def test_only_the_ninjask_and_shedinja_methods_add_a_shedinja(
     )
     assert (extra is not None) == added
     assert out == {ITEM_POKE_BALL: 0 if added else 1}
+
+
+# --- GT-14 evolution prompts, Rare Candy, stones (E3-B3-14) ------------------------------------
+
+OLD = SUBJECT  # the evolving species of the prompt and plan tests; A is its target
+MASK1 = [True] + [False] * 5
+STONE = 82  # an item id; the synthetic rows name it, so the table does not matter
+
+
+def sp(species=OLD, level=30, **fields):
+    return replace(spec(species=species, level=level), **fields)
+
+
+def carry_settings():
+    def resolved(value):
+        return Resolved(value, Origin.DEFAULT, "test")
+
+    return Settings(
+        values={
+            "shedinja": resolved("forbidden"),
+            "swap": resolved(Swap(1, 2)),
+            "bag_uses": resolved(3),
+        },
+        gaps={},
+        locked=(),
+        locked_source="",
+    )
+
+
+def carry_of(tables, party, bag=None):
+    return carry_from_party(
+        tables, party, bag or {}, carry_settings(), personality=[2 * i for i in range(len(party))]
+    )
+
+
+def rows_learnsets(manifest, method, rows_by_species):
+    """Learnsets whose species in ``rows_by_species`` have the evolution rows
+    ``(method name, param, target)``."""
+    evolutions = {
+        **manifest["evolutions"],
+        **{str(s): [[method[n], p, t] for n, p, t in rows] for s, rows in rows_by_species.items()},
+    }
+    return Learnsets({**manifest, "evolutions": evolutions})
+
+
+def level_evolver(manifest, method, level=10):
+    """Learnsets where OLD evolves into A at ``level`` by the plain level method."""
+    return rows_learnsets(manifest, method, {OLD: [("level", level, A)]})
+
+
+@pytest.mark.parametrize(
+    ("result", "offered"),
+    [
+        (BATTLE_RESULT_WIN, True),
+        (BATTLE_RESULT_CAPTURED_MON, True),
+        (BATTLE_RESULT_PLAYER_FLED, True),
+        (2, False),  # BATTLE_RESULT_LOSE, include/constants/battle.h:73
+        (3, False),  # BATTLE_RESULT_DRAW, :78
+        (6, False),  # BATTLE_RESULT_ENEMY_FLED, :80
+        (0, False),
+    ],
+)
+def test_prompts_only_on_win_capture_or_flee(tables, manifest, method, result, offered):
+    ls = level_evolver(manifest, method)
+    carry = carry_of(tables, [sp()])
+    got = post_battle_prompts(tables, ls, carry, MASK1, result, 0, None)
+    assert [p.slot for p in got] == ([0] if offered else [])
+
+
+def test_only_levelled_members_are_offered_and_a_fainted_one_too(tables, manifest, method):
+    ls = level_evolver(manifest, method)
+    carry = carry_of(tables, [sp(), sp(current_hp=0), sp(), sp(level=5)])
+    mask = [False, True, True, True, False, False]
+    got = post_battle_prompts(tables, ls, carry, mask, BATTLE_RESULT_WIN, 0, None)
+    # slot 3 is below the evolution level, slot 0 did not level up
+    assert [(p.slot, p.dead) for p in got] == [(1, True), (2, False)]
+    assert all(p.species == OLD and p.target == A and p.cancellable for p in got)
+    assert all(p.evo_class == EVO_CLASS_BY_LEVEL for p in got)
+
+
+def test_the_mask_is_a_party_slot_mask(tables, manifest, method):
+    ls = level_evolver(manifest, method)
+    carry = carry_of(tables, [sp()])
+    with pytest.raises(ValueError, match="mask"):
+        post_battle_prompts(tables, ls, carry, [True], BATTLE_RESULT_WIN, 0, None)
+
+
+def test_cancel_changes_nothing_and_offers_again_only_after_the_next_level_up(
+    tables, manifest, method
+):
+    ls = level_evolver(manifest, method)
+    carry = carry_of(tables, [sp()])
+    asked = []
+
+    def cancel(prompt):
+        asked.append(prompt)
+
+    def run(c, mask):
+        args = (tables, ls, c, mask, BATTLE_RESULT_WIN, 0, None, carry_settings(), cancel)
+        return resolve_post_battle(*args)
+
+    after, offered = run(carry, MASK1)
+    assert len(asked) == len(offered) == 1 and int(after.species[0]) == OLD
+    assert all(np.array_equal(getattr(after, f), getattr(carry, f)) for f in carry._fields)
+    # the next battle with no level-up offers nothing; the one with a level-up offers again
+    _, none = run(after, [False] * 6)
+    assert none == []
+    _, second = run(after, MASK1)
+    assert len(second) == 1
+
+
+def test_an_accepted_prompt_evolves_and_a_dead_member_is_never_asked(tables, manifest, method):
+    ls = level_evolver(manifest, method)
+    carry = carry_of(tables, [sp(), sp(current_hp=0)])
+    mask = [True, True, False, False, False, False]
+    seen = []
+
+    def accept(prompt):
+        seen.append(prompt.slot)
+        return {}
+
+    after, offered = resolve_post_battle(
+        tables, ls, carry, mask, BATTLE_RESULT_WIN, 0, None, carry_settings(), accept
+    )
+    assert [p.slot for p in offered] == [0, 1] and seen == [0]  # the dead one is offered only
+    assert int(after.species[0]) == A and int(after.species[1]) == OLD
+    assert int(after.hp[1]) == 0
+
+
+def test_a_later_slot_is_checked_against_the_party_after_an_evolution(tables, manifest, method):
+    # slot 0 evolves into A; slot 1 (B) evolves only with an A in the party (src/pokemon.c:3676)
+    ls = rows_learnsets(
+        manifest,
+        method,
+        {OLD: [("level", 10, A)], B: [("level_species_in_party", A, 3)]},
+    )
+    carry = carry_of(tables, [sp(), sp(species=B)])
+    mask = [True, True, False, False, False, False]
+    _, offered = resolve_post_battle(
+        tables, ls, carry, mask, BATTLE_RESULT_WIN, 0, None, carry_settings(), lambda p: None
+    )
+    assert [p.slot for p in offered] == [0]  # nobody evolved, no A in the party yet
+    _, offered = resolve_post_battle(
+        tables, ls, carry, mask, BATTLE_RESULT_WIN, 0, None, carry_settings(), lambda p: {}
+    )
+    assert [p.slot for p in offered] == [0, 1]
+
+
+def test_a_stone_prompt_cannot_be_cancelled_and_a_level_prompt_can(tables, manifest, method):
+    ls = rows_learnsets(manifest, method, {OLD: [("use_item", STONE, A), ("level", 10, B)]})
+    member = sp()
+    stone = evolution_prompt(
+        tables, ls, 0, member, None, EVO_CLASS_BY_ITEM, STONE, None, personality=0
+    )
+    level = evolution_prompt(
+        tables, ls, 0, member, None, EVO_CLASS_BY_LEVEL, 0, None, personality=0
+    )
+    assert (stone.target, stone.cancellable, stone.method) == (A, False, EVO_NONE)
+    assert (level.target, level.cancellable) == (B, True)
+    other = evolution_prompt(
+        tables, ls, 0, member, None, EVO_CLASS_BY_ITEM, STONE + 1, None, personality=0
+    )
+    assert other is None
+
+
+def test_use_stone_consumes_it_and_evolves(tables, manifest, method):
+    ls = rows_learnsets(manifest, method, {OLD: [("use_item", STONE, A)]})
+    member = sp(moves=(TACKLE, GROWL, 0, 0))
+    bag = {STONE: 2, 5: 1}
+    evolved, extra, out = use_stone(
+        tables, ls, member, STONE, bag, [member], shedinja_setting("forbidden"), personality=0
+    )
+    assert evolved.species == A and extra is None
+    assert out == {STONE: 1, 5: 1} and bag == {STONE: 2, 5: 1}  # main.c:2699-2701
+
+
+def test_use_stone_refusals(tables, manifest, method):
+    ls = rows_learnsets(manifest, method, {OLD: [("use_item", STONE, A)]})
+    setting = shedinja_setting("forbidden")
+
+    def go(member, stone=STONE, bag=None):
+        have = {STONE: 1} if bag is None else bag
+        return use_stone(tables, ls, member, stone, have, [member], setting, personality=0)
+
+    with pytest.raises(ValueError, match="dead"):
+        go(sp(current_hp=0))
+    with pytest.raises(ValueError, match="holds no item"):
+        go(sp(), bag={})
+    with pytest.raises(ValueError, match="does not evolve"):
+        go(sp(), stone=STONE + 1, bag={STONE + 1: 1})
+
+
+# Rare Candy -----------------------------------------------------------------------------------
+
+
+def candy_params(tables, names):
+    item = names.item("Rare Candy")
+    return item, np.asarray(tables.item_party_param)[item]
+
+
+def tier_gain(params, friendship):
+    """The item's friendship change by the tier of ``friendship`` (the table's params)."""
+    if friendship < 100:
+        give, change = ItemParam.GIVE_FRIENDSHIP_LOW, ItemParam.FRIENDSHIP_LOW
+    elif friendship < 200:
+        give, change = ItemParam.GIVE_FRIENDSHIP_MED, ItemParam.FRIENDSHIP_MED
+    else:
+        give, change = ItemParam.GIVE_FRIENDSHIP_HIGH, ItemParam.FRIENDSHIP_HIGH
+    return int(params[change]) if params[give] else 0
+
+
+@pytest.mark.parametrize("friendship", [0, 99, 100, 150, 199, 200, 250])
+def test_rare_candy_friendship_follows_the_params_by_tier(tables, names, learnsets, friendship):
+    item, params = candy_params(tables, names)
+    out = rare_candy(tables, learnsets, sp(friendship=friendship), item)
+    assert out.friendship == min(255, friendship + tier_gain(params, friendship))
+    assert tier_gain(params, friendship) > 0  # the vanilla candy gives friendship in every tier
+
+
+def test_rare_candy_soothe_bell_comes_before_the_plus_ones(tables, names, learnsets):
+    item, params = candy_params(tables, names)
+    soothe = names.item("Soothe Bell")
+    assert int(np.asarray(tables.item_hold_effect)[soothe]) == 53
+    base = tier_gain(params, 50)
+    member = sp(friendship=50, item=soothe, friend_bonus=1, egg_location=7)
+    out = rare_candy(tables, learnsets, member, item, location=7)
+    item_path = base * 150 // 100 + 1 + 1  # src/item_use_pokemon.c:575-586
+    battle_path = (base + 1 + 1) * 150 // 100  # src/pokemon.c:2664-2678
+    assert item_path != battle_path
+    assert out.friendship == 50 + item_path
+    # no location given: no egg-location bonus
+    no_egg = rare_candy(tables, learnsets, member, item)
+    assert no_egg.friendship == 50 + base * 150 // 100 + 1
+
+
+def test_rare_candy_friendship_clamps_and_stops_at_255(tables, names, learnsets):
+    item, _ = candy_params(tables, names)
+    assert rare_candy(tables, learnsets, sp(friendship=254), item).friendship == 255
+    assert rare_candy(tables, learnsets, sp(friendship=255), item).friendship == 255
+
+
+def test_rare_candy_level_exp_stats_and_hp(tables, names, learnsets):
+    item, _ = candy_params(tables, names)
+    member = sp(current_hp=20)
+    old_max = int(spec_stats(tables, member)[0])
+    out = rare_candy(tables, learnsets, member, item)
+    rate = int(np.asarray(tables.species_exp_rate)[member.species])
+    assert out.level == 31 and out.exp == int(np.asarray(tables.exp_table)[rate][31])
+    new_max = int(spec_stats(tables, out)[0])
+    assert out.current_hp == 20 + new_max - old_max  # src/pokemon.c:640-651
+    full = rare_candy(tables, learnsets, sp(), item)
+    assert full.current_hp is None and full.level == 31
+
+
+def test_rare_candy_revives_a_fainted_member_with_the_hp_gain(tables, names, learnsets):
+    item, _ = candy_params(tables, names)
+    member = sp(current_hp=0)
+    old_max = int(spec_stats(tables, member)[0])
+    out = rare_candy(tables, learnsets, member, item)
+    new_max = int(spec_stats(tables, out)[0])
+    assert out.current_hp == new_max - old_max > 0  # item_use_pokemon.c:294-298
+    assert out.level == 31
+
+
+def test_rare_candy_below_level_100_only(tables, names, learnsets):
+    item, _ = candy_params(tables, names)
+    with pytest.raises(ValueError, match="below"):
+        rare_candy(tables, learnsets, sp(level=100), item)
+    assert rare_candy(tables, learnsets, sp(level=99), item).level == 100
+
+
+def test_rare_candy_learn_prompt_at_the_new_level(tables, names, manifest):
+    item, _ = candy_params(tables, names)
+    levels = {**manifest["level_learnsets"], str(OLD): [[31, MIRACLE_EYE]]}
+    ls = Learnsets({**manifest, "level_learnsets": levels})
+    full = sp(moves=(TACKLE, GROWL, CONFUSION, 98), pp_ups=(1, 2, 3, 0))
+    gave_up = rare_candy(tables, ls, full, item)
+    assert gave_up.moves == full.moves and gave_up.pp_ups == full.pp_ups
+    learned = rare_candy(tables, ls, full, item, learn_answers={MIRACLE_EYE: 1})
+    assert learned.moves == (TACKLE, MIRACLE_EYE, CONFUSION, 98)
+    assert learned.pp_ups == (1, 0, 3, 0)  # callbacks.c:1105-1113
+    free = sp(moves=(TACKLE, 0, 0, 0), pp_ups=(0, 2, 0, 0))
+    assert rare_candy(tables, ls, free, item).moves == (TACKLE, MIRACLE_EYE, 0, 0)
+    assert rare_candy(tables, ls, replace(free, level=31), item).moves == free.moves  # level 32
+
+
+def test_rare_candy_evolution_is_a_cancellable_level_prompt(tables, names, manifest, method):
+    item, _ = candy_params(tables, names)
+    ls = level_evolver(manifest, method, level=31)
+    out = rare_candy(tables, ls, sp(), item)
+    prompt = evolution_prompt(tables, ls, 0, out, None, EVO_CLASS_BY_LEVEL, 0, None, personality=0)
+    assert prompt is not None and prompt.cancellable and prompt.target == A
+    before = evolution_prompt(tables, ls, 0, sp(), None, EVO_CLASS_BY_LEVEL, 0, None, personality=0)
+    assert before is None
+
+
+# --- GT-15 growth plan (E3-B3-15) ---------------------------------------------------------------
+
+KNOWN = (TACKLE, GROWL, CONFUSION, 10)
+M1, M2, M3, M4 = 150, 151, 152, 153  # offered moves; effects set apart below
+CAP = 20
+MOVE_COLUMNS = (
+    "move_effect",
+    "move_type",
+    "move_category",
+    "move_priority",
+    "move_target",
+    "move_param",
+    "move_flags",
+    "move_power",
+    "move_accuracy",
+    "move_pp",
+    "move_effect_chance",
+)
+
+
+def edited(tables, **columns):
+    """``tables`` with ``column[index] = value`` (or a row) for each ``name={index: value}``."""
+    out = {}
+    for name, edits in columns.items():
+        arr = np.array(getattr(tables, name))
+        for index, value in edits.items():
+            arr[index] = value
+        out[name] = jnp.asarray(arr)
+    return tables._replace(**out)
+
+
+def apart(tables, moves):
+    """Every move of ``moves`` with its own supported effect, so none dominates another."""
+    supported = [int(e) for e in EffectId if e != EffectId.UNSUPPORTED]
+    return edited(tables, move_effect={m: supported[i] for i, m in enumerate(moves)})
+
+
+def with_learnsets(manifest, method, entries, rows=None):
+    """Learnsets with the level-up lists of ``entries`` (species -> ``[(level, move)]``) and the
+    evolution ``rows`` of OLD."""
+    levels = {
+        **manifest["level_learnsets"],
+        **{str(s): [[lv, mv] for lv, mv in e] for s, e in entries.items()},
+    }
+    patched = {**manifest, "level_learnsets": levels}
+    if rows is not None:
+        patched["evolutions"] = {
+            **manifest["evolutions"],
+            str(OLD): [[method[n], p, t] for n, p, t in rows],
+        }
+    return Learnsets(patched)
+
+
+def plan_tables(tables):
+    """A twin of OLD: A with OLD's types, ability, experience group and a higher base stat, and
+    the offered moves apart from each other and from the known ones."""
+    twin = edited(
+        tables,
+        species_types={A: np.asarray(tables.species_types)[OLD]},
+        species_abilities_decomp={A: np.asarray(tables.species_abilities_decomp)[OLD]},
+        species_base_stats={A: np.asarray(tables.species_base_stats)[OLD] + 10},
+        species_exp_rate={A: 0, OLD: 0},
+    )
+    return apart(twin, [*KNOWN, M1, M2, M3, M4])
+
+
+def old_member(**fields):
+    return sp(**{"species": OLD, "level": 10, "moves": KNOWN, **fields})
+
+
+def test_base_plan_gives_up_and_never_evolves():
+    assert BASE_PLAN == GrowthPlan((), None)
+    assert BASE_PLAN.answer((12, M1)) is None and BASE_PLAN.evolve_at is None
+    plan = GrowthPlan((((12, M1), 2), ((14, M2), None)), 0)
+    assert plan.answer((12, M1)) == 2 and plan.answer((14, M2)) is None
+    assert plan.answers_at(12) == {M1: 2} and plan.answers_at(13) == {}
+
+
+def test_max_growth_plans_is_64():
+    assert MAX_GROWTH_PLANS == 64
+
+
+def test_learn_offers_skip_known_moves_and_other_levels(manifest, method):
+    entries = [(5, M1), (12, M1), (12, TACKLE), (21, M2), (15, M3)]
+    ls = with_learnsets(manifest, method, {OLD: entries})
+    assert learn_offers(ls, OLD, 0, {TACKLE}, 10, CAP) == ((12, M1), (15, M3))
+    assert learn_offers(ls, OLD, 0, set(), 12, 15) == ((15, M3),)
+
+
+def counted(tables, manifest, method, gap_level=14):
+    """OLD offered M1 at 12 and M2 at 15; A offered M3 at 14 and M4 at 18; one evolution gap
+    at level ``gap_level``. A is not a twin of OLD, so nothing is dominated."""
+    t = apart(tables, [*KNOWN, M1, M2, M3, M4])
+    entries = {OLD: [(12, M1), (15, M2)], A: [(14, M3), (18, M4)]}
+    ls = with_learnsets(manifest, method, entries, [("level", gap_level, A)])
+    gaps = [EvolutionGap(0, gap_level, A, method["level"])]
+    return t, ls, member_options(t, ls, 0, old_member(), 0, CAP, gaps)
+
+
+def test_plan_counts_for_two_offers_and_one_evolution_gap(tables, manifest, method):
+    t, ls, opts = counted(tables, manifest, method)
+    assert opts.offers == ((12, M1), (15, M2))
+    (gap,) = opts.evolutions
+    assert gap.pre == ((12, M1),) and gap.post == ((14, M3), (18, M4))
+    # never: 5^2; evolve at the gap: the old offer before it and the two of the new species, 5^3
+    assert member_plan_count(t, ls, opts) == 5**2 + 5**3
+    plans = member_plans(t, ls, opts)
+    assert len(plans) == 150 and len(set(plans)) == 150
+    assert sum(p.evolve_at is None for p in plans) == 25
+    assert all(p.evolve_at in (None, 0) for p in plans)
+    # a setup is the product over members
+    both = growth_plans(t, ls, [opts, opts], growth_cap=-1)
+    assert both.total == 150 * 150 and both.kept == both.total and not both.capped
+
+
+def test_an_hm_slot_is_never_an_answer(tables, manifest, method):
+    t, ls, opts = counted(tables, manifest, method)
+    hm = int(np.flatnonzero(np.asarray(t.move_is_hm))[0])
+    t = apart(t, [hm, M1, M2, M3, M4])
+    opts = opts._replace(member=old_member(moves=(hm, GROWL, CONFUSION, 10)))
+    assert member_plan_count(t, ls, opts) == 4**2 + 4**3  # the HM slot is never replaced
+    answers = [a for p in member_plans(t, ls, opts) for _, a in p.answers]
+    assert 0 not in answers
+
+
+def test_a_strictly_worse_duplicate_is_pruned_to_give_up(tables):
+    t = apart(tables, [TACKLE])
+    edits = {}
+    for column in MOVE_COLUMNS:
+        row = np.asarray(getattr(t, column))[TACKLE]
+        edits[column] = {160: row, 161: row}
+    t = edited(t, **edits)
+    power = int(np.asarray(t.move_power)[TACKLE])
+    pp = int(np.asarray(t.move_pp)[TACKLE])
+    other_type = 1 - int(np.asarray(t.move_type)[TACKLE])
+    t = edited(t, move_power={160: power - 1, 161: power + 1})
+    assert give_up_only(t, [TACKLE], 160)  # lower power, the rest equal
+    assert not give_up_only(t, [TACKLE], 161)  # more power: may be better
+    assert not give_up_only(t, [GROWL], 160)  # a different known move
+    more_pp = edited(t, move_pp={160: pp + 1}, move_power={160: power})
+    assert not give_up_only(more_pp, [TACKLE], 160)
+    another_type = edited(t, move_power={160: power}, move_type={160: other_type})
+    assert not give_up_only(another_type, [TACKLE], 160)
+    sure_hit = edited(t, move_power={160: power}, move_accuracy={TACKLE: 50, 160: 0})
+    assert not give_up_only(sure_hit, [TACKLE], 160)  # never misses against a known 50
+
+
+def test_an_unsupported_move_is_pruned_and_costs_no_branch(tables, manifest, method):
+    t = apart(tables, [*KNOWN, M1, M2])
+    t = edited(t, move_effect={M2: int(EffectId.UNSUPPORTED)})
+    ls = with_learnsets(manifest, method, {OLD: [(12, M1), (15, M2)]}, [])
+    opts = member_options(t, ls, 0, old_member(), 0, CAP, [])
+    assert give_up_only(t, KNOWN, M2) and not give_up_only(t, KNOWN, M1)
+    assert member_plan_count(t, ls, opts) == 5  # only M1 has a real choice
+    assert all(dict(p.answers).keys() == {(12, M1)} for p in member_plans(t, ls, opts))
+
+
+def twin_case(tables, manifest, method):
+    entries = {OLD: [(12, M1), (15, M2)], A: [(15, M2)]}
+    ls = with_learnsets(manifest, method, entries, [("level", 14, A)])
+    t = plan_tables(tables)
+    gap = EvolutionGap(0, 14, A, method["level"])
+    return t, ls, member_options(t, ls, 0, old_member(), 0, CAP, [gap])
+
+
+def test_evolve_dominates_cancel_only_when_every_condition_holds(tables, manifest, method):
+    t, ls, opts = twin_case(tables, manifest, method)
+    (gap,) = opts.evolutions
+    assert evolve_dominates(t, ls, opts, gap)
+    # then only the evolving path, at the earliest gap: 5^2 (the old offer at 12, the new at 15)
+    assert member_plan_count(t, ls, opts) == 25
+    assert {p.evolve_at for p in member_plans(t, ls, opts)} == {0}
+
+    types = np.array(np.asarray(t.species_types)[A])
+    types[0] = (int(types[0]) + 1) % 17
+    stats = np.array(np.asarray(t.species_base_stats)[A])
+    stats[3] = np.asarray(t.species_base_stats)[OLD][3] - 1
+    abilities = np.array(np.asarray(t.species_abilities_decomp)[A])
+    abilities[0] += 1
+    cases = {
+        "types change": edited(t, species_types={A: types}),
+        "a base stat falls": edited(t, species_base_stats={A: stats}),
+        "the ability changes": edited(t, species_abilities_decomp={A: abilities}),
+        "the level falls on the new exp table": edited(t, species_exp_rate={A: 5}),
+    }
+    for why, bad in cases.items():
+        assert not evolve_dominates(bad, ls, opts, gap), why
+        assert member_plan_count(bad, ls, opts) == 25 + 25, why  # never and the gap, both kept
+    # a learnset entry lost: the old species' M2 at 15 is not offered by A
+    entries = {OLD: [(12, M1), (15, M2)], A: [(15, M3)]}
+    lost = with_learnsets(manifest, method, entries, [("level", 14, A)])
+    gaps = [EvolutionGap(0, 14, A, method["level"])]
+    lost_opts = member_options(t, lost, 0, old_member(), 0, CAP, gaps)
+    assert not evolve_dominates(t, lost, lost_opts, lost_opts.evolutions[0])
+    # a method that uses up a held item
+    held = [EvolutionGap(0, 14, A, method["level_with_held_item_day"])]
+    held_opts = member_options(t, ls, 0, old_member(), 0, CAP, held)
+    assert not evolve_dominates(t, ls, held_opts, held_opts.evolutions[0])
+
+
+def test_only_the_earliest_gap_is_kept_when_evolving_dominates(tables, manifest, method):
+    t, ls, _ = twin_case(tables, manifest, method)
+    gaps = [EvolutionGap(g, 14 + g, A, method["level"]) for g in range(3)]
+    opts = member_options(t, ls, 0, old_member(), 0, CAP, gaps)
+    assert {p.evolve_at for p in member_plans(t, ls, opts)} == {0}
+
+
+def many_gaps(tables, manifest, method, n):
+    """A member with no offers and ``n`` eligible gaps: 1 + n plans (A has other types)."""
+    ls = with_learnsets(manifest, method, {OLD: [], A: []}, [])
+    gaps = [EvolutionGap(g, 11, A, method["level"]) for g in range(n)]
+    return ls, member_options(tables, ls, 0, old_member(), 0, CAP, gaps)
+
+
+def test_the_cap_enumerates_only_the_current_fight_and_reports_the_count(tables, manifest, method):
+    ls, opts = many_gaps(tables, manifest, method, 64)
+    assert member_plan_count(tables, ls, opts) == 65
+    over = growth_plans(tables, ls, [opts], growth_cap=64)
+    assert over.capped and over.total == 65 and over.kept == 2
+    # the plan that evolves at the current fight's gap, and the one that does not
+    assert {p.evolve_at for (p,) in over.setups()} == {None, 0}
+    line = over.report_line()
+    assert "2 of 65" in line and "--growth-cap -1" in line
+    # the default cap is MAX_GROWTH_PLANS
+    assert growth_plans(tables, ls, [opts]).capped
+    at = growth_plans(tables, ls, [opts], growth_cap=65)
+    assert not at.capped and at.kept == 65 and at.report_line() is None
+    every = growth_plans(tables, ls, [opts], growth_cap=-1)
+    assert not every.capped and every.kept == 65 and len(list(every.setups())) == 65
+    with pytest.raises(ValueError, match="below -1"):
+        growth_plans(tables, ls, [opts], growth_cap=-2)
+
+
+def test_later_prompts_take_the_screens_best_answer_above_the_cap(tables, manifest, method):
+    ls, opts = many_gaps(tables, manifest, method, 64)
+    calls = []
+
+    def later(slot, plan):
+        calls.append(slot)
+        return plan._replace(answers=(*plan.answers, ((20, M1), 1)))
+
+    over = growth_plans(tables, ls, [opts], growth_cap=10, later=later)
+    assert calls == [0, 0]
+    assert all(p.answer((20, M1)) == 1 for (p,) in over.setups())

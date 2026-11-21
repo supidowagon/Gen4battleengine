@@ -595,10 +595,10 @@ def test_run_input_counts(plain):
     for run, key in (
         (RunInput(swaps_left=-2), "--swaps-left"),
         (RunInput(horizon=-1), "--horizon"),
-        (RunInput(growth_cap=-1), "--growth-cap"),
+        (RunInput(growth_cap=-2), "--growth-cap"),
     ):
         with pytest.raises(GauntletSettingsError) as e:
             resolve_settings(plain, run=run)
         assert e.value.key == key
-    ok = resolve_settings(plain, run=RunInput(swaps_left=-1, horizon=0, growth_cap=40))
-    assert ok.run.swaps_left == -1 and ok.run.growth_cap == 40
+    ok = resolve_settings(plain, run=RunInput(swaps_left=-1, horizon=0, growth_cap=-1))
+    assert ok.run.swaps_left == -1 and ok.run.growth_cap == -1

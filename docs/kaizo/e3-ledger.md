@@ -1849,3 +1849,30 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   `carry_from_party` ignores a spec's stored stats. Views: `member_spec`, `set_member`; `evolve_carry` runs `growth.evolve` on a
   member (single row), Shedinja into the first free slot with Poke Ball (`src/evolution.c:736-737`, `:773`).
   Tests: tests/prep/test_gauntlet_carry.py. Not run locally (no local pytest): for the pod.
+
+- E3-B3-14 GT-14 evolution prompts (`src/nuzline/prep/growth.py`, `src/nuzline/prep/leveling.py`). No table input changed.
+  `post_battle_prompts(tables, learnsets, carry, levelled, result, map_method, time)` -> `[Prompt]`; `resolve_post_battle(..., settings, decide)`
+  applies answers slot by slot (`decide(prompt)` = None cancel, or the post-evolution learn answers). `result` is the `resultMask`: only WIN, CAPTURED_MON,
+  PLAYER_FLED (`battle_system.c:829-833`; `battle.h:72-79`); `levelled` is a bool[6] party-0 mask (`bs.c:9867`, `battle_system.c:835-849`); HP not checked,
+  a dead member is offered (`Prompt.dead`) and never evolves (design s6). Cancel flag: battle `battle_main.c:283`, Rare Candy `start_menu.c:1740`, stone none (`:1742`).
+  `rare_candy(tables, learnsets, member, item, *, location=None, learn_answers=None)`: below 100 (`item_use_pokemon.c:171-175`); exp to next level + CalcLevelAndStats
+  (`:291-293`; HP + gain, `pokemon.c:640-651`); fainted member revived with HP = gain (`:294-298`, `:478-495`; stay_dead is the Carry's `dead`/barred, GT-5);
+  friendship from `tables.item_party_param[item]` by tier (`:363-387`, `:565-600`): Soothe Bell x150/100 first, then Luxury Ball +1, egg location == `location` +1.
+  Learn prompts at the new level through GT-13's learn loop (`pokemon.c:3935-3966`; `callbacks.c:1105-1113`). Values: the built tables hold the Rare Candy friendship params
+  (5/3/2); GT-6 must supply which item ids are Rare Candies (LEVEL_UP param) and stones (EVOLVE param): `ItemParam` has no such column.
+  `use_stone`: BY_ITEM with no party (`item_use_pokemon.c:177-181`), stone consumed before the screen (`party_menu/main.c:2699-2701`), no friendship, dead member refused.
+  `leveling.grow_to_cap` / `PreFightGrowth` / `level_to_cap(growth=)`: per candy the learn prompts, then the evolution check (`callbacks.c:816-829`); the stone before the first candy.
+  Ruling: pre-fight growth is gap 0; evolving at gap 0 happens at the earliest offered point. Without `growth` the output is unchanged.
+  Deviations: the sheet's `callbacks.c:820` (map method) is `:818`; `item_use_pokemon.c:295-298` is `:294-298`; `battle_main.c:261` is the CHECK_EVOLUTION state set, the case is `:274`.
+  Tests: tests/prep/test_growth.py, tests/prep/test_leveling.py. Not run locally (no local pytest): for the pod.
+
+- E3-B3-15 GT-15 growth plan (`src/nuzline/prep/growth.py`, `data/gauntlet.py`, `cli.py`). No table input changed.
+  `GrowthPlan(answers, evolve_at)` per member, answers keyed by `(level, move)`; `BASE_PLAN` = give up, never evolve. `member_options`, `member_plan_count`, `member_plans`,
+  `growth_plans(tables, learnsets, options, growth_cap=, current_gap=, later=)` -> `GrowthPlanSet(members, total, cap, capped)` with `kept` and `report_line()`.
+  Counts: per path 5^free (4 with an HM slot), summed over never + gaps, product over members. Pruning (exact, before the cap): `give_up_only` (unsupported = `coverage.learn_masked`;
+  or a known move with same effect/type/category and power, accuracy, PP at least as high) and `evolve_dominates` (types, ability, no base stat falls, no entry lost; then the earliest gap only).
+  Cap: `MAX_GROWTH_PLANS = 64`, `-1` none; above it only the current gap's evolution and its learn prompts are enumerated, later prompts by the `later` hook (single-fight screen; default base plan).
+  Deviations: `give_up_only` also needs equal priority, target, params, flags and effect chance at least as high; `evolve_dominates` also needs no held item used up and the level kept on the new exp table
+  (both only prune less, so they stay exact). `--growth-cap` took `_cap` (rejected -1) in GT-3: now `_count`, help text corrected. The root offers count moves not known at the root (an empty slot is not modelled: 5 answers
+  counted as the sheet). The levels of later gaps are the caller's input (`EvolutionGap.level`).
+  Tests: tests/prep/test_growth.py (plan half), tests/data/test_gauntlet_settings.py. Not run locally (no local pytest): for the pod.

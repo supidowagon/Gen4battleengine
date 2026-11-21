@@ -437,7 +437,10 @@ def _parser() -> argparse.ArgumentParser:
         )
         cmd.add_argument("--horizon", type=int, default=None, help="fights planned ahead")
         cmd.add_argument(
-            "--growth-cap", type=int, default=None, help="level the growth plan may reach"
+            "--growth-cap",
+            type=int,
+            default=None,
+            help="growth plans screened at most (default 64, -1 = all)",
         )
         cmd.add_argument(
             "--time",

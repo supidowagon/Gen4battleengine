@@ -27,32 +27,69 @@ Inputs the function reads from its arguments, never from a Carry:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import itertools
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import replace
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 
 from nuzline.data.forms import personal_row
-from nuzline.data.gauntlet import Settings
+from nuzline.data.gauntlet import UNLIMITED, Settings
 from nuzline.data.learnsets import Learnsets
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import Stat
+from nuzline.engine.coverage import learn_masked
+from nuzline.engine.ids import ItemParam, Stat
+from nuzline.engine.levelup import (
+    BOOST_PERCENT,
+    FRIENDSHIP_TIERS,
+    HOLD_EFFECT_FRIENDSHIP_UP,
+    MAX_FRIENDSHIP,
+    MAX_LEVEL,
+)
 from nuzline.engine.state import spec_exp, spec_stats
 from nuzline.engine.stats import SPECIES_SHEDINJA
 
+if TYPE_CHECKING:
+    from nuzline.prep.gauntlet import Carry
+
 __all__ = [
+    "BASE_PLAN",
+    "BATTLE_RESULT_CAPTURED_MON",
+    "BATTLE_RESULT_PLAYER_FLED",
+    "BATTLE_RESULT_WIN",
     "EVOLVE_FRIENDSHIP_THRESHOLD",
     "EVO_CLASS_BY_ITEM",
     "EVO_CLASS_BY_LEVEL",
     "EVO_CLASS_BY_TRADE",
     "EVO_CLASS_UNUSED_02",
+    "EVO_NONE",
     "HOLD_EFFECT_NO_EVOLVE",
     "ITEM_POKE_BALL",
+    "MAX_GROWTH_PLANS",
     "MAX_PARTY_SIZE",
     "SPECIES_KADABRA",
+    "EvolutionGap",
+    "EvolutionOption",
+    "GrowthPlan",
+    "GrowthPlanSet",
+    "MemberOptions",
+    "Prompt",
+    "evolution_prompt",
     "evolution_target",
     "evolve",
+    "evolve_dominates",
+    "give_up_only",
+    "growth_plans",
+    "learn_offers",
+    "member_options",
+    "member_plan_count",
+    "member_plans",
+    "post_battle_prompts",
+    "rare_candy",
+    "resolve_post_battle",
+    "use_stone",
 ]
 
 # enum EvolutionClass (include/pokemon.h:51-56).
@@ -427,3 +464,681 @@ def evolve(
     elif name in _HELD_ITEM_METHODS:
         mon = replace(mon, item=0)
     return mon, extra, out_bag
+
+
+# --- GT-14: evolution prompts, Rare Candy, stones (design v5.4 section 6 G6, G7; E3-B3-14) ------
+
+# include/constants/battle.h:72, :74, :79.
+BATTLE_RESULT_WIN = 1 << 0
+BATTLE_RESULT_CAPTURED_MON = 1 << 2
+BATTLE_RESULT_PLAYER_FLED = BATTLE_RESULT_CAPTURED_MON | BATTLE_RESULT_WIN
+# The results after which the game looks for an evolving member
+# (``Battle_FindEvolvingPartyMember``, src/battle/battle_system.c:829-833).
+_EVOLVING_RESULTS = frozenset(
+    {BATTLE_RESULT_WIN, BATTLE_RESULT_CAPTURED_MON, BATTLE_RESULT_PLAYER_FLED}
+)
+EVO_NONE = 0  # generated/evolution_methods.txt, line 1: the method of an item evolution
+
+
+class Prompt(NamedTuple):
+    """One evolution prompt of the game: carry slot ``slot`` of species ``species`` would evolve
+    into ``target`` by ``method`` (:func:`evolution_target`'s answer) in class ``evo_class``.
+
+    ``cancellable``: the class passes the cancel flag 0x1 (``EVO_CLASS_BY_LEVEL`` after a battle,
+    ``battle_main.c:283``, and after a Rare Candy, ``src/start_menu.c:1740``); a stone passes
+    ``NULL`` (``:1742``) and cannot be cancelled. ``dead``: the member is at 0 HP: the game
+    offers it (HP is not checked, ``battle_system.c:826-850``) but the answer is cancel and
+    nothing changes (design section 6, "Decisions"; :func:`evolve`)."""
+
+    slot: int
+    species: int
+    target: int
+    method: int
+    evo_class: int
+    cancellable: bool
+    dead: bool
+
+
+def evolution_prompt(
+    tables: Tables,
+    learnsets: Learnsets,
+    slot: int,
+    member: PokemonSpec,
+    party: Sequence[PokemonSpec] | None,
+    evo_class: int,
+    evo_param: int,
+    time: str | None,
+    *,
+    personality: int,
+    beauty: int = 0,
+) -> Prompt | None:
+    """The prompt the game raises for ``member`` (:func:`evolution_target` and its arguments),
+    else ``None``."""
+    found = evolution_target(
+        tables,
+        learnsets,
+        member,
+        party,
+        evo_class,
+        evo_param,
+        time,
+        personality=personality,
+        beauty=beauty,
+    )
+    if found is None:
+        return None
+    target, method = found
+    return Prompt(
+        slot,
+        member.species,
+        target,
+        method,
+        evo_class,
+        evo_class == EVO_CLASS_BY_LEVEL,
+        member.current_hp == 0,
+    )
+
+
+def _party_specs(carry: Carry) -> dict[int, PokemonSpec]:
+    from nuzline.prep.gauntlet import member_spec  # gauntlet imports this module
+
+    return {int(i): member_spec(carry, int(i)) for i in np.flatnonzero(carry.present)}
+
+
+def _levelled_mask(levelled: Sequence[bool] | np.ndarray) -> np.ndarray:
+    mask = np.asarray(levelled, dtype=bool)
+    if mask.shape != (MAX_PARTY_SIZE,):
+        raise ValueError(f"levelled is a party-0 slot mask of {MAX_PARTY_SIZE}, got {mask.shape}")
+    return mask
+
+
+def post_battle_prompts(
+    tables: Tables,
+    learnsets: Learnsets,
+    carry: Carry,
+    levelled: Sequence[bool] | np.ndarray,
+    result: int,
+    map_method: int,
+    time: str | None,
+) -> list[Prompt]:
+    """The evolution prompts after a battle, as the game raises them from ``carry`` (a single
+    Carry after the battle: levels, friendship and moves as the level-ups left them).
+
+    ``result`` is the battle's ``resultMask`` (``BATTLE_RESULT_*``): only a win, a capture or a
+    flee looks for an evolving member (``src/battle/battle_system.c:829-833``); anything else,
+    a draw or a loss included, gives ``[]``. ``levelled``: the ``leveledUpMonsMask`` as a
+    party-0 slot mask (``bool[6]``; ``bs.c:9867``): only those members are checked, each once,
+    slot by slot, with class ``EVO_CLASS_BY_LEVEL`` and the battle's map method
+    (``battle_system.c:835-849``); ``map_method`` is ``Learnsets.map_evolution_method`` of the
+    map. A member is offered whether or not it fainted (``dead`` on the prompt). The prompts are
+    those of the Carry as it stands, every answer a cancel; :func:`resolve_post_battle` follows
+    the answers (an evolution changes the party the later slots are checked against). A cancelled
+    member is offered again only when it levels again (the mask is per battle)."""
+    mask = _levelled_mask(levelled)
+    if result not in _EVOLVING_RESULTS:
+        return []
+    members = _party_specs(carry)
+    party = list(members.values())
+    out = []
+    for slot, member in members.items():
+        if not mask[slot]:
+            continue
+        prompt = evolution_prompt(
+            tables,
+            learnsets,
+            slot,
+            member,
+            party,
+            EVO_CLASS_BY_LEVEL,
+            map_method,
+            time,
+            personality=int(carry.personality[slot]),
+            beauty=int(carry.beauty[slot]),
+        )
+        if prompt is not None:
+            out.append(prompt)
+    return out
+
+
+def resolve_post_battle(
+    tables: Tables,
+    learnsets: Learnsets,
+    carry: Carry,
+    levelled: Sequence[bool] | np.ndarray,
+    result: int,
+    map_method: int,
+    time: str | None,
+    settings: Settings,
+    decide: Callable[[Prompt], Mapping[int, int | None] | None],
+) -> tuple[Carry, list[Prompt]]:
+    """:func:`post_battle_prompts` with the answers applied, slot by slot as the game's loop
+    (``Battle_FindEvolvingPartyMember``, ``battle_system.c:835-849``): ``decide(prompt)`` is
+    ``None`` to cancel, or the post-evolution learn answers (move id -> slot, see
+    :func:`evolve`) to evolve. An evolution changes the party the next slots are checked
+    against (``Party_HasSpecies``; an added Shedinja is not in the mask). A dead member is
+    offered but never evolves. Returns ``(the Carry afterwards, the prompts offered)``."""
+    from nuzline.prep.gauntlet import evolve_carry
+
+    mask = _levelled_mask(levelled)
+    offered: list[Prompt] = []
+    if result not in _EVOLVING_RESULTS:
+        return carry, offered
+    for slot in range(MAX_PARTY_SIZE):
+        if not mask[slot] or not carry.present[slot]:
+            continue
+        members = _party_specs(carry)
+        prompt = evolution_prompt(
+            tables,
+            learnsets,
+            slot,
+            members[slot],
+            list(members.values()),
+            EVO_CLASS_BY_LEVEL,
+            map_method,
+            time,
+            personality=int(carry.personality[slot]),
+            beauty=int(carry.beauty[slot]),
+        )
+        if prompt is None:
+            continue
+        offered.append(prompt)
+        if prompt.dead:
+            continue
+        answer = decide(prompt)
+        if answer is not None:
+            carry = evolve_carry(
+                tables,
+                learnsets,
+                carry,
+                slot,
+                prompt.target,
+                prompt.method,
+                settings,
+                learn_answers=answer,
+            )
+    return carry, offered
+
+
+def _item_friendship(tables: Tables, member: PokemonSpec, item: int, location: int | None) -> int:
+    """The member's friendship after an item's friendship params: the tier of the current value
+    picks ``GIVE_FRIENDSHIP_*`` and ``FRIENDSHIP_*`` (``Pokemon_ApplyItemEffects``,
+    ``src/item_use_pokemon.c:363-387``), then ``UpdatePokemonFriendship`` (``:565-600``): no
+    change at 255 for a gain or at 0 for a loss (``:567-573``); for a gain, Soothe Bell x150/100
+    first (``:575-578``, ``include/constants/items.h:50``), then +1 for a Luxury Ball
+    (``:580-582``) and +1 when the egg location equals ``location`` (``:584-586``); clamp
+    0..255 (``:591-598``). ``tables.item_party_param`` holds the item's params
+    (``ids.ItemParam``). The battle level-up differs: ``Pokemon_UpdateFriendship`` adds the
+    bonuses first and multiplies after (``src/pokemon.c:2664-2678``)."""
+    params = np.asarray(tables.item_party_param)[item]
+    friendship = member.friendship
+    low, med = FRIENDSHIP_TIERS
+    if friendship < low:
+        give, change = ItemParam.GIVE_FRIENDSHIP_LOW, ItemParam.FRIENDSHIP_LOW
+    elif friendship < med:
+        give, change = ItemParam.GIVE_FRIENDSHIP_MED, ItemParam.FRIENDSHIP_MED
+    elif friendship <= MAX_FRIENDSHIP:
+        give, change = ItemParam.GIVE_FRIENDSHIP_HIGH, ItemParam.FRIENDSHIP_HIGH
+    else:
+        return friendship
+    if not params[give]:
+        return friendship
+    delta = int(params[change])
+    if (friendship == MAX_FRIENDSHIP and delta > 0) or (friendship == 0 and delta < 0):
+        return friendship
+    if delta > 0:
+        if int(np.asarray(tables.item_hold_effect)[member.item]) == HOLD_EFFECT_FRIENDSHIP_UP:
+            delta = delta * BOOST_PERCENT // 100
+        if member.friend_bonus:
+            delta += 1
+        if location is not None and member.egg_location == location:
+            delta += 1
+    return min(max(friendship + delta, 0), MAX_FRIENDSHIP)
+
+
+def rare_candy(
+    tables: Tables,
+    learnsets: Learnsets,
+    member: PokemonSpec,
+    item: int,
+    *,
+    location: int | None = None,
+    learn_answers: Mapping[int, int | None] | None = None,
+) -> PokemonSpec:
+    """``member`` after one Rare Candy ``item`` (ledger E3-B3-14; ``Pokemon_ApplyItemEffects``,
+    ``src/item_use_pokemon.c:237-391``, then the party menu's level-up states).
+
+    - usable only below level 100 (``:171-175``; ``ValueError`` otherwise);
+    - experience to the next level and ``Pokemon_CalcLevelAndStats`` (``:291-293``): the new
+      level, stats, and current HP raised by the max-HP gain (``src/pokemon.c:640-651``; 1 for
+      Shedinja). A fainted member is revived with HP equal to the gain (``:294-298``,
+      ``RestorePokemonHP``, ``:478-495``; 1 when the maximum is 1). Under
+      ``revived_dead = stay_dead`` the member stays dead and barred: that flag is the Carry's
+      (``dead``), which :func:`~nuzline.prep.gauntlet.set_member` does not touch (GT-5);
+    - friendship from the item's params by tier (:func:`_item_friendship`), read from
+      ``tables.item_party_param[item]``; ``location`` is the map the item is used on
+      (``None``: no egg-location bonus);
+    - the learn prompts of the new level (``Pokemon_LevelUpMove``, ``src/pokemon.c:3935-3966``):
+      an empty slot learns, with four moves ``learn_answers[move]`` is the slot to forget (its PP
+      Ups become 0, ``src/applications/party_menu/callbacks.c:1105-1113``) and a missing answer
+      or ``None`` gives the move up, as :func:`evolve`'s learn loop.
+
+    The evolution check that follows (``callbacks.c:816-829``; the current header's map method is
+    read at ``:818``) is :func:`evolution_prompt` with ``EVO_CLASS_BY_LEVEL`` on the returned
+    member: the caller answers it. Which item ids are Rare Candies (``ITEM_PARAM_LEVEL_UP``) is
+    the caller's; the item table holds no such column."""
+    if member.level >= MAX_LEVEL:
+        raise ValueError(f"level {member.level}: a Rare Candy needs a level below {MAX_LEVEL}")
+    rate = int(np.asarray(tables.species_exp_rate)[member.species])
+    exp = int(np.asarray(tables.exp_table)[rate][member.level + 1])
+    old_max = int(spec_stats(tables, member)[Stat.HP])
+    moved = replace(member, exp=exp, level=_level_at(tables, member.species, exp), stats=None)
+    new_max = int(spec_stats(tables, moved)[Stat.HP])
+    hp = member.current_hp
+    if hp is not None:
+        if hp != 0:
+            hp = 1 if member.species == SPECIES_SHEDINJA else hp + new_max - old_max
+        else:
+            hp = 1 if new_max == 1 else min(new_max, new_max - old_max)
+    moved = replace(moved, current_hp=hp)
+    moved = replace(moved, friendship=_item_friendship(tables, moved, item, location))
+    return _post_evolution_learn(tables, learnsets, moved, learn_answers or {})
+
+
+def use_stone(
+    tables: Tables,
+    learnsets: Learnsets,
+    member: PokemonSpec,
+    stone: int,
+    bag: Mapping[int, int],
+    party: Sequence[PokemonSpec],
+    settings: Settings,
+    *,
+    personality: int,
+    learn_answers: Mapping[int, int | None] | None = None,
+) -> tuple[PokemonSpec, PokemonSpec | None, dict[int, int]]:
+    """Use the evolution item ``stone`` on ``member``: ``(evolved member, an added Shedinja or
+    None, the bag afterwards)``. The item must evolve the member
+    (``Pokemon_GetEvolutionTargetSpecies`` with ``EVO_CLASS_BY_ITEM`` and no party,
+    ``src/item_use_pokemon.c:177-181``; ``ValueError`` otherwise) and the bag must hold it. The
+    stone is used up when the effect is accepted, before the evolution screen
+    (``Bag_TryRemoveItem``, ``src/applications/party_menu/main.c:2699-2701``); the screen passes
+    no cancel flag (``src/start_menu.c:1742``), so it cannot be cancelled: the decision is
+    whether to call this. The item path applies no friendship (``main.c:2702-2706`` leaves the
+    menu straight into the evolution). A dead member is not offered a stone (design section 6):
+    ``ValueError``. ``party``, ``settings``, ``personality`` and ``learn_answers`` as
+    :func:`evolve`."""
+    if member.current_hp == 0:
+        raise ValueError("a dead member is not offered an evolution stone")
+    if bag.get(stone, 0) < 1:
+        raise ValueError(f"the bag holds no item {stone}")
+    found = evolution_target(
+        tables,
+        learnsets,
+        member,
+        None,
+        EVO_CLASS_BY_ITEM,
+        stone,
+        None,
+        personality=personality,
+        beauty=0,
+    )
+    if found is None:
+        raise ValueError(f"item {stone} does not evolve species {member.species}")
+    target, method = found
+    after = dict(bag)
+    after[stone] -= 1
+    return evolve(
+        tables,
+        learnsets,
+        member,
+        target,
+        method,
+        after,
+        party,
+        settings,
+        personality=personality,
+        learn_answers=learn_answers,
+    )
+
+
+# --- GT-15: growth plan, never-better pruning, --growth-cap (design v5.4 section 6; E3-B3-15) ---
+
+MAX_GROWTH_PLANS = 64  # the default of --growth-cap (design section 6, "Bound", rule 3)
+GIVE_UP_ANSWER = None  # an answer is a move slot 0-3, or None to give the move up
+
+Offer = tuple[int, int]  # (level, move): one learnset entry the member is offered at that level
+
+
+class GrowthPlan(NamedTuple):
+    """One member's plan, held in every playout (design section 6, "Decisions").
+
+    ``answers``: ``((level, move), slot or None)`` per offered move that has a free answer,
+    sorted; a slot 0-3 replaces that move slot, ``None`` gives the move up. An offer without an
+    entry is given up. ``evolve_at``: the gap (an index of the chain's gaps, ``EvolutionGap.gap``)
+    where the member evolves, or ``None`` for never."""
+
+    answers: tuple[tuple[Offer, int | None], ...] = ()
+    evolve_at: int | None = None
+
+    def answer(self, offer: Offer) -> int | None:
+        """The answer to ``offer``: its entry, else give up."""
+        return dict(self.answers).get(offer)
+
+    def answers_at(self, level: int) -> dict[int, int | None]:
+        """The answers to the offers of ``level`` as ``evolve`` and ``rare_candy`` take them
+        (move id -> slot or ``None``)."""
+        return {move: slot for (lv, move), slot in self.answers if lv == level}
+
+
+# The base plan (funnel): learn into an empty slot, else give up; never evolve
+# (``search/learn.py`` ``learn_policy``, ``GIVE_UP``).
+BASE_PLAN = GrowthPlan()
+
+
+class EvolutionGap(NamedTuple):
+    """An eligible evolution gap of one member, from the caller (the chain): the gap's index,
+    the member's ``level`` there, and the ``target`` species and ``method`` that
+    :func:`evolution_target` gives it there."""
+
+    gap: int
+    level: int
+    target: int
+    method: int
+
+
+class EvolutionOption(NamedTuple):
+    """An eligible gap with the moves offered on that path: ``pre`` the old line's offers up to
+    and including the evolution level, ``post`` the new species' offers from that level to the
+    last cap (``src/evolution.c:461-480`` offers its entries of exactly the current level)."""
+
+    gap: int
+    level: int
+    target: int
+    method: int
+    pre: tuple[Offer, ...]
+    post: tuple[Offer, ...]
+
+
+class MemberOptions(NamedTuple):
+    """What the plan of one member chooses among: ``member`` and ``personality`` as it stands at
+    the root, ``offers`` the moves offered before the last cap while it never evolves, and one
+    :class:`EvolutionOption` per eligible gap (in gap order)."""
+
+    slot: int
+    member: PokemonSpec
+    personality: int
+    offers: tuple[Offer, ...]
+    evolutions: tuple[EvolutionOption, ...]
+
+
+def learn_offers(
+    learnsets: Learnsets,
+    species: int,
+    form: int,
+    known: Collection[int],
+    level_from: int,
+    level_to: int,
+) -> tuple[Offer, ...]:
+    """The learnset entries of ``species`` at levels above ``level_from`` up to ``level_to``
+    whose move is not in ``known`` (``Pokemon_LevelUpMove`` offers each entry of exactly the
+    level reached, ``src/pokemon.c:3935-3966``; a known move is skipped, ``:3852-3874``), in
+    table order, once each."""
+    out: dict[Offer, None] = {}
+    for level, move in learnsets.level_up(species, form):
+        if level_from < level <= level_to and move not in known:
+            out.setdefault((level, move))
+    return tuple(out)
+
+
+def member_options(
+    tables: Tables,
+    learnsets: Learnsets,
+    slot: int,
+    member: PokemonSpec,
+    personality: int,
+    cap: int,
+    gaps: Sequence[EvolutionGap],
+) -> MemberOptions:
+    """The plan's choices for ``member`` up to the last level cap ``cap``, with ``gaps`` its
+    eligible evolution gaps. The offers count the moves not known at the root; whether a slot is
+    still empty when one is offered is a runtime fact (an offer with an empty slot is answered by
+    the game itself and its answer is unused)."""
+    known = set(member.moves)
+    offers = learn_offers(learnsets, member.species, member.form, known, member.level, cap)
+    options = []
+    for gap in sorted(gaps, key=lambda g: g.gap):
+        _, target_form = _row(tables, gap.target, member.form)
+        options.append(
+            EvolutionOption(
+                gap.gap,
+                gap.level,
+                gap.target,
+                gap.method,
+                learn_offers(
+                    learnsets, member.species, member.form, known, member.level, gap.level
+                ),
+                learn_offers(learnsets, gap.target, target_form, known, gap.level - 1, cap),
+            )
+        )
+    return MemberOptions(slot, member, personality, offers, tuple(options))
+
+
+def _accuracy(value: int) -> int:
+    return 101 if value == 0 else value  # accuracy 0 never misses
+
+
+def give_up_only(tables: Tables, known: Collection[int], move: int) -> bool:
+    """Whether the only answer worth enumerating for the offered ``move`` is to give it up
+    (never-better pruning, design section 6, "Bound" rule 2): its effect is unsupported
+    (``coverage.learn_masked``, ruling D10), or a known move has the same effect id, type and
+    category and a power, accuracy (0 = never misses) and PP at least as high. To keep the
+    pruning exact the known move must also match priority, target, move params and flags, and
+    have at least the offered move's secondary-effect chance: a difference there could make the
+    offered move the better one."""
+    if learn_masked(tables, move):
+        return True
+    t = {name: np.asarray(getattr(tables, name)) for name in _MOVE_COLUMNS}
+    for k in known:
+        if k == 0 or k == move:
+            continue
+        same = all(
+            np.array_equal(t[name][k], t[name][move])
+            for name in (
+                "move_effect",
+                "move_type",
+                "move_category",
+                "move_priority",
+                "move_target",
+                "move_param",
+                "move_flags",
+            )
+        )
+        if (
+            same
+            and t["move_power"][k] >= t["move_power"][move]
+            and _accuracy(int(t["move_accuracy"][k])) >= _accuracy(int(t["move_accuracy"][move]))
+            and t["move_pp"][k] >= t["move_pp"][move]
+            and t["move_effect_chance"][k] >= t["move_effect_chance"][move]
+        ):
+            return True
+    return False
+
+
+_MOVE_COLUMNS = (
+    "move_effect",
+    "move_type",
+    "move_category",
+    "move_priority",
+    "move_target",
+    "move_param",
+    "move_flags",
+    "move_power",
+    "move_accuracy",
+    "move_pp",
+    "move_effect_chance",
+)
+
+
+def evolve_dominates(
+    tables: Tables, learnsets: Learnsets, options: MemberOptions, option: EvolutionOption
+) -> bool:
+    """Whether evolving at ``option`` never does worse than cancelling (design section 6,
+    "Bound" rule 2): the evolved species keeps its types and its ability, no base stat falls, and
+    no learnset entry before the last cap is lost (every move the member would be offered
+    without evolving is offered on the evolved path). To keep the pruning exact it also requires
+    that the evolution does not use up a held item (``_HELD_ITEM_METHODS``) and that the new
+    species' experience table keeps the member's level at its experience
+    (:func:`_recalculated` takes the level from the experience)."""
+    member = options.member
+    old_row, _ = _row(tables, member.species, member.form)
+    new_row, _ = _row(tables, option.target, member.form)
+    types = np.asarray(tables.species_types)
+    if not np.array_equal(types[old_row], types[new_row]):
+        return False
+    abilities = np.asarray(tables.species_abilities_decomp)
+    new_slot = _ability_slot(tables, new_row, options.personality)
+    if abilities[new_row][new_slot] != abilities[old_row][member.ability_slot]:
+        return False
+    stats = np.asarray(tables.species_base_stats)
+    if np.any(stats[new_row] < stats[old_row]):
+        return False
+    if learnsets.evolution_methods[option.method] in _HELD_ITEM_METHODS:
+        return False
+    rate = int(np.asarray(tables.species_exp_rate)[member.species])
+    exp = int(np.asarray(tables.exp_table)[rate][option.level])
+    if _level_at(tables, option.target, exp) < option.level:
+        return False
+    kept = {move for _, move in option.pre + option.post}
+    return all(move in kept for _, move in options.offers)
+
+
+def _paths(
+    tables: Tables, learnsets: Learnsets, options: MemberOptions
+) -> list[tuple[int | None, tuple[Offer, ...]]]:
+    """The non-dominated ``(evolve_at, offers on that path)`` of one member: never plus every
+    eligible gap, or, when evolving at the earliest gap dominates cancelling, only that gap
+    (design section 6, "Bound" rule 2)."""
+    paths = [(o.gap, tuple(dict.fromkeys(o.pre + o.post))) for o in options.evolutions]
+    if options.evolutions and evolve_dominates(tables, learnsets, options, options.evolutions[0]):
+        return paths[:1]
+    return [(None, options.offers), *paths]
+
+
+def _free(tables: Tables, options: MemberOptions, offers: Sequence[Offer]) -> list[Offer]:
+    """The offers with more than one worthwhile answer (not :func:`give_up_only`)."""
+    known = set(options.member.moves)
+    return [o for o in offers if not give_up_only(tables, known, o[1])]
+
+
+def _answers(tables: Tables, options: MemberOptions) -> list[int | None]:
+    """The answers a free offer can take: each slot not holding an HM (``Item_IsHMMove``;
+    ``src/battle_sub_menus/battle_party.c:1724-1735`` in battle, ``pokemon_summary_screen/
+    main.c:814-820`` between fights), and give up."""
+    hm = np.asarray(tables.move_is_hm)
+    slots = [s for s, m in enumerate(options.member.moves) if not (m and hm[m])]
+    return [*slots, GIVE_UP_ANSWER]
+
+
+def member_plan_count(tables: Tables, learnsets: Learnsets, options: MemberOptions) -> int:
+    """The number of non-dominated plans of one member: per path 5^m for its m free offers
+    (fewer answers with an HM slot), summed over the paths (design section 6, "Bound")."""
+    width = len(_answers(tables, options))
+    return sum(
+        width ** len(_free(tables, options, offers))
+        for _, offers in _paths(tables, learnsets, options)
+    )
+
+
+def member_plans(
+    tables: Tables, learnsets: Learnsets, options: MemberOptions
+) -> tuple[GrowthPlan, ...]:
+    """Every non-dominated plan of one member (:func:`member_plan_count` of them). A given-up-
+    only offer has no entry."""
+    answers = _answers(tables, options)
+    plans = []
+    for evolve_at, offers in _paths(tables, learnsets, options):
+        free = sorted(_free(tables, options, offers))
+        for combo in itertools.product(answers, repeat=len(free)):
+            plans.append(GrowthPlan(tuple(zip(free, combo, strict=True)), evolve_at))
+    return tuple(plans)
+
+
+def _committed_plans(
+    tables: Tables,
+    learnsets: Learnsets,
+    options: MemberOptions,
+    current_gap: int,
+    later: Callable[[int, GrowthPlan], GrowthPlan] | None,
+) -> tuple[GrowthPlan, ...]:
+    """The plans the root enumerates above the cap (design section 6, "Bound" rule 3): do not
+    evolve at ``current_gap``, or evolve there with every answer to the learn prompts of the
+    evolution itself (the new species' offers at the evolution level); every later prompt is the
+    caller's best answer, ``later(slot, plan)`` (the single-fight screen), by default the base
+    plan's (give up, never evolve later)."""
+    complete = later or (lambda _slot, plan: plan)
+    plans = [complete(options.slot, BASE_PLAN)]
+    for option in options.evolutions:
+        if option.gap != current_gap:
+            continue
+        free = sorted(_free(tables, options, [o for o in option.post if o[0] == option.level]))
+        for combo in itertools.product(_answers(tables, options), repeat=len(free)):
+            plan = GrowthPlan(tuple(zip(free, combo, strict=True)), option.gap)
+            plans.append(complete(options.slot, plan))
+    return tuple(plans)
+
+
+class GrowthPlanSet(NamedTuple):
+    """The plans one setup screens: ``members`` the plans of each member (a setup takes one of
+    each), ``total`` the non-dominated setups before the cap, ``cap`` the limit used
+    (``UNLIMITED`` = -1: none), ``capped`` whether the cap removed options."""
+
+    members: tuple[tuple[GrowthPlan, ...], ...]
+    total: int
+    cap: int
+    capped: bool
+
+    @property
+    def kept(self) -> int:
+        """The number of setups screened (the product over the members)."""
+        return int(np.prod([len(p) for p in self.members], dtype=object))
+
+    def setups(self) -> Iterator[tuple[GrowthPlan, ...]]:
+        """Every setup: one plan per member."""
+        return itertools.product(*self.members)
+
+    def report_line(self) -> str | None:
+        """The plain report line when the cap removed options (GT-11 prints it), else ``None``."""
+        if not self.capped:
+            return None
+        return (
+            f"growth options removed by --growth-cap {self.cap}: screened {self.kept} of "
+            f"{self.total} growth plans; the rest take the best answer by single-fight screen. "
+            "Run with --growth-cap -1 to screen all."
+        )
+
+
+def growth_plans(
+    tables: Tables,
+    learnsets: Learnsets,
+    options: Sequence[MemberOptions],
+    *,
+    growth_cap: int | None = None,
+    current_gap: int = 0,
+    later: Callable[[int, GrowthPlan], GrowthPlan] | None = None,
+) -> GrowthPlanSet:
+    """The growth plans of one setup (design section 6, "Bound"): the product over ``options``
+    of each member's non-dominated plans. ``growth_cap`` is ``--growth-cap`` (``None`` =
+    ``MAX_GROWTH_PLANS``, ``-1`` = none, ``ValueError`` below -1): when the product is at most
+    the cap, all are kept. Above it only the current fight's evolution (gap ``current_gap``) and
+    the prompts of that evolution are enumerated, every later prompt takes ``later``'s answer.
+    The current fight's own prompts are exact Stage B nodes, never in a plan."""
+    cap = MAX_GROWTH_PLANS if growth_cap is None else growth_cap
+    if cap < UNLIMITED:
+        raise ValueError(f"growth cap {cap} is below -1")
+    counts = [member_plan_count(tables, learnsets, o) for o in options]
+    total = int(np.prod(counts, dtype=object)) if counts else 1
+    if cap == UNLIMITED or total <= cap:
+        members = tuple(member_plans(tables, learnsets, o) for o in options)
+        return GrowthPlanSet(members, total, cap, False)
+    members = tuple(_committed_plans(tables, learnsets, o, current_gap, later) for o in options)
+    return GrowthPlanSet(members, total, cap, True)

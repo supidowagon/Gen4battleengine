@@ -866,7 +866,7 @@ def resolve_settings(
     for name, value, check in (
         ("--swaps-left", run.swaps_left, _count),
         ("--horizon", run.horizon, _cap),
-        ("--growth-cap", run.growth_cap, _cap),
+        ("--growth-cap", run.growth_cap, _count),
     ):
         if value is not None:
             try:
