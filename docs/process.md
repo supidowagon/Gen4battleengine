@@ -48,8 +48,9 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    inside the diff range and is checked against the compare log). Verdict: MERGE or FIX. When
    only tests or docs changed since an already-reviewed commit, a diff stat of `src` and
    `tools` replaces the review.
-9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, send the stream the
-   new tip and the non-blocking notes, and tell the user in at most three lines.
+9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, then
+   `bash tools/ops/offsite.sh` (section 12, Off-site copy), send the stream the new tip and the
+   non-blocking notes, and tell the user in at most three lines.
 
 **Merge train.** When two or more batches are expected to be merge-ready within one gate run
 of each other (about 3 hours), the managing session names a train order.
@@ -268,6 +269,7 @@ or clear. Times are local cron expressions; the scheduler adds jitter.
 |---|---|
 | `47 9,21 * * *` | Fallback check: watchdog plus usage; silent unless something is wrong |
 | `7 22 * * *` | Dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier on `ci-day-big` when that is up, else on `ci-nightly`, and deletes `ci-nightly` itself |
+| `37 23 * * *` | `bash tools/ops/offsite.sh` from the main checkout (section 12, Off-site copy); report only a rejected branch, an abort or a failed push |
 | `57 22 * * *` | Delete the test pod if nothing is queued and no nightly runs on it, verify with a pod listing, log the cost |
 
 ## 8. Usage rules
@@ -348,6 +350,36 @@ pod work. This section is the source of the handoff procedure; a copy in
   `HOME` set to `_scratch/rent/home` (DAYBOX.md, Paths).
 - The watch scripts: `tools/ops/watch_flags.ps1` and `tools/ops/watchdog.ps1` with the stream
   list `_scratch/manager/streams.json` (section 6; command line in `_scratch/handoff/MANAGER.md`).
+
+### Off-site copy
+
+The private GitHub repo added as git remote `offsite` in the main checkout. Never push it to
+`origin`, never make it public. It never receives ROMs, saves, save states, keys, tokens,
+table archives or run outputs.
+- `bash tools/ops/offsite.sh` (Git Bash, from the main checkout's root) pushes every local
+  branch (`git push offsite --all`: no force, no delete; rejected branches are reported) and
+  mirrors the state files into the clone `_scratch/offsite/state/` as commits on the branch
+  `scratch-state`, which has no common history with the code. Deletions are mirrored; git
+  history keeps old versions. `--dry-run` prints what would be pushed and copied and changes
+  nothing.
+- Runs after every push of `main` (section 2 step 9) and nightly (section 7).
+- State files, paths relative to `_scratch/`: `handoff/`; the text files of `manager/` and of
+  each stream folder `e<n>/` (rule sheets, family lists, plans, podlists, notes, small
+  scripts and logs); in `rent/` the `*.md` notes, the pod id files (`POD_ID*`, `*POD*.txt`),
+  `lists/*.txt` and the top-level helper scripts.
+- Never copied (the script enforces it and re-checks the whole state tree before every
+  commit; an offender aborts the commit): worktrees and nested repos, `.cache/`, `.venv/`,
+  `external/`, cache, code-copy and table-copy folders, ROM, save and archive files
+  (`*.nds`, `*.sav`, `*.dsv`, `*.ds<n>`, `*.zip`, `*.7z`, `*.tar*`, `*.npz`, `*.npy`,
+  `*.pkl`, `*.bin`, ...), keys and credentials (`_scratch/rent/home/.runpod/`, `*.key`,
+  `*.pem`, `.env*`, `*.env`, `local.toml`, `*.b64`), files whose content looks like a key or
+  token, `rent/out/` and other run outputs, logs over 1 MB, files over 2 MB, anything inside
+  a folder named `backup*`.
+- Restore on a new machine: `git clone <off-site repo> <project folder>` gives every branch
+  (`git checkout <branch>`; set `origin` to the public repo again). Then
+  `git clone -b scratch-state <off-site repo> _scratch/offsite/state` and copy its files
+  (not `.git`) into `_scratch/`. Worktrees, tables, `.cache/`, the runpodctl key and the
+  inputs are rebuilt or supplied as in "What you must supply yourself".
 
 ### What does not travel
 
