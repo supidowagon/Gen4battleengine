@@ -153,6 +153,7 @@ def test_greedy_equals_playout_through_learns(tables, roots):
         runs.append((root, s, k, got, out))
     drop_programs()  # the loop program before the replay's turn programs (module docstring)
     checks = {build.__name__: 0 for build in _ROOTS}
+    sites = {"window_c": 0, "bonsly_last": 0}  # runs that reach the two hazard-faint sites
     for root, s, k, got, out in runs:
         if int(got.refused):
             continue
@@ -161,7 +162,15 @@ def test_greedy_equals_playout_through_learns(tables, roots):
         assert reason is None and n == turns, root
         for name, a, b in zip(out._fields, out, final, strict=True):
             assert np.array_equal(np.asarray(a), np.asarray(b)), f"{root}: replay {name}"
-        checks[root.split(",")[0]] += 1
+        name = root.split(",")[0]
+        checks[name] += 1
+        if name == _window_c.__name__:
+            # Bonsly's hazard payout (L17 -> L18) in turn 1's passes, the battle going on: the
+            # resolve after the passes (player.py, the second _select) answers its work.
+            _, first, n = player_module._replay(tables, s, GREEDY, (), k, 1, VANILLA)
+            sites["window_c"] += n == 1 and int(first.over) == 0 and int(first.level[0, 0]) == 18
+        if name == _bonsly_last.__name__:
+            sites["bonsly_last"] += bool(int(got.ended) and needs_learn(out) and turns)
         if not int(got.ended):
             assert not bool(needs_learn(out)), f"{root}: learn work was left pending"
         elif bool(needs_learn(out)) and turns:  # turns 0: the root's settle ended the battle
@@ -169,6 +178,7 @@ def test_greedy_equals_playout_through_learns(tables, roots):
             assert reason is None and n == turns - 1 and int(before.over) == 0, root
             assert not bool(needs_learn(before)), f"{root}: learn work left before the final turn"
     assert all(checks.values()), f"roots with no unrefused run: {checks}"
+    assert all(sites.values()), f"hazard-faint sites not reached: {sites}"
 
 
 @pytest.mark.fullset
