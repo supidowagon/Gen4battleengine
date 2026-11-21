@@ -202,7 +202,7 @@ from nuzline.engine.hooks import (
     entry_damage_up,
     fling_try,
     forbids_status,
-    forecast,
+    form_change,
     held_item_check,
     move_end_switch_in,
     recover_status_by_ability,
@@ -737,10 +737,12 @@ def _switch_in(
     state = _restore_ability(tables, state, side, True)
     state = _restore_moves(state, side, True)
     state = _reset_battler(state, side, True, baton)
-    # BattleSystem_InitBattleMon re-reads the party's friendship (battle_lib.c:136, F-15).
+    # BattleSystem_InitBattleMon re-reads the party's friendship (battle_lib.c:136, F-15) and its
+    # form (:132: BattleMon.formNum, H-5; after the Transform restore, which gives the form back).
     row = party(format_of(state), side)
     state = state._replace(
-        friendship=state.friendship.at[row, slot].set(state.party_friendship[row, slot])
+        friendship=state.friendship.at[row, slot].set(state.party_friendship[row, slot]),
+        form_num=state.form_num.at[side].set(state.form[row, slot].astype(state.form_num.dtype)),
     )
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
@@ -3604,11 +3606,12 @@ def _move_end_tail(tables: Tables, state: BattleState, clear, trace_pick=None) -
     Swap, E3-2-5) acts now, and the HELD_ITEM_STATUS state sees the learner's raised HP; a no-op
     while every flag is set or no holder. The same TriggerEffectOnSwitch's
     SWITCH_IN_CHECK_STATE_FORM_CHANGE (battle_lib.c:4115, after the Trace / weather / Intimidate /
-    Download states; AfterMoveEffects' :3672-3680 before it): its Castform form change runs after
-    every move, so a weather move or a type change takes effect before the next battler acts (F-6).
+    Download states; AfterMoveEffects' :3672-3680 before it): its form changes (Castform, Cherrim, Arceus,
+    a Transformed Giratina-Origin) run after every move, so a weather move or a type change takes
+    effect before the next battler acts (F-6, H-5).
     A learn pause (``learn_site``) stands between the payout and this tail: the resume runs it."""
     state = move_end_switch_in(tables, state, clear, trace_pick)
-    return forecast(tables, state, clear)
+    return form_change(tables, state, clear)
 
 
 def execute_actions(
@@ -5057,7 +5060,7 @@ def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:
     """The next turn's ``ShowBattleMon`` (battle_controller_player.c:256-268) runs
     ``BattleSystem_TriggerEffectOnSwitch``, whose ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
     (battle_lib.c:4151-4165) checks every battler's held item before the commands are chosen
-    (``hooks.after_damage_items``). Its other states find nothing new at a turn start (Forecast's form change does, ``hooks.forecast``), and before
+    (``hooks.after_damage_items``). Its other states find nothing new at a turn start (the form change does, ``hooks.form_change``), and before
     a Future Sight hit (``_future_sight``, after the last item check of the turn's end,
     ``MON_COND_CHECK_STATE_ITEM_CONDITION``) the item check found nothing new either; a berry the
     hit brings into its range is eaten here. With a replacement pending, ``replace`` runs the
@@ -5067,7 +5070,7 @@ def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:
     run = (state.over == 0) & ~jnp.any(needs_replacement(state) != 0)
     # SWITCH_IN_CHECK_STATE_FORM_CHANGE comes first (battle_lib.c:3629-3640): a Castform whose
     # weather ended this turn reverts before the commands are chosen (F-6).
-    state = forecast(tables, state, run)
+    state = form_change(tables, state, run)
     for side in range(fmt.B):
         state = after_damage_items(tables, state, side, run)
     return state

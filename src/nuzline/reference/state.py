@@ -148,6 +148,7 @@ class RefBattler:
     transformed: int  # VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)
     shadow_species: int  # the party Pokemon's own while transformed (G-69)
     shadow_form: int
+    form_num: int  # BattleMon.formNum (battle_mon.h:79, H-5)
     shadow_stats: list[int]
     shadow_ivs: list[int]
     shadow_ability_slot: int

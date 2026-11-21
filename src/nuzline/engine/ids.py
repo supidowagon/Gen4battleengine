@@ -1306,6 +1306,9 @@ CHOICE_ITEMS = (ItemId.CHOICE_BAND, ItemId.CHOICE_SPECS, ItemId.CHOICE_SCARF)
 # (battle_lib.c:6730-6774; generated/species.txt line N is id N-1).
 SPECIES_PIKACHU = 25
 SPECIES_CASTFORM = 351  # BattleSystem_TriggerFormChange (battle_lib.c:6314), F-6
+SPECIES_CHERRIM = 421  # BattleSystem_TriggerFormChange's Cherrim block (battle_lib.c:6366), H-5
+# CASTFORM_FORM_* (include/constants/forms.h:51-54): BattleMon.formNum, H-5.
+CASTFORM_FORM_NORMAL, CASTFORM_FORM_SUNNY, CASTFORM_FORM_RAINY, CASTFORM_FORM_SNOWY = 0, 1, 2, 3
 SPECIES_SHAYMIN = 492  # subscript_check_shaymin_form.s:6, F-16
 SPECIES_FARFETCHD = 83  # BattleSystem_CalcCriticalMulti (battle_lib.c:7128)
 SPECIES_CHANSEY = 113  # :7127
@@ -1318,6 +1321,8 @@ SPECIES_LATIOS = 381
 SPECIES_DIALGA = 483
 SPECIES_PALKIA = 484
 SPECIES_GIRATINA = 487
+# GIRATINA_FORM_* (include/constants/forms.h:93-94): BattleMon.formNum, H-5.
+GIRATINA_FORM_ALTERED, GIRATINA_FORM_ORIGIN = 0, 1
 
 
 # ``item_param[i, 1]`` of Chilan Berry (``HOLD_EFFECT_WEAKEN_NORMAL``): the berry halves any

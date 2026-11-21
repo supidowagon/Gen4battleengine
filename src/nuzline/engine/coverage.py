@@ -81,7 +81,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   changes, the halved Defense) runs over them too (``fight_calls``);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
-  ``subscript_form_change``), which the engine does not model; Shaymin-Sky reverts to Land
+  ``subscript_giratina_form_change``), which the engine does not model (the Orb cannot leave in
+  battle, so an Origin that starts with it never reaches that branch); Castform, Cherrim, Arceus
+  and the Transformed Giratina-Origin are modelled since E1 batch H (``hooks.form_change``,
+  ``BattleSystem_TriggerFormChange``, battle_lib.c:6305-6451, F-6, H-5); Shaymin-Sky reverts to Land
   Forme when frozen (``subscript_check_shaymin_form.s``, ``battle_controller_player.c:3497-3505``)
   and is modelled since E1 batch F (``hooks.shaymin_land``, F-16), also for a Transformed
   battler that copied a Sky Shaymin: the script writes Land's ability into the Transform user's
@@ -152,6 +155,7 @@ from nuzline.data.trainer import (
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.ids import (
+    GIRATINA_FORM_ORIGIN,
     GRAVITY_TURNS,
     METRONOME_DRAW,
     MOVE_CHATTER,
@@ -180,7 +184,7 @@ from nuzline.engine.state import make_state, spec_exp, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
-SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
+SPECIES_GIRATINA = 487
 ITEM_GRISEOUS_ORB = 112
 
 

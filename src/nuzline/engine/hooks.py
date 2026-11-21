@@ -90,6 +90,7 @@ from nuzline.engine.damage import (
     battler_decomp_ability,
     decomp_ability_id,
     divide,
+    judgment_type,
     weather_suppressed,
 )
 from nuzline.engine.effects import (
@@ -104,10 +105,20 @@ from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
+    ABILITY_MULTITYPE,
+    CASTFORM_FORM_NORMAL,
+    CASTFORM_FORM_RAINY,
+    CASTFORM_FORM_SNOWY,
+    CASTFORM_FORM_SUNNY,
     CONFUSION_PENDING,
+    GIRATINA_FORM_ALTERED,
+    GIRATINA_FORM_ORIGIN,
     ITEM_ABILITY_IDS,
     NATURE_DISLIKED_FLAVOR,
+    SPECIES_ARCEUS,
     SPECIES_CASTFORM,
+    SPECIES_CHERRIM,
+    SPECIES_GIRATINA,
     SPECIES_SHAYMIN,
     STARF_STATS,
     AbilityId,
@@ -1107,36 +1118,67 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
 
 
-def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
-    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE``'s Castform block (``BattleSystem_TriggerFormChange``,
-    battle_lib.c:6313-6364), F-6, for every battler (``monSpeedOrder``) that is a Castform with HP
-    and Forecast (``Battler_Ability``: ``damage.battler_decomp_ability``) where
-    ``cond``. With no alive Cloud Nine or Air Lock (``damage.weather_suppressed``): no rain, sun
-    or hail (``FIELD_CONDITION_CASTFORM``) and neither type Normal -> Normal/Normal; else sun and
-    neither type Fire -> Fire/Fire; else rain and neither Water -> Water/Water; else hail and
-    neither Ice -> Ice/Ice. With one alive: neither type Normal -> Normal/Normal (:6355-6363).
+def form_change(tables: Tables, state: BattleState, cond=True) -> BattleState:
+    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE`` (``BattleSystem_TriggerFormChange``, battle_lib.c:
+    6305-6451), F-6 and H-5, for every battler (``monSpeedOrder``) where ``cond``: the four species
+    blocks, each written when it differs.
+
+    Castform (:6313-6364, F-6): a Castform with HP and Forecast (``Battler_Ability``:
+    ``damage.battler_decomp_ability``). With no alive Cloud Nine or Air Lock
+    (``damage.weather_suppressed``): no rain, sun or hail (``FIELD_CONDITION_CASTFORM``) and
+    neither type Normal -> Normal/Normal; else sun and neither type Fire -> Fire/Fire; else rain
+    and neither Water -> Water/Water; else hail and neither Ice -> Ice/Ice. With one alive: neither
+    type Normal -> Normal/Normal (:6355-6363). The types are written with ``form_num``
+    (``CASTFORM_FORM_*``: Normal 0, Sunny 1, Rainy 2, Snowy 3, include/constants/forms.h:51-54).
+
+    Cherrim (:6366-6396): species and HP only, no ability test. Its ``form_num`` (Overcast 0,
+    Sunshine 1) is Sunshine when no Cloud Nine / Air Lock is alive and it is sunny, Overcast
+    otherwise: the else-if chain (:6369-6389) and the Cloud Nine case (:6391-6395) reduce to it.
+
+    Arceus (:6398-6410): a Multitype holder (``Battler_Ability``) with HP takes the form of its
+    RAW held item's plate type (``Pokemon_GetArceusTypeOf``, pokemon.c:4319-4377: Normal for any
+    other item; Klutz and Embargo do not hide it): ``damage.judgment_type``.
+
+    Giratina (:6412-6451): a Transformed Giratina (species, HP) with ``form_num`` Origin (1), the
+    copy of an Origin, rebuilds from a party Pokemon copied from its target (a singles foe, doubles
+    ``chosen_target``: :6423-6429) with the item removed and Altered forced (:6431-6439,
+    ``Pokemon_SetGiratinaFormByHeldItem``, pokemon.c:4380-4405, which acts on a Giratina): its
+    Attack, Defense, Speed, Sp. Atk and Sp. Def become the recalculated stats of Altered's personal
+    row from the target's IVs, EVs, level and nature (:6441-6445), its ability that row's slot 0
+    (``BoxPokemon_CalcAbility``, pokemon.c:4746-4766: Altered's second slot is empty; :6446),
+    ``form_num`` Altered (:6447), and ``SYSCTL_FORM_CHANGE`` writes the copier's own party form 0
+    (:6448-6450, battle_io_command.c:597-599: ``shadow_form``; ``form``, the copy the Transformed
+    slot holds, follows). ``subscript_form_change`` runs, not the Giratina subscript: the AI's
+    record of the ability and the party's ability stay. Types, stages, moves, PP, HP and
+    ``power_trick`` / ``power_trick_desync`` stay. A Giratina Origin that is not Transformed
+    changes only without the Griseous Orb (:6416-6418, :6450-6453): refused by coverage.
+
     The state is not advanced while a change happened (battle_lib.c:4115-4121), so the call
-    repeats until none changes; each result is stable under its own test and no battler's change
-    feeds another's, so one pass reaches the same fixpoint whatever the order. Only ``types``
-    are written: ``formNum`` is read by the display only (``battle_controller.c``) and the party's
-    form, which the switch-in re-reads (battle_lib.c:113-114), is not updated (the change sets no
-    ``SYSCTL_FORM_CHANGE``, only Giratina does, :6446), so ``state.form`` stays."""
+    repeats until none changes; each result is stable under its own test and no block feeds
+    another's (Cloud Nine, the weather, the items and the copy's target are written by none), so
+    one pass reaches the same fixpoint whatever the order. The party's form, which the switch-in
+    re-reads (battle_lib.c:132), is not updated by Castform, Cherrim or Arceus (no
+    ``SYSCTL_FORM_CHANGE``, only Giratina sets it, :6448), so ``state.form`` stays for them."""
     fmt = format_of(state)
     clear = ~weather_suppressed(tables, state)
     w = fcm.weather_bits(state)
     rain, sun, hail = fcm.rain(w), fcm.sun(w), fcm.hail(w)
     weathered = rain | sun | hail
+    cond = jnp.asarray(cond)
+    altered = tables.species_form_row[SPECIES_GIRATINA, 0]
     for side in range(fmt.B):
         row, mon = party(fmt, side), state.active[side]
         types = state.types[row, mon]
+        species, alive = state.species[row, mon], state.hp[row, mon] > 0
+        shown = state.form_num[side].astype(_I32)
 
         def has(t, types=types):
             return jnp.any(types == t)
 
         is_castform = (
-            jnp.asarray(cond)
-            & (state.species[row, mon] == SPECIES_CASTFORM)
-            & (state.hp[row, mon] > 0)
+            cond
+            & (species == SPECIES_CASTFORM)
+            & alive
             & (
                 battler_decomp_ability(tables, state, side)
                 == ABILITY_DECOMP_IDS[AbilityId.FORECAST]
@@ -1153,7 +1195,66 @@ def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
         )
         change = is_castform & (normal | fire | water | ice)
         both = jnp.full(types.shape, new, state.types.dtype)
+        cast_form = jnp.where(
+            normal,
+            CASTFORM_FORM_NORMAL,
+            jnp.where(
+                fire,
+                CASTFORM_FORM_SUNNY,
+                jnp.where(water, CASTFORM_FORM_RAINY, CASTFORM_FORM_SNOWY),
+            ),
+        )
+        shown = jnp.where(change, cast_form, shown)
         state = state._replace(types=state.types.at[row, mon].set(jnp.where(change, both, types)))
+
+        is_cherrim = cond & (species == SPECIES_CHERRIM) & alive
+        shown = jnp.where(is_cherrim, (clear & sun).astype(_I32), shown)
+
+        is_arceus = (
+            cond
+            & (species == SPECIES_ARCEUS)
+            & alive
+            & (battler_decomp_ability(tables, state, side) == ABILITY_MULTITYPE)
+        )
+        plate = judgment_type(tables, state.item[row, mon], Type.NORMAL)
+        shown = jnp.where(is_arceus, plate, shown)
+
+        # The copier's target: a singles foe, a doubles battler's chosen target (:6423-6429).
+        foe = state.chosen_target[side].astype(_I32) if fmt.B == 4 else side ^ 1
+        t_row, t_mon = party(fmt, foe), state.active[foe]
+        is_copy = (
+            cond
+            & (species == SPECIES_GIRATINA)
+            & alive
+            & (state.form_num[side] == GIRATINA_FORM_ORIGIN)
+            & (state.transformed[side] != 0)
+        )
+        stats = calc_stats_jnp(
+            tables.species_base_stats[altered],
+            state.ivs[t_row, t_mon],
+            state.evs[t_row, t_mon],
+            state.level[t_row, t_mon],
+            tables.nature_mods[state.nature[t_row, t_mon]],
+            SPECIES_GIRATINA,
+        )
+        shown = jnp.where(is_copy, GIRATINA_FORM_ALTERED, shown)
+
+        def put(arr, value, is_copy=is_copy, row=row, mon=mon):
+            return arr.at[row, mon].set(jnp.where(is_copy, value, arr[row, mon]).astype(arr.dtype))
+
+        state = state._replace(
+            stats=put(state.stats, stats[Stat.ATK :]),
+            ability=put(state.ability, tables.species_abilities[altered, 0]),
+            ability_slot=put(state.ability_slot, 0),
+            ability_form=put(state.ability_form, 0),
+            form=put(state.form, GIRATINA_FORM_ALTERED),
+            shadow_form=state.shadow_form.at[side].set(
+                jnp.where(is_copy, GIRATINA_FORM_ALTERED, state.shadow_form[side]).astype(
+                    state.shadow_form.dtype
+                )
+            ),
+            form_num=state.form_num.at[side].set(shown.astype(state.form_num.dtype)),
+        )
     return state
 
 
@@ -1264,6 +1365,10 @@ def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleS
         shadow_form=state.shadow_form.at[side].set(
             jnp.where(on & tr, 0, state.shadow_form[side]).astype(state.shadow_form.dtype)
         ),
+        # subscript_check_shaymin_form.s:10 writes the battler's formNum 0 (H-5).
+        form_num=state.form_num.at[side].set(
+            jnp.where(on, 0, state.form_num[side]).astype(state.form_num.dtype)
+        ),
         shadow_stats=state.shadow_stats.at[side].set(
             jnp.where(on & tr, stats[Stat.ATK :], state.shadow_stats[side]).astype(
                 state.shadow_stats.dtype
@@ -1310,7 +1415,7 @@ def switch_in_effects(
         state, side, mon, SWITCH_IN, state.hp[party(format_of(state), side), mon] > 0
     )
     state = reveal_ability(state, foe, other, SWITCH_IN, traced)
-    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6
+    state = form_change(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6, H-5
     state = recover_status_by_ability(state, side)
     state = recover_status_by_ability(state, foe, traced)
     # SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS runs for every battler (battle_lib.c:4135-4145):
@@ -1427,7 +1532,7 @@ def show_battle_mon(
     for side in sides:
         mon = state.active[side]
         state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[party(fmt, side), mon] > 0)
-    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6
+    state = form_change(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6, H-5
     for side in sides:
         state = recover_status_by_ability(state, side)
     for side in sides:

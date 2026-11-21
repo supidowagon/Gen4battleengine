@@ -594,6 +594,8 @@ CONSTANTS: tuple[Constant, ...] = (
     # SPECIES_CASTFORM (generated/species.txt line 352): BattleSystem_TriggerFormChange's Castform
     # block (battle_lib.c:6314), F-6.
     Constant("nuzline.engine.ids.SPECIES_CASTFORM", "species", 351, "Castform", _E),
+    # SPECIES_CHERRIM (generated/species.txt line 422): the Cherrim block (battle_lib.c:6366), H-5.
+    Constant("nuzline.engine.ids.SPECIES_CHERRIM", "species", 421, "Cherrim", _E),
     # The crit species items' species (BattleSystem_CalcCriticalMulti, battle_lib.c:7127-7128).
     Constant("nuzline.engine.ids.SPECIES_CHANSEY", "species", 113, "Chansey", _E),
     Constant("nuzline.engine.ids.SPECIES_FARFETCHD", "species", 83, "Farfetch’d", _E),

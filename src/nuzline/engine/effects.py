@@ -2369,6 +2369,8 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         shadow_form=put(
             state.shadow_form, side, jnp.where(fresh, state.form[own], state.shadow_form[side])
         ),
+        # formNum is in the copied bytes (battle_mon.h:79, :5346-5348), H-5.
+        form_num=put(state.form_num, side, state.form_num[foe]),
         shadow_stats=put(
             state.shadow_stats, side, jnp.where(fresh, state.stats[own], state.shadow_stats[side])
         ),
@@ -3226,7 +3228,7 @@ def sync_step(
     (battle_lib.c:4493-4572) where ``cond``: ``synchronize``, which returns when a status script
     ran; then ``BattleSystem_TriggerFormChange`` (:4536-4544), which returns when a form changes
     (``form_change_pending``; the change itself runs at the later form-change checks, so the knot
-    of this hit is lost, H-4); then ``knot``. ``failed``: the knot's ``MOVE_STATUS_FAILED``."""
+    of this hit is lost, H-4, H-5); then ``knot``. ``failed``: the knot's ``MOVE_STATUS_FAILED``."""
     state, flag, sem, ran = synchronize(tables, state, attacker, defender, flag, sem, cond, held)
     knots = jnp.asarray(cond, bool) & ~ran & ~form_change_pending(tables, state)
     state, sem, loved, failed = knot(tables, state, attacker, defender, loved, sem, knots)
@@ -3235,13 +3237,13 @@ def sync_step(
 
 def form_change_pending(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool``: ``BattleSystem_TriggerFormChange`` (battle_lib.c:6305-6451) would change a form
-    now. Only Castform's (Forecast, ``hooks.forecast``) is modelled. Giratina-Origin is refused by
-    coverage (``coverage.py``, Griseous Orb test); Cherrim's formNum (:6367-6400, no ability test)
-    and Arceus's plate formNum (:6402-6410) have no state here and no coverage refusal: an open
-    gap, ledger H-4."""
-    from nuzline.engine.hooks import forecast  # hooks imports this module
+    now: any of its four blocks (``hooks.form_change``: Castform's types, Cherrim's and Arceus's
+    ``form_num``, a Transformed Giratina-Origin's rebuild, which shows in ``form_num``), H-5. A
+    Giratina Origin that is not Transformed and lacks the Orb is refused by coverage."""
+    from nuzline.engine.hooks import form_change  # hooks imports this module
 
-    return jnp.any(forecast(tables, state).types != state.types)
+    new = form_change(tables, state)
+    return jnp.any(new.types != state.types) | jnp.any(new.form_num != state.form_num)
 
 
 def knot(

@@ -542,6 +542,11 @@ class BattleState(NamedTuple):
     transformed: jnp.ndarray  # int8, VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)
     shadow_species: jnp.ndarray  # int16, the party Pokemon's species while transformed (G-69)
     shadow_form: jnp.ndarray  # int8 (G-69)
+    # int8 per battler, BattleMon.formNum (battle_mon.h:79, H-5): the party's form at the send-out
+    # (``BattleSystem_InitBattleMon``, battle_lib.c:132), copied by Transform (:5346-5348), written
+    # by ``BattleSystem_TriggerFormChange`` (``hooks.form_change``) and Shaymin's revert. Read only
+    # by that function's Cherrim, Arceus and Giratina blocks; not cleared, not Baton-passed.
+    form_num: jnp.ndarray
     shadow_stats: jnp.ndarray  # int16[B,5], the party's Atk, Def, SpA, SpD, Spe (G-69)
     shadow_ivs: jnp.ndarray  # int8[B,6] (G-69)
     shadow_ability_slot: jnp.ndarray  # int8 (G-69)
@@ -984,6 +989,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "transformed": (_BATTLER, np.int8),
     "shadow_species": (_BATTLER, np.int16),
     "shadow_form": (_BATTLER, np.int8),
+    "form_num": (_BATTLER, np.int8),
     "shadow_stats": ((*_BATTLER, 5), np.int16),
     "shadow_ivs": ((*_BATTLER, 6), np.int8),
     "shadow_ability_slot": (_BATTLER, np.int8),
@@ -1357,6 +1363,8 @@ def initial_arrays(
                     f"side {side}: lead slot {leads[b]} is not in a party of {len(members)}"
                 )
             a["active"][b] = leads[b]
+            # BattleSystem_InitBattleMon (battle_lib.c:132): BattleMon.formNum = the party's form.
+            a["form_num"][b] = a["form"][side, leads[b]]
         if len({leads[b] for b in own}) != len(own):
             raise ValueError(
                 f"side {side}: two battlers lead from one slot ({[leads[b] for b in own]})"

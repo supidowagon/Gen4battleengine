@@ -2260,6 +2260,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
     a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
     a["weather_turns"][...] = timer
+    # BattleMon.formNum (H-5): the active slot's form (a Transform copies it with the rest).
+    for side in (0, 1):
+        a["form_num"][side] = a["form"][side, a["active"][side]]
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 

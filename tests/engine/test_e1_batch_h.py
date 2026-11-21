@@ -5,7 +5,8 @@ axis, ``outcome._future_fields``), and the roll kept whole (``loose``) only on a
 is due (bcp.c:1767-1769, :1782; accuracy 0 draws nothing, bcp.c:2900-2902). H-2: Immunity, Own Tempo,
 Water Veil, Magma Armor and Oblivious (blocks, MoveEnd cures, the switch-out and battle-won cures).
 H-3: Color Change (per hit), Marvel Scale and Soundproof. H-4: the held items Quick Powder, Full
-Incense, Shed Shell, Mental Herb, Destiny Knot, and the ids of the items with no in-battle hook."""
+Incense, Shed Shell, Mental Herb, Destiny Knot, and the ids of the items with no in-battle hook. H-5:
+``BattleSystem_TriggerFormChange``'s Cherrim, Arceus and Transformed Giratina-Origin blocks."""
 
 from __future__ import annotations
 
@@ -40,6 +41,7 @@ from tests.engine.helpers import (
     jit_step,
     roark_state,
     sample_rows,
+    weather_of,
 )
 from tests.engine.test_field_mask import _hits, _masked, _pursuit_fight, _rearming
 
@@ -996,6 +998,11 @@ def _pursued_u_turn(tables, names, bench="Geodude", **start):
         # A Castform newcomer in rain: TriggerFormChange (battle_lib.c:6314-6340) returns first
         # (:4536-4544), before the switch-in effects (bcp.c:3672): the knot is lost.
         ("castform", False),
+        # H-5: the Cherrim block (battle_lib.c:6366-6389) is pending in sun (party form 0), not in
+        # rain (Overcast already), and not under an alive Cloud Nine (target Overcast).
+        ("cherrim sun", False),
+        ("cherrim rain", True),
+        ("cherrim sun cloud nine", True),
     ],
 )
 def test_the_pursuers_cute_charm_flag_reaches_the_resumed_knot(tables, names, case, reflects):
@@ -1009,6 +1016,11 @@ def test_the_pursuers_cute_charm_flag_reaches_the_resumed_knot(tables, names, ca
 
     if case == "castform":
         s = _pursued_u_turn(tables, names, "Castform", start_condition=Weather.RAIN)
+    elif case.startswith("cherrim"):
+        weather = Weather.RAIN if case == "cherrim rain" else Weather.SUN
+        s = _pursued_u_turn(tables, names, "Cherrim", start_condition=weather)
+        if case.endswith("cloud nine"):
+            s = s._replace(ability=s.ability.at[0, 0].set(AbilityId.CLOUD_NINE))
     else:
         s = _pursued_u_turn(tables, names)
     if case == "toxic spikes":
@@ -1021,6 +1033,8 @@ def test_the_pursuers_cute_charm_flag_reaches_the_resumed_knot(tables, names, ca
     assert (int(out.infatuated[1]) != 0) is reflects
     knot = names.item("Destiny Knot")
     assert int(out.ai_item_known[0]) == (knot if reflects else 0)
+    if case.startswith("cherrim"):  # the switch-in check ran after the lost knot (bcp.c:3672)
+        assert int(out.form_num[1]) == int(case == "cherrim sun")
 
 
 def test_a_u_turn_user_felled_by_the_pursuit_keeps_its_flag_for_its_knot(tables, names):
@@ -1069,3 +1083,202 @@ def test_the_h4_items_have_their_own_ids_and_the_inert_ones_one_shared_set(table
         ItemId.SOOTHE_BELL,
         ItemId.LUCKY_EGG,
     }
+
+
+# --- H-5: BattleSystem_TriggerFormChange's Cherrim, Arceus and Transformed Giratina blocks ----
+
+
+def _cherrim_state(tables, names, weather, timer=0, form_num=0):
+    """Monferno protects; the foe's active slot is a Cherrim (no ability test: lib.c:6366-6368)
+    showing ``form_num``, under ``weather``."""
+    from tests.engine.test_e1_batch_f import _become, _weather
+    from tests.engine.test_protect import _state
+
+    s = _state(tables, names, mine=["Protect"])
+    s = _weather(_become(tables, names, s, 1, "Cherrim"), weather, timer)
+    return s._replace(form_num=s.form_num.at[1].set(form_num))
+
+
+@pytest.mark.parametrize(
+    ("weather", "timer", "shown", "expect"),
+    [
+        (Weather.SUN, 0, 0, 1),  # :6375-6379 sun and Overcast -> Sunshine
+        (Weather.SUN, 0, 1, 1),  # already Sunshine: no change
+        (Weather.SUN, 1, 1, 0),  # the sun ends at the turn end: :6369-6374, the next turn start
+        (Weather.RAIN, 0, 1, 0),  # :6380-6384
+        (Weather.HAIL, 0, 1, 0),  # :6385-6389
+        (Weather.SANDSTORM, 0, 1, 0),  # FIELD_CONDITION_CASTFORM has no sandstorm bit
+        (Weather.NONE, 0, 1, 0),
+    ],
+)
+def test_cherrim_shows_sunshine_in_sun_and_overcast_otherwise(
+    tables, names, weather, timer, shown, expect
+):
+    """battle_lib.c:6366-6389: ``BattleMon.formNum`` only (CHERRIM_FORM_SUNSHINE 1 / OVERCAST 0);
+    the party's form is not written (no SYSCTL_FORM_CHANGE)."""
+    s = _cherrim_state(tables, names, weather, timer, shown)
+    out = assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), empty_outcome())
+    assert int(out.form_num[1]) == expect
+    assert int(out.form[1, 0]) == int(s.form[1, 0])
+
+
+def test_an_alive_cloud_nine_turns_a_sunshine_cherrim_back_to_overcast(tables, names):
+    """NO_CLOUD_NINE fails (include/battle/common.h:63-64): formNum 1 -> OVERCAST (:6391-6395),
+    sun or not."""
+    s = _cherrim_state(tables, names, Weather.SUN, form_num=1)
+    s = s._replace(ability=s.ability.at[0, 0].set(AbilityId.CLOUD_NINE))
+    out = assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), empty_outcome())
+    assert int(out.form_num[1]) == 0
+
+
+def test_sunny_day_gives_a_cherrim_sunshine_at_the_move_end_and_the_lead_at_battle_start(
+    tables, names
+):
+    """MoveEnd's TriggerEffectOnSwitch (bcp.c:3973) and the battle start's ShowBattleMon
+    (bcp.c:256) both run SWITCH_IN_CHECK_STATE_FORM_CHANGE (battle_lib.c:4115)."""
+    from nuzline.engine.hooks import battle_start
+
+    s = _cherrim_state(tables, names, Weather.NONE)
+    s = s._replace(moves=s.moves.at[0, 0, 0].set(names.move("Sunny Day")))
+    out = assert_matches_reference(tables, s, A(0, "Tackle", s, names), empty_outcome())
+    assert int(weather_of(out)) == Weather.SUN and int(out.form_num[1]) == 1
+    sunny = _cherrim_state(tables, names, Weather.SUN)
+    assert int(battle_start(tables, sunny).form_num[1]) == 1
+
+
+def test_a_switched_in_cherrim_takes_its_party_form_then_its_check(tables, names):
+    """BattleSystem_InitBattleMon reads the party's form (battle_lib.c:132): the outgoing
+    battler's formNum is gone at the send-out, and the check that follows sets Sunshine in sun."""
+    from nuzline.engine.field import with_weather
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon
+
+    mine = _mon(names, "Monferno", ["Protect"], 40)
+    foe = [_mon(names, "Geodude", ["Tackle"], 30), _mon(names, "Cherrim", ["Tackle"], 30)]
+    for weather, expect in ((Weather.SUN, 1), (Weather.NONE, 0)):
+        s = with_weather(make_state(tables, [mine], foe), weather, 0)
+        s = s._replace(form_num=s.form_num.at[1].set(1))  # the outgoing Geodude's, not the party's
+        out = assert_matches_reference(tables, s, (0, MOVE_ACTIONS + 1), empty_outcome())
+        assert int(out.active[1]) == 1 and int(out.form_num[1]) == expect
+
+
+def _arceus(names, plate="Flame Plate"):
+    from dataclasses import replace
+
+    from tests.engine.test_pivot import _mon
+
+    return replace(_mon(names, "Arceus", ["Protect"], 50, item=plate), gender=2)
+
+
+def test_a_lead_arceus_takes_its_plates_form_at_battle_start(tables, names):
+    """battle_lib.c:6398-6410: formNum := Pokemon_GetArceusTypeOf(plate) (pokemon.c:4319-4377;
+    Flame Plate: TYPE_FIRE 10) when it differs from the party's form (0: a trainer Pokemon gets
+    no Pokemon_SetArceusForm call); the party's form stays."""
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon
+
+    foe = [_mon(names, "Geodude", ["Tackle"], 30)]
+    s = make_state(tables, [_arceus(names)], foe)
+    assert int(s.form_num[0]) == Type.FIRE == 10 and int(s.form[0, 0]) == 0
+    assert int(make_state(tables, [_arceus(names, "Sitrus Berry")], foe).form_num[0]) == 0
+
+
+def test_a_pending_form_change_is_each_blocks_own_test_in_both_engines(tables, names):
+    """``effects.form_change_pending`` / the reference ``_form_pending``: an Arceus whose formNum
+    differs from its plate's type (H-4 ruling 1's skip), a Cherrim in sun showing Overcast; none
+    once settled."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.effects import form_change_pending
+    from nuzline.engine.state import make_state
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _form_pending
+    from tests.engine.test_pivot import _mon
+
+    foe = [_mon(names, "Geodude", ["Tackle"], 30)]
+    arceus = make_state(tables, [_arceus(names)], foe)
+    cherrim = _cherrim_state(tables, names, Weather.SUN)
+    cases = [
+        (arceus, False),  # the battle start settled it
+        (arceus._replace(form_num=arceus.form_num.at[0].set(0)), True),
+        (cherrim, True),
+        (cherrim._replace(form_num=cherrim.form_num.at[1].set(1)), False),
+    ]
+    for state, pending in cases:
+        assert bool(form_change_pending(tables, state)) is pending
+        assert _form_pending(to_numpy(tables), to_ref(state)) is pending
+
+
+def test_a_pending_arceus_form_loses_the_knot_a_settled_one_keeps_it(tables, names):
+    """sync_step (battle_lib.c:4536-4544): the pending form change returns before the Destiny
+    Knot, so a reflection that would fail on a genderless Arceus (TryAttract, battle_script.c:
+    5727-5742: MOVE_STATUS_FAILED) never runs."""
+    from dataclasses import replace
+
+    from nuzline.engine.effects import sync_step
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon
+
+    knot = replace(_mon(names, "Monferno", ["Tackle"], 40, item="Destiny Knot"), gender=0)
+    s = make_state(tables, [knot], [_arceus(names)])
+    loved = jnp.asarray([True, False])
+    for shown, failed in ((0, False), (int(Type.FIRE), True)):
+        s2 = s._replace(form_num=s.form_num.at[1].set(shown))
+        got = sync_step(tables, s2, 0, 1, False, 0, loved, True)[-1]
+        assert bool(got) is failed
+
+
+def test_a_transform_copy_of_an_arceus_takes_its_own_plates_form(tables, names):
+    """Transform copies formNum with the BattleMon bytes up to ``ability`` (battle_script.c:
+    5346-5348, battle_mon.h:57-84) but not the item: a Ditto holding a Spooky Plate that copies a
+    Flame Plate Arceus keeps Multitype and changes to its own plate's form (Ghost 7) at the
+    check after the move (:6398-6410); its types are Ghost already (F-3)."""
+    from dataclasses import replace
+
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon
+
+    ditto = replace(_mon(names, "Ditto", ["Transform"], 50, item="Spooky Plate"), gender=2)
+    s = make_state(tables, [ditto], [_arceus(names)])
+    out = assert_matches_reference(tables, s, A("Transform", "Protect", s, names), empty_outcome())
+    assert int(out.species[0, 0]) == int(out.species[1, 0]) and int(out.form_num[0]) == Type.GHOST
+    assert int(out.form_num[1]) == Type.FIRE and out.types[0, 0].tolist() == [Type.GHOST] * 2
+
+
+def test_a_transformed_giratina_origin_is_rebuilt_as_altered_with_pressure(tables, names):
+    """battle_lib.c:6412-6449: a Ditto that copied an Origin (formNum 1, the Orb stays with the
+    foe) takes Altered's stats from the foe's party Pokemon (IVs, EVs, level, nature), ability
+    Pressure (Altered's slot 0), formNum 0 and its slot's form 0; the party's form (``shadow_form``)
+    is written 0 (SYSCTL_FORM_CHANGE, battle_io_command.c:597-599); types, stages and HP stay. It
+    leaves as its own species with its own stats again (``_restore_transform``)."""
+    from dataclasses import replace
+
+    from nuzline.engine.state import make_state
+    from nuzline.engine.stats import calc_stats_jnp
+    from tests.engine.test_pivot import _mon
+
+    n = names
+    ditto = _mon(n, "Ditto", ["Transform"], 50)
+    bench = _mon(n, "Geodude", ["Tackle"], 30)
+    giratina = replace(_mon(n, "Giratina", ["Protect"], 50, item="Griseous Orb"), form=1)
+    s = make_state(tables, [ditto, bench], [giratina])
+    assert int(s.form_num[1]) == 1
+    out = assert_matches_reference(tables, s, A("Transform", "Protect", s, n), empty_outcome())
+    altered = int(tables.species_form_row[n.species("Giratina"), 0])
+    expect = calc_stats_jnp(
+        tables.species_base_stats[altered],
+        s.ivs[1, 0],
+        s.evs[1, 0],
+        s.level[1, 0],
+        tables.nature_mods[s.nature[1, 0]],
+        n.species("Giratina"),
+    )
+    assert out.stats[0, 0].tolist() == expect[1:].tolist()
+    assert out.stats[0, 0].tolist() != out.stats[1, 0].tolist()  # Origin's, which it copied
+    assert int(out.ability[0, 0]) == int(AbilityId.PRESSURE)
+    assert (int(out.form_num[0]), int(out.form[0, 0]), int(out.shadow_form[0])) == (0, 0, 0)
+    assert int(out.form_num[1]) == 1 and int(out.species[0, 0]) == n.species("Giratina")
+    assert out.types[0, 0].tolist() == out.types[1, 0].tolist()
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0])
+    left = assert_matches_reference(tables, out, (MOVE_ACTIONS + 1, 0), empty_outcome())
+    assert int(left.species[0, 0]) == n.species("Ditto") and int(left.form_num[0]) == 0
+    assert left.stats[0, 0].tolist() == s.stats[0, 0].tolist()

@@ -406,6 +406,15 @@ three structs has a row.
   reloads the battler's own stats, level and HP, not its moves (battle_lib.c:169-194):
   `levelup.party_identity`. `ai_ability_known` is `battlerAbilities`: the decomp id the AI
   recorded, 0 none, -1 known but not named by the engine (settled to its id by a Transform).
+- **formNum -> `form_num`** (H-5, per battler, `BattleMon.formNum`, battle_mon.h:79): the party's form at the
+  send-out (`BattleSystem_InitBattleMon`, battle_lib.c:132: `initial_arrays` for the leads, `step._switch_in`
+  after the Transform restore), copied by Transform with the BattleMon bytes (battle_script.c:5346-5348),
+  written by `hooks.form_change` (`BattleSystem_TriggerFormChange`, battle_lib.c:6305-6451: Castform 0-3,
+  Cherrim Overcast 0 / Sunshine 1, Arceus its plate's type, a Transformed Giratina-Origin back to Altered 0)
+  and by Shaymin's revert (`subscript_check_shaymin_form.s:10`). Not cleared by a switch (the send-out
+  overwrites it), not Baton-passed. Read only by that function's Cherrim, Arceus and Giratina tests; `form`
+  (the party's, per slot) and its readers stay (Beat Up, personal rows): the two differ only for a Castform,
+  Cherrim or Arceus (their personal rows ignore the form) and the Giratina rebuild writes both.
 - **chatotCries -> `chatot_cry`** (E1 trial batch, G-70): `BattleSystem.chatotCries[battler]` as
   Chatter's parameter 0 / 1 / 2 (`ids.CHATTER_CHANCES`, sound_chatot.c:193-213), a battle constant
   like `terrain`: every enemy's is 0 (`ChatotCry_New` is invalid, field_battle_data_transfer.c:97,
@@ -612,7 +621,7 @@ three structs has a row.
 | `BattleMon.weight` | — | not needed because it is constant per species in Gen 4; read from `tables.species_weight` |
 | `BattleMon.type1` | `types` | mapped |
 | `BattleMon.type2` | `types` | mapped |
-| `BattleMon.formNum` | `form`, `shadow_form` | mapped |
+| `BattleMon.formNum` | `form`, `shadow_form`, `form_num` | mapped |
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
 | `BattleMon.ability` | `ability`, `ability_slot`, `ability_form`, `party_ability` | mapped |

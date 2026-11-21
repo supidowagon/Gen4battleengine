@@ -45,6 +45,10 @@ from nuzline.engine.ids import (
     ACUPRESSURE_STATS,
     CALL_GRAVITY,
     CANNOT_ENCORE_MOVES,
+    CASTFORM_FORM_NORMAL,
+    CASTFORM_FORM_RAINY,
+    CASTFORM_FORM_SNOWY,
+    CASTFORM_FORM_SUNNY,
     CHARGE_PARAM,
     CHARGE_TURNS,
     CHOICE_ITEMS,
@@ -55,6 +59,8 @@ from nuzline.engine.ids import (
     FLAIL_FALLOFF,
     FUTURE_SIGHT_TURNS,
     GENDER_NONE,
+    GIRATINA_FORM_ALTERED,
+    GIRATINA_FORM_ORIGIN,
     GRAVITY_MOVES,
     GRIP_CLAW_TURNS,
     HP_RESTORED_ALL,
@@ -108,6 +114,7 @@ from nuzline.engine.ids import (
     SPECIES_ARCEUS,
     SPECIES_CASTFORM,
     SPECIES_CHATOT,
+    SPECIES_CHERRIM,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
@@ -773,6 +780,7 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
     if bool(foe.power_trick) != bool(foe.power_trick_desync):
         stats[Stat.ATK - 1], stats[Stat.DEF - 1] = stats[Stat.DEF - 1], stats[Stat.ATK - 1]
     mon.species, mon.form, mon.stats = foe_mon.species, foe_mon.form, stats
+    sd.form_num = foe.form_num  # BattleMon.formNum is copied (battle_mon.h:79), H-5
     # A copied Multitype Arceus gives the user its own plate's types (lib.c:7629-7699), F-3.
     mon.ivs = list(foe_mon.ivs)
     mon.types = _multitype_plate(tables, foe_mon.species, foe_mon.ability, mon.item, foe_mon.types)
@@ -3183,34 +3191,66 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
             _know_ability(s, s.battlers[0].active)
 
 
-def _forecast(tables, s: RefState) -> None:
-    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE`` (lib.c:4115-4121), ``BattleSystem_TriggerFormChange``'s
-    Castform block (lib.c:6313-6364), F-6, as ``hooks.forecast``: every battler that is a Castform
-    with HP and Forecast (``Battler_Ability``) takes the type of the weather (Fire in sun, Water
-    in rain, Ice in hail) or Normal (no such weather, or an alive Cloud Nine / Air Lock) unless it
-    has that type already, until none changes. Only the types are written (the form number is
-    display, the party's form is not updated, :6446)."""
+def _form_change(tables, s: RefState) -> None:
+    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE`` (lib.c:4115-4121), ``BattleSystem_TriggerFormChange``
+    (lib.c:6305-6451), F-6 and H-5, as ``hooks.form_change``, until none changes.
+
+    Castform (:6313-6364): with HP and Forecast (``Battler_Ability``) it takes the type of the
+    weather (Fire in sun, Water in rain, Ice in hail) or Normal (no such weather, or an alive
+    Cloud Nine / Air Lock) unless it has that type already, and ``form_num`` (CASTFORM_FORM_*).
+    Cherrim (:6366-6396): with HP, ``form_num`` Sunshine (1) in sun with no alive Cloud Nine / Air
+    Lock, else Overcast (0). Arceus (:6398-6410): with HP and Multitype, ``form_num`` the type of
+    its raw item's plate (``Pokemon_GetArceusTypeOf``). A Transformed Giratina with ``form_num``
+    Origin (:6412-6449): Altered's stats from the target's IVs, EVs, level and nature, its slot 0
+    ability, ``form_num`` Altered, the copy's form and the party's form (``shadow_form``) 0."""
     w = 0 if _weather_suppressed(tables, s) else _weather_bits(s)
     castform = FieldCondition.RAINING | FieldCondition.SUNNY | FieldCondition.HAILING
     # lib.c:6318-6352, if-else: no CASTFORM bit -> Normal, else sun -> Fire, rain -> Water,
     # hail -> Ice, each unless the battler has that type already.
     chain = (
-        (not w & castform, Type.NORMAL),
-        (w & FieldCondition.SUNNY, Type.FIRE),
-        (w & FieldCondition.RAINING, Type.WATER),
-        (w & FieldCondition.HAILING, Type.ICE),
+        (not w & castform, Type.NORMAL, CASTFORM_FORM_NORMAL),
+        (w & FieldCondition.SUNNY, Type.FIRE, CASTFORM_FORM_SUNNY),
+        (w & FieldCondition.RAINING, Type.WATER, CASTFORM_FORM_RAINY),
+        (w & FieldCondition.HAILING, Type.ICE, CASTFORM_FORM_SNOWY),
     )
     for side in range(_fmt(s).B):
-        mon = _active(s, side)
-        if not (
+        mon, sd = _active(s, side), s.battlers[side]
+        if not mon.hp:
+            continue
+        if (
             mon.species == SPECIES_CASTFORM
-            and mon.hp
             and _battler_decomp_ability(tables, s, mon) == ABILITY_DECOMP_IDS[AbilityId.FORECAST]
         ):
-            continue
-        target = next((t for test, t in chain if test and t not in mon.types), None)
-        if target is not None:
-            mon.types = [int(target)] * len(mon.types)
+            target = next(((t, f) for test, t, f in chain if test and t not in mon.types), None)
+            if target is not None:
+                mon.types = [int(target[0])] * len(mon.types)
+                sd.form_num = target[1]
+        elif mon.species == SPECIES_CHERRIM:
+            sd.form_num = int(
+                not _weather_suppressed(tables, s) and bool(_weather_bits(s) & FieldCondition.SUNNY)
+            )
+        elif (
+            mon.species == SPECIES_ARCEUS
+            and _battler_decomp_ability(tables, s, mon) == ABILITY_MULTITYPE
+        ):
+            sd.form_num = int(
+                PLATE_TYPES.get(_t(tables, "item_hold_effect", mon.item), Type.NORMAL)
+            )
+        elif (
+            mon.species == SPECIES_GIRATINA
+            and sd.form_num == GIRATINA_FORM_ORIGIN
+            and sd.transformed
+        ):
+            # The copier's target: a singles foe, a doubles battler's chosen target (:6423-6429).
+            target = sd.chosen_target if _fmt(s).B == 4 else _foe(side)
+            altered = copy.copy(_active(s, target))
+            altered.species, altered.form = SPECIES_GIRATINA, GIRATINA_FORM_ALTERED
+            _calc_stats(tables, altered)  # Pokemon_SetGiratinaFormByHeldItem (pokemon.c:4380-4405)
+            mon.stats = list(altered.stats)
+            row = _t(tables, "species_form_row", SPECIES_GIRATINA, GIRATINA_FORM_ALTERED)
+            mon.ability = _t(tables, "species_abilities", row, 0)  # BoxPokemon_CalcAbility, slot 0
+            mon.ability_slot = mon.ability_form = 0
+            mon.form = sd.shadow_form = sd.form_num = GIRATINA_FORM_ALTERED
 
 
 def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
@@ -3315,7 +3355,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int, flagged: int = -1) -
         _know_ability(s, s.battlers[0].active)
     if traced and other == 0 and _ability(s, foe) in announced:
         _know_ability(s, s.battlers[0].active)
-    _forecast(tables, s)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE, after Pressure (F-6)
+    _form_change(tables, s)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE, after Pressure (F-6)
     _recover_status_by_ability(s, side)
     if traced:
         _recover_status_by_ability(s, other)
@@ -3470,6 +3510,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     # BattleSystem_InitBattleMon re-reads the party's friendship (lib.c:136, F-15).
     newcomer = _active(s, side)
     newcomer.friendship = newcomer.party_friendship
+    sd.form_num = newcomer.form  # InitBattleMon: BattleMon.formNum (lib.c:132), H-5
     sd.fake_out_turn = turn.entry_turn
     sd.truant = turn.entry_turn & 1  # lib.c:2119
     # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (it only
@@ -3600,13 +3641,22 @@ def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None
 
 
 def _form_pending(tables, s: RefState) -> bool:
-    """``BattleSystem_TriggerFormChange`` (lib.c:6305-6451) would change a form now: only
-    Castform's is modelled (``effects.form_change_pending``)."""
-    saved = [list(_active(s, b).types) for b in range(_fmt(s).B)]
-    _forecast(tables, s)
-    pending = any(list(_active(s, b).types) != saved[b] for b in range(_fmt(s).B))
+    """``BattleSystem_TriggerFormChange`` (lib.c:6305-6451) would change a form now: any of its
+    four blocks (``_form_change``; ``effects.form_change_pending``), H-5. The change is run on the
+    state and undone: only the types and ``form_num`` are compared, the other writes (a
+    Transformed Giratina's rebuild) always come with a ``form_num`` change."""
+    saved = [
+        (copy.deepcopy(_active(s, b).__dict__), s.battlers[b].form_num, s.battlers[b].shadow_form)
+        for b in range(_fmt(s).B)
+    ]
+    _form_change(tables, s)
+    pending = any(
+        _active(s, b).types != saved[b][0]["types"] or s.battlers[b].form_num != saved[b][1]
+        for b in range(_fmt(s).B)
+    )
     for b in range(_fmt(s).B):
-        _active(s, b).types = saved[b]
+        _active(s, b).__dict__.update(saved[b][0])
+        s.battlers[b].form_num, s.battlers[b].shadow_form = saved[b][1], saved[b][2]
     return pending
 
 
@@ -5067,7 +5117,7 @@ def _shaymin_land(tables, s: RefState, side: int) -> None:
     slot = sd.shadow_ability_slot if sd.transformed else mon.ability_slot
     if not _t(tables, "species_abilities_decomp", land, slot):  # empty: decomp id 0 (:18-19)
         slot = 0
-    mon.form = 0
+    mon.form = sd.form_num = 0  # subscript_check_shaymin_form.s:10 (H-5)
     mon.ability = _t(tables, "species_abilities", land, slot)
     mon.ability_slot, mon.ability_form = slot, 0
     mon.types = [_t(tables, "species_types", land, k) for k in range(len(mon.types))]
@@ -8514,7 +8564,7 @@ def _move_end_tail(turn: _Turn, s: RefState, clear: bool) -> None:
         _move_end_switch_in(turn, s)  # an ability gained mid-battle acts now (E3-2-5)
         # The same TriggerEffectOnSwitch's SWITCH_IN_CHECK_STATE_FORM_CHANGE (lib.c:4115), after
         # its Trace / weather / Intimidate / Download states: Castform's Forecast, F-6.
-        _forecast(turn.tables, s)
+        _form_change(turn.tables, s)
     # MoveEnd's BattleContext_Init (bcp.c:3998, battle_lib.c:1980): powerMul back to 10, so a
     # later action's list never reads a Pursuit's 20 and a resumed MoveEnd pause starts at 10.
     turn.pick_mul = 10
@@ -8575,7 +8625,7 @@ def _end_turn(turn: _Turn, s: RefState, site: int = 0, cursor: int = 0) -> RefSt
     # replacement pending it comes after it (ref_replace's switch-in effects).
     waiting = any(_awaits_replacement(s, b) for b in range(_fmt(s).B))
     if not s.over and not waiting:
-        _forecast(tables, s)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE precedes the item check (F-6)
+        _form_change(tables, s)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE precedes the item check (F-6)
         for side in range(_fmt(s).B):
             _held_item(turn, s, side)
     # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept); a resumed

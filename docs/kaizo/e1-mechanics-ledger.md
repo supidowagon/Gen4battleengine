@@ -2493,8 +2493,7 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   Rulings (manager: follow the decomp, departures are must-fix):
   1. Order. A status script that ran returns first (:4515-4532: `synchronize` now returns `ran`); then
   BattleSystem_TriggerFormChange returns when any form would change (:4536-4544), losing the hit's knot
-  (`effects.form_change_pending`: Castform's Forecast only; Cherrim, Arceus' plate and Giratina's Origin have no state
-  here, never pending). Then the knot. The flag SYSCTL_TRY_SYNCHRONIZE_STATUS is not read by the knot.
+  (`effects.form_change_pending`: every block, H-5). Then the knot. The flag SYSCTL_TRY_SYNCHRONIZE_STATUS is not read by the knot.
   2. Cute Charm moves `sideEffectMon` to the attacker BEFORE `subscript_infatuate` tries the infatuation
   (battle_lib.c:4339-4350: tests `curHP`, the attacker not in love, no NO_EFFECTS, not FIRST_OF_MULTI_TURN / UTURN_ACTIVE,
   damage taken, contact, defender HP, the 30 % roll), so a failed one (genders, Oblivious) still moves it:
@@ -2528,10 +2527,7 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   hit, battle_lib.c:3359): `knot_failed` in the hit loop and `_Turn.knot_failed`; on the U-turn tail the conv2 record
   clears likewise (`tail_knot_failed`). Nothing else reads the flag after the Synchronize step (grep of
   MOVE_STATUS_NO_EFFECTS / DID_NOT_HIT in battle_controller_player.c, battle_lib.c).
-  6. Not modelled (owed): the Cherrim (battle_lib.c:6367-6400, no ability test) and Arceus plate (:6402-6410) form
-  changes at that step. Coverage does NOT refuse them (only Giratina-Origin without its Orb is refused, coverage.py's
-  Griseous Orb test); Flower Gift and Multitype are EXACT abilities: an open gap reported to the manager, no form state
-  built here. Unobservable in singles (review should-fix 3): the sideEffectMon a failed Cute Charm moves is read only
+  6. Modelled in H-5. Unobservable in singles (review should-fix 3): the sideEffectMon a failed Cute Charm moves is read only
   by the Synchronize step with SYSCTL_TRY_SYNCHRONIZE_STATUS set, which needs a status landed this action; with Cute
   Charm the defender's ability, that is a secondary on the defender, which cannot then take the passed status.
   Enumerate: `knot_love` (the foe's damaging contact move, a knot holder, a Cute Charm holder on `s` that can
@@ -2550,6 +2546,61 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   the shared set).
   Snapshot (expected): `none` for every item here: the items were refused by coverage until now, so no snapshot team
   can hold one (and tests/strategies.py's generators draw no such item).
+- H-5 BattleSystem_TriggerFormChange: Cherrim, Arceus, the Transformed Giratina-Origin (rule sheet form-change.md;
+  `hooks.form_change`, formerly `hooks.forecast`; reference `_form_change`). battle_lib.c:6305-6451, per battler in
+  `monSpeedOrder`, the first change writes and returns TRUE. Kaizo changes only relocate the function (rom_diff.md:678,
+  :674, :642, :461): every rule holds in both games. The sheet's cites were re-checked against the decomp; no departure.
+  New state: `form_num` (int8 per battler, `BattleMon.formNum`, battle_mon.h:79; STATE.md row `BattleMon.formNum`).
+  Writers (all of the decomp's): InitBattleMon (battle_lib.c:130-132: `initial_arrays` for the leads, `step._switch_in`
+  after `_restore_transform`, reference `_enter`), Transform (battle_script.c:5346-5348: the bytes up to `ability` carry
+  it; `effects._transform`, reference `_transform`), the Castform block (CASTFORM_FORM_* 0-3, forms.h:51-54; it had no
+  reader, now mirrored), Shaymin's revert (sub/subscript_check_shaymin_form.s:10), and the blocks below. Its only readers
+  are the Cherrim, Arceus and Giratina tests; `state.form` and its readers stay (Cherrim, Arceus and Castform have no data
+  form: `Pokemon_GetFormNarcIndex`, pokemon.c:4929-4960).
+  (a) Cherrim (:6366-6396): species and HP, no ability test (Gastro Acid is irrelevant; a Ditto copy of a Cherrim is
+  tested by species). The else-if chain and the Cloud Nine case reduce to one target: Sunshine (1) iff no alive Cloud Nine /
+  Air Lock (`NO_CLOUD_NINE`, common.h:63-64) and sun; else Overcast (0); sandstorm and fog count as no weather
+  (FIELD_CONDITION_CASTFORM, condition.h:140). Only formNum is written. Not reachable from a trainer's data (every
+  trainer Cherrim has form 0, the party's form is never updated: no SYSCTL_FORM_CHANGE or SYSCTL_RECALC_MON_STATS is set
+  for it), modelled by the rule all the same.
+  (b) Arceus (:6398-6410): species, HP and `Battler_Ability` Multitype; formNum := `Pokemon_GetArceusTypeOf` of the RAW
+  held item's hold effect (pokemon.c:4319-4377: the plate's type, Normal for any other item or none; Klutz and Embargo do
+  not hide it: `damage.judgment_type` on `state.item`). Reach: the plate and the ability cannot change in battle (Fling
+  effect_script_0233.s:5, Thief / Covet battle_script.c:5108, Knock Off subscript_knock_off.s:6, Trick
+  subscript_exchange_items.s:7-8, Embargo subscript_embargo_start.s:7; Role Play, Skill Swap, Worry Seed and Gastro Acid
+  skip Multitype, Trace skips it: battle_lib.c:7756-7776), so a change comes at a send-out whose party form (a trainer
+  Arceus gets no `Pokemon_SetArceusForm`, trainer_data.c:204-305) differs from its plate (a lead's check at the battle
+  start, a newcomer's after the knot step), or for a Transform copier whose own item's type differs from the copied formNum
+  (Kaizo Ditto 650 with a Spooky Plate).
+  (c) Giratina (:6412-6451): species, HP, formNum Origin and (Transformed or, without Distortion, no Griseous Orb). The
+  Transformed branch (:6419-6449) is built: the target is a singles foe (`msgBattlerTemp ^ 1`) or a doubles battler's
+  `chosen_target` (:6423-6429, read as data); its party Pokemon is copied with the item removed and Altered forced
+  (:6431-6439); `Pokemon_SetGiratinaFormByHeldItem` (pokemon.c:4380-4405) acts on a Giratina: Altered, ability slot 0 of
+  Altered's row (`BoxPokemon_CalcAbility`, pokemon.c:4746-4766: Pressure; the second slot is empty), stats recalculated
+  from the target's IVs, EVs, level and nature. The copier's Attack, Defense, Speed, Sp. Atk and Sp. Def and ability take
+  those (:6441-6446), formNum := 0 (:6447); `SYSCTL_FORM_CHANGE` (:6448) makes `BattleController_EmitUpdatePartyMon`
+  (:6450, battle_controller.c:1461-1493) write the copier's OWN party form 0 (battle_io_command.c:597-599: `shadow_form`;
+  the copy `state.form` the Transformed slot holds follows, which Beat Up reads); no `updateStats`, so the party's ability
+  and stats stay; moves and PP are skipped while Transformed (:581-587). `subscript_form_change` runs, not the Giratina
+  subscript: no `BattleAI_SetAbility` (the AI's `ai_ability_known` stays as Transform left it), no RefreshMonData. Types,
+  stages, moves, PP, HP, `power_trick` / `power_trick_desync` stay. The non-Transformed Origin without the Orb (:6450-6453,
+  `subscript_giratina_form_change`) stays refused (`coverage._check_form`: the Orb cannot leave in battle: Knock Off
+  subscript_knock_off.s:7, Thief battle_script.c:5111, Trick subscript_exchange_items.s:9-10, Fling effect_script_0233.s:6,
+  Natural Gift effect_script_0178.s:6, Embargo subscript_embargo_start.s:9). Reachable: Kaizo Cyrus 780 slot 0 (Origin with
+  the Orb) against any Transform user, or a Kaizo Ditto against the player's Origin. The target is the Giratina that was
+  copied: the check follows the Transform move (`step._use_move`, battle_script.c:5350-5362) before anything can change
+  the foe, so `SetGiratinaForm`'s species test (not a Giratina: -1, no recalculation) never fails here.
+  Callers (unchanged, renamed): `hooks.switch_in_effects`, `hooks.battle_start`, `step._move_end_tail`,
+  `step._turn_start_items` (battle_lib.c:4115-4121; reference engine.py:3358, :8567, :8628), and the Synchronize step (battle_lib.c:4536-4544): `effects.form_change_pending` is now `form_change`'s
+  types or `form_num` differing (reference `_form_pending`: run and undone), so a U-turn / Baton Pass newcomer whose form
+  is pending (a Cherrim in sun, an Arceus off its plate) loses that action's knot, as H-4 ruling 1 owed.
+  Coverage: no refusal added or lifted; coverage.py's header note lists the modelled blocks. Backlog: no row changes.
+  Tests: tests/engine/test_e1_batch_h.py (H-5 block: the Cherrim weather cases, Cloud Nine, Sunny Day and the battle start,
+  a send-out, the knot skip beside H-4's Castform case, the Arceus battle-start and Transform cases, `form_change_pending`
+  against `_form_pending`, a Destiny Knot reflection lost to a pending plate, the Transformed Giratina's rebuild and
+  restore). Snapshot (expected): no output divergence (tests/strategies.py draws no Cherrim, Arceus or Castform; its
+  Giratina holds the Orb at form 0; every block is idle); the one new field is `form_num` (`--allow-new form_num`), set
+  from the active slot's form by the generator.
 
 ## Stream state (restart point, 2026-11-19)
 
