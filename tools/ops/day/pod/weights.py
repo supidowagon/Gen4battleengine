@@ -11,17 +11,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DEFAULT_GB = 20  # every file measured over 12 GB is in weights.txt; docs/process.md section 5, Chunking
+DEFAULT_GB = 20  # files never measured; every measured file has a weights.txt line (docs/process.md section 5, Chunking)
 
 
 def load(path: Path) -> list[tuple[str, int]]:
+    return load_lines(path.read_text(encoding="utf-8").splitlines(), str(path))
+
+
+def load_lines(lines: list[str], where: str = "weights") -> list[tuple[str, int]]:
     table = []
-    for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for n, raw in enumerate(lines, 1):
         line = raw.split("#", 1)[0].split()
         if not line:
             continue
         if len(line) < 2 or not line[1].isdigit() or int(line[1]) < 1:
-            raise ValueError(f"{path}:{n}: expected '<entry> <GB> <cite>', got {raw!r}")
+            raise ValueError(f"{where}:{n}: expected '<entry> <GB> <cite>', got {raw!r}")
         table.append((line[0], int(line[1])))
     return table
 
