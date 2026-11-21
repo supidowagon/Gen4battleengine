@@ -124,8 +124,9 @@ per day is the rate used for estimates.
   on the pod.
 - **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
   sends a newer tip only after the previous run's result is back, and that tip's list holds
-  only the lines new since the previous list and the test files changed since the previous
-  run's tip (`git diff --name-only <previous tip> <tip> -- tests`). The managing session
+  only the lines new since the previous list, the test files changed since the previous
+  run's tip (`git diff --name-only <previous tip> <tip> -- tests`) and the files that failed
+  or errored in the previous run. The managing session
   holds any other request until the run is back.
 - **Snapshot capture of `main`.** After every push of `main` the managing session starts
   one capture of the new tip on a test pod, in `/work/snapmain-<short sha>` (seeds 0-199,
@@ -149,9 +150,10 @@ per day is the rate used for estimates.
   runs with `MAXP` lowered by 2.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
-  files, about 40 for other files. Every chunk has an expected peak: the list line's `<GB>G`
-  field, else its heaviest id in `tools/ops/day/pod/weights.txt` (measured peaks, each
-  citing its run), else 12 GB (a chunk grows to 8-12 GB after it starts). Start a chunk only
+  files, about 40 for other files. Every chunk has an expected peak: its heaviest id in
+  `tools/ops/day/pod/weights.txt` (measured peaks, each citing its run; 12 GB for an id the
+  table lacks: a chunk grows to 8-12 GB after it starts), raised to the list line's `<GB>G`
+  field when that is larger. Start a chunk only
   while container memory (`/sys/fs/cgroup/memory.current`) plus the unreached expected peaks
   of every live chunk on the pod (all runs) plus its own expected peak stays under `GATE_GB`,
   and run at most `MAXP` chunks at once across all runs on the pod (Test pod above: 88 GB and
