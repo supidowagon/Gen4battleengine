@@ -134,7 +134,12 @@ def same(a, b):
 def test_every_field_has_its_shape_without_batch_axis(tables):
     carry = build(tables)
     assert carry_batch(carry) is None
-    shapes = {**PER_SLOT, "bag": (len(tables.item_names),), "bench": (4,), "beaten": (5,)}
+    shapes = {
+        **PER_SLOT,
+        "bag": (int(np.shape(tables.item_hold_effect)[0]),),
+        "bench": (4,),
+        "beaten": (5,),
+    }
     assert set(shapes) == set(Carry._fields)
     for name, shape in shapes.items():
         assert getattr(carry, name).shape == shape, name
@@ -228,8 +233,9 @@ def test_shedinja_max_hp_is_one(tables):
 
 def test_pp_defaults_to_the_maximum_at_the_pp_ups(tables):
     carry = build(tables)
-    move_pp = np.asarray(tables.move_pp)
-    assert carry.pp[0, 0] == move_pp[TACKLE] + move_pp[TACKLE] * 20 * 2 // 100  # src/pokemon.c:961
+    move_pp = np.asarray(tables.move_pp, dtype=np.int32)
+    # MON_DATA_MOVE1_MAX_PP, src/pokemon.c:961-965; int32, as an int8 row overflows
+    assert carry.pp[0, 0] == move_pp[TACKLE] + move_pp[TACKLE] * 20 * 2 // 100
     assert carry.pp[0, 1] == move_pp[GROWL] and carry.pp[0, 2] == 0
     explicit = build(tables, [replace(mon(), pp=(3, 4, 0, 0))], personality=[0])
     assert explicit.pp[0].tolist() == [3, 4, 0, 0]

@@ -363,7 +363,7 @@ def carry_from_party(
     for name, per_member in (("personality", personality), ("beauty", beauty), ("ball", ball)):
         if per_member is not None and len(per_member) != n:
             raise ValueError(f"{name} needs {n} values, got {len(per_member)}")
-    n_items = len(tables.item_names)
+    n_items = int(np.shape(tables.item_hold_effect)[0])  # one row per item id
     counts = np.zeros(n_items, dtype=np.int32)
     for item, count in bag.items():
         if not 0 <= item < n_items:
