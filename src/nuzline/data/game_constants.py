@@ -163,9 +163,8 @@ _AI_MOVE_IDS = {
     "Earth Power": 414,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
     # E4-A0: TagStrategy_Main's IfMoveEqualTo / IfMoveKnown ids (script.s:6732-6752, :6867,
-    # :7102-7114, :7150-7193, :7215-7337); id 222 is Kaizo's Bulldoze (moves.json row 222).
+    # :7102-7114, :7150-7193, :7215-7337). Magnitude (222) is below: Kaizo names id 222 Bulldoze.
     "Skill Swap": 285,
-    "Magnitude": 222,
     "Future Sight": 248,
     "Doom Desire": 353,
     "Rain Dance": 240,
@@ -322,7 +321,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Sand Veil": 8,
             "Pure Power": 74,
             "Huge Power": 37,
-            "Lightning Rod": 31,
+            "Lightningrod": 31,
             "Storm Drain": 114,
         },
     ),
@@ -732,6 +731,9 @@ CONSTANTS: tuple[Constant, ...] = (
     # slot (Kaizo's 149 is Triple Axel and still takes MOVE_PSYWAVE's case), so they are
     # name-checked against vanilla only.
     *_table("nuzline.ai.commands.MOVE_TYPE_MOVES", "move", _P, _MOVE_TYPE_MOVES),
+    # TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:7102-7114) compares the id
+    # (ai.c:834-844); Kaizo's 222 is Bulldoze and takes the same block (E4-A0).
+    Constant("nuzline.ai.commands.MOVE_IDS", "move", 222, "Magnitude", _P),
     *_table("nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES", "move", _P, _COPYCAT_ENCOURAGED_MOVES),
     # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the
     # decomp tests Levitate a second time, which never matches (quirk).

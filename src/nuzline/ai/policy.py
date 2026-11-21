@@ -4860,14 +4860,14 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
 
     # TagStrategy_CheckElectricMove (:7215)
     ctx, spread = _split(c.if_move_equal_to(_at(ctx, electric), _MOVE["Discharge"]))
-    ctx, rod = _tag_have(ctx, _DP, "Lightning Rod")
+    ctx, rod = _tag_have(ctx, _DP, "Lightningrod")
     partner_rod = ctx.live  # GoTo _PartnerHasLightningRod
     ctx = c.add_to_move_score(_at(ctx, rod), -1)  # _TargetProtectedByLightningRod
     ctx = c.flag_battler_is_type(ctx, _DP, _TYPE["Ground"])
     ctx, t = _split(c.if_loaded_equal_to(ctx, c.AI_NOT_HAVE))
     partner_rod = partner_rod | t
     ctx = c.add_to_move_score(ctx, -8)
-    ctx, rod = _tag_have(_at(ctx, partner_rod | ctx.live), _AP, "Lightning Rod")  # :7232
+    ctx, rod = _tag_have(_at(ctx, partner_rod | ctx.live), _AP, "Lightningrod")  # :7232
     ctx = _score(ctx, rod, -10)
     ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Discharge"]))  # GoTo _CheckElectric_End
     spread = spread | t

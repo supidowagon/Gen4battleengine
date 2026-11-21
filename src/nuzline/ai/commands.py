@@ -1165,7 +1165,7 @@ ABILITY_IDS = {
     "Sand Veil": 8,
     "Pure Power": 74,
     "Huge Power": 37,
-    "Lightning Rod": 31,
+    "Lightningrod": 31,
     "Storm Drain": 114,
 }
 MOVE_IDS = {
