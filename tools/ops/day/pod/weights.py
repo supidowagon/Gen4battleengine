@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DEFAULT_GB = 12  # docs/process.md section 5, Chunking: a chunk grows to 8-12 GB
+DEFAULT_GB = 20  # every file measured over 12 GB is in weights.txt; docs/process.md section 5, Chunking
 
 
 def load(path: Path) -> list[tuple[str, int]]:

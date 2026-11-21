@@ -3,8 +3,10 @@
 # GB = 10^9 bytes, the unit of runner.sh's container memory: the measured max RSS (agg.txt
 # max_rss_MB, MiB) times 1.048576 / 1000, rounded up. An entry matches an id equal to it or
 # starting with it plus "::", "[" or "/"; the longest matching entry gives an id's weight, the
-# largest id weight is the unit's. Ids no entry matches weigh 12 (docs/process.md section 5,
-# Chunking). A list line's own <GB>G field raises the units cut from it to at least <GB>.
+# largest id weight is the unit's. Ids no entry matches weigh 20 (weights.py DEFAULT_GB): every
+# file measured over 12 GB is listed, so a file measured but not listed peaked at 12 GB or less,
+# and an unmeasured file is given room up to 20. A list line's own <GB>G field raises the units
+# cut from it to at least <GB>.
 # A test measured inside a multi-id unit carries that unit's peak. "killed" = the unit was killed
 # at the memory limit (rc 137), so the peak is a lower bound.
 # Runs: _scratch/rent/out/<run>/results/agg.txt on the managing PC.
@@ -55,7 +57,8 @@ tests/test_cli.py::test_cli_rank_deaths_and_protect                        79 sl
 tests/test_cli.py::test_cli_rank_default_budget_keeps_the_header           79 slow-20261120-8c5cd83
 tests/test_cli.py::test_cli_solve_deaths                                   79 slow-20261120-8c5cd83
 
-# Files over 20 GB (any tier; the file's largest unit).
+# Files over 12 GB (any tier; the largest unit of the file across every run's agg.txt under
+# _scratch/rent/out/ on 20 Nov, 120 runs).
 tests/search/test_line.py                                                  35 slow-20261120-8c5cd83
 tests/search/test_player_eval.py                                           35 slow-20261120-8c5cd83
 tests/search/test_player.py                                                34 slow-20261120-8c5cd83
@@ -70,3 +73,49 @@ tests/search/test_line_search.py                                           24 sl
 tests/ai/test_kaizo_policy.py                                              23 slow-20261120-8c5cd83
 tests/engine/test_batch11.py                                               22 train-e5490cc
 tests/search/test_stage_b.py                                               22 slow-20261120-8c5cd83
+tests/engine/test_observe.py                                               21 e2-d3g-e4fbd40
+tests/search/test_plan_tree.py                                             20 slow-20261120-8c5cd83
+tests/engine/test_attract.py                                               19 slow-20261120-8c5cd83
+tests/engine/test_d3_trick_room.py                                         19 e2-d3q-d5e66d5
+tests/engine/test_protect.py                                               19 s2m
+tests/engine/test_singles_followup2.py                                     19 s2mf
+tests/prep/test_screen.py                                                  19 slow-20261120-8c5cd83
+tests/engine/test_d3_owed_follow_me.py                                     18 e2-d3u-1909895
+tests/engine/test_d3_turn_reset.py                                         18 e2-d3u-1909895
+tests/engine/test_e3_batch1.py                                             18 e2-d3g-e4fbd40
+tests/engine/test_quick_claw.py                                            18 train-e5490cc
+tests/reference/test_d3_trick_room_ref.py                                  18 e2-d3p-df4f55a
+tests/ai/test_allin.py                                                     17 slow-20261120-8c5cd83
+tests/engine/test_d3_move_end.py                                           16 e2-d3p-df4f55a
+tests/engine/test_e1_gardenia.py                                           16 s2m
+tests/engine/test_fangs.py                                                 16 s2m
+tests/engine/test_present.py                                               16 s2m
+tests/engine/test_roar.py                                                  16 slow-20261120-8c5cd83
+tests/reference/test_d3_faint_check_ref.py                                 16 e2-d3u-1909895
+tests/search/test_pivot_search.py                                          16 nightly-20261120-8c5cd83
+tests/test_cli_line.py                                                     16 slow-20261120-8c5cd83
+tests/ai/test_kaizo_outcome.py                                             15 slow-20261120-8c5cd83
+tests/engine/test_accuracy_classes.py                                      15 train9-093367d
+tests/engine/test_batch13.py                                               15 train-e5490cc
+tests/engine/test_invokers.py                                              15 e3w
+tests/engine/test_terrain_moves.py                                         15 s2m
+tests/engine/test_d2_action_encoding.py                                    14 slow-20261120-8c5cd83
+tests/engine/test_disable.py                                               14 slow-20261120-8c5cd83
+tests/engine/test_e1_trial.py                                              14 e2-d3g-e4fbd40
+tests/engine/test_e3_batch2.py                                             14 e2-d3g-e4fbd40
+tests/engine/test_k3b_abilities.py                                         14 nightly-20261120-8c5cd83
+tests/engine/test_power_moves.py                                           14 e2-d3g-e4fbd40
+tests/engine/test_self_destruct.py                                         14 slow-20261120-8c5cd83
+tests/engine/test_small_moves.py                                           14 slow-20261120-8c5cd83
+tests/engine/test_acid_rain_guard.py                                       13 e2-d3n-fs-6883cbc
+tests/engine/test_batch9.py                                                13 e1-g6-9d6a492
+tests/engine/test_d3_action_loop.py                                        13 e2-d3p-df4f55a
+tests/engine/test_d3_moved.py                                              13 e2-d3p-df4f55a
+tests/engine/test_d3_pause.py                                              13 e2-d3p-df4f55a
+tests/engine/test_d3_pursuit.py                                            13 e2-d3p-df4f55a
+tests/engine/test_d3_review_targets.py                                     13 e2-d3u-1909895
+tests/engine/test_d3_switch_in_order.py                                    13 e2-d3p-df4f55a
+tests/engine/test_damage_classes.py                                        13 ops-ts2-b09b08e
+tests/engine/test_pivot_review.py                                          13 e2-d3g-e4fbd40
+tests/engine/test_resist_berries.py                                        13 slow-20261120-8c5cd83
+tests/test_trace_to_state.py                                               13 train9-093367d
