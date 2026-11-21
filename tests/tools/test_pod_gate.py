@@ -152,7 +152,7 @@ def test_the_head_is_claimed_after_claim_s_and_skip_ahead_stops(tmp_path):
     assert _in(d, tmp_path / "c", "choose 18 10 137 0 120 none") == "none - hold claim"
     assert _in(d, tmp_path / "c", "choose 18 10 137 0 500 mine") == "none - hold -"
     assert _in(d, tmp_path / "c", "choose 18 0 100 0 500 mine") == "start u_001 start -"
-    assert _in(d, tmp_path / "c", "choose 1 0 0 0 0 other") == "none - claim-other -"
+    assert _in(d, tmp_path / "c", "choose 1 0 0 0 0 other 176") == "none - claim-other -"
 
 
 def test_claim_hand_over_between_two_runners(tmp_path):
@@ -162,15 +162,15 @@ def test_claim_hand_over_between_two_runners(tmp_path):
     live = {4001: "S", 4002: "S"}
     _in(a, claims, "CLAIM_PID=4001 claim_write run-a u_001 30 1000", live)
     assert (claims / "run-a.u_001").read_text(encoding="utf-8").split() == ["1000", "30", "4001"]
-    assert _in(a, claims, "claim_state run-a", live) == "mine u_001"
-    assert _in(b, claims, "claim_state run-b", live) == "other run-a.u_001"
+    assert _in(a, claims, "claim_state run-a", live) == "mine u_001 30"
+    assert _in(b, claims, "claim_state run-b", live) == "other run-a.u_001 30"
     # b's own later claim does not outrank the older one
     _in(b, claims, "CLAIM_PID=4002 claim_write run-b u_001 9 1005", live)
-    assert _in(b, claims, "claim_state run-b", live) == "other run-a.u_001"
+    assert _in(b, claims, "claim_state run-b", live) == "other run-a.u_001 30"
     # a starts its unit and drops the claim: b's claim is now the oldest
     _in(a, claims, "claim_drop run-a u_001", live)
-    assert _in(b, claims, "claim_state run-b", live) == "mine u_001"
-    assert _in(a, claims, "claim_state run-a", live) == "other run-b.u_001"
+    assert _in(b, claims, "claim_state run-b", live) == "mine u_001 9"
+    assert _in(a, claims, "claim_state run-a", live) == "other run-b.u_001 9"
 
 
 def test_a_dead_or_zombie_claimant_is_ignored_and_deleted(tmp_path):
@@ -192,6 +192,75 @@ def test_podgate_counts_a_unit_that_has_not_called_setsid_yet(tmp_path):
     assert _run(f"{fake_z}\npodgate '{f}'") == "0 0"
 
 
+GB_KIB = 1e9 / 1024   # ps rss is KiB; the gate's GB is 10^9 bytes
+
+
+def _units(root: Path, specs: list[tuple[int, float]]) -> tuple[str, str]:
+    """Live units of weight GB at RSS GB, pgids 1001...: (podgate's file args, a fake ps)."""
+    files, rows = [], []
+    for i, (w, rss) in enumerate(specs):
+        files.append(_unit(root / "out", f"u_{i:03d}", str(1001 + i), str(w)))
+        rows.append(f"'{1001 + i} {1001 + i} S {int(rss * GB_KIB)}'")
+    return " ".join(f"'{f}'" for f in files), "ps() { printf '%s\n' " + " ".join(rows) + "; }"
+
+
+def test_podgate_reserves_every_heavy_gap_and_only_the_largest_light_gaps(tmp_path):
+    # heavy (w >= 40): gaps 72, 50, 0 (over its weight); light: gaps 24, 20, 14, 5, 0
+    args, fake = _units(tmp_path, [(82, 10), (60, 10), (45, 50), (30, 6), (26, 6), (20, 6), (11, 6), (5, 6)])
+    assert _run(f"{fake}\npodgate {args}") == "8 166"                          # 72 + 50 + 24 + 20
+    assert _run(f"{fake}\nRESERVE_TOP=3; podgate {args}") == "8 180"           # + 14
+    assert _run(f"{fake}\nRESERVE_TOP=0; podgate {args}") == "8 122"           # heavy gaps only
+    assert _run(f"{fake}\nRESERVE_FULL_GB=0; podgate {args}") == "8 185"       # every gap: the old sum
+    assert _run(f"{fake}\nRESERVE_FULL_GB=999; podgate {args}") == "8 122"     # top 2 of all: 72 + 50
+
+
+def test_17_live_units_of_379_gb_weight_admit_the_next_unit(tmp_path):
+    # Pod 3, 21 Nov: 17 live units, weight sum 379 GB, ran without a kill. Early in their lives
+    # (6 GB each, 10 GB of other memory) the old sum of every gap held the pod; now two light
+    # gaps are reserved: 112 + 48 + 12 < 176 (and < 200).
+    weights = [30, 30] + [21] * 11 + [22] * 4
+    assert sum(weights) == 379
+    args, fake = _units(tmp_path, [(w, 6) for w in weights])
+    live, res = _run(f"{fake}\npodgate {args}").split()
+    assert (live, res) == ("17", "48")
+    for gate in (176, 200):
+        env = f"NO_W_FILE_GB=12 MAXP=18 GATE_GB={gate} KILL_GB=236 IDLE_WAIT_S=300"
+        assert _run(f"admit 17 {res} 112 12 0", env) == "start"
+    _, old = _run(f"{fake}\nRESERVE_FULL_GB=0; podgate {args}").split()   # the old formula
+    assert old == "277"
+    assert _run(f"admit 17 {old} 112 12 0", "NO_W_FILE_GB=12 MAXP=18 GATE_GB=200 KILL_GB=236 IDLE_WAIT_S=300") == "hold"
+
+
+def test_a_heavy_unit_keeps_its_whole_reserve(tmp_path):
+    env = "NO_W_FILE_GB=12 MAXP=18 GATE_GB=200 KILL_GB=236 IDLE_WAIT_S=300"
+    # an 80 GB head at 150 GB of real memory holds, even with nothing reserved
+    assert _run("admit 10 0 150 80 0", env) == "hold"
+    assert _run("admit 10 0 100 80 0", env) == "start"    # 180 < 200
+    # once started (4 GB used) it reserves its whole gap, with no light gap reserved at all
+    args, fake = _units(tmp_path, [(80, 4), (20, 6), (20, 6)])
+    assert _run(f"{fake}\nRESERVE_TOP=0; podgate {args}") == "3 76"
+    _, res = _run(f"{fake}\npodgate {args}").split()
+    assert res == "104"
+    assert _run(f"admit 3 {res} 60 35 0", env) == "start"    # 199
+    assert _run(f"admit 3 {res} 60 36 0", env) == "hold"     # 200
+
+
+def test_another_runs_claim_lets_a_unit_start_only_beside_it(tmp_path):
+    d = _run_dir(tmp_path, "r1", [("u_001", 30), ("u_002", 20), ("u_003", 9)])
+    c = tmp_path / "c"
+    # another run's claim of 30 GB: a unit starts only when it fits beside it
+    assert _in(d, c, "choose 10 10 100 0 0 other 30") == "start u_001 claim-fit -"   # 100 + 10 + 30 + 30 = 170
+    assert _in(d, c, "choose 10 10 120 0 0 other 30") == "start u_003 claim-fit -"   # 120 + 40 + 9 = 169
+    assert _in(d, c, "choose 10 10 130 0 0 other 30") == "none - claim-other -"      # 9 fits alone, not beside
+    assert _in(d, c, "choose 0 0 0 0 0 other 30") == "none - claim-other -"          # idle: the claimant goes first
+    assert _in(d, c, "choose 20 0 0 0 0 other 30") == "none - claim-other -"         # MAXP
+    # this run's own head: skip-ahead while its hold is young; claimed, only the head
+    assert _in(d, c, "choose 10 10 140 0 119 none") == "start u_002 skip-ahead -"    # 140 + 10 + 20 = 170
+    assert _in(d, c, "choose 10 10 140 0 120 none") == "none - hold claim"
+    assert _in(d, c, "choose 10 10 140 0 500 mine") == "none - hold -"
+    assert _in(d, c, "choose 10 10 120 0 500 mine") == "start u_001 start -"
+
+
 # runnerpid stand-in: pids 6001 and 6002 run runner.sh; 6003 is alive but a reused pid.
 RUNNERS = "runnerpid() { case \"$1\" in 6001|6002) return 0;; esac; return 1; }\n"
 
@@ -203,12 +272,12 @@ def test_only_a_reused_pids_claim_expires_by_time_a_live_runners_never(tmp_path)
     _in(b, claims, "CLAIM_PID=6001 claim_write run-a u_001 30 1000; CLAIM_PID=6002 claim_write run-b u_001 9 4000; "
         "CLAIM_PID=6003 claim_write run-c u_002 30 900", live)
     # at 4500 the reused pid's claim is 3600 s old, not older than CLAIM_MAX_S: it still wins
-    assert _in(b, claims, RUNNERS + "NOW=4500 CLAIM_MAX_S=3600 claim_state run-b", live) == "other run-c.u_002"
+    assert _in(b, claims, RUNNERS + "NOW=4500 CLAIM_MAX_S=3600 claim_state run-b", live) == "other run-c.u_002 30"
     script = RUNNERS + "NOW=4501 CLAIM_MAX_S=3600 claim_state run-b 2> err.txt; cat err.txt"
-    assert _in(b, claims, script, live).splitlines() == ["other run-a.u_001", "4501 claim-expired run-c.u_002 age 3601 s"]
+    assert _in(b, claims, script, live).splitlines() == ["other run-a.u_001 30", "4501 claim-expired run-c.u_002 age 3601 s"]
     # run-a's runner is alive: its 3601 s old claim stays and stays the oldest
     assert sorted(p.name for p in claims.iterdir()) == ["run-a.u_001", "run-b.u_001"]
-    assert _in(b, claims, RUNNERS + "NOW=99999 CLAIM_MAX_S=3600 claim_state run-a", live) == "mine u_001"
+    assert _in(b, claims, RUNNERS + "NOW=99999 CLAIM_MAX_S=3600 claim_state run-a", live) == "mine u_001 30"
 
 
 PODCHECK = GATE.parent / "podcheck.sh"
