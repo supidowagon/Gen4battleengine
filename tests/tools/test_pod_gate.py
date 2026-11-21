@@ -604,9 +604,10 @@ def test_runner_kills_a_unit_over_unit_max_s_with_rc_96(tmp_path):
                                        'date +%s > "$O/$u.start"; exec sleep 300\n', encoding="utf-8", newline="\n")
     (d / "out" / "queue.txt").write_text("u_001 tests/x.py\n", encoding="utf-8", newline="\n")
     (d / "out" / "u_001.w").write_text("1\n", encoding="utf-8", newline="\n")
+    (d / "run.env").write_text("export RESERVE_PCT='80'\n", encoding="utf-8", newline="\n")   # setup.sh's
     cg = _cg(tmp_path, {"memory.current": "1000000000"})
     env = (f"CGROOT='{cg}' WORK='{work}' RUNNER_LOCK='{tmp_path / 'lock'}' CLAIMS='{tmp_path / 'claims'}' "
-           "WARMUP=none SPACING=0 UNIT_MAX_S=2")
+           "WARMUP=none SPACING=0 UNIT_MAX_S=2 RESERVE_PCT=80 RESERVE_TOP=3")
     log = d / "runner.log"
     subprocess.run([BASH, "-c", f"{env} bash '{d / 'bin/runner.sh'}' > '{log}' 2>&1"], check=True, timeout=120, env=_clean_env())
     o = d / "out"
@@ -614,6 +615,9 @@ def test_runner_kills_a_unit_over_unit_max_s_with_rc_96(tmp_path):
     assert (o / "timedout.txt").read_text(encoding="utf-8").split() == ["u_001"]
     assert (o / "DONE").is_file()
     assert "TIMEOUT u_001: over UNIT_MAX_S 2 s, killed: rc 96" in log.read_text(encoding="utf-8")
+    # the runner adds the effective RESERVE_ knobs to run.env, defaults included, each once
+    assert (d / "run.env").read_text(encoding="utf-8").splitlines() == [
+        "export RESERVE_PCT='80'", "export RESERVE_TOP='3'", "export RESERVE_FULL_GB='40'"]
 
 
 

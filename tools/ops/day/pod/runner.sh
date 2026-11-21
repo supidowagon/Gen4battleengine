@@ -69,6 +69,8 @@ memgb() { local b; b=$(cgmem current) || return 1; echo $(( b / 1000000000 )); }
 nomem() { echo "$(date +%s) ERROR: no cgroup memory file (v2 memory.current or v1 memory/memory.usage_in_bytes); runner stops"; exit 1; }
 memgb > /dev/null || nomem
 reserve_knobs || { echo "$(date +%s) ERROR: bad RESERVE_ knob; runner stops"; exit 1; }
+for n in RESERVE_TOP RESERVE_FULL_GB RESERVE_PCT; do   # run.env gets their effective values, defaults too
+  grep -q "^export $n=" "$D/run.env" 2>/dev/null || echo "export $n='${!n}'" >> "$D/run.env"; done
 # Temp files this runner writes (p.new, run/.<unit>.tmp, its claim temp files) go on any exit.
 trap 'rm -f p.new run/.*.tmp "$CLAIMS/.$RUN".*.tmp' EXIT; trap 'exit 143' TERM; trap 'exit 130' INT; trap 'exit 129' HUP
 okpg() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac   # the pid (setsid not called yet) or a group
