@@ -38,7 +38,7 @@ def test_generated_lines_take_the_max_per_file_with_floor_and_skip_hand_kept_uni
     a2 = _agg(tmp_path, "run-b", ["u_001 1 30000 10 0 tests/a.py::test_2", "u_002 1 10 1 0 tests/b.py::test_2"])
     out = wfa.render(w, [a1, a2]).splitlines()
     assert out[:4] == ["# head", "tests/h.py::test_big 90 r0", "tests/f.py 7 r0", wfa.MARK]
-    assert out[4:] == ["tests/a.py 32 run-b", "tests/h.py 32 run-a", "tests/b.py 4 run-a"]
+    assert out[4:] == ["tests/a.py 32 run-b", "tests/h.py 32 run-a", "tests/b.py 4 run-a", "tests/a.py::test_1 21 run-a"]
 
 
 def test_an_agg_without_a_unit_table_uses_its_file_rows(tmp_path):
@@ -65,7 +65,7 @@ def test_warnings_for_kernel_kills_triple_kills_hand_kept_overruns_and_lower_val
     ])
     warn: list[str] = []
     out = wfa.render(w, [agg], warn).splitlines()
-    assert out[-1] == "tests/a.py 63 run-a"
+    assert out[2:] == ["tests/a.py 63 run-a", "tests/a.py::test_1 21 run-a"]
     assert sorted(warn) == sorted([
         "killed three times, no peak: run-a u_003 tests/b.py",
         "hand-kept ids peaked at 32 GB, above their largest hand-kept weight 10 GB: run-a u_004 tests/h.py::test_big",
@@ -83,3 +83,34 @@ def test_a_file_the_aggs_no_longer_measure_is_warned_and_main_prints_warnings(tm
     io = capsys.readouterr()
     assert io.out.splitlines()[-1] == "tests/a.py 4 run-a"
     assert io.err.splitlines() == ["WARNING: no longer measured, dropped: tests/gone.py (was 9 GB); pass the agg.txt that measured it"]
+
+
+def test_per_test_lines_take_the_smallest_passed_unit_that_ran_the_test(tmp_path):
+    w = tmp_path / "weights.txt"
+    w.write_text("tests/p.py::test_h 80 r0\ntests/p.py::test_k 80 r0 keep\n" + wfa.MARK + "\n", encoding="utf-8")
+    ids = {"u_001": [f"tests/p.py::test_{c}" for c in "abcdh"], "u_002": ["tests/p.py::test_a", "tests/p.py::test_b"],
+           "u_005": ["tests/p.py::test_e", "tests/p.py::test_x[a b]"]}
+    a1 = _agg(tmp_path, "run-a", [
+        "u_001 5 76000 50 0 tests/p.py::test_a",        # 80 GB: the file line
+        "u_002 2 9000 10 0 tests/p.py::test_a",         # 10 GB for a and b
+        "u_003 1 4000 10 1 tests/p.py::test_c",         # failed: not a measurement of c
+        "u_004 1 74000 10 0 tests/p.py::test_d",        # alone at 78: within the margin, no line
+        "u_005 2 30000 10 0 tests/p.py::test_e",        # 32 GB; an id with a space gets no line
+        "u_006 1 5000 10 0 tests/p.py::test_h",         # hand-kept 80, alone at 6: warned
+        "u_007 1 5000 10 0 tests/p.py::test_k",         # hand-kept 80 with "keep": not warned
+    ], ids)
+    a2 = _agg(tmp_path, "run-b", ["u_001 2 14000 10 0 tests/p.py::test_b", "u_002 1 20000 10 0 tests/p.py::test_e"],
+              {"u_001": ["tests/p.py::test_b", "tests/p.py::test_f"]})
+    warn: list[str] = []
+    out = wfa.render(w, [a1, a2], warn).splitlines()
+    assert out[3:] == ["tests/p.py 80 run-a",
+                       "tests/p.py::test_a 10 run-a",       # 2-id unit, run-a
+                       "tests/p.py::test_b 15 run-b",       # two 2-id units: the larger peak
+                       "tests/p.py::test_e 21 run-b",       # the 1-id unit beats the 2-id one
+                       "tests/p.py::test_f 15 run-b"]
+    assert warn == ["hand-kept line 80 GB above its test's own peak 6 GB (smallest unit 1 ids, run-a): tests/p.py::test_h"]
+    # the new table loads, and its per-test lines weigh the units the gate sees
+    w.write_text("\n".join(out) + "\n", encoding="utf-8")
+    t = wfa.weights.load(w)
+    assert wfa.weights.unit_weight(["tests/p.py::test_a", "tests/p.py::test_b"], t) == 15
+    assert wfa.weights.unit_weight(["tests/p.py::test_c"], t) == 80
