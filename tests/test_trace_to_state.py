@@ -77,8 +77,9 @@ def _step(tables, state, actions, outcome) -> BattleState:
     whole-turn program resident: a converted trace left the process at 9.2 GB with it and
     4.7 GB without (test_a_thunder_fang_flinch_is_inferred, measured locally), above and below
     conftest's 6 GB clear threshold, so every test dropped both programs and reloaded them
-    (100-190 s a test on the pod) where now the module keeps its one program. ``advance_learns`` is a no-op once it has run (levelup.py:400-404), so the
-    callers' own scan after this one changes nothing."""
+    (100-190 s a test on the pod) where now the module keeps its one program.
+    ``advance_learns`` is a no-op once it has run (levelup.py:400-404), so the callers' own
+    scan after this one changes nothing."""
     return replay_turn(tables, state, actions, outcome, -1, -1)
 
 
