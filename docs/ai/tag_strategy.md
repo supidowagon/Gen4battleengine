@@ -50,7 +50,7 @@ bit 8). A doubles battle adds bit 7 to every thinking mask (`ai:252-255`); B = 4
 | SkillSwap (7195-7213) | as at B = 4 | +5 own Truant / Slow Start / Stall / Klutz; +2 defender Shadow Tag, Pure Power, Huge Power, Mold Breaker, Solid Rock, Filter, Flower Gift (ability coin `ai:1195` for a two-ability unknown defender) |
 | Electric (7215-7263) | Discharge only | Discharge -3 (SpreadElectric reads battler 3: Normal, no -10 / +3 case), other Electric 0 |
 | Water (7265-7302) | `CheckBattlerAbility DEFENDER_PARTNER STORM_DRAIN` is UNKNOWN: -1 | every non-Surf Water move -1; Surf -3 |
-| Fire (7304-7337) | `IfActivatedFlashFire ATTACKER` | +1 with Flash Fire on; Lava Plume -3 more (`s:7308`'s comment says +3, the script scores -3) |
+| Fire (7304-7337) | `IfActivatedFlashFire ATTACKER` | +1 with Flash Fire on; Lava Plume -3 more (`s:7334`: the partner tests all fail). A Dry Skin partner scores -3 (`s:7322-7323`, `ScoreMinus3`) where `s:7308`'s comment says +3; unreachable at B = 2 (the partner's ability is UNKNOWN) |
 
 Never at B = 2: Helping Hand +1, the defender-partner and attacker-partner score changes, both speed-rank
 blocks (`LoadBattlerSpeedRank` in TrickRoom and FutureSight), `IfBattlerFainted` and `IfMoveKnown

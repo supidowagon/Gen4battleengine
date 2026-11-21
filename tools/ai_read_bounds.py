@@ -27,7 +27,14 @@ Branches whose outcome is fixed by the move are decided, so the bound follows th
   table (``Tables.move_ai_effect``, the effect the scripts read) is not the current one;
 * ``IfTargetIsPartner`` never jumps in singles; at B = 2 the partner arguments name the zeroed
   battlers 2 and 3 (``_HP_START``): their HP percent is 0, ``IfBattlerFainted`` on one jumps and
-  ``IfMoveKnown AI_BATTLER_ATTACKER_PARTNER`` does not (E4-A0);
+  ``IfMoveKnown AI_BATTLER_ATTACKER_PARTNER`` does not (E4-A0); their cleared ability, types
+  and masks decide ``CheckBattlerAbility`` (AI_UNKNOWN) and ``FlagBattlerIsType`` (AI_HAVE for
+  TYPE_NORMAL only) with the ``IfLoaded(Not)EqualTo`` AI_HAVE / AI_NOT_HAVE / AI_UNKNOWN that
+  follow, and ``IfStatus`` / ``IfMoveEffect`` (never) and ``IfNotStatus`` (always) on one
+  (``_AI_VALUES``);
+* ``IfMoveEffectivenessEquals`` tests one class, fixed for the move on the path
+  (trainer_ai.c:1311-1346): after one jumped no other jumps, and a class a test fell through on
+  never jumps later (``_effectiveness_branch``);
 * ``IfHPPercentLessThan`` / ``GreaterThan`` / ``EqualTo`` / ``NotEqualTo`` (trainer_ai.c:588-646)
   compare a battler's ``curHP * 100 / maxHP``, which no AI command changes, so the path keeps
   each battler argument's percent range (0-100) and a compare the range already fixes is
@@ -134,7 +141,7 @@ def flag_reads(
     lines = script.lines
 
     @cache
-    def most(i: int, calc: tuple, hp: tuple = ()) -> int:
+    def most(i: int, calc: tuple, hp: tuple = (), eff: tuple = ()) -> int:
         while True:
             if i >= len(lines):
                 raise RuntimeError(f"flag {bit}: fell off the end of script.s")
@@ -164,30 +171,36 @@ def flag_reads(
                 reads = int(drawn == 2 and damaging)
             target = args[-1] if args and args[-1] in script.labels else None
             if cmd == "GoTo":
-                return reads + most(script.labels[target], calc, hp)
+                return reads + most(script.labels[target], calc, hp, eff)
             taken = _decided(script, cmd, args, calc, effect, damaging, can_quad)
             hp_jump = hp_stay = hp
             if cmd in _HP_COMPARES and target is not None:
                 taken, hp_jump, hp_stay = _hp_branch(cmd, args, hp)
-            nxt = _next_calc(cmd, calc, effect, damaging, drawn)
+            eff_jump = eff_stay = eff
+            if cmd == "IfMoveEffectivenessEquals" and taken is None:
+                taken, eff_jump, eff_stay = _effectiveness_branch(args[0], eff)
+            nxt = _next_calc(cmd, calc, effect, damaging, drawn, args)
             if calc[0] == "compared" and calc[2] and cmd.startswith("IfLoaded") and taken is None:
                 reads += 1  # FlagMoveDamageScore's pending read: its result is read here
                 nxt = (calc[0], calc[1], False)
             if target is None or not cmd.startswith("If"):
                 if reads:
-                    return reads + most(i + 1, nxt, hp)
+                    return reads + most(i + 1, nxt, hp, eff)
                 calc = nxt
                 i += 1
                 continue
             if taken is True:
-                return reads + most(script.labels[target], nxt, hp_jump)
+                return reads + most(script.labels[target], nxt, hp_jump, eff_jump)
             if taken is False:
                 if reads:
-                    return reads + most(i + 1, nxt, hp_stay)
-                calc, hp = nxt, hp_stay
+                    return reads + most(i + 1, nxt, hp_stay, eff_stay)
+                calc, hp, eff = nxt, hp_stay, eff_stay
                 i += 1
                 continue
-            return reads + max(most(script.labels[target], nxt, hp_jump), most(i + 1, nxt, hp_stay))
+            return reads + max(
+                most(script.labels[target], nxt, hp_jump, eff_jump),
+                most(i + 1, nxt, hp_stay, eff_stay),
+            )
 
     return most(script.labels[FLAG_LABELS[bit]] + 1, ("unknown",))
 
@@ -197,6 +210,14 @@ def flag_reads(
 # ROM's division returns as the dividend, 0 (ruling G-53; A-8 section 9.1). So their HP compares
 # are decided (E4-A0: Tag Strategy at B = 2; B = 4 is E4-A's, and the format gate refuses it).
 _HP_START = {"AI_BATTLER_DEFENDER_PARTNER": (0, 0), "AI_BATTLER_ATTACKER_PARTNER": (0, 0)}
+# The cleared partners' state (A-8 section 1): ability 0 and species 0, whose abilities are 0 and 0,
+# so ``CheckBattlerAbility`` on one loads AI_UNKNOWN (trainer_ai.c:1212-1266: the attacker's
+# partner's own ability, the defender's partner's guess from species 0, battlerAbilities 0);
+# types 0 and 0, so ``FlagBattlerIsType`` loads TRUE (AI_HAVE) only for TYPE_NORMAL (:991-1004,
+# MON_HAS_TYPE, battle/common.h:53); status and moveEffectsMask 0, so ``IfStatus`` and
+# ``IfMoveEffect`` never jump and ``IfNotStatus`` always does (:648-674, :704-716).
+# AI_NOT_HAVE, AI_HAVE, AI_UNKNOWN: include/constants/battle/trainer_ai.h:39-41
+_AI_VALUES = {"AI_NOT_HAVE": 0, "AI_HAVE": 1, "AI_UNKNOWN": 2}
 _HP_COMPARES = {
     "IfHPPercentLessThan",
     "IfHPPercentGreaterThan",
@@ -241,9 +262,28 @@ def _hp_branch(cmd: str, args, hp: tuple) -> tuple[bool | None, tuple, tuple]:
     return None, jump, stay
 
 
-def _next_calc(cmd: str, calc: tuple, effect: int, damaging: bool, drawn: int = 0) -> tuple:
+def _effectiveness_branch(expected: str, eff: tuple) -> tuple[bool | None, tuple, tuple]:
+    """``IfMoveEffectivenessEquals expected`` on the path's knowledge ``eff`` of the move's
+    effectiveness class: ``("is", class)`` once one test jumped, else the sorted classes earlier
+    tests ruled out. The class is fixed for the move on the path (the attacker, defender and move
+    do not change within a run; trainer_ai.c:1311-1346), so a path that jumped on one class never
+    jumps on another, and one that fell through on a class never jumps on it later."""
+    if eff[:1] == ("is",):
+        return eff[1] == expected, eff, eff
+    if expected in eff:
+        return False, eff, eff
+    return None, ("is", expected), tuple(sorted({*eff, expected}))
+
+
+def _next_calc(
+    cmd: str, calc: tuple, effect: int, damaging: bool, drawn: int = 0, args=()
+) -> tuple:
     if cmd == "LoadCurrentMoveEffect":
         return ("effect", effect)
+    if cmd == "CheckBattlerAbility" and args[0] in _HP_START:
+        return ("value", _AI_VALUES["AI_UNKNOWN"])
+    if cmd == "FlagBattlerIsType" and args[0] in _HP_START:
+        return ("value", int(args[1] == "TYPE_NORMAL"))
     if cmd in ("FlagMoveDamageScore", "CheckIfHighestDamageWithPartner"):
         return ("compared", damaging, drawn >= 1 and damaging)
     if cmd.startswith("If") or cmd in _KEEPS_CALC:
@@ -261,6 +301,10 @@ def _decided(script, cmd, args, calc, effect, damaging, can_quad) -> bool | None
         )
     if cmd == "IfMoveKnown" and args[0] == "AI_BATTLER_ATTACKER_PARTNER":
         return False  # curHP 0: no jump (trainer_ai.c:1650-1653)
+    if cmd in ("IfStatus", "IfMoveEffect") and args[0] in _HP_START:
+        return False  # status / moveEffectsMask & mask is 0 (trainer_ai.c:648-660, :704-716)
+    if cmd == "IfNotStatus" and args[0] in _HP_START:
+        return True  # (status & mask) == FALSE (trainer_ai.c:662-674)
     if cmd in ("IfCurrentMoveEffectEqualTo", "IfCurrentMoveEffectNotEqualTo"):
         same = script.effect_id(args[0]) == effect
         return same if cmd.endswith("EqualTo") and "Not" not in cmd else not same
@@ -280,6 +324,8 @@ def _decided(script, cmd, args, calc, effect, damaging, can_quad) -> bool | None
             equal = not calc[1]
         elif calc[0] == "effect" and script.effect_id(args[0]) is not None:
             equal = script.effect_id(args[0]) == calc[1]
+        elif calc[0] == "value" and args[0] in _AI_VALUES:
+            equal = _AI_VALUES[args[0]] == calc[1]
         if equal is None:
             return None
         return equal if cmd == "IfLoadedEqualTo" else not equal

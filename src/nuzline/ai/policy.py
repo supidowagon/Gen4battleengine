@@ -4545,7 +4545,7 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
     never jumps in singles: ``TagStrategy_Partner`` (:7339) is not transcribed. The unused
     labels ``TagStrategy_Unused_1`` / ``_2`` (:7116-7125) have no jump to them. Fall-throughs
     the decomp's comments omit: ``SunnyDay_SelfHasSolarPower`` falls into the 50 % roll
-    (:6815-6821); ``SpreadFire``'s Dry Skin is ``ScoreMinus3`` (:7320, the comment says +3)."""
+    (:6815-6821); ``SpreadFire``'s Dry Skin is ``ScoreMinus3`` (:7322-7323, the comment :7308 says +3)."""
     # TagStrategy_Main (:6637)
     ctx, _ = _split(c.if_target_is_partner(ctx))  # -> TagStrategy_Partner
     ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)  # :6641
@@ -4909,8 +4909,8 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
     lava = ctx.live  # GoTo _CheckLavaPlume
     ctx = c.add_to_move_score(_at(ctx, flash_fire), 1)  # _FlashFireScorePlus1
     ctx, spread = _split(c.if_move_equal_to(_at(ctx, lava | ctx.live), _MOVE["Lava Plume"]))
-    # TagStrategy_SpreadFireMove (:7318); GoTo _CheckFire_End for the rest
-    ctx, minus3 = _tag_have(_at(ctx, spread), _AP, "Dry Skin")  # ScoreMinus3 (:7320)
+    # TagStrategy_SpreadFireMove (:7321, from :7318); GoTo _CheckFire_End for the rest
+    ctx, minus3 = _tag_have(_at(ctx, spread), _AP, "Dry Skin")  # ScoreMinus3 (:7323)
     ctx, plus3 = _tag_have(ctx, _AP, "Flash Fire")
     minus10 = jnp.zeros_like(ctx.live)
     for type_name in ("Grass", "Steel", "Ice", "Bug"):
@@ -5055,12 +5055,13 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         # a doubles battle adds TAG_STRATEGY (thinking_mask), which is not transcribed.
         mask = thinking_mask(tables)
         policy = policy | (tables.ai_flags < 0) | ((mask & ~layout.flags) != 0)
-    if layout.per_slot_sites and format_of(state).B == 4:
+    if format_of(state).B == 4:
         # Tag Strategy at B = 4 is not modelled yet (E4-A): _tag_strategy transcribes the
         # B = 2 rules only (script.s:6637-7338 with the partner reads at B = 2; the B = 4
-        # partner reads are A-8 sections 1, 5 and A-10 sections 2, 3). A battler whose
-        # thinking_mask has TAG_STRATEGY (its own flag or the doubles bit, trainer_ai.c:252-255)
-        # is refused under every Kaizo layout (fixed, fight or ALLIN), never run on B = 2 rules.
+        # partner reads are A-8 sections 1, 5 and A-10 sections 2, 3), and the vanilla policy
+        # has no Tag transcription at all. A battler whose thinking_mask has TAG_STRATEGY (its
+        # own flag or the doubles bit, trainer_ai.c:252-255) is refused under every layout
+        # (vanilla, fixed Kaizo, fight or ALLIN), never run on B = 2 rules or without bit 7.
         policy = policy | ((thinking_mask(tables) >> TAG_STRATEGY) & 1 == 1)
     if layout.per_slot_sites:  # reads by order, bounded per path (missing_read)
         sites = jnp.zeros_like(present[1])

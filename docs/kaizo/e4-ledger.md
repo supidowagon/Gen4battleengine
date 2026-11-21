@@ -39,21 +39,24 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
 
 ## T-6 to T-8 (Tag Strategy, bit 7)
 
-- **E4-7. `ALLIN_READS` 18 -> 22 (c944513e).** `layout.ALLIN_READS` is the largest row sum of
+- **E4-7. `ALLIN_READS` 18 -> 21 (c944513e; 22 before the review fix that decides the cleared
+  partners' tests and the effectiveness class in `tools/ai_read_bounds.py`).** `layout.ALLIN_READS` is the largest row sum of
   `read_bounds.READ_BOUNDS` and `DRAWN_READ_BOUNDS` over every flag, so adding bit 7 to
-  `KAIZO_FLAG_BITS` raised it from 18 to 22; `ALLIN.slot_reads` follows. What changes:
+  `KAIZO_FLAG_BITS` raised it from 18 to 21 (the row
+  `DRAWN_READ_BOUNDS[(23, True, True, True)]`, Tag column 3: IfCurrentMoveKills or the
+  CheckIfHighestDamageWithPartner compare, with R@6694); `ALLIN.slot_reads` follows. What changes:
   - Shapes only. `outcome.sample_ai_outcome` draws read column i from `fold_in(k[1], i)` and the
     damage draws of column i from `fold_in(fold_in(key, 0x43414C43), i)`, each of shape `(MOVES,)` /
-    `(MOVES, CALC_DRAWS)`, then stacks the columns: `script_rolls` is `uint8[MOVES, 22]` and
-    `calc_draws` `uint16[MOVES, 22, CALC_DRAWS]` under `ALLIN` (were 18). Columns 0-17 are drawn
+    `(MOVES, CALC_DRAWS)`, then stacks the columns: `script_rolls` is `uint8[MOVES, 21]` and
+    `calc_draws` `uint16[MOVES, 21, CALC_DRAWS]` under `ALLIN` (were 18). Columns 0-17 are drawn
     from the same keys as before, so a fixed-key sample of a fight without bit 7 has the same
-    draws in those columns; columns 18-21 are new and are read only by a path that reaches an
-    18th to 22nd read, which no flag but bit 7 has. The other fields (`switch_stop`, `tiebreak`,
+    draws in those columns; columns 18-20 are new and are read only by a path that reaches an
+    18th to 21st read, which no flag but bit 7 has. The other fields (`switch_stop`, `tiebreak`,
     `sim_roll`) come from `split(key, 4)` and `slot_reads` does not enter them. A fight without
     bit 7 therefore scores and samples as before (a read past `slot_reads` is refused,
     `AiContext.missing_read`, so a larger bound refuses less, never differently).
   - What a snapshot compare sees: arrays of `ALLIN` outcomes (`script_rolls`, `calc_draws`) are
-    wider (22 columns), so a stored 18-column array differs in shape although its first 18 columns
+    wider (21 columns), so a stored 18-column array differs in shape although its first 18 columns
     are equal; compare those columns, or regenerate the snapshot. `policy._check_outcome`
     (`shapes["script_rolls"] = (MOVES, layout.slot_reads)`) refuses an outcome of the
     old width passed under `ALLIN`.
@@ -65,12 +68,12 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   written and tested with the effect added to the layout by hand (tests/ai/test_tag_strategy.py
   `SANDSTORM_EFFECT`). Transcribing 115 is a separate job (its Basic / Expert paths).
 - **E4-9. Tag Strategy at B = 4 is refused by the policy.** `policy._refused`: a state with
-  `format_of(state).B == 4` under a per-slot (Kaizo) layout whose `thinking_mask` has bit 7 (the
+  `format_of(state).B == 4` under any layout (the flat VANILLA one, which has no Tag transcription, and every Kaizo one) whose `thinking_mask` has bit 7 (the
   trainer's flag or the doubles bit, trainer_ai.c:252-255) sets `policy`, hence `scoring` and
   `any`. Before c944513e `ALLIN` lacked bit 7 and `(mask & ~layout.flags) != 0` refused it;
   with bit 7 in `ALLIN.flags` that test passes, and `_tag_strategy` models B = 2 only (A-8
   sections 1, 5; A-10 sections 2, 3 are E4-A's). Every entry point calls `_refused`, so the one
-  refusal covers `ALLIN`, `kaizo_layout` / `layout_of` fight layouts (with or without bit 7 in
+  refusal covers `ALLIN`, `VANILLA`, `kaizo_layout` / `layout_of` fight layouts (with or without bit 7 in
   their flags), the exact and the loose paths. `coverage.IMPLEMENTED_FORMATS` still refuses
   `double`, `double_two_trainer`, `multi`. Test: tests/ai/test_tag_strategy.py
   `test_tag_strategy_at_b4_is_refused` (`fullset`). To be deleted by E4-A.

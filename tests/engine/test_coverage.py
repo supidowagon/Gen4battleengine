@@ -340,6 +340,7 @@ def test_kaizo_singles_bit_7_has_no_flag_line(
     assert not [m for m in report.missing if "AI flag" in m or "battle format" in m]
 
 
+@pytest.mark.fullset
 @pytest.mark.parametrize("fmt", ["double", "double_two_trainer", "multi"])
 def test_kaizo_bit_7_doubles_row_is_refused_by_the_format_gate(
     kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, fmt

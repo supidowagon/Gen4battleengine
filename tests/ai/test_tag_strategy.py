@@ -37,7 +37,7 @@ NORMAL, FLYING, POISON, ROCK, BUG = 0, 2, 3, 5, 6
 FIRE, WATER, GRASS, ELECTRIC, ICE, GROUND, STEEL = 10, 11, 12, 13, 15, 4, 8
 # Effects the layout transcribes for this module's moves beyond KAIZO_TRANSCRIBED: Sandstorm's.
 SANDSTORM_EFFECT = 115
-SLOT_READS = 6  # the widest Tag path: read_bounds (bit 7) at most 6, drawn rows included
+SLOT_READS = 4  # the widest Tag path: read_bounds (bit 7) at most 4, drawn rows included
 _PHYSICAL_FILLER = ("Stone Edge", "Harden", "Harden")
 _NONE = ("Harden", "Harden", "Harden")
 
@@ -522,16 +522,6 @@ def test_flash_fire_and_lava_plume(tag):
     _assert_law(_law(t, n, lava_on), {98: 1.0})  # +1 first, then -3 (:7311, :7336)
 
 
-def test_spread_fire_dry_skin_is_minus_3_not_plus_3():
-    # script.s:7320: `IfLoadedEqualTo AI_HAVE, ScoreMinus3` after CheckBattlerAbility
-    # ATTACKER_PARTNER DRY_SKIN; the comment at :7308 says +3. The partner is battler 3 at B = 2,
-    # so the line is unreachable there; the transcription takes the code: the source line.
-    import inspect
-
-    source = inspect.getsource(policy._tag_strategy)
-    assert "ScoreMinus3 (:7320" in source
-
-
 # --- Scores near 0 ---------------------------------------------------------------------------
 
 
@@ -592,13 +582,23 @@ def test_a_path_past_slot_reads_is_refused(tag):
 
 
 def test_layout_of_a_bit_7_fight_has_the_bounds(tag):
-    # fight_slot_reads over the fight's moves: Follow Me at most one read, Gravity one, Skill Swap
-    # one (the defender's guess), a highest damaging move two.
-    from nuzline.ai.layout import fight_layout
+    # The bit-7 bound of each move (move_read_rows, read_bounds at B = 2) and fight_slot_reads
+    # over a fight's moves: Follow Me one (R@7053 or its band's roll), Gravity one (R@6959: the
+    # defender partner's Levitate / Flying / Magnet Rise tests at :6964-6968 never jump), Skill
+    # Swap one (the defender's ability coin, :7205), a damaging hit two (R@6694, then R@6722 or
+    # R@6728; a HALF / QUARTER path never takes DOUBLE / QUADRUPLE, trainer_ai.c:1311-1346).
+    from nuzline.ai.layout import fight_layout, fight_slot_reads, move_read_rows
+    from nuzline.ai.read_bounds import READ_BOUND_BITS
 
     t, n, _fight = tag
-    layout = fight_layout(t, 1 << 7, np.asarray([_id(n, "Follow Me"), _id(n, "Tackle")]))
-    assert layout.flags == 1 << 7 and layout.slot_reads >= 1
+    col = READ_BOUND_BITS.index(7)
+    moves = ["Follow Me", "Gravity", "Skill Swap", "Tackle"]
+    rows = move_read_rows(t, [_id(n, m) for m in moves])
+    assert [int(rows[i, col]) for i in range(len(moves))] == [1, 1, 1, 2]
+    ids = np.asarray([_id(n, "Follow Me"), _id(n, "Tackle")])
+    layout = fight_layout(t, 1 << 7, ids)
+    assert layout.flags == 1 << 7
+    assert layout.slot_reads == fight_slot_reads(move_read_rows(t, list(ids)), 1 << 7) == 2
 
 
 @pytest.mark.slow
@@ -630,35 +630,41 @@ def test_tag_loose_vs_exact_607(kaizo_tables, kaizo_names, kaizo_trainers, kaizo
 
 
 @pytest.mark.fullset
-@pytest.mark.parametrize("layout_name", ["allin", "fixed_with_bit_7", "fixed_without_bit_7"])
+@pytest.mark.parametrize(
+    "layout_name", ["vanilla", "allin", "fixed_with_bit_7", "fixed_without_bit_7"]
+)
 @pytest.mark.parametrize("flags", [0x87, 0x17], ids=["own_bit_7", "doubles_adds_bit_7"])
-def test_tag_strategy_at_b4_is_refused(kaizo_tables, kaizo_names, layout_name, flags):
+def test_tag_strategy_at_b4_is_refused(request, layout_name, flags):
     """A B = 4 state whose ``thinking_mask`` has bit 7 (the trainer's own flag, or the doubles
-    bit added at trainer_ai.c:252-255) is refused under every Kaizo layout: ``_tag_strategy``
-    models B = 2 (A-8 sections 1, 5; A-10 sections 2, 3 are E4-A's). The same flags at B = 2
-    are not refused for bit 7. A mechanic not modelled yet: ``fullset``."""
-    from nuzline.ai.layout import ALLIN
+    bit added at trainer_ai.c:252-255) is refused under every layout, the flat VANILLA one (no
+    Tag transcription; on the vanilla tables) and every Kaizo one: ``_tag_strategy`` models
+    B = 2 (A-8 sections 1, 5; A-10 sections 2, 3 are E4-A's). A mechanic not modelled yet:
+    ``fullset``."""
+    from nuzline.ai.layout import ALLIN, VANILLA
     from nuzline.data.tables import BATTLE_TYPE_DOUBLES, BATTLE_TYPE_TRAINER
     from tests.engine.d2_states import four
 
+    vanilla = layout_name == "vanilla"
+    tables = request.getfixturevalue("tables" if vanilla else "kaizo_tables")
+    names = request.getfixturevalue("names" if vanilla else "kaizo_names")
     layouts = {
+        "vanilla": VANILLA,
         "allin": ALLIN,
         "fixed_with_bit_7": kaizo_layout(0x87, 4),
         "fixed_without_bit_7": kaizo_layout(0x17, 4),
     }
     layout = layouts[layout_name]
-    doubles = four(kaizo_tables, kaizo_names)
-    t4 = kaizo_tables._replace(
+    doubles = four(tables, names)
+    t4 = tables._replace(
         ai_flags=np.int32(flags), battle_type=BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLES
     )
     assert bool(policy._refused(t4, doubles, layout).policy)
     assert bool(policy._refused(t4, doubles, layout).any)
     # B = 4 without bit 7 in the mask (no doubles bit, flag unset): this refusal does not fire
-    t_plain = kaizo_tables._replace(ai_flags=np.int32(0x17), battle_type=BATTLE_TYPE_TRAINER)
+    t_plain = tables._replace(ai_flags=np.int32(0x17), battle_type=BATTLE_TYPE_TRAINER)
     assert not bool(policy._refused(t_plain, doubles, layout).policy)
 
 
-@pytest.mark.fullset
 def test_tag_strategy_at_b2_is_not_refused_by_the_policy(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):

@@ -76,18 +76,20 @@ def test_tag_strategy_column_is_walked_at_b2():
     """E4-A0: bit 7 (TagStrategy_Main, script.s:6637-7338) joins ``READ_BOUND_BITS``. Hand-checked
     rows: a damaging plain hit makes the R@6694 and the effectiveness roll (2), a Rain Dance none
     (0), Follow Me one (R@7053 or its band's roll), Skill Swap one (the defender's ability coin),
-    Gravity two (R@6959, R@6972: the partner tests are not decided by the move), a drawing
-    damaging move one more (CheckIfHighestDamageWithPartner, :6684). The partner arguments'
-    HP percent is 0 at B = 2, so the TryScoreMinus rolls (:6666, :6678), Trick Room's and Future
-    Sight's speed ranks never count."""
+    Gravity one (R@6959; the cleared defender partner's Levitate / Flying / Magnet Rise tests,
+    :6964-6968, never jump, so R@6972 never counts), a damaging hit that draws itself one more
+    (3: IfCurrentMoveKills :6660 or the CheckIfHighestDamageWithPartner compare :6685, with
+    R@6694; a HALF path never takes DOUBLE's R@6722, trainer_ai.c:1311-1346). The partner
+    arguments' HP percent is 0 at B = 2, so the TryScoreMinus rolls (:6666, :6678), Trick
+    Room's and Future Sight's speed ranks never count."""
     assert 7 in READ_BOUND_BITS
     col = READ_BOUND_BITS.index(7)
     assert READ_BOUNDS[(0, True, False)][col] == 2
-    assert DRAWN_READ_BOUNDS[(0, True, False, True)][col] == 4
+    assert DRAWN_READ_BOUNDS[(0, True, False, True)][col] == 3
     assert READ_BOUNDS[(136, False, False)][col] == 0
     assert READ_BOUNDS[(172, False, False)][col] == 1
     assert READ_BOUNDS[(191, False, False)][col] == 1
-    assert READ_BOUNDS[(215, False, False)][col] == 2
+    assert READ_BOUNDS[(215, False, False)][col] == 1
     assert READ_BOUNDS[(259, False, False)][col] == 0  # Trick Room: -30 at once
     assert READ_BOUNDS[(148, False, False)][col] == 0  # Future Sight: End
 
