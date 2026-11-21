@@ -108,6 +108,7 @@ per day is the rate used for estimates.
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
   - 256 GB (the memory-optimized 32 vCPU type): `GATE_GB` 176, `MAXP` 18 (more than about
     18 units on one pod stalls it), `KILL_GB` 236, and `SNAP_GATE_GB` 176 for `snap.sh`.
+  - Every run on one pod gets the shape's `MAXP` (MAXP rule, Chunking below).
   - `SPACING` (s between two chunk starts of one runner) is 4 on both shapes. It is the
     runner's default; pass `"SPACING":"4"` in every exec-pod body's `env` anyway, so a run
     packed with older pod scripts (another default) gets it too. This is the one SPACING
@@ -165,9 +166,11 @@ per day is the rate used for estimates.
   PC (Windows) than on the pod (Linux) from the same seed and content hash. A stream rebuilds
   a diverged part only from the capture's `<part>.inputs.pkl.gz`: it asks the managing
   session, which copies those files from the pod with `snap.sh fetch` (DAYBOX.md) into `<scratch>/rent/out/<snapshot folder>/fetch-<epoch>/`.
-- **Snapshot jobs and the runner.** A capture or compare runs outside the runner's `MAXP`,
-  `GATE_GB` and `KILL_GB` accounting. While one runs, the managing session sends new pack
-  runs with `MAXP` lowered by 2.
+- **Snapshot jobs and the runner.** A capture or compare is outside the runner's chunk count
+  and reserves; the runner sees it only as container memory. New pack runs keep the pod's
+  `MAXP`. The memory gate protects the job: the runners' `GATE_GB` and `KILL_GB` (they read
+  its memory), and `SNAP_GATE_GB` for the job's own start. If the pod must carry fewer chunks
+  while the job runs, restart every live runner with the lower `MAXP` (MAXP rule, Chunking).
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
@@ -187,6 +190,16 @@ per day is the rate used for estimates.
   one kept out only by memory no chunk holds starts after `IDLE_WAIT_S` (300 s). A head
   chunk that does not fit lets the first later chunk of its run that fits start; after
   `CLAIM_S` (120 s) it claims the pod, and no other run starts a chunk until it has started.
+  **MAXP rule.** Every runner compares its own `MAXP` with the pod-wide count of live chunks
+  (`tools/ops/day/pod/gate.sh` `admit`, `hold-maxp`; `RUNMAXP` caps this run's own chunks,
+  `runner.sh` main loop). A run sent with a lower `MAXP` than another live run: its head
+  chunk holds, after `CLAIM_S` it claims the pod, every runner then starts nothing until the
+  count is below the low `MAXP`, the low run starts one chunk and drops the claim, and the
+  others refill to their own `MAXP`; this repeats for every head chunk. A lower `MAXP`
+  reserves no slots: it stalls the other runs once per chunk. So every run on one pod gets
+  the same `MAXP`, the shape's value (Test pod above). To throttle a pod, restart every live
+  runner with the lower value (DAYBOX.md Housekeeping step 4); to give a run a smaller share,
+  use another pod or wait.
   Heavy tests need no hand placement: list them with their weights and the runner keeps them
   apart. A claim lasts while its runner lives: a dead runner's claim is dropped at once, a
   claim whose pid was reused by another process after `CLAIM_MAX_S` (3600 s); a live
