@@ -11,7 +11,7 @@
 # runner=alive|gone|starting|none: runner.pid's process alive | dead | not alive yet while setup
 # is alive | no runner.pid and setup not alive.
 [ -n "${1:-}" ] && sleep "$1"
-D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
+D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; . "$D/bin/gate.sh"   # cgmem: cgroup v2 or v1
 grep -E 'SETUP_|units|RUNNER|rror|code' "$D/setup.log" 2>/dev/null | tail -4 | sed 's/^/setup: /'
 grep -vE 'collect_rc=(0|5)$' "$D/collected.txt" 2>/dev/null | sed 's/^/COLLECT FAILED: /'
 # A run is active only while its setup or runner process (setup.pid, runner.pid) is alive, runs
@@ -41,8 +41,8 @@ echo "other active runs:${active:- none}"
 cd "$O"
 NRUN=0; for r in run/*; do [ -e "$r" ] && [ ! -f "$(basename "$r").rc" ] && NRUN=$((NRUN + 1)); done   # with an .rc: done
 echo "now $(date +%s) start $(cat ALL.start 2>/dev/null) units $(grep -c . queue.txt) done $(ls *.rc 2>/dev/null | wc -l) running $NRUN pending $(grep -c . pending.txt 2>/dev/null) killed $(cat killed.txt 2>/dev/null | wc -l) crashed $(cat crashed.txt 2>/dev/null | wc -l)"
-pk=n/a; [ -r /sys/fs/cgroup/memory.peak ] && pk="$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MB"
-echo "mem now $(( $(cat /sys/fs/cgroup/memory.current) / 1048576 )) MB peak $pk load $(cut -d' ' -f1 /proc/loadavg)"
+pk=n/a; b=$(cgmem peak) && pk="$(( b / 1048576 )) MB"; mn=n/a; b=$(cgmem current) && mn="$(( b / 1048576 )) MB"
+echo "mem now $mn peak $pk load $(cut -d' ' -f1 /proc/loadavg)"
 for u in $(ls run 2>/dev/null); do n=$(head -c 20000 "$u.log" 2>/dev/null | grep -E '^[.sFExX]+' | tr -cd 'FE' | wc -c); [ "$n" -gt 0 ] && echo "running $u has $n F/E"; done
 for r in *.rc; do [ -e "$r" ] || continue; c=$(cat "$r"); u=$(basename "$r" .rc)
   case $c in 0) ;; *) echo "BAD $u rc=$c $(grep "^$u " queue.txt | cut -d' ' -f2)"; grep -E '^(FAILED|ERROR) ' "$u.log" 2>/dev/null | cut -c1-240 | head -20;; esac; done
