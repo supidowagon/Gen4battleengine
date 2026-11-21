@@ -24,7 +24,7 @@ Stream list: `$NUZLINE_SCRATCH/manager/streams.json`, edited by hand at every st
 Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` section 5.
 
 - `common.sh`: sourced by the PC-side scripts; main checkout and scratch paths, the table upload rules (`TABLE_ALLOW`, `TABLE_DENY`), run-name check.
-- `build_tables.sh --here | <commit>`: builds the vanilla and Kaizo tables in place, or for a commit in a temporary worktree packed into `_scratch/rent/tables_<short>.tar.xz` (only `TABLE_ALLOW` files). Local inputs come from the main checkout. `NUZLINE_PY` selects an existing venv's python; default `uv run --group rom python`.
+- `build_tables.sh --here | <commit>`: builds the vanilla and Kaizo tables in place, or for a commit in a temporary worktree packed into `_scratch/rent/tables/tables_k<key16>.tar.xz` (only `TABLE_ALLOW` files) and linked as `_scratch/rent/tables_<short>.tar.xz`; when `table_key.py`'s key already has an archive the build is skipped (`tables_<short>.key` and `tables/index.txt` record commit and key). Local inputs come from the main checkout. `NUZLINE_PY` selects an existing venv's python; default `uv run --group rom python`.
 - `nightly_brief.md`: the brief for the nightly run.
 - `day/push_bin.sh`: once per pod (safe to repeat); sends `day/bootstrap.sh` and prints the exec-pod body that runs it in `/work/_bin/new`.
 - `day/bootstrap.sh`: pod side, once per pod; apt tools, uv, Python 3.12, runpodctl checksum, decomp clone; ends with `BOOTSTRAP_OK`.
