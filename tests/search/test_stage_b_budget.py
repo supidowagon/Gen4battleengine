@@ -11,6 +11,8 @@ import pytest
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import damage_table
+from nuzline.search import expand as expand_mod
+from nuzline.search import leaves as leaves_mod
 from nuzline.search import stage_b
 from nuzline.search.deaths import DeathDistribution
 from nuzline.search.expand import ai_rows
@@ -18,6 +20,7 @@ from nuzline.search.leaves import LeafValue
 from nuzline.search.rows import row_bytes
 from nuzline.search.stage_b import ActionValue, Backup, PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_real_state
+from tests.search import exhaustive as exhaustive_mod
 from tests.search.exhaustive import exhaustive
 from tests.search.fixtures import (
     _facing,
@@ -32,6 +35,23 @@ KEY = jax.random.PRNGKey(0)
 EXACT = SolveSettings(max_depth=1, epsilon=0.0, n_depth0=8)
 TO_PRINPLUP, TO_STARLY = MOVE_ACTIONS + 1, MOVE_ACTIONS + 3
 _SPE = 4  # stats[..., 0..4] are Atk..Spe
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _small_chunk():
+    """``expand``'s programs in 1024-row calls instead of ``CHUNK`` (16384), the exhaustive
+    solver's in 1024-row calls instead of ``exhaustive.P`` (8192) and the leaf evaluators'
+    playouts in 512-row calls instead of ``leaves.LEAF_CHUNK`` (4096), as
+    ``tests/search/test_stage_b.py``'s ``_small_chunk``: every call pads to its full size, and
+    at the full sizes each solve here peaked at 70-77 GB on the pod (an XLA abort, rc 134,
+    in a leaf program's compile once the pod's other chunks filled the rest). A row's result
+    depends on neither the call size nor the device count (each row plays its own key: the
+    three modules' docstrings), so the solves are unchanged."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(expand_mod, "CHUNK", 1024)
+        mp.setattr(exhaustive_mod, "P", 1024)
+        mp.setattr(leaves_mod, "LEAF_CHUNK", 512)
+        yield
 
 
 def plan_nodes(nodes: list[PlanNode]):
