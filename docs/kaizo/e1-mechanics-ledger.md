@@ -2574,22 +2574,37 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   (Kaizo Ditto 650 with a Spooky Plate).
   (c) Giratina (:6412-6451): species, HP, formNum Origin and (Transformed or, without Distortion, no Griseous Orb). The
   Transformed branch (:6419-6449) is built: the target is a singles foe (`msgBattlerTemp ^ 1`) or a doubles battler's
-  `chosen_target` (:6423-6429, read as data); its party Pokemon is copied with the item removed and Altered forced
-  (:6431-6439); `Pokemon_SetGiratinaFormByHeldItem` (pokemon.c:4380-4405) acts on a Giratina: Altered, ability slot 0 of
-  Altered's row (`BoxPokemon_CalcAbility`, pokemon.c:4746-4766: Pressure; the second slot is empty), stats recalculated
-  from the target's IVs, EVs, level and nature. The copier's Attack, Defense, Speed, Sp. Atk and Sp. Def and ability take
-  those (:6441-6446), formNum := 0 (:6447); `SYSCTL_FORM_CHANGE` (:6448) makes `BattleController_EmitUpdatePartyMon`
-  (:6450, battle_controller.c:1461-1493) write the copier's OWN party form 0 (battle_io_command.c:597-599: `shadow_form`;
-  the copy `state.form` the Transformed slot holds follows, which Beat Up reads); no `updateStats`, so the party's ability
-  and stats stay; moves and PP are skipped while Transformed (:581-587). `subscript_form_change` runs, not the Giratina
-  subscript: no `BattleAI_SetAbility` (the AI's `ai_ability_known` stays as Transform left it), no RefreshMonData. Types,
-  stages, moves, PP, HP, `power_trick` / `power_trick_desync` stay. The non-Transformed Origin without the Orb (:6450-6453,
-  `subscript_giratina_form_change`) stays refused (`coverage._check_form`: the Orb cannot leave in battle: Knock Off
-  subscript_knock_off.s:7, Thief battle_script.c:5111, Trick subscript_exchange_items.s:9-10, Fling effect_script_0233.s:6,
-  Natural Gift effect_script_0178.s:6, Embargo subscript_embargo_start.s:9). Reachable: Kaizo Cyrus 780 slot 0 (Origin with
-  the Orb) against any Transform user, or a Kaizo Ditto against the player's Origin. The target is the Giratina that was
-  copied: the check follows the Transform move (`step._use_move`, battle_script.c:5350-5362) before anything can change
-  the foe, so `SetGiratinaForm`'s species test (not a Giratina: -1, no recalculation) never fails here.
+  `chosen_target` (battlerActions[..][CHOOSE_TARGET], :6424-6425, read as data; a redirect can leave it on another
+  species); its party Pokemon (`hooks._party_mon`, reference `_party_pokemon`: the target's shadow while it is Transformed
+  itself) is copied with the item removed and form Altered set (:6431-6437). `Pokemon_SetGiratinaFormByHeldItem`
+  (pokemon.c:4380-4405) acts only on a Giratina (:4397-4404): Altered, the ability by `BoxPokemon_CalcAbility`
+  (pokemon.c:4746-4766: the personality's slot, `ability_slot`, slot 0 when the row's second is empty, as `shaymin_land`;
+  Pressure today), stats recalculated from the party Pokemon's IVs, EVs, level and nature; any other species keeps its party
+  stats and ability (`MON_DATA_FORM` is a plain write, pokemon.c:1608-1609; `party_ability` where a script wrote it). The
+  copier's Attack, Defense, Speed, Sp. Atk and Sp. Def and ability take those (:6441-6446), formNum := 0 (:6447);
+  `SYSCTL_FORM_CHANGE` (:6448) makes `BattleController_EmitUpdatePartyMon` (:6450, battle_controller.c:1461-1494) write
+  the copier's OWN party form 0 (battle_io_command.c:597-599: `shadow_form`; the copy `state.form` the Transformed slot
+  holds follows, which Beat Up reads); no `updateStats`, so the party's ability and stats stay; moves and PP are skipped
+  while Transformed (:581-587). `subscript_form_change` runs, not the Giratina subscript, but the AI learns the new
+  ability all the same (review 6567c627 must-fix 1): the rebuild happens at AfterMoveEffects' SYNCHRONIZE_STATUS
+  (`BattleSystem_SynchronizeStatus`, battle_lib.c:4536-4544; bcp.c:3665-3670), and Transform cleared
+  `moldBreakerAnnounced` / `pressureAnnounced` (battle_script.c:5357-5358), so TRIGGER_SWITCH_IN_EFFECTS (bcp.c:3672)
+  reaches the PRESSURE state (battle_lib.c:4096-4110) with Pressure: subscript_pressure.s tags BTLSCR_MSG_BATTLER_TEMP ->
+  `BattleMessage_AbilityTag` -> `BattleAI_SetAbility` (battle_script.c:11806). The engines run `form_change` before the
+  Transform's switch-in checks (`step._use_move`, reference `_move_effect`), so `reveal_ability` / `_know_ability` and
+  the Trace / weather / Intimidate / Download states see the rebuilt ability; the engine has no `pressureAnnounced`
+  (its only effect is that AI record, written at the same check). Types, stages, moves, PP, HP, `power_trick` /
+  `power_trick_desync` stay. Fixpoint (review should-fix 1): the rebuild writes an ability (a party Cloud Nine / Air Lock
+  added or removed), which Castform's and Cherrim's tests read, and the decomp re-runs the loop (:4115-4121); nothing
+  feeds a rebuild and it fires once, so `form_change` runs every rebuild first and the other blocks after. The
+  non-Transformed Origin without the Orb (:6450-6453, `subscript_giratina_form_change`) stays refused
+  (`coverage._check_form`: the Orb cannot leave in battle: Knock Off subscript_knock_off.s:7, Thief battle_script.c:5111,
+  Trick subscript_exchange_items.s:9-10, Fling effect_script_0233.s:6, Natural Gift effect_script_0178.s:6, Embargo
+  subscript_embargo_start.s:9). Reachable: Kaizo Cyrus 780 slot 0 (Origin with the Orb) against any Transform user, or a
+  Kaizo Ditto against the player's Origin. Not applied (review should-fix 2): `outcome.pivot_view` (outcome.py:1854) and
+  the speed variants of `enumerate` (enumerate.py:705) install an active without `form_num`, but neither state reaches
+  `form_change` / `form_change_pending` (only `effects.sync_step` and the step's own calls read them; the resumed U-turn
+  runs `step._switch_in`, which sets `form_num`), so no reader sees the stale value.
   Callers (unchanged, renamed): `hooks.switch_in_effects`, `hooks.battle_start`, `step._move_end_tail`,
   `step._turn_start_items` (battle_lib.c:4115-4121; reference engine.py:3358, :8567, :8628), and the Synchronize step (battle_lib.c:4536-4544): `effects.form_change_pending` is now `form_change`'s
   types or `form_num` differing (reference `_form_pending`: run and undone), so a U-turn / Baton Pass newcomer whose form
@@ -2597,10 +2612,12 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   Coverage: no refusal added or lifted; coverage.py's header note lists the modelled blocks. Backlog: no row changes.
   Tests: tests/engine/test_e1_batch_h.py (H-5 block: the Cherrim weather cases, Cloud Nine, Sunny Day and the battle start,
   a send-out, the knot skip beside H-4's Castform case, the Arceus battle-start and Transform cases, `form_change_pending`
-  against `_form_pending`, a Destiny Knot reflection lost to a pending plate, the Transformed Giratina's rebuild and
-  restore). Snapshot (expected): no output divergence (tests/strategies.py draws no Cherrim, Arceus or Castform; its
-  Giratina holds the Orb at form 0; every block is idle); the one new field is `form_num` (`--allow-new form_num`), set
-  from the active slot's form by the generator.
+  against `_form_pending`, a Destiny Knot reflection lost to a pending plate, the Transformed Giratina's rebuild with the
+  AI's Pressure record (one step: the switch-out restore is G-69's), the doubles rebuild from a chosen Golduck (party
+  stats, Cloud Nine, the Cherrim turned back in the same check) and from an odd-personality Giratina (Pressure, slot 0)
+  in both engines). Snapshot (expected): no output divergence (tests/strategies.py draws no Cherrim, Arceus or Castform;
+  its Giratina holds the Orb at form 0; every block is idle, the Transform pre-run included); the one new field is
+  `form_num` (`--allow-new form_num`), set from the active slot's form by the generator.
 
 ## Stream state (restart point, 2026-11-19)
 

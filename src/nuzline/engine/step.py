@@ -2772,7 +2772,13 @@ def _use_move(
             state.pivot_battler.dtype
         ),
     )
-    state = _where(transform_ok, switch_in_effects(tables, state, side, outcome.trace_pick), state)
+    # AfterMoveEffects' SYNCHRONIZE_STATUS runs BattleSystem_TriggerFormChange before
+    # TRIGGER_SWITCH_IN_EFFECTS (battle_lib.c:4536-4544, bcp.c:3665-3672): a copied Giratina-Origin
+    # is rebuilt first, so the checks see its new ability (Pressure's announcement, H-5).
+    rebuilt = form_change(tables, state, transform_ok)
+    state = _where(
+        transform_ok, switch_in_effects(tables, rebuilt, side, outcome.trace_pick), state
+    )
     # The roosting chart ends with the move: the target's own types again (if it is still the
     # active battler: a drag restored the outgoing one's from its personal row).
     # A move that changed them (Shaymin-Sky's revert, F-16) leaves its own.

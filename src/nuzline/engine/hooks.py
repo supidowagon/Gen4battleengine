@@ -1140,32 +1140,97 @@ def form_change(tables: Tables, state: BattleState, cond=True) -> BattleState:
     other item; Klutz and Embargo do not hide it): ``damage.judgment_type``.
 
     Giratina (:6412-6451): a Transformed Giratina (species, HP) with ``form_num`` Origin (1), the
-    copy of an Origin, rebuilds from a party Pokemon copied from its target (a singles foe, doubles
-    ``chosen_target``: :6423-6429) with the item removed and Altered forced (:6431-6439,
-    ``Pokemon_SetGiratinaFormByHeldItem``, pokemon.c:4380-4405, which acts on a Giratina): its
-    Attack, Defense, Speed, Sp. Atk and Sp. Def become the recalculated stats of Altered's personal
-    row from the target's IVs, EVs, level and nature (:6441-6445), its ability that row's slot 0
-    (``BoxPokemon_CalcAbility``, pokemon.c:4746-4766: Altered's second slot is empty; :6446),
-    ``form_num`` Altered (:6447), and ``SYSCTL_FORM_CHANGE`` writes the copier's own party form 0
-    (:6448-6450, battle_io_command.c:597-599: ``shadow_form``; ``form``, the copy the Transformed
-    slot holds, follows). ``subscript_form_change`` runs, not the Giratina subscript: the AI's
-    record of the ability and the party's ability stay. Types, stages, moves, PP, HP and
-    ``power_trick`` / ``power_trick_desync`` stay. A Giratina Origin that is not Transformed
+    copy of an Origin, rebuilds from a copy of its target's party Pokemon (``Pokemon_Copy`` of
+    ``GetPartyPokemon(target, selectedPartySlot[target])``; the target a singles foe, doubles
+    ``chosen_target``, battlerActions[..][CHOOSE_TARGET], which a redirect can leave on another
+    Pokemon: :6420-6429) with the item removed and form Altered set (:6431-6437). The party
+    Pokemon is the target's own (``_party_mon``: its ``shadow_*`` while it is Transformed itself).
+    ``Pokemon_SetGiratinaFormByHeldItem`` (pokemon.c:4380-4405) acts only on a Giratina
+    (:4397-4404): form Altered, ``BoxPokemon_CalcAbility`` (pokemon.c:4746-4766: the second slot
+    for an odd personality when the row has one, ``ability_slot``; Altered's is empty today) and
+    ``Pokemon_CalcLevelAndStats`` (Altered's row, the party Pokemon's IVs, EVs, level, nature).
+    Any other species keeps its party stats and ability (``MON_DATA_FORM`` is a plain write,
+    pokemon.c:1608-1609; ``party_ability`` where a script wrote it). The copier's Attack, Defense,
+    Speed, Sp. Atk, Sp. Def and ability become the copy's (:6441-6446), ``form_num`` Altered
+    (:6447), and ``SYSCTL_FORM_CHANGE`` writes the copier's own party form 0 (:6448-6450,
+    battle_controller.c:1489-1494, battle_io_command.c:597-599: ``shadow_form``; ``form``, the
+    copy the Transformed slot holds, follows; no ``SYSCTL_RECALC_MON_STATS``, so the party's
+    ability stays). Types, stages, moves, PP, HP and ``power_trick`` / ``power_trick_desync``
+    stay. The AI learns the new ability where it announces itself: Transform cleared
+    ``moldBreakerAnnounced`` and ``pressureAnnounced`` (battle_script.c:5357-5358), and the
+    rebuild runs at AfterMoveEffects' SYNCHRONIZE_STATUS (battle_lib.c:4536-4544, bcp.c:3665-3670;
+    ``step._use_move`` runs this function before the Transform's switch-in checks), so its
+    TRIGGER_SWITCH_IN_EFFECTS (bcp.c:3672) reaches the MOLD_BREAKER / PRESSURE states
+    (battle_lib.c:4075, :4096-4110; subscript_pressure.s, ``BattleAI_SetAbility``,
+    battle_script.c:11806: ``reveal_ability``) with it. A Giratina Origin that is not Transformed
     changes only without the Griseous Orb (:6416-6418, :6450-6453): refused by coverage.
 
     The state is not advanced while a change happened (battle_lib.c:4115-4121), so the call
-    repeats until none changes; each result is stable under its own test and no block feeds
-    another's (Cloud Nine, the weather, the items and the copy's target are written by none), so
-    one pass reaches the same fixpoint whatever the order. The party's form, which the switch-in
-    re-reads (battle_lib.c:132), is not updated by Castform, Cherrim or Arceus (no
-    ``SYSCTL_FORM_CHANGE``, only Giratina sets it, :6448), so ``state.form`` stays for them."""
+    repeats until none changes. Each result is stable under its own test, and only the Giratina
+    rebuild feeds another block: the ability it writes can add or remove a Cloud Nine / Air Lock,
+    which Castform's and Cherrim's tests read. No block feeds the rebuild (its inputs are the
+    copier's ``form_num`` and the target's party Pokemon) and it fires once (``form_num`` Altered),
+    so running every rebuild first and the other blocks after reaches the decomp's fixpoint
+    whatever ``monSpeedOrder`` is. The party's form, which the switch-in re-reads
+    (battle_lib.c:132), is not updated by Castform, Cherrim or Arceus (no ``SYSCTL_FORM_CHANGE``,
+    only Giratina sets it, :6448), so ``state.form`` stays for them."""
     fmt = format_of(state)
+    cond = jnp.asarray(cond)
+    altered = tables.species_form_row[SPECIES_GIRATINA, GIRATINA_FORM_ALTERED]
+    for side in range(fmt.B):
+        row, mon = party(fmt, side), state.active[side]
+        # The copier's target: a singles foe, a doubles battler's chosen target (:6420-6429).
+        foe = state.chosen_target[side].astype(_I32) if fmt.B == 4 else side ^ 1
+        t_row, t_mon = party(fmt, foe), state.active[foe]
+        own_species, ivs, slot, aform, own_stats_ = _party_mon(state, foe)
+        is_copy = (
+            cond
+            & (state.species[row, mon] == SPECIES_GIRATINA)
+            & (state.hp[row, mon] > 0)
+            & (state.form_num[side] == GIRATINA_FORM_ORIGIN)
+            & (state.transformed[side] != 0)
+        )
+        giratina = own_species == SPECIES_GIRATINA
+        recalced = calc_stats_jnp(
+            tables.species_base_stats[altered],
+            ivs,
+            state.evs[t_row, t_mon],
+            state.level[t_row, t_mon],
+            tables.nature_mods[state.nature[t_row, t_mon]],
+            SPECIES_GIRATINA,
+        )[Stat.ATK :]
+        # BoxPokemon_CalcAbility: an empty second slot is decomp ability 0 (pokemon.c:4755-4763).
+        g_slot = jnp.where(tables.species_abilities_decomp[altered, slot] != 0, slot, 0)
+        written = state.party_ability[t_row, t_mon]
+        own_ability = tables.species_abilities[tables.species_form_row[own_species, aform], slot]
+        stats = jnp.where(giratina, recalced, own_stats_)
+        ability = jnp.where(
+            giratina,
+            tables.species_abilities[altered, g_slot],
+            jnp.where(written != 0, written, own_ability),
+        )
+
+        def put(arr, value, is_copy=is_copy, row=row, mon=mon):
+            return arr.at[row, mon].set(jnp.where(is_copy, value, arr[row, mon]).astype(arr.dtype))
+
+        def put_b(arr, value, is_copy=is_copy, side=side):
+            return arr.at[side].set(jnp.where(is_copy, value, arr[side]).astype(arr.dtype))
+
+        state = state._replace(
+            stats=put(state.stats, stats),
+            ability=put(state.ability, ability),
+            ability_slot=put(state.ability_slot, jnp.where(giratina, g_slot, slot)),
+            ability_form=put(state.ability_form, jnp.where(giratina, GIRATINA_FORM_ALTERED, aform)),
+            form=put(state.form, GIRATINA_FORM_ALTERED),
+            shadow_form=put_b(state.shadow_form, GIRATINA_FORM_ALTERED),
+            form_num=put_b(state.form_num, GIRATINA_FORM_ALTERED),
+        )
+
+    # The rebuilt abilities are in: Cloud Nine / Air Lock as the blocks below read them.
     clear = ~weather_suppressed(tables, state)
     w = fcm.weather_bits(state)
     rain, sun, hail = fcm.rain(w), fcm.sun(w), fcm.hail(w)
     weathered = rain | sun | hail
-    cond = jnp.asarray(cond)
-    altered = tables.species_form_row[SPECIES_GIRATINA, 0]
     for side in range(fmt.B):
         row, mon = party(fmt, side), state.active[side]
         types = state.types[row, mon]
@@ -1205,7 +1270,6 @@ def form_change(tables: Tables, state: BattleState, cond=True) -> BattleState:
             ),
         )
         shown = jnp.where(change, cast_form, shown)
-        state = state._replace(types=state.types.at[row, mon].set(jnp.where(change, both, types)))
 
         is_cherrim = cond & (species == SPECIES_CHERRIM) & alive
         shown = jnp.where(is_cherrim, (clear & sun).astype(_I32), shown)
@@ -1218,44 +1282,31 @@ def form_change(tables: Tables, state: BattleState, cond=True) -> BattleState:
         )
         plate = judgment_type(tables, state.item[row, mon], Type.NORMAL)
         shown = jnp.where(is_arceus, plate, shown)
-
-        # The copier's target: a singles foe, a doubles battler's chosen target (:6423-6429).
-        foe = state.chosen_target[side].astype(_I32) if fmt.B == 4 else side ^ 1
-        t_row, t_mon = party(fmt, foe), state.active[foe]
-        is_copy = (
-            cond
-            & (species == SPECIES_GIRATINA)
-            & alive
-            & (state.form_num[side] == GIRATINA_FORM_ORIGIN)
-            & (state.transformed[side] != 0)
-        )
-        stats = calc_stats_jnp(
-            tables.species_base_stats[altered],
-            state.ivs[t_row, t_mon],
-            state.evs[t_row, t_mon],
-            state.level[t_row, t_mon],
-            tables.nature_mods[state.nature[t_row, t_mon]],
-            SPECIES_GIRATINA,
-        )
-        shown = jnp.where(is_copy, GIRATINA_FORM_ALTERED, shown)
-
-        def put(arr, value, is_copy=is_copy, row=row, mon=mon):
-            return arr.at[row, mon].set(jnp.where(is_copy, value, arr[row, mon]).astype(arr.dtype))
-
         state = state._replace(
-            stats=put(state.stats, stats[Stat.ATK :]),
-            ability=put(state.ability, tables.species_abilities[altered, 0]),
-            ability_slot=put(state.ability_slot, 0),
-            ability_form=put(state.ability_form, 0),
-            form=put(state.form, GIRATINA_FORM_ALTERED),
-            shadow_form=state.shadow_form.at[side].set(
-                jnp.where(is_copy, GIRATINA_FORM_ALTERED, state.shadow_form[side]).astype(
-                    state.shadow_form.dtype
-                )
-            ),
+            types=state.types.at[row, mon].set(jnp.where(change, both, types)),
             form_num=state.form_num.at[side].set(shown.astype(state.form_num.dtype)),
         )
     return state
+
+
+def _party_mon(state: BattleState, battler):
+    """``(species, ivs, ability_slot, ability_form, stats)`` of ``battler``'s party Pokemon
+    (``BattleSystem_GetPartyPokemon``, the slot it was sent from): the active slot's values, or
+    the ``shadow_*`` while the battler is Transformed (the party keeps its own, G-69). ``stats``:
+    Attack .. Speed in ``state.stats`` order, the party's (a Power Trick swap is not in them)."""
+    row, mon = party(format_of(state), battler), state.active[battler]
+    tr = state.transformed[battler] != 0
+
+    def pick(shadow, own):
+        return jnp.where(tr, shadow[battler], own[row, mon])
+
+    return (
+        pick(state.shadow_species, state.species).astype(_I32),
+        pick(state.shadow_ivs, state.ivs),
+        pick(state.shadow_ability_slot, state.ability_slot).astype(_I32),
+        pick(state.shadow_ability_form, state.ability_form).astype(_I32),
+        pick(state.shadow_stats, state.stats),
+    )
 
 
 def land_stats(tables: Tables, state: BattleState, row, mon) -> jnp.ndarray:

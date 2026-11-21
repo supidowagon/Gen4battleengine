@@ -24,7 +24,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.effects import apply_move_effect
 from nuzline.engine.enumerate import _future_hit, hit_class_law, outcome_laws
-from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
+from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId, Stat, Status, Type, Weather
 from nuzline.engine.order import is_switch, move_effects
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -1244,12 +1244,17 @@ def test_a_transform_copy_of_an_arceus_takes_its_own_plates_form(tables, names):
     assert int(out.form_num[1]) == Type.FIRE and out.types[0, 0].tolist() == [Type.GHOST] * 2
 
 
+# Peak 8.51 GB with a cold step compile (above the fast tier's ~8.3 GB): slow tier.
+@pytest.mark.slow
 def test_a_transformed_giratina_origin_is_rebuilt_as_altered_with_pressure(tables, names):
     """battle_lib.c:6412-6449: a Ditto that copied an Origin (formNum 1, the Orb stays with the
     foe) takes Altered's stats from the foe's party Pokemon (IVs, EVs, level, nature), ability
     Pressure (Altered's slot 0), formNum 0 and its slot's form 0; the party's form (``shadow_form``)
-    is written 0 (SYSCTL_FORM_CHANGE, battle_io_command.c:597-599); types, stages and HP stay. It
-    leaves as its own species with its own stats again (``_restore_transform``)."""
+    is written 0 (SYSCTL_FORM_CHANGE, battle_io_command.c:597-599); types, stages and HP stay. The
+    rebuild runs at SYNCHRONIZE_STATUS (battle_lib.c:4536-4544), so the switch-in checks after it
+    reach the PRESSURE state (:4096-4110; Transform cleared pressureAnnounced, battle_script.c:5358)
+    and the AI learns Pressure (subscript_pressure.s, BattleAI_SetAbility, battle_script.c:11806).
+    The switch-out restore is G-69's (``_restore_transform``)."""
     from dataclasses import replace
 
     from nuzline.engine.state import make_state
@@ -1279,6 +1284,80 @@ def test_a_transformed_giratina_origin_is_rebuilt_as_altered_with_pressure(table
     assert int(out.form_num[1]) == 1 and int(out.species[0, 0]) == n.species("Giratina")
     assert out.types[0, 0].tolist() == out.types[1, 0].tolist()
     assert int(out.hp[0, 0]) == int(s.hp[0, 0])
-    left = assert_matches_reference(tables, out, (MOVE_ACTIONS + 1, 0), empty_outcome())
-    assert int(left.species[0, 0]) == n.species("Ditto") and int(left.form_num[0]) == 0
-    assert left.stats[0, 0].tolist() == s.stats[0, 0].tolist()
+    assert int(out.ai_ability_known[0]) == ABILITY_DECOMP_IDS[AbilityId.PRESSURE]
+
+
+@pytest.mark.parametrize("target", ["Golduck", "Giratina"])
+def test_a_doubles_giratina_copy_rebuilds_from_its_chosen_targets_party_pokemon(
+    tables, names, target
+):
+    """battle_lib.c:6420-6446 at B = 4: the target is the copier's chosen target
+    (battlerActions[..][CHOOSE_TARGET], :6424-6425), and ``Pokemon_SetGiratinaFormByHeldItem``
+    recalculates only a Giratina (pokemon.c:4397-4404). A chosen Golduck gives its own party stats
+    and ability (Cloud Nine, slot 1), which turns the Sunshine Cherrim back to Overcast in the same
+    check (the loop re-runs, :4115-4121; Cherrim is battler 0, before the copier). A chosen Giratina
+    with an odd personality (slot 1) still gives Pressure: Altered's second slot is empty
+    (``BoxPokemon_CalcAbility``, pokemon.c:4755-4763). Both engines."""
+    from dataclasses import replace
+
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.format import DOUBLES
+    from nuzline.engine.hooks import form_change
+    from nuzline.engine.state import BattleState, initial_arrays
+    from nuzline.engine.stats import calc_stats_jnp
+    from nuzline.reference.convert import from_ref, to_ref
+    from nuzline.reference.engine import _form_change
+    from tests.engine.d2_states import mon
+
+    n = names
+    base = mon(n)
+    cherrim = replace(base, species=n.species("Cherrim"))
+    ditto = replace(base, species=n.species("Ditto"))
+    origin = replace(base, species=n.species("Giratina"), form=1, item=n.item("Griseous Orb"))
+    golduck = replace(base, species=n.species("Golduck"), ability_slot=1)
+    altered_odd = replace(base, species=n.species("Giratina"), ability_slot=1, level=40)
+    second = golduck if target == "Golduck" else altered_odd
+    a = initial_arrays(
+        DOUBLES,
+        tables,
+        [[cherrim, ditto], [origin, second]],
+        start_condition=Weather.SUN,
+        opp2_items=(),
+    )
+    s = BattleState(**{k: jnp.asarray(v) for k, v in a.items()})
+    # Battler 2 (the player's slot 1 Ditto) is a copy of the Origin, its own values in the shadow.
+    s = s._replace(
+        shadow_species=s.shadow_species.at[2].set(s.species[0, 1]),
+        shadow_stats=s.shadow_stats.at[2].set(s.stats[0, 1]),
+        shadow_ivs=s.shadow_ivs.at[2].set(s.ivs[0, 1]),
+        species=s.species.at[0, 1].set(s.species[1, 0]),
+        form=s.form.at[0, 1].set(1),
+        stats=s.stats.at[0, 1].set(s.stats[1, 0]),
+        ability=s.ability.at[0, 1].set(s.ability[1, 0]),
+        transformed=s.transformed.at[2].set(1),
+        form_num=s.form_num.at[0].set(1).at[2].set(1),
+        chosen_target=s.chosen_target.at[2].set(3),
+    )
+    out = form_change(tables, s)
+    r = to_ref(s)
+    _form_change(to_numpy(tables), r)
+    for field in ("stats", "ability", "ability_slot", "form", "form_num", "shadow_form"):
+        assert getattr(from_ref(r), field).tolist() == getattr(out, field).tolist(), field
+    assert int(out.form_num[2]) == 0 and int(out.shadow_form[2]) == 0
+    if target == "Golduck":
+        assert int(out.ability[0, 1]) == AbilityId.CLOUD_NINE == int(s.ability[1, 1])
+        assert out.stats[0, 1].tolist() == s.stats[1, 1].tolist()
+        assert int(out.form_num[0]) == 0  # Cloud Nine alive: Overcast (:6391-6395)
+    else:
+        altered = int(tables.species_form_row[n.species("Giratina"), 0])
+        expect = calc_stats_jnp(
+            tables.species_base_stats[altered],
+            s.ivs[1, 1],
+            s.evs[1, 1],
+            s.level[1, 1],
+            tables.nature_mods[s.nature[1, 1]],
+            n.species("Giratina"),
+        )
+        assert out.stats[0, 1].tolist() == expect[1:].tolist()
+        assert (int(out.ability[0, 1]), int(out.ability_slot[0, 1])) == (AbilityId.PRESSURE, 0)
+        assert int(out.form_num[0]) == 1

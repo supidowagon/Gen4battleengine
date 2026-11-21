@@ -864,7 +864,7 @@ class AbilityId(IntEnum):
     MULTITYPE = 93
     # F-5: Hydration (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:5626-5639; ``step._weather_effect``).
     HYDRATION = 94
-    # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.forecast``).
+    # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.form_change``).
     FORECAST = 95
     # G-14: Air Lock shares Cloud Nine's lock (include/battle/common.h:63-67); read by decomp id
     # (``WEATHER_ABILITY_IDS``) in ``damage.weather_suppressed``, so no new reader.

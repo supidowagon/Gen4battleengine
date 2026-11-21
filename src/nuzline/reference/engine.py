@@ -3193,16 +3193,48 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
 
 def _form_change(tables, s: RefState) -> None:
     """``SWITCH_IN_CHECK_STATE_FORM_CHANGE`` (lib.c:4115-4121), ``BattleSystem_TriggerFormChange``
-    (lib.c:6305-6451), F-6 and H-5, as ``hooks.form_change``, until none changes.
+    (lib.c:6305-6451), F-6 and H-5, as ``hooks.form_change``, until none changes: the Giratina
+    rebuilds first (the ability one writes can add or remove a Cloud Nine, which Castform and
+    Cherrim read; nothing feeds a rebuild), then the other blocks.
 
+    A Transformed Giratina with ``form_num`` Origin (:6412-6449) copies its target's party Pokemon
+    (a singles foe, a doubles ``chosen_target``, :6420-6429; ``_party_pokemon``): a Giratina is
+    recalculated as Altered (``Pokemon_SetGiratinaFormByHeldItem``, pokemon.c:4380-4405: stats,
+    ``BoxPokemon_CalcAbility``'s slot, pokemon.c:4746-4766), any other species keeps its party
+    stats and ability. The copier takes those stats and that ability, ``form_num`` Altered, the
+    copy's form and the party's form (``shadow_form``) 0.
     Castform (:6313-6364): with HP and Forecast (``Battler_Ability``) it takes the type of the
     weather (Fire in sun, Water in rain, Ice in hail) or Normal (no such weather, or an alive
     Cloud Nine / Air Lock) unless it has that type already, and ``form_num`` (CASTFORM_FORM_*).
     Cherrim (:6366-6396): with HP, ``form_num`` Sunshine (1) in sun with no alive Cloud Nine / Air
     Lock, else Overcast (0). Arceus (:6398-6410): with HP and Multitype, ``form_num`` the type of
-    its raw item's plate (``Pokemon_GetArceusTypeOf``). A Transformed Giratina with ``form_num``
-    Origin (:6412-6449): Altered's stats from the target's IVs, EVs, level and nature, its slot 0
-    ability, ``form_num`` Altered, the copy's form and the party's form (``shadow_form``) 0."""
+    its raw item's plate (``Pokemon_GetArceusTypeOf``)."""
+    for side in range(_fmt(s).B):
+        mon, sd = _active(s, side), s.battlers[side]
+        if not (
+            mon.hp
+            and mon.species == SPECIES_GIRATINA
+            and sd.form_num == GIRATINA_FORM_ORIGIN
+            and sd.transformed
+        ):
+            continue
+        # The copier's target: a singles foe, a doubles battler's chosen target (:6420-6429).
+        target = sd.chosen_target if _fmt(s).B == 4 else _foe(side)
+        copied = _party_pokemon(s, target)
+        if copied.species == SPECIES_GIRATINA:  # pokemon.c:4397-4404
+            copied.form = GIRATINA_FORM_ALTERED
+            _calc_stats(tables, copied)
+            row = _t(tables, "species_form_row", SPECIES_GIRATINA, GIRATINA_FORM_ALTERED)
+            slot = copied.ability_slot  # BoxPokemon_CalcAbility: an empty slot 2 is ability 0
+            if not _t(tables, "species_abilities_decomp", row, slot):
+                slot = 0
+            mon.ability = _t(tables, "species_abilities", row, slot)
+            mon.ability_slot, mon.ability_form = slot, GIRATINA_FORM_ALTERED
+        else:  # MON_DATA_FORM is a plain write (pokemon.c:1608-1609): the party's own values
+            mon.ability = _party_ability(tables, copied)
+            mon.ability_slot, mon.ability_form = copied.ability_slot, copied.ability_form
+        mon.stats = list(copied.stats)
+        mon.form = sd.shadow_form = sd.form_num = GIRATINA_FORM_ALTERED
     w = 0 if _weather_suppressed(tables, s) else _weather_bits(s)
     castform = FieldCondition.RAINING | FieldCondition.SUNNY | FieldCondition.HAILING
     # lib.c:6318-6352, if-else: no CASTFORM bit -> Normal, else sun -> Fire, rain -> Water,
@@ -3236,21 +3268,18 @@ def _form_change(tables, s: RefState) -> None:
             sd.form_num = int(
                 PLATE_TYPES.get(_t(tables, "item_hold_effect", mon.item), Type.NORMAL)
             )
-        elif (
-            mon.species == SPECIES_GIRATINA
-            and sd.form_num == GIRATINA_FORM_ORIGIN
-            and sd.transformed
-        ):
-            # The copier's target: a singles foe, a doubles battler's chosen target (:6423-6429).
-            target = sd.chosen_target if _fmt(s).B == 4 else _foe(side)
-            altered = copy.copy(_active(s, target))
-            altered.species, altered.form = SPECIES_GIRATINA, GIRATINA_FORM_ALTERED
-            _calc_stats(tables, altered)  # Pokemon_SetGiratinaFormByHeldItem (pokemon.c:4380-4405)
-            mon.stats = list(altered.stats)
-            row = _t(tables, "species_form_row", SPECIES_GIRATINA, GIRATINA_FORM_ALTERED)
-            mon.ability = _t(tables, "species_abilities", row, 0)  # BoxPokemon_CalcAbility, slot 0
-            mon.ability_slot = mon.ability_form = 0
-            mon.form = sd.shadow_form = sd.form_num = GIRATINA_FORM_ALTERED
+
+
+def _party_pokemon(s: RefState, battler: int):
+    """A copy of ``battler``'s party Pokemon (``BattleSystem_GetPartyPokemon``): the active one,
+    with its own species, form, stats, IVs and ability slot / form from the shadow while it is
+    Transformed (G-69), as ``hooks._party_mon``."""
+    sd, mon = s.battlers[battler], copy.copy(_active(s, battler))
+    if sd.transformed:
+        mon.species, mon.form = sd.shadow_species, sd.shadow_form
+        mon.stats, mon.ivs = list(sd.shadow_stats), list(sd.shadow_ivs)
+        mon.ability_slot, mon.ability_form = sd.shadow_ability_slot, sd.shadow_ability_form
+    return mon
 
 
 def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
@@ -4403,6 +4432,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         _mimic(tables, s, side, target)
     elif effect == EffectId.TRANSFORM and landed:
         if _transform(tables, s, side, target):
+            # SYNCHRONIZE_STATUS's TriggerFormChange first (lib.c:4536-4544, bcp.c:3665-3672): a
+            # copied Giratina-Origin is rebuilt before the checks (H-5).
+            _form_change(tables, s)
             _switch_in_effects(turn, s, side)  # :5350-5362 clear the flags: the checks run again
     elif effect == EffectId.YAWN and landed and _active(s, target).hp:
         # subscript_yawn.s: an ability that blocks it is tagged; else unless it fails the count 2.
