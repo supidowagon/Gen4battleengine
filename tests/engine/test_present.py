@@ -295,16 +295,26 @@ def _sitrus_delibird(tables, names, opp):
     return s.replace_hp(0, 0, 3)
 
 
-def test_full_hp_heal_runs_no_item_check(tables, names):
+def test_full_hp_heal_item_check_at_move_end(tables, names):
     """subscript_recover_hp.s _036 sets MOVE_STATUS_NO_MORE_WORK; CheckMoveFailure
-    (bcp.c:3313-3315) then skips AfterMoveEffects (bcp.c:3638-3769), so Delibird's Sitrus
-    (ATTACKER_ITEM) is not checked after a heal on a full-HP foe, and Cranidos's Tackle KOs
-    it. After a damage path it is checked and eaten first."""
+    (bcp.c:3313-3314) then skips AfterMoveEffects (bcp.c:3638-3769) but goes on to
+    LOOP_SPREAD_MOVES -> FAINT_AFTER_SELFDESTRUCT (:3884-3885) -> TRIGGER_AFTER_HIT_EFFECTS
+    (:3899) -> UPDATE_MOVE_BUFFERS (:3909) -> MOVE_END (:3959). MoveEnd's
+    TriggerEffectOnSwitch (:3973) runs SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS over every
+    battler (battle_lib.c:4151-4165), so Delibird (3 HP, at or below half) eats its Sitrus
+    (HOLD_EFFECT_HP_PCT_RESTORE 25, res/items/data/sitrus_berry.json:16-17; lib.c:4983-4988)
+    after a heal on a full-HP foe, and survives Cranidos's Tackle (D3-15 item pass)."""
     s = _sitrus_delibird(tables, names, "Tackle")
     acts = A(PRESENT, "Tackle", s, names)
     sitrus = names.item("Sitrus Berry")
+    mx = int(s.max_hp[0, 0])
+    # Tackle's damage to Delibird: the same board without the berry, at full HP.
+    bare = s._replace(item=s.item.at[0, 0].set(0)).replace_hp(0, 0, mx)
+    tackle = mx - int(assert_matches_reference(tables, bare, acts, _o(PRESENT_HEAL)).hp[0, 0])
+    assert 3 < tackle < 3 + max(mx // 4, 1)  # the berry decides the KO
     out = assert_matches_reference(tables, s, acts, _o(PRESENT_HEAL))
-    assert int(out.hp[0, 0]) == 0 and int(out.item[0, 0]) == sitrus
+    assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == sitrus
+    assert int(out.hp[0, 0]) == 3 + max(mx // 4, 1) - tackle
     out = assert_matches_reference(tables, s, acts, _o(0))
     assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == sitrus
     # A heal on a hurt foe ("regained health") reaches AfterMoveEffects: eaten too.
@@ -314,10 +324,9 @@ def test_full_hp_heal_runs_no_item_check(tables, names):
 
 @pytest.mark.parametrize("opp", ["Leer", "Rock Polish"])
 def test_skipped_sitrus_is_eaten_later_in_the_turn(tables, names, opp):
-    # The berry is not lost: Cranidos's Leer runs its own AfterMoveEffects with Delibird as
-    # the defender (DEFENDER_ITEM, bcp.c:3691); after a Rock Polish (its defender is its
-    # user) the end-of-turn MON_COND_CHECK_STATE_USE_ITEM (bcp.c:1362) eats it. Either way
-    # it is gone by the end of the turn and Delibird has 3 + Sitrus's heal.
+    # The berry is eaten at Delibird's own MoveEnd (bcp.c:3959, :3973; battle_lib.c:4151-4165),
+    # whatever Cranidos does after: it is gone by the end of the turn and Delibird has
+    # 3 + Sitrus's heal.
     s = _sitrus_delibird(tables, names, opp)
     out = assert_matches_reference(tables, s, A(PRESENT, opp, s, names), _o(PRESENT_HEAL))
     mx = int(s.max_hp[0, 0])
@@ -325,11 +334,14 @@ def test_skipped_sitrus_is_eaten_later_in_the_turn(tables, names, opp):
     assert int(out.hp[0, 0]) == 3 + max(mx // 4, 1)
 
 
-def test_full_hp_recover_runs_no_item_check(tables, names):
+def test_full_hp_recover_item_check_at_move_end(tables, names):
     """Recover (effect_script_0032.s -> subscript_recover_half_max_hp.s:16 ->
-    subscript_recover_hp.s) at full HP: the same NO_MORE_WORK path, so no item check after
-    it. A confused Onix at exactly its self-hit's damage, holding a Sitrus Berry, then
-    faints to the self-hit; the Sitrus is not eaten after the Recover."""
+    subscript_recover_hp.s) at full HP: the same NO_MORE_WORK path, which skips
+    AfterMoveEffects but reaches MoveEnd (bcp.c:3313-3314, :3884-3885, :3899, :3909,
+    :3959). Its TriggerEffectOnSwitch (:3973) checks every battler's held item
+    (battle_lib.c:4151-4165): a confused Onix at exactly its self-hit's damage (at or
+    below half), holding a Sitrus Berry, eats it at the Recover's MoveEnd (lib.c:4983-4988)
+    and is left with the berry's heal after its self-hit (D3-15 item pass)."""
     from nuzline.engine.damage import confusion_damage
 
     s = roark_state(
@@ -352,10 +364,10 @@ def test_full_hp_recover_runs_no_item_check(tables, names):
     acts = A("Recover", "Tackle", s, names)
     o = empty_outcome()._replace(confusion_hit=jnp.asarray([0, 1], jnp.int8))
     out = assert_matches_reference(tables, s, acts, o)
-    assert int(out.hp[1, 0]) == 0 and int(out.item[1, 0]) == names.item("Sitrus Berry")
-    # Below full HP the Recover reaches AfterMoveEffects (DEFENDER_ITEM is the user itself
-    # in the decomp; the engine also checks the foe's item there): Onix eats its Sitrus
-    # first and survives the self-hit.
+    assert int(out.item[1, 0]) == 0 and int(out.item_consumed[1, 0]) == names.item("Sitrus Berry")
+    assert int(out.hp[1, 0]) == max(int(s.max_hp[1, 0]) // 4, 1)
+    # Below full HP the Recover runs AfterMoveEffects too; Onix eats its Sitrus first either
+    # way and survives the self-hit.
     hurt = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 2)
     out = assert_matches_reference(tables, hurt, acts, o)
     assert int(out.item[1, 0]) == 0 and int(out.hp[1, 0]) > 0

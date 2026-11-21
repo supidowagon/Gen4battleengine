@@ -386,7 +386,7 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[row, mon] > 0)
     w = fcm.weather_bits(state)
     already = fcm.ability_bits(w, weather) == w
-    state = announce(state, "weather_announced", side, on)  # :3748-3786, even when already up
+    state = announce(state, "weather_announced", side, on)  # :3747, :3756, :3765, :3774, even when already up
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
     return fcm.weather_ability(state, weather, on)
 

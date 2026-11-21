@@ -14,7 +14,6 @@ import json
 import re
 from pathlib import Path
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -33,7 +32,7 @@ from nuzline.engine.order import (
 )
 from nuzline.engine.outcome import Outcome, empty_outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import needs_replacement, replace, step
+from nuzline.engine.step import needs_replacement, replace
 from tests.test_golden import replay_mismatches
 from tools.trace_to_state import (
     INTERMEDIATE,
@@ -54,6 +53,7 @@ from tools.trace_to_state import (
     initial_state,
     main,
     resolve_roll,
+    step_turn,
     trace_to_states,
 )
 
@@ -69,7 +69,14 @@ STEALTH_ROCK, ROCK_THROW, SCREECH = 0, 1, 2  # Geodude / Onix move slots
 POTION = 10  # the opponent's bag slot 0
 BUDEW, ABSORB, STUN_SPORE = 5, 0, 3  # party slot and move slots
 
-_step = jax.jit(step)
+
+def _step(tables, state, actions, outcome) -> BattleState:
+    """``step`` exactly, through the converter's own program (``step_turn``): a ``jax.jit(step)``
+    beside it kept a second whole-turn program resident. A converted trace left the process at
+    9.2 GB with it and 4.7 GB without (test_a_thunder_fang_flinch_is_inferred, measured
+    locally), above and below conftest's 6 GB clear threshold, so every test dropped both
+    programs and reloaded them (100-190 s a test on the pod)."""
+    return step_turn(tables, state, actions, outcome)
 
 
 def _outcome(**hits) -> Outcome:
@@ -274,8 +281,11 @@ def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY, start
     is ``(actions, outcome)``, ``(actions, outcome, player_slots)`` or ``(actions, outcome,
     player_slots, learn_choices)``: the slots the player sends in, in order, for a fainted
     active Pokemon at the turn's end, and the answers to the turn's learn-move prompts
-    (``_answer_and_resume``, before the replacements). ``start`` edits
-    the turn-0 state (fields the first record carries, such as HP and status)."""
+    (``levelup.learn``, after ``advance_learns``, before the replacements). A prompt at a
+    mid-turn payout pauses ``step`` (``BattleState.learn_site``, E3-B2-21): its answers are
+    given and the turn resumes with the same outcome, as ``tools.trace_to_state.ref_apply_turn``
+    plays it. ``start`` edits the turn-0 state (fields the first record carries, such as HP
+    and status)."""
     trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
     player = load_party(party, names)
     state = initial_state(tables, player, trainer, leads)
@@ -286,8 +296,22 @@ def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY, start
         sent, learns = (*rest, (), ())[:2]
         records += _move_events(tables, state, actions, outcome, turn)
         acts = jnp.asarray(actions, jnp.int32)
+        answers = list(learns)
+
+        def answer(s, answers=answers):
+            s = advance_learns(tables, s)
+            while bool(needs_learn(s)) and answers:
+                s = learn(tables, s, answers.pop(0))
+            return s
+
         state = _step(tables, state, acts, outcome)
-        state = _answer_and_resume(tables, state, acts, outcome, list(learns))
+        while int(state.learn_site) and answers:
+            state = answer(state)
+            if bool(needs_learn(state)):
+                break  # no answer left: the turn stays at the prompt
+            state = _step(tables, state, acts, outcome)
+        state = answer(state)  # TurnEnd's prompts
+        assert not answers, f"turn {turn}: learn answers {answers} were never asked"
         for slot in sent:
             assert needs_replacement(state)[0]
             state = replace(tables, state, 0, slot)
@@ -298,23 +322,6 @@ def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY, start
         states.append(state)
     records[-1]["command"] = 41  # the last record is written at BATTLE_CONTROL_RESULT
     return records, states
-
-
-def _answer_and_resume(tables, state, acts, outcome, learns):
-    """``state`` after ``step`` with the turn's prompts answered in order (``learns``): a prompt
-    that pauses the turn (``learn_site``, E3-B2-21: MoveEnd's payout, bcp.c:3968) is answered and
-    the same turn resumes with the same actions and outcome; TurnEnd's prompts (bcp.c:1846) are
-    answered unpaused, before ReplaceFainted (:1848). As ``trace_to_state._apply_turn``, a prompt
-    with no answer left stops the turn there."""
-    for _ in range(8):
-        state = advance_learns(tables, state)
-        while learns and bool(needs_learn(state)):
-            state = learn(tables, state, learns.pop(0))
-        # Done, or a prompt with no answer left: the turn stays there (as _apply_turn).
-        if not int(state.learn_site) or bool(needs_learn(state)):
-            return state
-        state = _step(tables, state, acts, outcome)
-    raise AssertionError("more than eight learn pauses in one turn")
 
 
 def _write_raw(path: Path, records: list[dict]) -> Path:

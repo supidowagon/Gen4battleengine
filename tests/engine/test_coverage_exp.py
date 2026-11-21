@@ -16,9 +16,7 @@ import pytest
 from nuzline.data.games import KAIZO
 from nuzline.data.tables import Names
 from nuzline.engine.coverage import (
-    EXP_ITEM_HOLD_EFFECTS,
     FRIENDSHIP_POWER_EFFECTS,
-    ITEM_MOVING_EFFECTS,
     check_coverage,
     forced_learn_moves,
     learnable_moves,
@@ -208,10 +206,6 @@ def test_the_effect_ids_are_the_decomp_moves(tables, names):
     res/moves/<move>/data.json effect."""
     effect = np.asarray(tables.move_ai_effect)
     by_effect = {
-        105: ("Thief", "Covet"),
-        177: ("Trick", "Switcheroo"),
-        188: ("Knock Off",),
-        233: ("Fling",),
         121: ("Return",),
         123: ("Frustration",),
         57: ("Transform",),
@@ -220,32 +214,24 @@ def test_the_effect_ids_are_the_decomp_moves(tables, names):
     }
     for eid, moves in by_effect.items():
         assert all(int(effect[names.move(m)]) == eid for m in moves), moves
-    assert set(ITEM_MOVING_EFFECTS) == {105, 177, 188, 233}
     assert set(FRIENDSHIP_POWER_EFFECTS) == {121, 123}
-    hold = np.asarray(tables.item_hold_effect)
-    for item in ("Lucky Egg", "Exp. Share", "Soothe Bell", "Macho Brace", "Power Weight"):
-        assert int(hold[names.item(item)]) in EXP_ITEM_HOLD_EFFECTS, item
 
 
 @pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
 @pytest.mark.fullset
 def test_every_exp_sensitive_move_meets_its_exp_line(request, game, names):
-    """Every move of §4.2, §4.4 and §4.5, in both games and whatever its engine support, meets
-    its family's ``exp_refusals`` line: an item-moving move with an exp-item holder (§4.2), a
-    friendship-power move with a nonzero egg location that can level (§4.4). (§4.5, the reload
-    moves Transform, Mimic and Power Trick, is modelled: G-68, G-69, B12-10.) So implementing one
-    of these moves keeps its payout exact by refusal, not by its being unsupported."""
+    """Every move of §4.4, in both games and whatever its engine support, meets its family's
+    ``exp_refusals`` line: a friendship-power move with a nonzero egg location that can level
+    (§4.4). (§4.2, the item moves, is modelled: D9; §4.5, the reload moves Transform, Mimic and
+    Power Trick, is modelled: G-68, G-69, B12-10.) So implementing one of these moves keeps its
+    payout exact by refusal, not by its being unsupported."""
     from nuzline.engine.coverage import exp_refusals
 
     tables = request.getfixturevalue(game)
     ai_effect = np.asarray(tables.move_ai_effect)
     base = sample_party(names)[STARLY_SLOT]
-    holder = replace(base, item=names.item("Lucky Egg"))
     egg = replace(base, egg_location=7)
-    families = (
-        (ITEM_MOVING_EFFECTS, holder, False, "can move held items in battle"),
-        (FRIENDSHIP_POWER_EFFECTS, egg, True, "friendship per level-up"),
-    )
+    families = ((FRIENDSHIP_POWER_EFFECTS, egg, True, "friendship per level-up"),)
     met = 0
     for eids, spec, levels, phrase in families:
         # Kaizo gives no move a friendship-power effect: that family is empty there.
@@ -254,7 +240,8 @@ def test_every_exp_sensitive_move_meets_its_exp_line(request, game, names):
         for move in moves.tolist():
             lines = exp_refusals(tables, names, spec, [move], [move], levels)
             assert any(phrase in line for line in lines), (int(move), lines)
-    assert met
+    # Vanilla has Return and Frustration; Kaizo's family is empty (above).
+    assert (met == 0) == (game == "kaizo_tables"), met
 
 
 def test_an_unresolved_exp_boost_is_refused_below_level_100(tables, names):
@@ -271,24 +258,6 @@ def test_an_unresolved_exp_boost_is_refused_below_level_100(tables, names):
     ]
     party[0] = replace(party[0], level=100, stats=None, current_hp=None, exp=None)
     assert _lines(_missing(tables, names, party, roark_party(names)), "experience") == []
-
-
-@pytest.mark.fullset
-def test_an_exp_item_with_an_item_moving_move_is_refused(tables, names):
-    """§4.2 (ruling D9): the payout reads the party item (battle_script.c:2209, :9706,
-    :10226; pokemon.c:2649)."""
-    party = sample_party(names)
-    party[0] = replace(party[0], item=names.item("Lucky Egg"))
-    opp = roark_party(names)
-    thief = [replace(opp[0], moves=(names.move("Thief"), *opp[0].moves[1:]))] + opp[1:]
-    want = (
-        "Player MONFERNO (slot 0): Lucky Egg is read from the party by the exp payout, and "
-        "Thief can move held items in battle (experience UNSUPPORTED)"
-    )
-    assert _lines(_missing(tables, names, party, thief), "experience") == [want]
-    assert _lines(_missing(tables, names, party, opp), "experience") == []
-    plain = sample_party(names)
-    assert _lines(_missing(tables, names, plain, thief), "experience") == []
 
 
 @pytest.mark.fullset
@@ -370,12 +339,13 @@ def test_make_state_takes_the_new_spec_fields(tables, names):
 
 
 @pytest.mark.fullset
-def test_knock_off_meets_the_exp_item_line(tables, names):
-    """§4.2 (ruling D9) for Knock Off (B10-6): an exp-item holder in a fight where Knock Off can be
-    used is refused, as the payout reads the party item (a knocked-off item stays on the party,
-    battle_io_command.c:590-592) while the battle copy holds nothing."""
+def test_item_moves_are_not_refused_for_an_exp_item(tables, names):
+    """§4.2 (ruling D9, gone): the payout reads the party item, which the engines model
+    (``levelup.party_item``: a knocked-off slot keeps its item on the party, a Trick / Thief copy
+    reaches it at once), so an exp-item holder in a fight with item-moving moves is no refusal."""
     from nuzline.engine.coverage import exp_refusals
 
     starly = replace(sample_party(names)[STARLY_SLOT], item=names.item("Lucky Egg"))
-    lines = exp_refusals(tables, names, starly, [], [names.move("Knock Off")], False)
-    assert any("Knock Off can move held items in battle" in line for line in lines), lines
+    moves = [names.move(m) for m in ("Knock Off", "Thief", "Trick", "Fling")]
+    lines = exp_refusals(tables, names, starly, [], moves, False)
+    assert not any("held items" in line or "party" in line for line in lines), lines

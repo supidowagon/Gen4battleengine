@@ -262,7 +262,12 @@ def test_end_of_turn_runs_the_faster_battler_first(tables, names):
     # Both seeded at 1 HP: the faster battler's seed drains it first and the battle ends
     # there; the slower one's check never runs (battle_controller_player.c:1289).
     s = roark_state(tables, names, player_count=1)  # Monferno outspeeds Geodude
-    s = s._replace(leech_seed=jnp.ones_like(s.leech_seed)).replace_hp(0, 0, 1).replace_hp(1, 0, 1)
+    s = s._replace(
+        leech_seed=jnp.ones_like(s.leech_seed),
+        # Each is seeded by the other (D3-11b: the recipient is the seeder's battler, 1 + b ^ 1).
+        leech_seed_recipient=jnp.asarray([2, 1], s.leech_seed_recipient.dtype),
+    )
+    s = s.replace_hp(0, 0, 1).replace_hp(1, 0, 1)
     s = s._replace(species=s.species.at[1, 1:].set(0), hp=s.hp.at[1, 1:].set(0))
     out = jit_step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
     assert int(out.over) == 1 and int(out.winner) == 1 and int(out.hp[1, 0]) == 2  # healed 1
@@ -274,7 +279,12 @@ def test_end_of_turn_runs_the_faster_battler_first(tables, names):
 @pytest.mark.slow
 def test_end_of_turn_speed_tie_uses_its_own_outcome(tables, names):
     s = roark_state(tables, names, equal_speed=True, player_count=1)
-    s = s._replace(leech_seed=jnp.ones_like(s.leech_seed)).replace_hp(0, 0, 1).replace_hp(1, 0, 1)
+    s = s._replace(
+        leech_seed=jnp.ones_like(s.leech_seed),
+        # Each is seeded by the other (D3-11b: the recipient is the seeder's battler, 1 + b ^ 1).
+        leech_seed_recipient=jnp.asarray([2, 1], s.leech_seed_recipient.dtype),
+    )
+    s = s.replace_hp(0, 0, 1).replace_hp(1, 0, 1)
     s = s._replace(species=s.species.at[1, 1:].set(0), hp=s.hp.at[1, 1:].set(0))
     first = jit_step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
     second = jit_step(

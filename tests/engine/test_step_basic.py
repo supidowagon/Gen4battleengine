@@ -109,12 +109,14 @@ def test_a_fainted_battler_loses_its_stages_and_volatiles(tables, names):
         confusion=s.confusion.at[1].set(3),
         taunt=s.taunt.at[1].set(3),
         leech_seed=s.leech_seed.at[1].set(1),
+        leech_seed_recipient=s.leech_seed_recipient.at[1].set(1),  # seeded by battler 0
         water_sport=s.water_sport.at[1].set(1),
     )
     out = jit_step(tables, s, jnp.array([0, 0]), empty_outcome())  # Scratch faints Geodude
     assert int(out.hp[1, 0]) == 0 and int(out.over) == 0
     assert out.stages[1].tolist() == [0] * 8
     assert [int(out.confusion[1]), int(out.taunt[1]), int(out.leech_seed[1])] == [0, 0, 0]
+    assert int(out.leech_seed_recipient[1]) == 0
     assert int(out.water_sport[1]) == 0
 
 

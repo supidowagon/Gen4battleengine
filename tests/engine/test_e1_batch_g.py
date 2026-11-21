@@ -445,15 +445,37 @@ def test_a_status_word_with_several_conditions_is_refused():
 _SPE = 4  # stats[..., 0..4] are Atk, Def, Sp. Atk, Sp. Def, Speed (state.py, ``stats``)
 
 
-def _starf_fight(names, tables, mine, theirs, *, foe_item="", bench=False, foe_level=10):
-    """Side 0: a level-50 Abra (``mine``) holding a Starf Berry at a quarter HP, and with
-    ``bench`` a second one at a quarter HP; side 1: a Rattata (``theirs``, ``foe_item``) at
-    ``foe_level``, faster than the Abra."""
+def _starf_fight(
+    names, tables, mine, theirs, *, foe_item="", bench=False, foe_level=10, lead="hit"
+):
+    """Side 0: a level-50 Abra (``mine``) holding a Starf Berry; side 1: a Rattata (``theirs``,
+    ``foe_item``) at ``foe_level``, faster than the Abra. A lead at its pinch (curHP <= maxHP / 4,
+    battle_lib.c:4855) cannot start a turn with its Starf uneaten: every turn's ShowBattleMon
+    (battle_controller_player.c:254-267) checks every battler's held item (battle_lib.c:4151-4165;
+    ``step._turn_start_items``, run at the end of each step). So ``lead`` sets where it reaches
+    the pinch:
+
+    - ``"hit"``: maxHP // 4 + 1; the faster foe's first damaging hit (at least 1, lib:7084-7090)
+      lands it at the pinch, before that action's item checks.
+    - ``"rough_skin"``: maxHP // 4 + maxHP // 8 and the foe's ability Rough Skin; after the Abra's
+      own contact move it takes maxHP // 8 (lib:4257-4270, at ONE_HIT_TRIGGER_ABILITY bcp:3513,
+      after a pluck at ONE_HIT_TRIGGER_SECONDARY bcp:3484, before ATTACKER_ITEM bcp:3684) and
+      lands on maxHP // 4.
+    - ``"pinch"``: maxHP // 4, only for ``battle_start``: a lead sent out at its pinch eats there
+      (bcp:256).
+
+    ``bench``: a second holder at maxHP // 4, a party member low from the overworld and never sent
+    out, so never checked."""
     abra = _mon(names, "Abra", mine, 50, "Starf Berry")
     party = [abra, _mon(names, "Abra", ["Tackle"], 50, "Starf Berry")] if bench else [abra]
     s = make_state(tables, party, [_mon(names, "Rattata", theirs, foe_level, foe_item)])
-    for slot in range(len(party)):
-        s = s.replace_hp(0, slot, int(s.max_hp[0, slot]) // 4)
+    top = int(s.max_hp[0, 0])
+    hp = {"hit": top // 4 + 1, "rough_skin": top // 4 + top // 8, "pinch": top // 4}[lead]
+    s = s.replace_hp(0, 0, hp)
+    if bench:
+        s = s.replace_hp(0, 1, int(s.max_hp[0, 1]) // 4)
+    if lead == "rough_skin":
+        s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.ROUGH_SKIN))
     return s._replace(stats=s.stats.at[1, 0, _SPE].set(500))
 
 
@@ -471,9 +493,10 @@ def _boosts(s, side=0):
 
 
 def test_a_recycled_starf_berry_draws_again(tables, names):
-    """(c) The foe's faster Tackle puts the holder's Starf Berry check at the defender item check
-    (bcp:3691-3696, lib:4865: Attack, draw 0); its Recycle gives the berry back and it is eaten
-    again with its own draw (lib:4865 / :5288: rank 3 of five, Sp. Atk), not a repeat (G-27)."""
+    """(c) The foe's faster Tackle puts the holder (``lead="hit"``) at its pinch, and its Starf
+    Berry is eaten at that action's item checks (bcp:3672-3696, lib:4865: Attack, draw 0); its
+    Recycle gives the berry back and it is eaten again with its own draw (lib:4865 / :5288: rank 3
+    of five, Sp. Atk), not a repeat (G-27)."""
     s = _starf_fight(names, tables, ["Recycle"], ["Tackle"])
     out = assert_matches_reference(tables, s, _acts(names, s, 0, "Recycle", "Tackle"), _draws(0, 3))
     assert _boosts(out) == {"ATK": 2, "SPA": 2} and int(out.item[0, 0]) == 0
@@ -482,10 +505,14 @@ def test_a_recycled_starf_berry_draws_again(tables, names):
 
 
 def test_a_roar_newcomer_eats_with_its_own_draw(tables, names):
-    """(b) The holder eats at its Tackle's attacker item check (bcp:3684-3689: Attack, draw 0);
-    the foe's Roar drags in the bench holder at its pinch, whose switch-in check (lib:4151-4165,
-    :5288) takes the second draw: 4 of five, Sp. Def, on fresh stages (lib:97-101), G-27."""
-    s = _starf_fight(names, tables, ["Tackle"], ["Roar"], bench=True, foe_level=60)
+    """(b) The foe's Rough Skin puts the holder at its pinch during its Tackle
+    (``lead="rough_skin"``), and it eats at that action's item checks (bcp:3672-3689: Attack,
+    draw 0); the foe's Roar drags in the bench holder at its pinch, whose switch-in check
+    (lib:4151-4165, :5288) takes the second draw: 4 of five, Sp. Def, on fresh stages
+    (lib:97-101), G-27."""
+    s = _starf_fight(
+        names, tables, ["Tackle"], ["Roar"], bench=True, foe_level=60, lead="rough_skin"
+    )
     out = assert_matches_reference(tables, s, _acts(names, s, 0, "Tackle", "Roar"), _draws(0, 4))
     assert int(out.active[0]) == 1 and int(out.item[0, 0]) == int(out.item[0, 1]) == 0
     assert _boosts(out) == {"SPD": 2}
@@ -494,12 +521,20 @@ def test_a_roar_newcomer_eats_with_its_own_draw(tables, names):
 @pytest.mark.parametrize("theirs", ["Tackle", "Roar"])
 def test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer(tables, names, theirs):
     """(d) Bug Bite eats the foe's Starf Berry for the attacker (lib:5798-5817, draw :5808:
-    Attack, draw 0); the attacker's own one goes at its item check (bcp:3684-3689: rank 3 of five,
-    Sp. Atk); a slower foe's Roar then drags in the bench holder, the third draw (Defense, 1),
-    G-28."""
+    Attack, draw 0); the foe's Rough Skin then puts the attacker at its pinch
+    (``lead="rough_skin"``) and its own one goes at the action's item checks (bcp:3672-3689: rank
+    3 of five, Sp. Atk); a slower foe's Roar then drags in the bench holder, the third draw
+    (Defense, 1), G-28."""
     level = 60 if theirs == "Roar" else 10  # Roar's level check; a weak Tackle
     s = _starf_fight(
-        names, tables, ["Bug Bite"], [theirs], foe_item="Starf Berry", bench=True, foe_level=level
+        names,
+        tables,
+        ["Bug Bite"],
+        [theirs],
+        foe_item="Starf Berry",
+        bench=True,
+        foe_level=level,
+        lead="rough_skin",
     )
     s = s._replace(stats=s.stats.at[1, 0, _SPE].set(1))
     out = assert_matches_reference(
@@ -514,10 +549,13 @@ def test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer(tables, nam
 
 def test_a_pluck_flag_left_set_eats_the_attackers_starf_twice(tables, names):
     """A Bug Bite of a Cheri Berry that cures nothing leaves SELF_TURN_FLAG_PLUCK_BERRY set
-    (lib:5848; subscript_pluck_check.s): the attacker's Starf Berry is kept at the attacker item
-    check (bcp:3684-3689, draw 0: Attack) and eaten at _HELD_ITEM_STATUS (bcp:3730-3761, lib:5288:
-    rank 2 of five, Speed), two draws, G-28."""
-    s = _starf_fight(names, tables, ["Bug Bite"], ["Growl"], foe_item="Cheri Berry")
+    (lib:5848; subscript_pluck_check.s); the foe's Rough Skin then puts the attacker at its pinch
+    (``lead="rough_skin"``): its Starf Berry is eaten and kept (draw 0: Attack), then eaten again
+    in the same action's item checks (bcp:3672-3761, lib:5288: rank 2 of five, Speed), two draws,
+    G-28."""
+    s = _starf_fight(
+        names, tables, ["Bug Bite"], ["Growl"], foe_item="Cheri Berry", lead="rough_skin"
+    )
     s = s._replace(stats=s.stats.at[1, 0, _SPE].set(1))
     acts = _acts(names, s, 0, "Bug Bite", "Growl")
     out = assert_matches_reference(tables, s, acts, _draws(0, 2))
@@ -527,7 +565,7 @@ def test_a_pluck_flag_left_set_eats_the_attackers_starf_twice(tables, names):
 def test_a_battle_start_berry_takes_entry_zero_and_a_recycled_one_the_next(tables, names):
     """A lead's battle-start Starf Berry waits open for the turn's first draw (F-10: Sp. Atk, 3);
     its Recycle then eats it again from queue entry 2 (Attack, 0), G-27."""
-    s = _starf_fight(names, tables, ["Recycle"], ["Tackle"])
+    s = _starf_fight(names, tables, ["Recycle"], ["Tackle"], lead="pinch")
     started = battle_start(tables, s)
     assert int(started.starf_open[0]) == 1
     out = assert_matches_reference(
@@ -552,16 +590,25 @@ def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
     rec = laws(_starf_fight(names, tables, ["Recycle"], ["Tackle"]), "Recycle", "Tackle")
     assert rec.relevant.starf[0].tolist() == [True, False, True, False]
     assert _starf(rec, 0, 2)[2] == STARF_DRAWS
-    roar = _starf_fight(names, tables, ["Tackle"], ["Roar"], bench=True, foe_level=60)
+    roar = _starf_fight(
+        names, tables, ["Tackle"], ["Roar"], bench=True, foe_level=60, lead="rough_skin"
+    )
     roar_laws = laws(roar, "Tackle", "Roar")
     assert roar_laws.relevant.starf[0].tolist() == [True, True, True, False]
     assert _starf(roar_laws, 0, 2) == (list(range(5)), [1] * 5, 5)
     bite = _starf_fight(
-        names, tables, ["Bug Bite"], ["Roar"], foe_item="Starf Berry", bench=True, foe_level=60
+        names,
+        tables,
+        ["Bug Bite"],
+        ["Roar"],
+        foe_item="Starf Berry",
+        bench=True,
+        foe_level=60,
+        lead="rough_skin",
     )
     assert laws(bite, "Bug Bite", "Roar").relevant.starf[0].tolist() == [True] * 4
-    # Without the Roar: the Bug Bite draw and the own berry, two eats; the Pluck flag's second
-    # own eat never meets a plucked Starf Berry's draw (the flag is cleared or neither draws).
+    # Without the Roar: the faster foe's Tackle puts the Abra at its pinch and its own berry is
+    # eaten at that action's item checks (entry 0), then Bug Bite's draw (entry 2): two eats.
     bite = _starf_fight(names, tables, ["Bug Bite"], ["Tackle"], foe_item="Starf Berry")
     assert laws(bite, "Bug Bite", "Tackle").relevant.starf[0].tolist() == [True, False, True, False]
 
@@ -573,6 +620,7 @@ def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
         ("Bug Bite", "Grip Claw", False),
         ("Pluck", "Micle Berry", False),
         ("Pluck", "Leppa Berry", False),
+        ("Bug Bite", "Leppa Berry", False),
         ("Bug Bite", "Occa Berry", True),
         ("Pluck", "Razz Berry", True),
         ("Bug Bite", "Cheri Berry", True),
@@ -582,15 +630,19 @@ def test_the_pluck_flags_second_starf_eat_needs_a_berry_that_can_keep_it(
     tables, names, move, foe_item, second
 ):
     """G-S6: ``starf[0, 2]`` through the Pluck flag (``_starf_reads``' ``twice``) only where the
-    foe's item can leave SELF_TURN_FLAG_PLUCK_BERRY set, the plucker at its pinch. Grip Claw is
+    foe's item can leave SELF_TURN_FLAG_PLUCK_BERRY set. The plucker acts first and the foe's
+    Rough Skin puts it at its pinch after the pluck (``lead="rough_skin"``). Grip Claw is
     no berry: no flag (``result`` FALSE, battle_lib.c:5832-5835, :5846-5848). Micle's
     PLUCK_EFFECT_TEMP_ACC_UP (:5827-5830, subscript_held_item_temp_acc_up.s:12) and Leppa's
-    PLUCK_EFFECT_PP_RESTORE (:5609-5633) always set ``nextSeq``, whose subscript's PLUCK_CHECK
+    PLUCK_EFFECT_PP_RESTORE (:5609-5633: PP back to the move with the largest gap, and
+    ``nextSeq`` subscript_held_item_pp_restore with no condition, for Pluck and Bug Bite alike)
+    always set ``nextSeq``, whose subscript's PLUCK_CHECK (subscript_held_item_pp_restore.s:11)
     clears it. Occa (a resist berry) and Razz are PLUCK_EFFECT_NONE berries (Item_IsBerry, :5833),
     Cheri cures no paralysis on the unparalysed plucker (:5569-5575): ``nextSeq`` 0, kept."""
     from nuzline.engine.enumerate import outcome_laws
 
-    s = _starf_fight(names, tables, [move], ["Tackle"], foe_item=foe_item)
+    s = _starf_fight(names, tables, [move], ["Tackle"], foe_item=foe_item, lead="rough_skin")
+    s = s._replace(stats=s.stats.at[1, 0, _SPE].set(1))  # the plucker acts first
     acts = jnp.asarray(_acts(names, s, 0, move, "Tackle"))
     laws = jax.tree.map(np.asarray, outcome_laws(tables, s, acts))
     assert bool(laws.relevant.starf[0, 2]) is second
@@ -628,10 +680,7 @@ def test_the_pluck_reads_a_berry_the_foe_recycles_first(tables, names, own_starf
     from nuzline.engine.enumerate import outcome_laws
 
     if own_starf:
-        s = _starf_fight(names, tables, ["Bug Bite"], ["Recycle"], foe_level=60)
-        top = int(s.max_hp[0, 0])
-        s = s.replace_hp(0, 0, top // 4 + top // 8)  # Rough Skin's max/8 lands on max/4
-        s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.ROUGH_SKIN))
+        s = _starf_fight(names, tables, ["Bug Bite"], ["Recycle"], foe_level=60, lead="rough_skin")
         recycled, cell = "Occa Berry", 2
     else:
         s = make_state(
@@ -690,8 +739,7 @@ def test_a_flung_starf_its_own_and_its_recycle_are_three_eats(tables, names, min
     consumed cell is read."""
     from nuzline.engine.enumerate import outcome_laws
 
-    s = _starf_fight(names, tables, [mine], ["Fling"], foe_item="Starf Berry")
-    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4 + 1)  # reachable: above the pinch at start
+    s = _starf_fight(names, tables, [mine], ["Fling"], foe_item="Starf Berry")  # lead="hit"
     acts = jnp.asarray(_acts(names, s, 0, mine, "Fling"))
     relevant = np.asarray(outcome_laws(tables, s, acts).relevant.starf[0]).tolist()
     consumed = _consumed_starf(tables, s, acts)
