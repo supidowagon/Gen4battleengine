@@ -27,9 +27,10 @@ Refused (``UnsupportedAi`` on concrete inputs, ``REFUSED_SLOT`` traced): stage 2
 with the first candidate's slot 0 empty or of power 1. That slot is skipped but the
 comparison after it still runs (battle_lib.c:8080), on the ``score`` left over from stage
 1, which this module does not track. Wonder Guard's ``MOVE_STATUS_IMMUNE`` bit zeroes a stage-2
-score (``switching.wonder_guard_bit``, ruling G-23). The type-chart modifiers (Levitate,
-Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
-Ball; Hidden Power, Natural Gift, Judgment and Weather Ball take each
+score (``switching.wonder_guard_bit``, ruling G-23). Levitate, Scrappy (stage 1 through the
+candidate's and the player's abilities, ``calc_effectiveness_flags``), Filter and Solid Rock
+(stage 2, ``apply_type_chart``) are read since H-6. The other type-chart modifiers (Normalize,
+Adaptability, Tinted Lens, Expert Belt; Hidden Power, Natural Gift, Judgment and Weather Ball take each
 candidate's ``Move_CalcVariableType``, ``switching.party_move_types``, B13-35; a candidate's
 Weather Ball where that case assigns no type is refused here
 (``damage.ai_weather_ball_typed``); the player's Foresight, Ingrain, Miracle Eye and
@@ -46,12 +47,13 @@ import jax.numpy as jnp
 
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.ai.switching import (
-    MAGNET_RISE,
+    IMMUNE_CHART,
     SUPER_EFFECTIVE,
     apply_type_chart,
     calc_effectiveness_flags,
-    defender_chart_flags,
+    chart_flags,
     party_move_types,
+    seen_ability,
     type_chart_flags,
     wonder_guard_bit,
 )
@@ -61,6 +63,7 @@ from nuzline.engine.damage import (
     AI_WEATHER_BALL,
     ai_weather_ball_typed,
     calc_move_damage,
+    decomp_abilities,
     iron_ball,
 )
 from nuzline.engine.state import MOVES, SLOTS, BattleState
@@ -91,26 +94,21 @@ def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mu
     ``ApplyTypeMultiplier`` (:7547); the ``MOVE_STATUS_IMMUNE`` check (:8070) adds Wonder
     Guard's bit (``wonder_guard_bit``, the fainted battler's Mold Breaker against ``D``'s Wonder
     Guard; ruling G-23) and Magnet Rise's (``MAGNET_RISE``; the walk is skipped, so only STAB
-    is left in the value, G-66) and the refused Levitate. ``CalcMoveDamage`` takes type 0, the
+    is left in the value, G-66) and Levitate's (``LEVITATED``). ``CalcMoveDamage`` takes type 0, the
     table's (:8058);
     the chart takes ``move_type``, the candidate's ``Move_CalcVariableType`` (:8051)."""
     score = calc_move_damage(tables, state, 1, move, power_mul) & _U8
     score = apply_type_chart(tables, state, 1, move, score, move_type) & _U8
-    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, 0)
     d_types = state.types[0, state.active[0]]
     flags = type_chart_flags(
         tables,
         move,
         d_types,
         fcm.gravity_count(state),
-        identified,
-        move_type,
-        grounded,
-        roosting,
-        magnet,
-        eyed,
+        move_type=move_type,
+        **chart_flags(tables, state, 1, 0)._asdict(),
     )
-    immune = wonder_guard_bit(tables, state, 1, 0, move, flags) | ((flags & MAGNET_RISE) != 0)
+    immune = wonder_guard_bit(tables, state, 1, 0, move, flags) | ((flags & IMMUNE_CHART) != 0)
     return jnp.where(immune, 0, score)
 
 
@@ -130,11 +128,15 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
     types = party_move_types(tables, state)  # [SLOTS, MOVES]
     # Battler_HeldItemEffect(defender) (battle_lib.c:8006): the player's Iron Ball (G-56).
     d_iron = iron_ball(tables, state, 0)
+    # battle_lib.c:8002-8006: attacker the candidate's raw MON_DATA_ABILITY, defender
+    # Battler_Ability(defender) (H-6: Scrappy, Levitate).
+    abilities = jnp.repeat(decomp_abilities(tables, state)[1], MOVES)
+    d_seen = seen_ability(tables, state, 0)
     flags = jax.vmap(
-        lambda m, k: calc_effectiveness_flags(
-            tables, m, d_types, fcm.gravity_count(state), k, d_iron
+        lambda m, k, ab: calc_effectiveness_flags(
+            tables, m, d_types, fcm.gravity_count(state), k, d_iron, ab, d_seen
         )
-    )(moves.reshape(-1), types.reshape(-1)).reshape(SLOTS, MOVES)
+    )(moves.reshape(-1), types.reshape(-1), abilities).reshape(SLOTS, MOVES)
     super_effective = jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0), axis=1)
     eligible = candidate & super_effective & (score_1 > 0)
     pick_1 = jnp.argmax(jnp.where(eligible, score_1, -1)).astype(_I32)

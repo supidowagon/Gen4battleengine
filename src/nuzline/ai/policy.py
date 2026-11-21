@@ -4522,12 +4522,13 @@ def _flag_scripts(layout: AiLayout) -> tuple:
 
 # --- Refusals ----------------------------------------------------------------------
 
-_ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
-# Wonder Guard is modelled since the E1 Gardenia batch (switching.wonder_guard_bit, G-23).
-_DEFENDER_ABILITIES = ("Levitate", "Filter", "Solid Rock")
+_ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Tinted Lens")
+# Wonder Guard is modelled since the E1 Gardenia batch (switching.wonder_guard_bit, G-23);
+# Levitate, Filter and Solid Rock since H-6 (switching.chart_flags, apply_type_chart): no
+# player ability is refused for the scoring now beyond switching's (Normalize).
 # Ingrain and Roost are read since E1 prep batch P2, Magnet Rise since the E1 trial batch
-# (switching.defender_chart_flags).
-# Miracle Eye since E3-B2-10 (``defender_chart_flags``): no move is refused for its state now.
+# (switching.chart_flags).
+# Miracle Eye since E3-B2-10 (``chart_flags``): no move is refused for its state now.
 _STATE_MOVE_IDS: dict[str, int] = {}
 
 
@@ -4545,12 +4546,6 @@ def player_ability_refusal(ability: int) -> str | None:
     """Why the AI refuses a fight whose player Pokemon has ``ability`` (decomp id), or None."""
     if ability in switching.PLAYER_ABILITY_REFUSALS:
         return f"AI switching: {switching.PLAYER_ABILITY_REFUSALS[ability]}"
-    for name in _DEFENDER_ABILITIES:
-        if ability == _ABILITY[name]:
-            return (
-                f"AI scoring: ability {name} changes IfMoveEffectivenessEquals "
-                "and is not implemented"
-            )
     return None
 
 
@@ -4614,16 +4609,16 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         sites = present[1] & (jax.vmap(script_roll_count)(moves[1]) > MAX_SCRIPT_ROLLS)
     # Raw over every party slot: a refusal of what any Pokemon holds (trainer_ai.c:1205).
     ability = decomp_abilities(tables, state)
-    side_abilities = (_DEFENDER_ABILITIES, _ATTACKER_ABILITIES)
+    # Only the AI side's (side 1) attacker abilities remain refused here (H-6).
     ability_bad = jnp.stack(
         [
-            jnp.isin(ability[side], jnp.array([_ABILITY[n] for n in names], _I32))
-            for side, names in enumerate(side_abilities)
+            jnp.zeros_like(present[0]),
+            jnp.isin(ability[1], jnp.array([_ABILITY[n] for n in _ATTACKER_ABILITIES], _I32)),
         ]
     )
     ability_bad = present & ability_bad
     # The AI side's Expert Belt (its damage factor is not transcribed); the player's Iron Ball is
-    # modelled since E1 Batch D (switching.defender_chart_flags, G-56).
+    # modelled since E1 Batch D (switching.chart_flags, G-56).
     items = state.item.astype(_I32)
     item_bad = present & (jnp.arange(2)[:, None] == 1) & (items == c.ITEM_EXPERT_BELT)
     state_ids = jnp.array(list(_STATE_MOVE_IDS.values()), _I32)

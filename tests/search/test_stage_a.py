@@ -164,10 +164,10 @@ def test_stats_are_counts_over_the_shared_playouts(tables, names):
 @pytest.mark.slow
 @pytest.mark.fullset
 def test_refused_playouts_are_refused_loudly(tables, names):
-    # Levitate on the player's lead is refused by the AI: the ranking must not count
+    # Normalize on the player's lead is refused by the AI: the ranking must not count
     # those playouts as losses.
-    s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
-    with pytest.raises(UnsupportedAi, match=r"(?s)refused.*Levitate"):
+    s = roark_state(tables, names, player_species="Skitty", player_ability="Normalize")
+    with pytest.raises(UnsupportedAi, match=r"(?s)refused.*Normalize"):
         rank_actions(tables, names, s, n=8, key=jax.random.PRNGKey(5))
 
 

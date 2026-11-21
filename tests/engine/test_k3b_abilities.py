@@ -264,12 +264,13 @@ def test_tables_map_the_abilities_in_both_games(tables, names, kaizo_tables, kai
 @pytest.mark.fullset
 def test_ai_still_refuses_what_it_does_not_score(tables, names):
     # K3c: IfMoveEffectivenessEquals and the AI's damage (TrainerAI_CalcDamage) run
-    # ApplyTypeChart with the AI as attacker, so the player's Solid Rock and the AI's
-    # Adaptability change them and stay refused; the AI never computes damage against its
-    # own Pokemon or by the player's, so the AI's Solid Rock and the player's Adaptability
-    # need nothing, and its transcribed scripts read the other three by decomp id.
-    assert player_ability_refusal(names.ability("Solid Rock")) is not None
-    for name in ("Rough Skin", "Flame Body", "Limber", "Adaptability"):
+    # ApplyTypeChart with the AI as attacker, so the player's Normalize and the AI's
+    # Adaptability change them and stay refused (the player's Solid Rock is read since H-6); the
+    # AI never computes damage against its own Pokemon or by the player's, so the AI's Solid
+    # Rock and the player's Adaptability need nothing, and its transcribed scripts read the
+    # other three by decomp id.
+    assert player_ability_refusal(names.ability("Normalize")) is not None
+    for name in ("Rough Skin", "Flame Body", "Limber", "Adaptability", "Solid Rock"):
         assert player_ability_refusal(names.ability(name)) is None
     s = roark_state(tables, names)
     geodude = int(s.species[1, 0])

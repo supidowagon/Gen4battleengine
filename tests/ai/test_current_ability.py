@@ -15,6 +15,7 @@ from nuzline.ai import policy, switching
 from nuzline.engine.state import make_state
 
 LEVITATE, MOLD_BREAKER = c.ABILITY_IDS["Levitate"], c.ABILITY_IDS["Mold Breaker"]
+NORMALIZE = c.ABILITY_IDS["Normalize"]
 
 
 def _changed(monkeypatch, side: int, ability: int):
@@ -57,21 +58,21 @@ def test_defender_reads_its_current_ability_when_known(monkeypatch, kaizo_tables
 
 @pytest.mark.fullset
 def test_refusals_read_the_current_ability(monkeypatch, kaizo_tables, kaizo_names, state):
-    """A player's Pokemon whose current ability is a refused one (Levitate, policy
-    _DEFENDER_ABILITIES) is refused although its species has none."""
+    """A player's Pokemon whose current ability is a refused one (Normalize, switching
+    ``_ANY_SIDE_ABILITIES``) is refused although its species has none."""
     t, n = kaizo_tables, kaizo_names
-    assert not any("Levitate" in r for r in policy.ai_refusals(t, state, n))
+    assert not any("Normalize" in r for r in policy.ai_refusals(t, state, n))
     import jax
 
-    _changed(monkeypatch, 0, LEVITATE)
+    _changed(monkeypatch, 0, NORMALIZE)
     with jax.disable_jit():  # the patched function, not a program compiled before the patch
-        assert any("Levitate" in r for r in policy.ai_refusals(t, state, n))
+        assert any("Normalize" in r for r in policy.ai_refusals(t, state, n))
 
 
 @pytest.mark.fullset
 def test_switching_reads_the_current_ability(monkeypatch, kaizo_tables, state):
     """The switch logic refuses on the current ability too (``switching._layout`` and its
-    message, ``_refusals``): a player's Pokemon whose current ability is Levitate
+    message, ``_refusals``): a player's Pokemon whose current ability is Normalize
     (``_ANY_SIDE_ABILITIES``) is refused, though its species has none (batch 6 review M4)."""
     import jax
 
@@ -79,8 +80,8 @@ def test_switching_reads_the_current_ability(monkeypatch, kaizo_tables, state):
     assert not switching._refusals(
         switching._layout(kaizo_tables, state, sites), state, kaizo_tables, sites
     )
-    _changed(monkeypatch, 0, LEVITATE)
+    _changed(monkeypatch, 0, NORMALIZE)
     with jax.disable_jit():
         lay = switching._layout(kaizo_tables, state, sites)
         lines = switching._refusals(lay, state, kaizo_tables, sites)
-    assert any("Levitate" in line for line in lines), lines
+    assert any("Normalize" in line for line in lines), lines

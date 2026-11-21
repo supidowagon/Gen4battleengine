@@ -62,11 +62,10 @@ from nuzline.ai.outcome import (
     line_sites,
 )
 from nuzline.ai.switching import (
-    INEFFECTIVE,
-    MAGNET_RISE,
+    IMMUNE_CHART,
     SUPER_EFFECTIVE,
     apply_type_chart,
-    defender_chart_flags,
+    chart_flags,
     type_chart_flags,
     wonder_guard_bit,
 )
@@ -1627,19 +1626,15 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
     moves = state.moves[_row(state, a), state.active[a]].astype(_I32)
     d_types = state.types[_row(state, d), state.active[d]]
-    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, d)
+    cf = chart_flags(tables, state, a, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
             m,
             d_types,
             fcm.gravity_count(state),
-            identified,
-            ai_move_type(tables, state, a, m),
-            grounded,
-            roosting,
-            magnet,
-            eyed,
+            move_type=ai_move_type(tables, state, a, m),
+            **cf._asdict(),
         )
     )(moves)
     return _jump(ctx, jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0)))
@@ -1769,11 +1764,12 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     through ``BattleSystem_ApplyTypeChart`` (STAB x15/10, then each chart entry with
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit (``MOVE_STATUS_IMMUNE``: ``INEFFECTIVE`` or Wonder
-    Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability,
-    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter and Solid Rock change
-    this value and are refused (``policy.ai_refusals``); the player's Foresight, Ingrain /
-    Iron Ball, roosting, Magnet Rise and Miracle Eye flags are read
-    (``switching.defender_chart_flags``)."""
+    Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability, Tinted
+    Lens and Expert Belt change this value and are refused (``policy.ai_refusals``); the
+    player's Foresight, Ingrain / Iron Ball, roosting, Magnet Rise, Miracle Eye and Levitate
+    flags, the AI's Scrappy and the player's Filter or Solid Rock (x3/4 of a super-effective
+    move, battle_lib.c:2657-2660) are read (``switching.chart_flags``, ``apply_type_chart``;
+    H-6)."""
     move = jnp.asarray(move, _I32)
     d_types = state.types[0, state.active[0]]
     value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
@@ -1788,23 +1784,16 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, 0)
     flags = type_chart_flags(
         tables,
         move,
         d_types,
         fcm.gravity_count(state),
-        identified,
-        ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
-        grounded,
-        roosting,
-        magnet,
-        eyed,
+        move_type=ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
+        **chart_flags(tables, state, 1, 0)._asdict(),
     )
-    # MOVE_STATUS_IMMUNE (moves.h:87): INEFFECTIVE, Wonder Guard's or Magnet Rise's bit.
-    immune = ((flags & (INEFFECTIVE | MAGNET_RISE)) != 0) | wonder_guard_bit(
-        tables, state, 1, 0, move, flags
-    )
+    # MOVE_STATUS_IMMUNE (moves.h:87): INEFFECTIVE, LEVITATED, Magnet Rise's or Wonder Guard's bit.
+    immune = ((flags & IMMUNE_CHART) != 0) | wonder_guard_bit(tables, state, 1, 0, move, flags)
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 

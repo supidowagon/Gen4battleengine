@@ -106,7 +106,7 @@ _SOUND_MOVES = {
 # model; none is left since Miracle Eye's bit is read (E3-B2-10), so ``_MOVES``,
 # ``PLAYER_MOVE_REFUSALS`` and ``policy._STATE_MOVE_IDS`` are empty and name no id.
 # Roost and Ingrain are read since E1 prep batch P2
-# (switching.defender_chart_flags); Perish Song (step 3, AI_PerishSongKO, G-64) and Magnet
+# (switching.chart_flags); Perish Song (step 3, AI_PerishSongKO, G-64) and Magnet
 # Rise (G-66) since the E1 trial batch; Weather Ball, Natural Gift and Judgment are typed
 # since E2 batch 13 (B13-35: switching.party_move_types; Weather Ball refused only where its
 # case assigns no type).
@@ -121,7 +121,7 @@ _SWITCH_MOVES = {
     "Judgment": 449,
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
-_ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}
+_ANY_SIDE_ABILITIES = {"Normalize": 96}
 # ai/commands.py MOVE_IDS: Basic_Main's OHKO checks (script.s:57-58), Expert_Pursuit's
 # U-turn (:3730), Expert_StealthRock's Roar and Whirlwind (:6276-6277), Expert_Curse's Gyro
 # Ball and Trick Room (:3472-3473, read from K3c Task 6), and the Basic_CheckSoundproof list
@@ -308,6 +308,10 @@ CONSTANTS: tuple[Constant, ...] = (
         _E,
         {
             **_ANY_SIDE_ABILITIES,
+            "Levitate": 26,
+            "Scrappy": 113,
+            "Filter": 111,
+            "Solid Rock": 116,
             "Wonder Guard": 25,
             "Mold Breaker": 104,
             "Shadow Tag": 23,

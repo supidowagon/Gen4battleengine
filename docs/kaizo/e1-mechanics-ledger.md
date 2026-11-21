@@ -2618,6 +2618,44 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   in both engines). Snapshot (expected): no output divergence (tests/strategies.py draws no Cherrim, Arceus or Castform;
   its Giratina holds the Orb at form 0; every block is idle, the Transform pre-run included); the one new field is
   `form_num` (`--allow-new form_num`), set from the active slot's form by the generator.
+- H-6 The trainer AI's reads of Filter (111), Solid Rock (116), Levitate (26) and Scrappy (113) (rule sheets
+  ai-filter.md, ai-solid-rock.md, ai-levitate.md, ai-scrappy.md). AI only: the battle's own handling of the four was
+  built in `damage` earlier (`_finish`, `levitated`, `identified`); the engine, the reference and the tables are
+  untouched. Decomp (battle_lib.c): `BattleSystem_ApplyTypeChart` :2560-2679 -- Levitate through
+  `Battler_IgnorableAbility` + Ground + no Iron Ball sets MOVE_STATUS_LEVITATED (:2600-2603, moves.h:68, part of
+  MOVE_STATUS_IMMUNE :87, not of INEFFECTIVE) and skips the walk like Magnet Rise (:2604-2609); Scrappy of the
+  attacker (`Battler_Ability`, no Mold Breaker gate, Gastric Juice makes it none) or Foresight breaks the walk at the
+  0xFE separator (:2611-2616); a super-effective move with power against Filter or Solid Rock
+  (`Battler_IgnorableAbility`, :2657-2659) becomes `BattleSystem_Divide(damage * 3, 4)` (:2660, Divide :3599-3618),
+  no flag change, before Expert Belt and Tinted Lens. `BattleSystem_CalcEffectiveness` :2681-2741 -- Levitate in the
+  defender argument, attacker argument not Mold Breaker, Ground, no Gravity, defender item effect not Iron Ball
+  leaves INEFFECTIVE alone (:2698-2703); the attacker argument Scrappy breaks the walk (:2708-2714, no Foresight
+  test). The attacker/defender arguments are the callers': trainer_ai.c:3769-3777 (pass 1: the
+  player's `Battler_Ability(moveHitBattler)` against the bench member's raw MON_DATA_ABILITY), :3786-3794 (pass 2
+  and the Wonder Guard step: the member's raw ability against `Battler_Ability(moveHitBattler)`) and
+  battle_lib.c:8002-8010 (post-KO stage 1, same shape). `Battler_Ability` reads Levitate as none under Gravity,
+  Ingrain and Gastric Juice (:3088-3104). Built (src/nuzline/ai): `switching.chart_flags` (a `ChartFlags` tuple
+  replacing `defender_chart_flags`: adds the attacker's Scrappy to `identified` and `levitated`),
+  `chart_multipliers` / `_chart_flags` / `type_chart_flags` take `levitated` (LEVITATED bit, walk skipped),
+  `apply_type_chart` applies Filter / Solid Rock after the walk, `calc_effectiveness_flags` takes the two ability
+  arguments (`atk_ability`, `def_ability`), `seen_ability` is `Battler_Ability` of the player's active in decomp ids,
+  `IMMUNE_CHART` = INEFFECTIVE | LEVITATED | MAGNET_RISE. Callers: `effectiveness_class` (ai.c:1311-1346, IMMUNE
+  class 0; the Filter value 60 / 90 / 180 hits no class, x4 non-STAB 160 -> 120 -> DOUBLE), `if_has_super_effective_move`
+  (ai.c:2176-2184), `_layout` (the keep draws, AI_CannotDamageWonderGuard, pass 1 and 2 with the abilities above),
+  `replacement._stage_2_score` (:8055-8075, IMMUNE_CHART) and `_post_ko` stage 1. `AI_OnlyIneffectiveMoves` still
+  tests INEFFECTIVE only (ai.c:3397), so a Ground move into Levitate counts as damaging, and a Normal / Fighting
+  move by a Scrappy attacker into a Ghost no longer reads INEFFECTIVE. Refusals lifted: switching
+  `_ANY_SIDE_ABILITIES` is Normalize only (game_constants.py `_ANY_SIDE_ABILITIES`), policy `_DEFENDER_ABILITIES`
+  is gone and `_ATTACKER_ABILITIES` is Normalize, Adaptability, Tinted Lens; the AI side's Expert Belt stays
+  refused. Weather Ball's AI type keeps its refusal (manager ruling). Departures from the sheets: none against the
+  decomp. One consequence the sheet only raised as an open question is taken: pass 1's Wonder Guard step reads the
+  player's `Battler_Ability` for Mold Breaker (trainer_ai.c:3772) instead of the raw ability, so a Gastric-Juiced
+  Mold Breaker no longer hides a Wonder Guard bench member. Tests: tests/ai/test_type_chart_abilities.py; the tests
+  that used Levitate, Scrappy, Filter or Solid Rock as the refused example now use Normalize
+  (test_current_ability, test_policy, test_switching, test_kaizo_outcome, test_k3b_abilities, test_batch3_review,
+  test_pool, tests/search). Expected snapshot divergence: none (the snapshot generator draws no state the AI read
+  differently before: every fight it covers was refused or has none of the four abilities in the chart reads; the
+  Gastric Juice + Mold Breaker + Wonder Guard bench case is outside it). No new field: `--allow-new` is empty.
 - MF-1 (claude/e1-main-fix 65aebee5) `order.compare_speed` takes BattleSystem_CompareBattlerSpeed's dead-battler
   short-circuit (battle_lib.c:1204-1211): a battler with no HP against one with HP is SLOWER, before Quick Claw,
   Lagging Tail, Trick Room and speed. The reference had it (`_player_second`), and so had `hooks.order_swaps`

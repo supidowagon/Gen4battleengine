@@ -108,8 +108,8 @@ def test_ladder_is_monotone(tables, names):
 @pytest.mark.fullset
 def test_refused_playout_raises(tables, names):
     # test_playout.py::test_refused_playout_cannot_be_counted_as_a_loss's state: the AI's
-    # Levitate refusal stops every playout on its first turn.
-    s = _state(tables, names, player_species="Gastly", player_ability="Levitate")
+    # Normalize refusal stops every playout on its first turn.
+    s = _state(tables, names, player_species="Skitty", player_ability="Normalize")
     with pytest.raises(UnsupportedAi, match="line playouts refused"):
         evaluate_lines(tables, s, [empty_line()], N, KEY, MAX_TURNS)
     # Every playout refused: nothing is left to count, so "exclude" raises too.
