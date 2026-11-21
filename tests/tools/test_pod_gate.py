@@ -366,10 +366,17 @@ def test_setup_writes_gate_env_without_the_beacon_codes(tmp_path):
     (d / "meta.env").write_text("COMMIT=x\nGATE_VERSION=2\nPOD_SCRIPTS=abc\nPOD_WEIGHTS=def\nWATCH_F=secretf\nWATCH_D=secretd\n",
                                 encoding="utf-8", newline="\n")
     # no cgroup memory file: setup stops right after writing gate.env
-    r = subprocess.run([BASH, "-c", f"CGROOT='{(tmp_path / 'nocg').as_posix()}' bash '{(d / 'bin/setup.sh').as_posix()}'"],
+    knobs = "GATE_GB=176 MAXP=18 SPACING=4 RUNMAXP=6 WARMUP=none NUZLINE_HYPOTHESIS_PROFILE=explore DUR='40 x'"
+    r = subprocess.run([BASH, "-c", f"{knobs} CGROOT='{(tmp_path / 'nocg').as_posix()}' bash '{(d / 'bin/setup.sh').as_posix()}'"],
                        check=False, capture_output=True, text=True)
     assert r.returncode != 0
     assert (d / "gate.env").read_text(encoding="utf-8") == "GATE_VERSION=2\nPOD_SCRIPTS=abc\nPOD_WEIGHTS=def\n"
+    env = (d / "run.env").read_text(encoding="utf-8")
+    assert "secret" not in env and "WATCH" not in env
+    show = (f". '{(d / 'run.env').as_posix()}'; echo \"$GATE_GB|$MAXP|$SPACING|$RUNMAXP|$WARMUP|"
+            f"$NUZLINE_HYPOTHESIS_PROFILE|$DUR|${{KILL_GB:-unset}}\"")
+    got = subprocess.run([BASH, "-c", show], check=True, capture_output=True, text=True)
+    assert got.stdout.strip() == "176|18|4|6|none|explore|40 x|unset"
     assert "ERROR: no cgroup memory file" in r.stdout
     assert "SETUP_FAILED" in r.stdout
     assert "secret" not in r.stdout + r.stderr
@@ -406,3 +413,57 @@ def test_runner_kills_a_unit_over_unit_max_s_with_rc_96(tmp_path):
     assert (o / "timedout.txt").read_text(encoding="utf-8").split() == ["u_001"]
     assert (o / "DONE").is_file()
     assert "TIMEOUT u_001: over UNIT_MAX_S 2 s, killed: rc 96" in log.read_text(encoding="utf-8")
+
+
+
+STOP = GATE.parent / "stop.sh"
+
+
+def _alive(pid: int) -> bool:
+    r = subprocess.run([BASH, "-c", f"ps -o stat= -p {pid}"], check=False, capture_output=True, text=True)
+    return bool(r.stdout.strip()) and not r.stdout.strip().startswith("Z")
+
+
+@pytest.mark.skipif(not _linux_tools(), reason="needs setsid, /proc and a procps ps (the pod)")
+def test_stop_kills_setup_notify_units_and_the_orphaned_memory_loop_but_nothing_else(tmp_path):
+    root = tmp_path / "work"
+    d = root / "run-s"
+    (d / "out" / "run").mkdir(parents=True)
+    (root / ".claims").mkdir()
+    (root / ".claims" / "run-s.u_002").write_text("1 9 1\n", encoding="utf-8", newline="\n")
+    (root / ".claims" / "run-sx.u_001").write_text("1 9 1\n", encoding="utf-8", newline="\n")
+    t = tmp_path
+    q = "> /dev/null 2>&1 < /dev/null"
+    launch = (f"cd '{t}'\n"
+              f"bash -c 'sleep 300 & wait' {q} & echo $! > '{d}/setup.pid'\n"      # setup.sh with a child
+              f"sleep 300 {q} & echo $! > '{d}/notify.pid'\n"                       # notify.sh, relative path
+              f"setsid sleep 300 {q} & echo $! > '{d}/out/run/u_001'\n"             # a unit's group
+              f"(cd '{d}/out' && exec sleep 300) {q} & echo $! > '{t}/memloop.pid'\n"  # the runner's loop, orphaned
+              f"sleep 300 {q} & echo $! > '{t}/bystander.pid'\n")
+    subprocess.run([BASH, "-c", launch], check=True, timeout=30)
+    pid = {n: int((d / f"{n}.pid").read_text()) for n in ("setup", "notify")}
+    pid["unit"] = int((d / "out/run/u_001").read_text())
+    pid["memloop"] = int((t / "memloop.pid").read_text())
+    child = subprocess.run([BASH, "-c", f"sleep 1; ps -eo pid=,ppid= | awk '$2 == {pid['setup']} {{print $1}}'"],
+                           check=True, capture_output=True, text=True).stdout.split()
+    assert child, "setup stand-in has no child"
+    pid["setup_child"] = int(child[0])
+    bystander = int((t / "bystander.pid").read_text())
+    try:
+        assert all(_alive(x) for x in pid.values())
+        r = subprocess.run([BASH, str(STOP), "run-s", str(root)], check=False, capture_output=True, text=True, timeout=60)
+        assert r.stdout.strip().splitlines()[-1] == "STOP_OK run-s", r.stdout
+        assert {n: _alive(x) for n, x in pid.items()} == {n: False for n in pid}
+        assert _alive(bystander)
+        assert (d / "STOPPED").is_file()
+        assert sorted(x.name for x in (root / ".claims").iterdir()) == ["run-sx.u_001"]
+    finally:
+        subprocess.run([BASH, "-c", f"kill -9 {bystander} {' '.join(map(str, pid.values()))} 2>/dev/null"], check=False)
+
+
+def test_stop_refuses_bad_names_and_missing_runs(tmp_path):
+    for name in ("", "_bin", "a/b", "A"):
+        r = subprocess.run([BASH, STOP.as_posix(), name, tmp_path.as_posix()], check=False, capture_output=True, text=True)
+        assert (r.returncode, r.stdout.startswith("STOP_REFUSED")) == (2, True), name
+    r = subprocess.run([BASH, STOP.as_posix(), "nope", tmp_path.as_posix()], check=False, capture_output=True, text=True)
+    assert (r.returncode, r.stdout.strip()) == (2, f"STOP_REFUSED: no folder {tmp_path.as_posix()}/nope")

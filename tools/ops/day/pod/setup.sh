@@ -12,11 +12,18 @@
 # files.txt lines: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]"; A = no -m filter;
 # <GB>G = a floor on the expected peak of every unit cut from that line. Each unit's expected peak
 # goes to out/<unit>.w: max(<GB>, bin/weights.py over bin/weights.txt); runner.sh gates on it.
+# Writes gate.env (GATE_VERSION, POD_SCRIPTS, POD_WEIGHTS for podcheck.sh) and run.env (the
+# knobs the exec-pod body's env set, for a runner restart) first.
 set -euxo pipefail
 export PATH="/root/.local/bin:/work/_bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 # meta.env holds the beacon codes: sourced with the trace off, so setup.log never shows them.
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; set +x; . ./meta.env; unset WATCH_F WATCH_D; set -x
 printf 'GATE_VERSION=%s\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\n' "${GATE_VERSION:-}" "${POD_SCRIPTS:-}" "${POD_WEIGHTS:-}" > "$D/gate.env"   # podcheck.sh reads it
+# run.env: every knob the exec-pod body's env set (RUN_ENV_NAMES; never the beacon codes, which
+# live in meta.env only), as "export NAME=<value>" lines, so a runner restart repeats them
+# (DAYBOX.md, Housekeeping, "Restart a runner"). A knob left unset is not written.
+RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_S RUNNER_LOCK CLAIM_S CLAIMS CLAIM_MAX_S UNIT_MAX_S WORK DUR COLLECTP WATCH_HOURS WARMUP WARMUP_S NUZLINE_TEST_COMPILE_CACHE NUZLINE_HYPOTHESIS_PROFILE NUZLINE_REQUIRE_NODE CGROOT"
+for n in $RUN_ENV_NAMES; do if [ -n "${!n+x}" ]; then printf 'export %s=%q\n' "$n" "${!n}"; fi; done > "$D/run.env"
 . "$D/bin/gate.sh"   # cgmem: container memory, cgroup v2 or v1
 MARK="${MARK:-not slow and not fullset}"   # pack.sh writes MARK into meta.env; this default is the same
 echo $$ > "$D/setup.pid"; SETUP_DONE=0
