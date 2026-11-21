@@ -29,7 +29,9 @@
 # Signals only process groups this runner started and that are alive; never PID 1.
 # Knobs (env of the exec-pod body that starts setup.sh): GATE_GB (default 88), MAXP (10),
 # RUNMAXP (MAXP), SPACING s between starts (4: the expected-peak reserve covers a unit's growth
-# after its start, which a longer spacing used to wait out), KILL_GB (118), DEFAULT_WEIGHT_GB (20),
+# after its start, which a longer spacing used to wait out), KILL_GB (118), DEFAULT_WEIGHT_GB (12: weight of a
+# unit without a .w file, a run packed before weights; those runs are mostly fast-tier chunks of
+# measured files and 12 GB is the 90th percentile of 7183 measured units),
 # IDLE_WAIT_S (300), RUNNER_LOCK (/work/.runner.lock), CLAIM_S (120), CLAIMS (/work/.claims),
 # WARMUP, WARMUP_S (900).
 # Warm-up: when queue.txt has a tests/engine unit, one pytest process over the node id WARMUP
@@ -42,7 +44,7 @@
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
 GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; RUNMAXP="${RUNMAXP:-$MAXP}"; SPACING="${SPACING:-4}"; KILL_GB="${KILL_GB:-118}"
-DEFW="${DEFAULT_WEIGHT_GB:-20}"; IDLE_WAIT_S="${IDLE_WAIT_S:-300}"; LOCK="${RUNNER_LOCK:-/work/.runner.lock}"
+NO_W_FILE_GB="${DEFAULT_WEIGHT_GB:-12}"; IDLE_WAIT_S="${IDLE_WAIT_S:-300}"; LOCK="${RUNNER_LOCK:-/work/.runner.lock}"
 CLAIMS="${CLAIMS:-/work/.claims}"; CLAIM_S="${CLAIM_S:-120}"; RUN=$(basename "$D")
 cd "$O"; mkdir -p run
 memgb() { echo $(( $(cat /sys/fs/cgroup/memory.current) / 1000000000 )); }

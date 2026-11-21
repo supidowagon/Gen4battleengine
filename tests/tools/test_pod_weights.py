@@ -25,8 +25,8 @@ TABLE = [
     ("tests/search/test_x.py::test_bigger", 30),  # a longer name is another test
     ("tests/search/test_x.py::test_small", 30),
     ("tests/search/test_y.py::test_a", 20),
-    ("tests/searcher/test_z.py::test_a", w.DEFAULT_GB),
-    ("tests/engine/test_q.py::test_a", w.DEFAULT_GB),
+    ("tests/searcher/test_z.py::test_a", w.UNMEASURED_FILE_GB),
+    ("tests/engine/test_q.py::test_a", w.UNMEASURED_FILE_GB),
 ])
 def test_longest_matching_entry_gives_the_weight(test_id, gb):
     assert w.id_weight(test_id, TABLE) == gb
@@ -38,7 +38,7 @@ def test_unit_weight_is_its_heaviest_id_and_a_line_weight_only_raises_it():
     assert w.unit_weight(ids, TABLE, 40) == 90
     assert w.unit_weight(ids, TABLE, 120) == 120
     assert w.unit_weight(["tests/engine/test_q.py::test_a"], TABLE, 40) == 40
-    assert w.unit_weight([], TABLE) == w.DEFAULT_GB
+    assert w.unit_weight([], TABLE) == w.UNMEASURED_FILE_GB
 
 
 LINES = {

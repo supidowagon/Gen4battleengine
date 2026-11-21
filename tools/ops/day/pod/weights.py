@@ -2,7 +2,7 @@
 
 weights.txt lines: "<entry> <GB> <cite...>"; "#" starts a comment. An entry matches a test id
 equal to it or starting with it plus "::", "[" or "/". An id's weight is the GB of its longest
-matching entry, else DEFAULT_GB; a unit's weight is the largest weight of its ids. A list
+matching entry, else UNMEASURED_FILE_GB; a unit's weight is the largest weight of its ids. A list
 line's weight (its "<GB>G" field) raises the weight of every unit cut from that line: such a
 unit weighs max(<GB>, its table weight); a line weight never lowers a measured peak.
 """
@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DEFAULT_GB = 20  # files never measured; every measured file has a weights.txt line (docs/process.md section 5, Chunking)
+# Ids of a file no run measured (every measured file has a weights.txt line): 20 GB, well above the
+# 90th percentile (12 GB) of 7183 measured units, since nothing is known of such a file.
+# Not runner.sh's DEFAULT_WEIGHT_GB, which is for units of runs packed before weights.
+UNMEASURED_FILE_GB = 20
 
 
 def load(path: Path) -> list[tuple[str, int]]:
@@ -39,11 +42,11 @@ def id_weight(test_id: str, table: list[tuple[str, int]]) -> int:
     for entry, gb in table:
         if _matches(entry, test_id) and (best is None or len(entry) > len(best[0])):
             best = (entry, gb)
-    return DEFAULT_GB if best is None else best[1]
+    return UNMEASURED_FILE_GB if best is None else best[1]
 
 
 def unit_weight(ids: list[str], table: list[tuple[str, int]], line_gb: int | None = None) -> int:
-    table_gb = max((id_weight(i, table) for i in ids), default=DEFAULT_GB)
+    table_gb = max((id_weight(i, table) for i in ids), default=UNMEASURED_FILE_GB)
     return table_gb if line_gb is None else max(line_gb, table_gb)
 
 

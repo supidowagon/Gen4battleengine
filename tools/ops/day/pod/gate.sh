@@ -1,8 +1,9 @@
 # POD SIDE, sourced by runner.sh: the start gate's arithmetic (tests/tools/test_pod_gate.py runs it
-# with a fake ps). Reads DEFW, MAXP, GATE_GB, KILL_GB, IDLE_WAIT_S, CLAIMS, CLAIM_S from the caller.
+# with a fake ps). Reads NO_W_FILE_GB, MAXP, GATE_GB, KILL_GB, IDLE_WAIT_S, CLAIMS, CLAIM_S from the caller.
 
-# wgb <file>: a unit's expected peak in GB from its .w file; DEFW when missing or not a number.
-wgb() { local w; w=$(cat "$1" 2>/dev/null); case "$w" in ''|*[!0-9]*) echo "$DEFW";; *) echo "$w";; esac; }
+# wgb <file>: a unit's expected peak in GB from its .w file; NO_W_FILE_GB (runner.sh's
+# DEFAULT_WEIGHT_GB, for units of runs packed before weights) when missing or not a number.
+wgb() { local w; w=$(cat "$1" 2>/dev/null); case "$w" in ''|*[!0-9]*) echo "$NO_W_FILE_GB";; *) echo "$w";; esac; }
 
 # podgate <run files>: "<live units> <reserve GB>" over the given run/<unit> files (each holds a
 # process group id; its weight is ../<unit>.w), from one ps snapshot. A unit is live while its group
@@ -12,7 +13,7 @@ podgate() {
   local f
   { for f in "$@"; do [ -f "$f" ] || continue
       echo "U $(cat "$f" 2>/dev/null) $(cat "${f%/run/*}/${f##*/}.w" 2>/dev/null)"; done
-    ps -eo pgid=,stat=,rss= | awk '{print "P", $1, $2, $3}'; } | awk -v d="$DEFW" '
+    ps -eo pgid=,stat=,rss= | awk '{print "P", $1, $2, $3}'; } | awk -v d="$NO_W_FILE_GB" '
     $1 == "P" { if ($3 !~ /^Z/) live[$2] = 1; rss[$2] += $4; next }
     $1 == "U" && $2 ~ /^[0-9]+$/ && $2 > 1 { n++; g[n] = $2; w[n] = ($3 ~ /^[0-9]+$/) ? $3 : d }
     END { for (i = 1; i <= n; i++) if (live[g[i]]) { c++; r = w[i] - rss[g[i]] * 1024 / 1e9; if (r > 0) t += r }

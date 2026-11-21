@@ -3,7 +3,7 @@
 # GB = 10^9 bytes, the unit of runner.sh's container memory: the measured max RSS (agg.txt
 # max_rss_MB, MiB) times 1.048576 / 1000, rounded up. An entry matches an id equal to it or
 # starting with it plus "::", "[" or "/"; the longest matching entry gives an id's weight, the
-# largest id weight is the unit's. Ids no entry matches weigh 20 (weights.py DEFAULT_GB): the
+# largest id weight is the unit's. Ids no entry matches weigh 20 (weights.py UNMEASURED_FILE_GB): the
 # generated part lists every file any run measured, so 20 applies only to files never measured.
 # A list line's own <GB>G field raises the units cut from it to at least <GB>.
 # Runs: _scratch/rent/out/<run>/results/agg.txt on the managing PC.

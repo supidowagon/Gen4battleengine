@@ -163,9 +163,11 @@ per day is the rate used for estimates.
   files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
   median 7 GB, 90th percentile 12 GB, 99th 24 GB, largest 92 GB. Every chunk has an expected peak: its heaviest id in
   `tools/ops/day/pod/weights.txt` (every file any run measured, at its largest chunk and
-  at least 4 GB, plus hand-kept per-test lines, each citing its run; 20 GB for a file never
-  measured), raised to the list line's `<GB>G` field when that is
-  larger. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`) plus
+  at least 4 GB, plus hand-kept per-test lines, each citing its run; `UNMEASURED_FILE_GB` 20 GB for a
+  file never measured), raised to the list line's `<GB>G` field when that is larger. A
+  live chunk of a run packed before weights (no `out/<unit>.w`) counts `DEFAULT_WEIGHT_GB`
+  12 GB: the 90th percentile of 7183 measured chunks, as those runs are mostly fast-tier
+  chunks of measured files. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`) plus
   the unreached expected peaks of every live chunk on the pod (all runs) plus its own
   expected peak stays under `GATE_GB`, and run at most `MAXP` chunks at once across all runs
   on the pod (Test pod above: 88 GB and 10, or 176 GB and 20). With no other live chunk on
