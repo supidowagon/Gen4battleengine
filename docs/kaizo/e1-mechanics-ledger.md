@@ -2626,7 +2626,7 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     (TryStealItem :5111; an Origin attacker holds the Orb, so :5120 fails it too), Fling effect_script_0233.s:6, Embargo
     subscript_embargo_start.s:9. Pluck / Bug Bite eat only a pluck-effect berry (BattleSystem_PluckBerry,
     battle_lib.c:5539-5543; TryPluck battle_script.c:8116-8131); every other RemoveItem takes the holder's own consumed
-    item; Sticky Barb's transfer and Recycle need an empty hand (battle_lib.c:5389, :7378; effect_script_0184.s:5). So
+    item; Sticky Barb's transfer and Recycle need an empty hand (battle_lib.c:5389, :7379; effect_script_0184.s:5). So
     the no-Orb branch of TriggerFormChange (battle_lib.c:6412-6418 -> subscript_giratina_form_change.s) is reachable
     only from the battle's start (the Origin without the Orb that coverage refuses, `coverage._check_form`), and
     `form_change_pending` has no missed early return before the Destiny Knot step. Both engines already model every
