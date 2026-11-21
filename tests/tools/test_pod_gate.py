@@ -35,7 +35,8 @@ def _runner_knobs() -> set[str]:
     text = (GATE.parent / "setup.sh").read_text(encoding="utf-8")
     line = next(x for x in text.splitlines() if x.startswith("RUN_ENV_NAMES="))
     return set(line.split("=", 1)[1].strip('"').split()) | {
-        "MARK", "NO_W_FILE_GB", "NOW", "CLAIM_PID", "WATCH_F", "WATCH_D", "PACK_OFF_MAIN_POD", "NUZLINE_REPO", "NUZLINE_SCRATCH"}
+        "MARK", "NO_W_FILE_GB", "NOW", "CLAIM_PID", "WATCH_F", "WATCH_D", "PACK_OFF_MAIN_POD", "NUZLINE_REPO", "NUZLINE_SCRATCH",
+        "GATE_VERSION", "POD_SCRIPTS", "POD_WEIGHTS", "RUNPODCTL"}
 
 
 def _clean_env() -> dict[str, str]:
@@ -370,13 +371,46 @@ def test_exec_body_script_writes_the_files_byte_for_byte(tmp_path):
     if "REFUSED: uncommitted changes" in r.stdout:
         pytest.skip("tools/ops/day/pod has uncommitted changes")
     cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"]
-    script = cmd[2].replace("W=/work/_podcheck;", f"W='{tmp_path.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
-    run = subprocess.run([BASH, "--posix", "-c", script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
-    assert run.returncode == 0, run.stderr
-    assert run.stdout.startswith("RAN /work ")
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["gate.sh", "podcheck.sh"]
-    for n in ("gate.sh", "podcheck.sh"):
-        assert (tmp_path / n).read_bytes() == _head(n)
+    for i, sh in enumerate(_posix_shells()):
+        w = tmp_path / str(i)
+        script = cmd[2].replace("W=/work/_podcheck;", f"W='{w.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
+        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
+        assert run.returncode == 0, (sh, run.stderr)
+        assert run.stdout.startswith("RAN /work "), sh
+        assert sorted(p.name for p in w.iterdir()) == ["gate.sh", "podcheck.sh"], sh
+        for n in ("gate.sh", "podcheck.sh"):
+            assert (w / n).read_bytes() == _head(n), sh
+
+
+def _posix_shells() -> list[list[str]]:
+    """bash in POSIX mode, and dash when it exists: the pod runs an exec body's script under sh."""
+    dash = shutil.which("dash")
+    return [[BASH, "--posix", "-c"]] + ([[dash, "-c"]] if dash else [])
+
+
+def test_exec_body_writes_a_multi_chunk_file_and_an_empty_file_byte_for_byte(tmp_path):
+    import json
+    import random
+    big = random.Random(0).randbytes(7001)   # base64 9336 characters: chunks 4000, 4000 and a partial 1336
+    (tmp_path / "big.bin").write_bytes(big)
+    (tmp_path / "empty.bin").write_bytes(b"")
+    common = (ROOT / "tools" / "ops" / "common.sh").as_posix()
+    r = subprocess.run([BASH, "-c", f". '{common}'; cd '{tmp_path.as_posix()}' && exec_body 'echo RAN' big=big.bin empty=empty.bin"],
+                       check=False, capture_output=True, text=True, env=_clean_env())
+    assert r.returncode == 0, r.stdout + r.stderr
+    script, files = _exec_body_files(json.loads(r.stdout.strip().splitlines()[-1]))
+    assert files == {"big": big, "empty": b""}
+    cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"]
+    assert [len(x) for x in cmd[4:]] == [4, 4000, 4000, 1336, 6]
+    for i, sh in enumerate(_posix_shells()):
+        w = tmp_path / f"w{i}"
+        run = subprocess.run([*sh, script.replace("W=/work/_podcheck;", f"W='{w.as_posix()}';"), *cmd[3:]],
+                             check=False, capture_output=True, text=True, env=_clean_env())
+        assert run.returncode == 0, (sh, run.stderr)
+        assert run.stdout.strip() == "RAN", sh
+        assert sorted(p.name for p in w.iterdir()) == ["big", "empty"], sh
+        assert (w / "big").read_bytes() == big, sh
+        assert (w / "empty").read_bytes() == b"", sh
 
 
 # pack.sh's main check, in a throwaway repo holding only the scripts it needs before that check.
@@ -597,3 +631,29 @@ def test_stop_body_carries_heads_stop_sh_and_the_run_name():
     assert script.startswith("W=/work/_podcheck;") and script.endswith("; bash $W/stop.sh run-x")
     bad = subprocess.run([BASH, body_sh, "Bad/name"], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
     assert bad.returncode == 2
+
+
+def _agg_peak_line(tmp_path: Path, mem: str | None) -> str:
+    d = tmp_path / "run1"
+    (d / "bin").mkdir(parents=True)
+    (d / "out").mkdir()
+    for n in ("agg.sh", "gate.sh"):
+        (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
+    (d / "out" / "queue.txt").write_text("", encoding="utf-8", newline="\n")
+    if mem is not None:
+        (d / "out" / "mem_mb.txt").write_text(mem, encoding="utf-8", newline="\n")
+    r = subprocess.run([BASH, "-c", f"CGROOT='{(tmp_path / 'nocg').as_posix()}' bash '{(d / 'bin/agg.sh').as_posix()}'"],
+                       check=False, capture_output=True, text=True, env=_clean_env())
+    return next(x for x in r.stdout.splitlines() if x.startswith("--- wall "))
+
+
+@pytest.mark.parametrize(("mem", "want"), [
+    ("1700000000 51234\n1700000015 60000\nbad\n1700000030 \n1700000045 x\n1700000060 9999\n", "60000 MB"),
+    ("", "n/a"),
+    (None, "n/a"),
+])
+def test_agg_prints_the_runs_peak_from_mem_mb_txt(tmp_path, mem, want):
+    """agg.sh's peak line: the largest numeric second field of mem_mb.txt; malformed lines skipped."""
+    line = _agg_peak_line(tmp_path, mem)
+    assert f"container peak while this run ran (max of its mem_mb.txt, 15 s samples, incl. other runs) {want};" in line
+    assert line.endswith("container lifetime peak (since the pod started, incl. earlier and other runs) n/a")
