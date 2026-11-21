@@ -880,6 +880,9 @@ EXEMPT: dict[str, str] = {
     # Chatter's effectChance per Chatot cry parameter (battle_script.c:8413-8426), G-70: engine
     # semantics of the effect script, not a game id.
     "nuzline.engine.ids.CHATTER_CHANCES": _KEYED_BY_EFFECT,
+    # BATTLE_EFFECT_STEAL_HELD_ITEM (105) and _SWITCH_HELD_ITEMS (177), generated/
+    # move_battle_effects.txt lines 106 and 178: the item-moving effects order.qc_transfer reads.
+    "nuzline.engine.ids.ITEM_TRANSFER_EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "
