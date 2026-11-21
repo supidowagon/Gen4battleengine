@@ -170,7 +170,6 @@ def _old_record(tables, s, acts):
 @settings(
     max_examples=30,
     deadline=None,
-    derandomize=True,
     suppress_health_check=[
         HealthCheck.too_slow,
         HealthCheck.function_scoped_fixture,

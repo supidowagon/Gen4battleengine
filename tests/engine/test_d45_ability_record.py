@@ -97,12 +97,25 @@ def test_entry_hazards_immunity_records_enemy(tables, names):
 
 def test_transform_settles_enemy_record(tables, names):
     """The user's "known, unnamed" record (-1) settles to its decomp id before the copy
-    (``_transform``, rule 5); reference side (the JAX twin runs in the slow step test)."""
+    (``_transform``, rule 5): eager JAX ``effects._transform`` (no ``step`` compile) against the
+    reference ``_transform``, battler 1 Transforming into battler 0."""
     s = with_ability(four(tables, names, DOUBLES), 1, AbilityId.STATIC)
+    s = s._replace(ai_ability_known=s.ai_ability_known.at[1].set(-1))
+    zero = jnp.asarray(0, jnp.int32)
+    h = effects._Hit(**{f: zero for f in effects._Hit._fields})._replace(
+        side=jnp.asarray(1, jnp.int32),
+        target_side=zero,
+        user=s.active[1],
+        target=s.active[0],
+        effect=jnp.asarray(effects._E.TRANSFORM, jnp.int32),
+        landed=jnp.asarray(True),
+    )
+    out = effects._transform(tables, s, h, empty_outcome())
     r = to_ref(s)
-    r.ai_ability_known[1] = -1
     assert ref._transform(to_numpy(tables), r, 1, 0)
+    assert _known(out) == r.ai_ability_known
     assert r.ai_ability_known[1] == _id(AbilityId.STATIC)
+    assert np.asarray(out.ability).tolist() == np.asarray(from_ref(r).ability).tolist()
 
 
 def test_singles_enemy_reveal_not_kept(tables, names):

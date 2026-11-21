@@ -49,7 +49,6 @@ def _items(tables, s, b):
 @settings(
     max_examples=30,
     deadline=None,
-    derandomize=True,
     suppress_health_check=[
         HealthCheck.too_slow,
         HealthCheck.function_scoped_fixture,
@@ -137,7 +136,6 @@ def test_item_action_spends_its_own_battlers_bag(tables, names):
 @settings(
     max_examples=20,
     deadline=None,
-    derandomize=True,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
 @given(data=st.data())
@@ -156,7 +154,6 @@ def test_four_state_other_formats_draw_bags(tables, names):
         @settings(
             max_examples=20,
             deadline=None,
-            derandomize=True,
             suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
         )
         @given(data=st.data())

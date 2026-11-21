@@ -2333,7 +2333,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
 def _set_sent_out(a: dict) -> None:
     """D45-18: each battler's active slot was sent out by it; at B = 2 the player battler also sent
     out every ``exp_mask`` slot (``sideGetExpMask``'s bits are slots battler 0 showed, sheet D45-18
-    rule 7). No draw. Not called for ``four_state`` (E4-T's states keep ``sent_out`` 0)."""
+    rule 7). At B = 4 an ``exp_mask`` bit may be battler 2's, so only the active slots (the
+    ``1 << leads[b]`` of ``state.initial_arrays``). No draw: ``supported_state`` and ``four_state``
+    draw as before."""
     for b in range(len(a["active"])):
         a["sent_out"][b] = 1 << int(a["active"][b])
     if a["exp_mask"].ndim == 0:
@@ -2790,6 +2792,7 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
     a["replace_mul"][...] = 0
     _draw_exp(draw, tables, a)
+    _set_sent_out(a)  # D45-18-S
     # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
     a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
     a["weather_turns"][...] = timer

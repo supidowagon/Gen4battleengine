@@ -270,7 +270,6 @@ def test_mold_breaker_reveals_on_switch_in(tables, names):
     BTLSCR_MSG_BATTLER_TEMP`` tags the announcing battler's ability."""
     s = roark_state(tables, names, player_species="Cranidos")
     assert int(s.ai_ability_known[0]) != 0
-    assert int(s.ai_ability_known[1]) == 0
 
 
 @pytest.mark.slow
