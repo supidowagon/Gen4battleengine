@@ -41,3 +41,6 @@ _scratch/
 
 # Node (tools/smogon_calc: commit package.json and package-lock.json only)
 node_modules/
+
+# Claude Code worktrees
+.claude/worktrees/
