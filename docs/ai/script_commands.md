@@ -10,6 +10,9 @@ The rows after `IfMoveNotKnown` are the commands Kaizo Roark's labels add (K3c T
 and `IfSideCondition` gained targets and masks there too. Each command has a fixed-state
 test in `tests/ai/test_kaizo_commands.py`, which also checks this table against the module.
 
+Bit 7 (`TagStrategy_Main`) at B = 2: its B = 2 table, partner constants and roll sites are in
+`docs/ai/tag_strategy.md`.
+
 - **Sources.** Macros come from `asm/macros/aicmd.inc`, and the handler `AICmd_<name>`
   comes from `src/battle/trainer_ai/trainer_ai.c` (line given). Both paths are
   relative to `external/pokeplatinum`.

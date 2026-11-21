@@ -41,7 +41,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   mapped by name or by decomp hold effect (``tools.effect_map.held_item_ids``), so an item with
   no hold effect is ``ItemId.NONE`` (or ``NO_EFFECT_BERRY``) and supported;
 * AI flags, per AI policy (``IMPLEMENTED_AI_FLAGS``): vanilla bits 0-2 (``AI_FLAG_BASIC``,
-  ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``), Kaizo those and bit 4 (``AI_FLAG_RISKY``).
+  ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``), Kaizo bits 0-6 and 8-10, and bit 7
+  (``AI_FLAG_TAG_STRATEGY``, E4-A0) at B = 2 only: the format gate (``IMPLEMENTED_FORMATS``)
+  refuses ``double``, ``double_two_trainer`` and ``multi``, and ``ai.policy._refused`` refuses a
+  B = 4 state whose ``thinking_mask`` has bit 7 (the B = 4 partner reads are E4-A's).
   The vanilla policy runs its three scripts together, so a vanilla trainer must have all
   three; the Kaizo policy runs each trainer's own flag set (``ai.layout.kaizo_layout``, E1
   Ruling R2), so a Kaizo trainer needs only every set flag implemented. The Kaizo layout's ability
@@ -245,6 +248,7 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
         4: Support.EXACT,
         5: Support.EXACT,
         6: Support.EXACT,  # AI_FLAG_BATON_PASS, E1 prep batch P3
+        7: Support.EXACT,  # AI_FLAG_TAG_STRATEGY at B = 2 (E4-A0); B = 4 is refused (format gate, policy)
         8: Support.EXACT,
         9: Support.EXACT,
         10: Support.EXACT,  # AI_FLAG_HARRASSMENT, E1 Roark close batch (G-37)

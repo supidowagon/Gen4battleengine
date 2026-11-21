@@ -5055,6 +5055,13 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         # a doubles battle adds TAG_STRATEGY (thinking_mask), which is not transcribed.
         mask = thinking_mask(tables)
         policy = policy | (tables.ai_flags < 0) | ((mask & ~layout.flags) != 0)
+    if layout.per_slot_sites and format_of(state).B == 4:
+        # Tag Strategy at B = 4 is not modelled yet (E4-A): _tag_strategy transcribes the
+        # B = 2 rules only (script.s:6637-7338 with the partner reads at B = 2; the B = 4
+        # partner reads are A-8 sections 1, 5 and A-10 sections 2, 3). A battler whose
+        # thinking_mask has TAG_STRATEGY (its own flag or the doubles bit, trainer_ai.c:252-255)
+        # is refused under every Kaizo layout (fixed, fight or ALLIN), never run on B = 2 rules.
+        policy = policy | ((thinking_mask(tables) >> TAG_STRATEGY) & 1 == 1)
     if layout.per_slot_sites:  # reads by order, bounded per path (missing_read)
         sites = jnp.zeros_like(present[1])
     else:

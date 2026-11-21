@@ -624,3 +624,47 @@ def test_tag_loose_vs_exact_607(kaizo_tables, kaizo_names, kaizo_trainers, kaizo
     if reasons:
         pytest.skip(f"trainer 607's first Pokemon is refused by another flag: {reasons[:2]}")
     _assert_exact_equals_loose(t, s, layout)
+
+
+# --- Tag Strategy at B = 4 is refused (E4-A: the B = 4 partner reads are not modelled) -------
+
+
+@pytest.mark.fullset
+@pytest.mark.parametrize("layout_name", ["allin", "fixed_with_bit_7", "fixed_without_bit_7"])
+@pytest.mark.parametrize("flags", [0x87, 0x17], ids=["own_bit_7", "doubles_adds_bit_7"])
+def test_tag_strategy_at_b4_is_refused(kaizo_tables, kaizo_names, layout_name, flags):
+    """A B = 4 state whose ``thinking_mask`` has bit 7 (the trainer's own flag, or the doubles
+    bit added at trainer_ai.c:252-255) is refused under every Kaizo layout: ``_tag_strategy``
+    models B = 2 (A-8 sections 1, 5; A-10 sections 2, 3 are E4-A's). The same flags at B = 2
+    are not refused for bit 7. A mechanic not modelled yet: ``fullset``."""
+    from nuzline.ai.layout import ALLIN
+    from nuzline.data.tables import BATTLE_TYPE_DOUBLES, BATTLE_TYPE_TRAINER
+    from tests.engine.d2_states import four
+
+    layouts = {
+        "allin": ALLIN,
+        "fixed_with_bit_7": kaizo_layout(0x87, 4),
+        "fixed_without_bit_7": kaizo_layout(0x17, 4),
+    }
+    layout = layouts[layout_name]
+    doubles = four(kaizo_tables, kaizo_names)
+    t4 = kaizo_tables._replace(
+        ai_flags=np.int32(flags), battle_type=BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLES
+    )
+    assert bool(policy._refused(t4, doubles, layout).policy)
+    assert bool(policy._refused(t4, doubles, layout).any)
+    # B = 4 without bit 7 in the mask (no doubles bit, flag unset): this refusal does not fire
+    t_plain = kaizo_tables._replace(ai_flags=np.int32(0x17), battle_type=BATTLE_TYPE_TRAINER)
+    assert not bool(policy._refused(t_plain, doubles, layout).policy)
+
+
+@pytest.mark.fullset
+def test_tag_strategy_at_b2_is_not_refused_by_the_policy(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    from nuzline.ai.layout import ALLIN
+
+    s = _tag_fight(kaizo_tables, kaizo_names, kaizo_roark_party, list(_NONE) + ["Harden"])
+    t = kaizo_tables._replace(ai_flags=np.int32(0x80))
+    for layout in (ALLIN, kaizo_layout(0x80, SLOT_READS)):
+        assert not bool(policy._refused(t, s, layout).policy)

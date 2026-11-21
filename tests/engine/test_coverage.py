@@ -328,6 +328,32 @@ def test_kaizo_flag_set_has_no_flag_line(
     assert not [m for m in report.missing if "AI flag" in m]
 
 
+@pytest.mark.parametrize("flags", [0x80, 0x87, 0x187, 0x607])
+def test_kaizo_singles_bit_7_has_no_flag_line(
+    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags
+):
+    # E4-A0: AI_FLAG_TAG_STRATEGY (bit 7) is exact at B = 2: a singles trainer's flags with
+    # bit 7 give no "AI flag" line and no format line.
+    trainer = replace(kaizo_roark, ai_flags=flags, format="single")
+    report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
+    assert IMPLEMENTED_AI_FLAGS["kaizo"][7] == Support.EXACT
+    assert not [m for m in report.missing if "AI flag" in m or "battle format" in m]
+
+
+@pytest.mark.parametrize("fmt", ["double", "double_two_trainer", "multi"])
+def test_kaizo_bit_7_doubles_row_is_refused_by_the_format_gate(
+    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, fmt
+):
+    # The B = 4 formats stay refused (IMPLEMENTED_FORMATS): bit 7 gives no AI flag line there, the
+    # format line refuses the fight; ai.policy._refused refuses the B = 4 state itself
+    # (tests/ai/test_tag_strategy.py test_tag_strategy_at_b4_is_refused).
+    assert coverage_module.IMPLEMENTED_FORMATS[fmt] == Support.NONE
+    trainer = replace(kaizo_roark, ai_flags=0x87, format=fmt)
+    report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
+    assert any("battle format UNSUPPORTED" in m for m in report.missing)
+    assert report.level == Support.NONE
+
+
 @pytest.mark.fullset
 def test_kaizo_implemented_ai_flags_are_the_transcribed_bits():
     from nuzline.ai.layout import KAIZO_FLAG_BITS
