@@ -69,8 +69,8 @@ def test_warnings_for_kernel_kills_triple_kills_hand_kept_overruns_and_lower_val
     assert sorted(warn) == sorted([
         "killed three times, no peak: run-a u_003 tests/b.py",
         "hand-kept ids peaked at 32 GB, above their largest hand-kept weight 10 GB: run-a u_004 tests/h.py::test_big",
-        "rc 137 lower bound 63 GB above the file's 21 GB; the line takes the bound, the real peak may be higher "
-        "(a hand-kept line or a rerun): tests/a.py (run-a u_002)",
+        ("rc 137 lower bound 63 GB above the file's 21 GB; the line takes the bound, the real peak may be higher "
+         "(a hand-kept line or a rerun): tests/a.py (run-a u_002)"),
         "lower than before: tests/a.py 70 -> 63 GB",
     ])
 
