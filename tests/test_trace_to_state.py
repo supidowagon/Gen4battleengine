@@ -14,7 +14,6 @@ import json
 import re
 from pathlib import Path
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -33,7 +32,7 @@ from nuzline.engine.order import (
 )
 from nuzline.engine.outcome import Outcome, empty_outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import needs_replacement, replace, step
+from nuzline.engine.step import needs_replacement, replace
 from tests.test_golden import replay_mismatches
 from tools.trace_to_state import (
     INTERMEDIATE,
@@ -53,6 +52,7 @@ from tools.trace_to_state import (
     decode_status,
     initial_state,
     main,
+    replay_turn,
     resolve_roll,
     trace_to_states,
 )
@@ -69,7 +69,17 @@ STEALTH_ROCK, ROCK_THROW, SCREECH = 0, 1, 2  # Geodude / Onix move slots
 POTION = 10  # the opponent's bag slot 0
 BUDEW, ABSORB, STUN_SPORE = 5, 0, 3  # party slot and move slots
 
-_step = jax.jit(step)
+
+def _step(tables, state, actions, outcome) -> BattleState:
+    """``step``, then ``advance_learns``, through the converter's own program
+    (``replay_turn`` with no replacement and no learn answer: ``apply_turn`` is ``step``, the
+    learnset scans and no prompt answered). A ``jax.jit(step)`` beside it kept a second
+    whole-turn program resident: a converted trace left the process at 9.2 GB with it and
+    4.7 GB without (test_a_thunder_fang_flinch_is_inferred, measured locally), above and below
+    conftest's 6 GB clear threshold, so every test dropped both programs and reloaded them
+    (100-190 s a test on the pod) where now the module keeps its one program. ``advance_learns`` is a no-op once it has run (levelup.py:400-404), so the
+    callers' own scan after this one changes nothing."""
+    return replay_turn(tables, state, actions, outcome, -1, -1)
 
 
 def _outcome(**hits) -> Outcome:
