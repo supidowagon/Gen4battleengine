@@ -3015,9 +3015,9 @@ def _contact_ability(
     Charm's (the attacker not in love, the roll; :4339-4350, H-4) and Static's, Poison Point's and
     Flame Body's (an attacker with no status, the roll; :4214-4224, :4303-4313, :4321-4331, H-M2),
     whose subscript may then stop on the attacker's Limber, Immunity, Water Veil, Leaf Guard in sun
-    or type (subscript_paralyze.s:5-8, subscript_poison.s:6-16, :34-37, subscript_burn.s:6-14,
-    :20-23; an ABILITY side effect skips Safeguard and the substitute, subscript_paralyze.s:33,
-    :43)."""
+    or type (subscript_paralyze.s:5-8, subscript_poison.s:13-16, :34-37, subscript_burn.s:20-23,
+    :40-41); an ABILITY side effect skips the substitute (subscript_paralyze.s:20, poison :28, burn
+    :35) and Safeguard (paralyze :26, poison :39, burn :43)."""
     fmt = format_of(state)
     # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4200-4371): Battler_Ability.
     ability = battler_ability(state, h.target_side, h.target)

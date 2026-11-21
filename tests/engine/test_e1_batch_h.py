@@ -1159,28 +1159,33 @@ def test_a_u_turn_user_felled_by_a_later_pursuer_keeps_the_charmed_one_as_side_e
     assert int(out.infatuated[1]) != 0 and int(out.infatuated[2]) != 0, np.asarray(out.infatuated)
 
 
-@pytest.mark.slow  # a singles step per case, engine and reference (58-144 s locally)
-@pytest.mark.parametrize(
-    "foe_ability, own",
-    [
-        (AbilityId.STATIC, AbilityId.LIMBER),  # subscript_paralyze.s:5
-        (AbilityId.POISON_POINT, AbilityId.IMMUNITY),  # subscript_poison.s:6-16
-        (AbilityId.FLAME_BODY, AbilityId.WATER_VEIL),  # subscript_burn.s:6-23
-    ],
-)
-def test_singles_a_blocked_contact_trigger_moves_side_effect_mon_unseen(
-    tables, names, foe_ability, own
+@pytest.mark.slow  # a singles step, engine and reference (52 s, peak 9.9 GB locally)
+def test_singles_a_blocked_poison_point_trigger_on_the_felling_pursuit_stops_the_knot(
+    tables, names
 ):
-    """H-M2, B = 2: the trigger (battle_lib.c:4214-4224, :4303-4313, :4321-4331) makes the
-    attacker the sideEffectMon before its subscript stops on the attacker's own ability. In
-    singles no later step can tell: the Synchronize step's attacker branch would pass the
-    attacker's own status, none (the trigger needs MON_CONDITION_NONE, :4216), and its defender
-    branch needs the sideEffectMon to be the defender, whose ability is the contact one, not
-    Synchronize; the knot needs an INFATUATED flag no such hit sets. Engine == reference."""
-    s = roark_state(tables, names, player_moves=("Tackle",), opp_moves=("Leer",))
-    s = s._replace(ability=s.ability.at[1, 0].set(foe_ability).at[0, 0].set(own))
-    out = assert_matches_reference(tables, s, A("Tackle", "Leer", s, names), _procs(opp=1))
-    assert int(out.status[0, 0]) == Status.NONE
+    """H-M2, B = 2, the MODE_PURSUIT tail (subscript_attack_then_switch_out.s:55): the knot-holding
+    Poison Point U-turn user is charmed by the foe's Cute Charm on its hit (:7; sideEffectMon = the
+    user, battle_lib.c:4350; subscript_infatuate.s:29 flags it). The foe's Pursuit fells it, and
+    Poison Point, with no defender-HP test (:4303-4313; only Cute Charm has one, :4347), passes its
+    trigger on that hit (subscript_pursuit.s:84-87): sideEffectMon = the foe, whose Steel type then
+    stops the poison (subscript_poison.s:34-37). AfterMoveEffects' knot attacker branch
+    (battle_lib.c:4553-4558) needs the attacker to be the sideEffectMon: no reflection, no item
+    record. The old code kept sideEffectMon = the user and reflected. Engine == reference."""
+    from dataclasses import replace
+
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon
+
+    n = names
+    lead = replace(_mon(n, "Scyther", ["U-turn"], 30, item="Destiny Knot"), gender=1)
+    bench = replace(_mon(n, "Geodude", ["Tackle"], 30), gender=1)
+    foe = replace(_mon(n, "Steelix", ["Pursuit"], 40), gender=0)  # slower, survives the U-turn
+    s = make_state(tables, [lead, bench], [foe]).replace_hp(0, 0, 1)
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.CUTE_CHARM))
+    s = s._replace(ability=s.ability.at[0, 0].set(AbilityId.POISON_POINT))
+    out = assert_matches_reference(tables, s, (0, 0), _procs(player=1, opp=1))
+    assert int(out.hp[0, 0]) == 0 and int(out.status[1, 0]) == Status.NONE
+    assert int(out.infatuated[1]) == 0 and int(out.ai_item_known[0]) == 0
 
 
 @pytest.mark.slow  # a B = 4 action phase, engine and reference (over 60 s)

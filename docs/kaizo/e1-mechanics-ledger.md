@@ -2678,8 +2678,10 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   decomp draws no tie bit there). Owed (cleanup): `hooks.order_swaps`' own dead-battler line (hooks.py:412-413)
   is now redundant with `player_second`; drop it in a later cleanup.
 - H-M1 (merge of main 7698de58, D3, into batch H; 2df0a922) Built, B = 4 only: the U-turn tail's sideEffectMon after
-  several pursuers. Writes between the U-turn hit and the list: the target's contact trigger on the U-turn hit
-  (subscript_attack_then_switch_out.s:6, battle_lib.c:4224, :4313, :4331, :4350: the user) and each Pursuit hit's
+  several pursuers. Writes between the U-turn hit and the list: U-turn's own secondary, MOVE_SIDE_EFFECT_ON_HIT
+  (effect_script_0228.s:5), whose MapSideEffectToSubscript sets sideEffectMon = 0 (battle_lib.c:7521-7522) before
+  subscript_attack_then_switch_out.s runs; then the target's contact trigger on the U-turn hit
+  (subscript_attack_then_switch_out.s:7, battle_lib.c:4224, :4313, :4331, :4350: the user) and each Pursuit hit's
   (subscript_pursuit.s:40, :86; BtlCmd_TryPursuit takes the pursuers in index order, battle_script.c:6899-6934): the
   U-turn user's trigger sets sideEffectMon = that pursuer whether or not its subscript lands (:4350 before
   subscript_infatuate.s:7 TryAttract). No other command in subscript_pursuit.s, its called subscripts or
@@ -2687,41 +2689,65 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   CheckToxicSpikes (battle_script.c:7638-7641) and King's Rock (bcp.c:4643) come after the list. Readers: the
   Synchronize step (its flag cleared at :69, set again only by the list's Toxic Spikes, `entry_toxic`) and the knot
   step (battle_lib.c:4546-4566), which needs the defender (or attacker) to be the sideEffectMon and flagged
-  INFATUATED (subscript_infatuate.s:29; the only reader of that flag). The U-turn user has one ability, so with any
+  INFATUATED (subscript_infatuate.s:29; the only reader of that flag). The secondary's battler 0 (with no trigger
+  after it) is never read: at the resume the Synchronize flag is clear (:69) and Toxic Spikes sets flag and
+  sideEffectMon together, the attacker's INFATUATED flag is cleared (:70), and any flagged pursuer means a trigger
+  ran and moved sideEffectMon; on the felled tail every flag likewise comes from a trigger (both engines take the
+  user / target there instead of 0). The U-turn user has one ability, so with any
   flagged pursuer every pursuer trigger is Cute Charm. Rule: the sideEffectMon at the list is the last pursuer
   whose Cute Charm trigger passed. Built in `ts_loved` (no new field): 1 = flagged and the sideEffectMon, 2 =
   flagged but a later pursuer's trigger moved sideEffectMon off it (the flag stays: King's Rock in the tail can make
   the defender the sideEffectMon again). Engine: `_pursuit_hit` returns `MoveHit.charm_proc`; the Pursuit pass
   turns 1 into 2 on a trigger and marks a charmed pursuer 1; `pre_list` reads `ts_loved == 1`; the MODE_PURSUIT
   tail's `pursuit_sync` sideEffectMon also moves on the trigger (a charmed pursuer stays sideEffectMon when a later
-  pursuer fells the user: a fainting hit passes no Cute Charm trigger, :4347). Reference: the pause writes 1 / 2 from
+  pursuer fells the user: a fainting hit passes no Cute Charm trigger, :4347; Static, Poison Point and Flame Body
+  have no defender-HP test, H-M2). Reference: the pause writes 1 / 2 from
   the live `turn.sync_mon`; `_resume` takes the 1 slot. Tests (test_e1_batch_h.py):
   `test_the_resumed_knot_reads_the_last_pursuers_cute_charm_trigger` (4 cases: superseded by a failed or a landed
   later trigger, the last charmed is the knot holder, only the second charmed),
   `test_a_u_turn_user_felled_by_a_later_pursuer_keeps_the_charmed_one_as_side_effect_mon`. Snapshot class: B = 2
-  none (one pursuer: only 1 occurs, and its fainted-tail trigger cannot pass).
+  none from H-M1 itself (one pursuer: only `ts_loved` 1 occurs, and its felling hit passes no Cute Charm trigger);
+  the felled tail's status-trigger case is H-M2's. If a later rule needs the sideEffectMon at the list itself, add
+  `ts_sem` (1 + battler) rather than more `ts_loved` codes.
 - H-M2 (found building H-M1) Built, all B: a blocked Static / Poison Point / Flame Body trigger still moves
   sideEffectMon. BattleSystem_TriggerAbilityOnHit sets sideEffectMon = attacker once the trigger passes (battle_lib.c:
   4214-4224 Static, :4303-4313 Poison Point, :4321-4331 Flame Body: attacker HP, attacker status NONE, no
   MOVE_STATUS_NO_EFFECTS, no FIRST_OF_MULTI_TURN / UTURN_ACTIVE, damage taken, contact, the roll; a substitute hit
   returns first, :4209), before the subscript, which then stops silently on the attacker's own Limber / Immunity /
-  Water Veil, Leaf Guard in sun, or type (subscript_paralyze.s:5-8, subscript_poison.s:6-16, :34-37,
-  subscript_burn.s:6-23; an ABILITY side effect skips Safeguard and the substitute, subscript_paralyze.s:33, :43; a
-  status already is excluded by the trigger itself). Only a landing toggles SYSCTL_TRY_SYNCHRONIZE_STATUS
+  Water Veil, Leaf Guard in sun, or type (subscript_paralyze.s:5-8, subscript_poison.s:13-16, :34-37,
+  subscript_burn.s:20-23, :40-41; an ABILITY side effect skips the substitute, paralyze :20, poison :28, burn :35, and
+  Safeguard, paralyze :26, poison :39, burn :43; a status already is excluded by the trigger itself). Only a landing toggles SYSCTL_TRY_SYNCHRONIZE_STATUS
   (subscript_paralyze.s:50-56 and the like). Effect Spore (:4273-4300) is the same shape but the ability is not
   modelled (dropped in batch F, no Kaizo holder). Built: engine `effects._contact_ability` returns `sem_proc` (Cute
   Charm's trigger, H-4, or the status trigger; `MoveHit.charm_proc` renamed `sem_proc`), which `_use_move`'s
   `sync_sem` and the Pursuit pass (H-M1: `ts_loved`, `pursuit_sync`) read; reference `_contact_ability` sets
-  `turn.sync_mon` at the trigger, before the blocks. B = 2: no later step can tell (the Synchronize step's attacker
-  branch passes the attacker's own status, none by the trigger's test; its defender branch needs the defender, whose
-  ability is the contact one, to have Synchronize; the knot needs an INFATUATED flag such a hit never sets), so no
-  snapshot change expected. B = 4 visible on the MODE_PURSUIT tail: a Synchronize pursuer burned earlier in the
-  chain no longer passes its burn (and its Synchronize reveal) to the user a later pursuer felled. Tests (test_e1_batch_h.py):
-  `test_singles_a_blocked_contact_trigger_moves_side_effect_mon_unseen` (3 cases),
-  `test_a_blocked_flame_body_trigger_moves_side_effect_mon_off_a_synchronize_pursuer` (slow; fails without either
-  engine's change), the singles test slow too. Not in scope, same
-  shape: a damaging move's secondary sets sideEffectMon at MapSideEffectToSubscript (battle_lib.c:7511-7523) before
-  its subscript's blocks; both engines move it only on a landing (`def_landed`); not checked for visibility.
+  `turn.sync_mon` at the trigger, before the blocks. B = 2 is visible on the MODE_PURSUIT tail (review 5408d448
+  finding 1): the three triggers have no defender-HP test (only Cute Charm's, :4347), so a Pursuit hit that fells the
+  U-turn user still runs them (subscript_pursuit.s:84-87). A Destiny Knot + Poison Point (Flame Body) user charmed by
+  the target's Cute Charm on its U-turn hit (sideEffectMon = user, :4350) and felled by that Cute Charm foe's Pursuit
+  passes the trigger on the felling hit (sideEffectMon = the pursuer) though the pursuer's Poison / Steel (Fire) type
+  stops it (subscript_poison.s:34-37, burn :40-41): the tail's knot attacker branch (battle_lib.c:4553-4558) then
+  fails, where both engines used to infatuate the pursuer. Snapshot class: B = 2 outputs change in that corner only
+  (correctly). Elsewhere at B = 2 no later step can tell (the Synchronize attacker branch passes the attacker's own
+  status, none by the trigger's test; the defender branch needs a Synchronize defender, whose ability is the contact
+  one; the knot needs an INFATUATED flag, which only that Cute Charm case sets). Kaizo: unreachable from species
+  data: the Cute Charm holders are Cleffa, Igglybuff, Skitty and Delcatty, all Normal (data/intermediate_kaizo/
+  species.json, ability 56; vanilla adds the Clefairy and Jigglypuff lines and Lopunny, all Normal,
+  data/intermediate/species.json); only a type change in battle could reach it. B = 4 visible on the MODE_PURSUIT
+  tail: a Synchronize pursuer burned earlier in the chain no longer passes its burn (and its Synchronize reveal) to the
+  user a later pursuer felled. Tests (test_e1_batch_h.py, both slow, each fails on the old code):
+  `test_singles_a_blocked_poison_point_trigger_on_the_felling_pursuit_stops_the_knot`,
+  `test_a_blocked_flame_body_trigger_moves_side_effect_mon_off_a_synchronize_pursuer`. Same shape, not reachable: a
+  damaging move's secondary sets sideEffectMon at MapSideEffectToSubscript (battle_lib.c:7511-7523; the probabilistic
+  branch :1551-1566 writes even when the roll fails) before its subscript's blocks, and both engines move it only on a
+  landing (`def_landed`). To be read it must follow, in the same action, a landing that set the Synchronize flag or a
+  Cute Charm flag: ONE_HIT runs the secondary (bcp.c:3484) before the ability (:3514), so a trigger overrides it;
+  MULTI_HIT puts hit k+1's secondary after hit k's ability, and the only multi-hit move with a secondary is
+  Twineedle (effect 77, effect_script_0077.s:5), no contact, whose own poison landing sets sideEffectMon = defender
+  either way; neither the Pursuit nor the U-turn tail runs a damaging secondary. Kaizo the same: Twineedle is the
+  only multi-hit move with a secondary (data/intermediate_kaizo/moves.json: effects 29, 44, 77, 104), be_seq 77 is
+  unchanged (e2 ledger :1965; rom/changed_scripts.json be_seq 48, 88, 104, 141, 182), and the changed multi-hit
+  scripts 88 / 104 only change Triple Kick's power step (data/kaizo/rom_diff.toml be_seq 88, 104).
 
 ## Stream state (restart point, 2026-11-19)
 

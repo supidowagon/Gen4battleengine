@@ -4213,7 +4213,8 @@ def _execute_actions(
         # off an earlier charmed one: a slot whose flag stays but is no longer the sideEffectMon
         # reads 2 (``ts_loved``), the flagged sideEffectMon 1. Nothing else between the U-turn hit
         # and the list writes it (subscript_pursuit.s:8-117, subscript_attack_then_switch_out.s:
-        # 52-69). B = 2 has one pursuer: only 1 occurs.
+        # 52-69). B = 2 has one pursuer: only 1 occurs. If a later rule needs the sideEffectMon at the
+        # list itself (an unflagged battler), add ``ts_sem`` (1 + battler) instead of more codes.
         proc = ap & fire & p_proc
         loved = jnp.where(proc & (state.ts_loved == 1), 2, state.ts_loved)
         state = state._replace(
