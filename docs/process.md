@@ -106,8 +106,11 @@ per day is the rate used for estimates.
 - **Test pod (`ci-day-big`):** 32 vCPU CPU, no daily limit, for every stream test run, in one
   of two shapes, each with its limits passed in the exec-pod body's `env`:
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
-  - 256 GB (the memory-optimized 32 vCPU type): `GATE_GB` 176, `MAXP` 20,
-    `KILL_GB` 236, and `SNAP_GATE_GB` 176 for `snap.sh`.
+  - 256 GB (the memory-optimized 32 vCPU type): `GATE_GB` 176, `MAXP` 18 (more than about
+    18 units on one pod stalls it), `KILL_GB` 236, `SPACING` 4, and `SNAP_GATE_GB` 176 for
+    `snap.sh`.
+  Several test pods may be up at once (approval: `docs/decisions.md`, section 5). Pod N's id
+  is in `_scratch/rent/day<N>/POD_ID_<N>`; pod 1's is in `_scratch/rent/POD_ID`.
   Read the shape before sending a body: exec `cat /sys/fs/cgroup/memory.max` on the pod
   (bytes; `max` or a value under 200 GB means the 128 GB limits). Never pass the 256 GB
   limits to a 128 GB pod.
@@ -146,7 +149,7 @@ per day is the rate used for estimates.
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Start a chunk only while container memory
   (`/sys/fs/cgroup/memory.current`) is under `GATE_GB`, and run at most `MAXP` chunks at
-  once across all runs on the pod (Test pod above: 88 GB and 10, or 176 GB and 20): a chunk
+  once across all runs on the pod (Test pod above: 88 GB and 10, or 176 GB and 18): a chunk
   grows to 8-12 GB after it starts. Near `KILL_GB` (118 or 236 GB) kill
   this run's newest chunk and queue it again, at most twice per chunk; a third kill counts
   as a failure. Never signal PID 1.
@@ -251,10 +254,15 @@ pod work. This section is the source of the handoff procedure; a copy in
 
 - The repo, all worktrees, `_scratch/` (tables, lists, pod results, `_scratch/handoff/`).
 - `CLAUDE.md`, `docs/`, `tools/ops/`.
-- The project's Claude files: `.claude/agents/review.md` (the fresh-context review agent of
-  every review and merge gate) and `.claude/commands/goal.md` (the `/goal` planning command).
-  These project copies are the source. A copy in the user profile's `.claude` folder follows
-  them.
+- `.claude/agents/review.md`: the fresh-context review agent of every review and merge gate.
+  This project copy is the source; a copy in the user profile's `.claude` folder follows it.
+  The `/goal` planning command is an optional owner-level command, not needed to run the
+  project.
+- runpodctl's key: `_scratch/rent/home/.runpod/config.toml`. The scripts run runpodctl with
+  `HOME` set to `_scratch/rent/home` (DAYBOX.md, Paths).
+- The live watch scripts: `_scratch/manager/watch_flags.ps1` and `_scratch/manager/watchdog.ps1`
+  (command line in `_scratch/handoff/MANAGER.md`). The copies under `tools/ops/` are older
+  until synced.
 
 ### What does not travel
 
@@ -264,7 +272,7 @@ pod work. This section is the source of the handoff procedure; a copy in
 - A session's private memory folder (`~/.claude/projects/<project>/memory/`). It loads only
   for a session opened in the main checkout under the same OS user, and it is a copy
   (section 9).
-- Tool sign-ins: `gh`, the Runpod plugin, runpodctl's key.
+- Tool sign-ins: `gh`, the Runpod plugin's MCP server.
 
 ### State files (`_scratch/handoff/`, git-ignored)
 
@@ -302,9 +310,10 @@ The owner opens a session in the main checkout folder and pastes one line:
 The session then:
 1. Reads `CLAUDE.md`, this file and `docs/decisions.md`.
 2. Verifies tips and worktrees (`git worktree list`, `git log -1 <branch>`).
-3. Recreates what does not travel: the watch loop (section 6), the scheduled prompts
-   (section 7), one Sonnet collector agent per pod for unfinished pod runs (DAYBOX.md, Wait
-   and Collect).
+3. The managing session only, and only when no pause is in force: recreates the watch loop
+   (section 6), the scheduled prompts (section 7) and one Sonnet collector agent per pod for
+   unfinished pod runs (DAYBOX.md, Wait and Collect). A stream session recreates none of
+   these.
 4. Reports to the owner in five lines what it found and what it does first.
 5. Waits for nothing unless its state file says an owner decision is open.
 
@@ -316,17 +325,22 @@ The session then:
 
 ### What you must supply yourself
 
-None of these is in the repo:
+None of these is in the repo. The setup assumes Windows with Git Bash and PowerShell.
 - The inputs: the vanilla Platinum (US) ROM, the Kaizo patch, the PKCalc zip (the official
   calc repo), the Kaizo docs spreadsheet and the save files. Their paths go in
-  `data/local.toml` (git-ignored; inputs and format: `docs/kaizo/pipeline.md`). The owner
-  writes it; sessions never edit it.
-- The decomp checkout at `external/pokeplatinum` (git-ignored).
-- `.cache/`: decomp symbols, ROM extraction, JAX caches (git-ignored, never uploaded).
+  `data/local.toml` (git-ignored; template `data/local.example.toml`; inputs:
+  `docs/kaizo/pipeline.md`). The owner writes it; sessions never edit it.
+- The decomp at `external/pokeplatinum` (git-ignored): `bash tools/clone_decomp.sh` clones
+  it at the pinned commit (`docs/decomp_paths.md`).
+- `.cache/` (git-ignored, never uploaded): `.cache/decomp/<commit>/main.nef.xMAP` is built
+  by hand once in WSL (`docs/rom_pipeline.md`, Decomp build); `.cache/rom/` (the patched ROM
+  copy) is written by `tools.extract_rom`; the JAX caches are written by the engine
+  (`src/nuzline/jaxcache.py`: `<repo>/.cache` unless `NUZLINE_CACHE_DIR` is set).
 - The owner's recordings folder (path in `_scratch/handoff/`), read-only.
 - A Runpod account, signed in through the Runpod plugin's MCP server, and the runpodctl
   binary at `_scratch/rent/bin/runpodctl-windows-amd64.exe` (used by `tools/ops/common.sh`;
-  not on PATH) with its key in the user profile's `.runpod/config.toml`.
+  not on PATH; version and source: DAYBOX.md, Paths) with its key in
+  `_scratch/rent/home/.runpod/config.toml`.
 - Claude Code with the plugins `superpowers@claude-plugins-official` and `runpod@runpod` at
   user scope. User settings `env`: `CLAUDE_CODE_TMPDIR`, `TEMP` and `TMP` on a folder on the
   project's drive (never C:), and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50`.
@@ -337,7 +351,7 @@ None of these is in the repo:
 1. Open the session in the main checkout folder. The managing session runs on Fable.
 2. Runpod: make one read-only call (list pods). If it asks for authorisation, the owner signs
    in; the session never types credentials.
-3. Desktop app preferences are per account: permission mode as on the other account,
+3. Desktop app preferences are per account: permission mode as on the previous setup,
    keep-awake on while streams work, notifications on. The owner sets them, or approves the
    change. Do not change security settings.
 4. Add the owner's recordings folder as an additional directory only when the Elite Four
@@ -350,10 +364,10 @@ None of these is in the repo:
 
 Checks (Git Bash, from the main checkout):
 ```
-git status -sb && git log -1 --format=%h          # main matches origin/main
+git fetch -q && git status -sb && git log -1 --format=%h          # main matches origin/main
 for t in git gh uv python node; do $t --version | head -1; done
 gh auth status
-ls _scratch/rent/bin/runpodctl-windows-amd64.exe
+ls _scratch/rent/bin/runpodctl-windows-amd64.exe _scratch/rent/home/.runpod/config.toml
 ls data/local.toml external/pokeplatinum/src .cache/decomp >/dev/null && echo INPUTS_OK
 python -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/settings.json')))['enabledPlugins'])"
 powershell -NoProfile -Command "[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)"   # free GB; local pytest needs more than 6
