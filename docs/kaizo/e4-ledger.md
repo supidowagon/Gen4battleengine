@@ -77,3 +77,28 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   their flags), the exact and the loose paths. `coverage.IMPLEMENTED_FORMATS` still refuses
   `double`, `double_two_trainer`, `multi`. Test: tests/ai/test_tag_strategy.py
   `test_tag_strategy_at_b4_is_refused` (`fullset`). To be deleted by E4-A.
+- **E4-10. Snapshot compare of 39168d89 against a de494d32 capture: no part sees `ALLIN`'s width
+  or a bit-7 trainer; no `UPGRADES` row.** Per part (`tools/snap_compare.py`):
+  - `step`, `jitstep`, `sample`, `rest`, `gen`: vanilla tables (`Ctx.tables_for`, :944-951) and
+    the engine only (`group_outputs` :960-1003: `step_events`, `ref_step`, `step`,
+    `engine.outcome.sample_outcome`, `enumerate_turn`, `decision_actions`, `root_belief`;
+    `draw_inputs` :1017-1075 through `tests/strategies.py` and `gated_states`). None calls the AI;
+    the diff touches no engine file but `engine/coverage.py` (docstring and the Kaizo row of
+    `IMPLEMENTED_AI_FLAGS`, :251), which these parts do not read.
+  - `ai`: `ai_outputs` (:1006-1014) stores `ai_action_distribution(tables, s)`
+    (`policy.py:6052-6066`), a `float32[NUM_OPP_ACTIONS]`, not an `AiOutcome`, on vanilla
+    `gated_states`. Its layout is `layout_of(tables)` (`policy._layout` :5285-5292,
+    `layout.py:360-377`) = `VANILLA` (`layout.py:185-191`: flat, `slot_reads` 0, flags `0b111`);
+    `_exact_layout` (`policy.py:5322-5331`) would refuse `ALLIN`. No bit 7, no `slot_reads`.
+    It does run the shared command code E4-A0 rewrote (`commands._side`, `_defender_abilities(b)`,
+    `_row`), at B = 2 with the default battlers, which keeps every vanilla read.
+  - `roark.rank`: `rank_actions` on vanilla tables (`roark_steps` :1118-1128,
+    `stage_a.py:214` `layout_of` = `VANILLA`); its playouts draw `sample_ai_outcome(..., VANILLA)`
+    (`playout.py:571`), the flat branch (`outcome.py:1371-1374`, `calc_draws` width 0); the stored
+    ranking holds no `AiOutcome`.
+  - `roark.trace`: Kaizo tables, `kaizo_roark_02.json` through `tools/trace_to_state.py`
+    (`trace_to_states`, `replay_turn`, `ref_apply_turn`), which imports no `nuzline.ai` module;
+    Roark's flags (`KAIZO.flags` `0b10111`, `layout.py:210`) lack bit 7 in any case.
+  - The 16 bit-7 trainers: no part runs `coverage` or draws a Kaizo trainer other than Roark.
+  So the compare should show `compare: ok` for every part. A divergence in `ai` would be a value
+  change of the rewritten shared commands under `VANILLA` (a bug to fix, not a layout upgrade).
