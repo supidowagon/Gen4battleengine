@@ -322,7 +322,7 @@ def test_record_is_json(tables, names):
         "game", "table_version",
         "trainer_id", "trainer", "cap", "deaths", "protected", "reserved", "settings", "seed",
         "fingerprint", "setup", "prep_steps", "cost", "ladder", "distribution", "plan",
-        "finalists", "stats", "excluded", "pruned", "cheaper_alternative",
+        "finalists", "stats", "excluded", "pruned", "cheaper_alternative", "post_fight_evolution",
     }  # fmt: skip
     assert rec["protected"] == ["party slot 1 FURRET"] and rec["reserved"] == ["Oran Berry"]
     assert rec["setup"][0]["label"] == "box 1 slot 1 KRICKETOT"
