@@ -971,14 +971,15 @@ def test_the_resumed_u_turn_never_reads_its_users_cute_charm_flag(tables, names)
 
 def _pursued_u_turn(tables, names, bench="Geodude", **start):
     """The foe's female Cute Charm Scyther U-turns (``bench`` behind it, female) into the player's
-    slower male Houndour holding a Destiny Knot, which pursues."""
+    slower male Steelix holding a Destiny Knot, which pursues (Steel / Ground: the U-turn does not
+    KO it, so CheckBlackOut at subscript_attack_then_switch_out.s:5 lets the list come)."""
     from dataclasses import replace
 
     from nuzline.engine.state import make_state
     from tests.engine.test_pivot import _mon
 
     n = names
-    me = replace(_mon(n, "Houndour", ["Pursuit"], 30, item="Destiny Knot"), gender=0)
+    me = replace(_mon(n, "Steelix", ["Pursuit"], 40, item="Destiny Knot"), gender=0)
     lead = replace(_mon(n, "Scyther", ["U-turn"], 50), gender=1)
     back = replace(_mon(n, bench, ["Tackle"], 30), gender=1)
     s = make_state(tables, [me], [lead, back], **start)
@@ -1036,7 +1037,7 @@ def test_a_u_turn_user_felled_by_the_pursuit_keeps_its_flag_for_its_knot(tables,
     n = names
     lead = replace(_mon(n, "Scyther", ["U-turn"], 30, item="Destiny Knot"), gender=1)
     bench = replace(_mon(n, "Geodude", ["Tackle"], 30), gender=1)
-    foe = replace(_mon(n, "Houndour", ["Pursuit"], 40), gender=0)
+    foe = replace(_mon(n, "Steelix", ["Pursuit"], 40), gender=0)  # slower, survives the U-turn
     s = make_state(tables, [lead, bench], [foe]).replace_hp(0, 0, 1)
     s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.CUTE_CHARM))
     out = assert_matches_reference(tables, s, (0, 0), _procs(opp=1))
