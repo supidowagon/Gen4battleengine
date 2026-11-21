@@ -164,6 +164,9 @@ def test_stats_are_counts_over_the_shared_playouts(tables, names):
 @pytest.mark.slow
 @pytest.mark.fullset
 def test_refused_playouts_are_refused_loudly(tables, names):
+    # Normalize is reachable only artificially: no Kaizo Pokemon holds it, and vanilla
+    # Skitty's is engine-UNSUPPORTED (coverage would refuse the fight first). The AI reads its
+    # decomp id 96 (species_abilities_decomp), so the refusal named is the AI's, not the engine's.
     # Normalize on the player's lead is refused by the AI: the ranking must not count
     # those playouts as losses.
     s = roark_state(tables, names, player_species="Skitty", player_ability="Normalize")

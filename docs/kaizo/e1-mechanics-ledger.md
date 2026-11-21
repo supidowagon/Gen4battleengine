@@ -2650,12 +2650,19 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   refused. Weather Ball's AI type keeps its refusal (manager ruling). Departures from the sheets: none against the
   decomp. One consequence the sheet only raised as an open question is taken: pass 1's Wonder Guard step reads the
   player's `Battler_Ability` for Mold Breaker (trainer_ai.c:3772) instead of the raw ability, so a Gastric-Juiced
-  Mold Breaker no longer hides a Wonder Guard bench member. Tests: tests/ai/test_type_chart_abilities.py; the tests
-  that used Levitate, Scrappy, Filter or Solid Rock as the refused example now use Normalize
-  (test_current_ability, test_policy, test_switching, test_kaizo_outcome, test_k3b_abilities, test_batch3_review,
-  test_pool, tests/search). Expected snapshot divergence: none (the snapshot generator draws no state the AI read
-  differently before: every fight it covers was refused or has none of the four abilities in the chart reads; the
-  Gastric Juice + Mold Breaker + Wonder Guard bench case is outside it). No new field: `--allow-new` is empty.
+  Mold Breaker no longer hides a Wonder Guard bench member. `damage.levitate_off` holds `Battler_Ability`'s Levitate
+  rule (Gravity, Ingrain; battle_lib.c:3095-3103) once, for `damage.ignorable` and `switching.seen_ability`. Tests:
+  tests/ai/test_type_chart_abilities.py (classes, the post-KO stage 2 pick with the u8 wrap, the Expert_HighCritical
+  :2836 and EvalAttack :6383 paths on Kaizo, the three Scrappy CalcEffectiveness reads); the tests that used
+  Levitate, Scrappy, Filter or Solid Rock as the refused example now use Normalize (test_current_ability,
+  test_policy, test_switching, test_kaizo_outcome, test_k3b_abilities, test_pool, tests/search), which is
+  reachable only artificially (no Kaizo holder; vanilla Skitty's is engine-UNSUPPORTED: the AI names it from the
+  decomp id); test_batch3_review's Trace copy of Mr. Mime's Filter is now kept, Tinted Lens stays the AI side's
+  refused copy. Expected snapshot divergence: none. The random-state parts (step, jitstep, sample, rest) never
+  import nuzline.ai; the ai part and roark.rank run vanilla Roark against the sample party, which holds none of
+  the four; the Kaizo golden party holds none either, Kaizo Roark's Solid Rock holders (Lileep, Corsola, Shuckle)
+  are on the AI side, which the AI's chart reads never take as the defender, and no party holds Wonder Guard. No
+  new field: `--allow-new` is empty.
 - MF-1 (claude/e1-main-fix 65aebee5) `order.compare_speed` takes BattleSystem_CompareBattlerSpeed's dead-battler
   short-circuit (battle_lib.c:1204-1211): a battler with no HP against one with HP is SLOWER, before Quick Claw,
   Lagging Tail, Trick Room and speed. The reference had it (`_player_second`), and so had `hooks.order_swaps`

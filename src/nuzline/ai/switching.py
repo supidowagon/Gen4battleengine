@@ -138,6 +138,7 @@ from nuzline.engine.damage import (
     ignorable,
     iron_ball,
     judgment_type,
+    levitate_off,
     levitated,
     on_damaging_turn,
     weather_ball_params,
@@ -466,13 +467,13 @@ def chart_flags(tables: Tables, state: BattleState, atk_side, def_side) -> Chart
     )
 
 
-def seen_ability(tables: Tables, state: BattleState, side) -> jnp.ndarray:
-    """``int32``: ``Battler_Ability`` (battle_lib.c:3088-3104) of ``side``'s active battler in
-    decomp ids: ``battler_decomp_ability`` (Gastric Juice), and Levitate reads as none under
-    Gravity or the holder's Ingrain (:3095-3103)."""
-    ability = battler_decomp_ability(tables, state, side)
-    rooted = (state.ingrain[side] != 0) | fcm.gravity_on(state)
-    return jnp.where(rooted & (ability == ABILITY_IDS["Levitate"]), 0, ability)
+def seen_ability(tables: Tables, state: BattleState, battler) -> jnp.ndarray:
+    """``int32``: ``Battler_Ability`` (battle_lib.c:3088-3104) of ``battler`` in decomp ids:
+    ``battler_decomp_ability`` (Gastric Juice), and Levitate reads as none under Gravity or the
+    holder's Ingrain (:3095-3103, ``damage.levitate_off``, the engine-id twin's rule)."""
+    ability = battler_decomp_ability(tables, state, battler)
+    off = levitate_off(state, battler) & (ability == ABILITY_IDS["Levitate"])
+    return jnp.where(off, 0, ability)
 
 
 def _chart_flags(

@@ -78,8 +78,11 @@ def _candidate(spec: PokemonSpec, slot: int = 0) -> Candidate:
 def test_prep_keeps_a_weather_war_and_refuses_a_trace_copy_the_ai_refuses(tables, names):
     """B3-20, B3-21, G-26: a Drought candidate against a Drizzle opponent is kept (the weather
     war is modelled); a Trace candidate is kept unless a copy it can make is one the AI refuses
-    on the player's side (Normalize, policy ``player_ability_refusal``), in the usable pool and the
-    pool check alike."""
+    on the player's side (policy ``player_ability_refusal``), in the usable pool and the pool
+    check alike. Since H-6 the AI reads Filter (battle_lib.c:2657-2660), so a Porygon that can
+    copy Mr. Mime's Filter is kept; the one copy still refused there, Normalize, has no example:
+    Kaizo has no holder and vanilla Skitty's / Delcatty's is an engine-UNSUPPORTED ability, whose
+    Trace copy reads as no decomp id (``damage.decomp_abilities``)."""
     opp = [_mon(names, "Kyogre")]
     trainer = roark_trainer()
     groudon, porygon = _candidate(_mon(names, "Groudon")), _candidate(_mon(names, "Porygon"), 1)
@@ -89,20 +92,20 @@ def test_prep_keeps_a_weather_war_and_refuses_a_trace_copy_the_ai_refuses(tables
     report = check_pool(tables, names, [groudon, porygon], opp, trainer)
     assert not any("weather" in m for m in report.missing)
     assert not any("Trace" in m for m in report.missing)
-    normalize_opp = [_mon(names, "Skitty", slot=1)]
-    kept, lines = usable_pool(tables, names, [porygon], normalize_opp, trainer)
-    assert kept == []
-    assert any("party slot 1" in line and "Trace copying Normalize" in line for line in lines)
-    report = check_pool(tables, names, [porygon], normalize_opp, trainer)
-    assert any("party slot 1" in m and "Trace copying Normalize" in m for m in report.missing)
+    filter_opp = [_mon(names, "Mr. Mime", slot=1)]
+    kept, lines = usable_pool(tables, names, [porygon], filter_opp, trainer)
+    assert kept == [porygon]
+    assert not any("Trace copying" in line for line in lines)
+    report = check_pool(tables, names, [porygon], filter_opp, trainer)
+    assert not any("Trace copying" in m for m in report.missing)
 
 
 @pytest.mark.fullset
 def test_coverage_reads_the_trace_copy_for_the_ai(tables, names):
     """B3-21: the AI reads the copy (LoadBattlerAbility, trainer_ai.c:1170-1209), so a Trace
-    holder is refused only for a copy the AI refuses on the holder's side: Normalize copied by
-    the player's Porygon (refused on either side), Tinted Lens
-    copied by the trainer's (an attacker ability, refused on the AI's side only)."""
+    holder is refused only for a copy the AI refuses on the holder's side: Tinted Lens copied by
+    the trainer's Porygon (an attacker ability, refused on the AI's side only); Filter copied by
+    the player's is read since H-6 (battle_lib.c:2657-2660) and refuses nothing."""
     trainer = roark_trainer()
 
     def trace_lines(player, opp):
@@ -115,12 +118,13 @@ def test_coverage_reads_the_trace_copy_for_the_ai(tables, names):
     # Copies of a Pokemon behind the lead (the lead's own copy is in the turn-0 state already,
     # whose refusals list it once).
     geodude = _mon(names, "Geodude")
-    lines = trace_lines([porygon], [geodude, _mon(names, "Skitty", slot=1)])
-    assert lines and all("Trace copying Normalize" in m and "side 0" in m for m in lines)
+    assert trace_lines([porygon], [geodude, _mon(names, "Mr. Mime", slot=1)]) == []
     lines = trace_lines([geodude, _mon(names, "Venomoth", slot=1)], [porygon])
     assert lines and all("Trace copying Tinted Lens" in m and "side 1" in m for m in lines)
-    r = check_coverage(tables, names, [porygon], trainer, [_mon(names, "Skitty", slot=1)], 0)
-    assert sum("Trace copying Normalize" in m for m in r.missing) == 1
+    r = check_coverage(tables, names, [_mon(names, "Venomoth", slot=1)], trainer, [porygon], 0)
+    assert sum("ability Tinted Lens" in m for m in r.missing) == 1
+    r = check_coverage(tables, names, [porygon], trainer, [_mon(names, "Mr. Mime", slot=1)], 0)
+    assert not any("Filter" in m for m in r.missing)
 
 
 def test_a_trace_newcomer_copying_battle_armor_is_never_crit(tables, names):

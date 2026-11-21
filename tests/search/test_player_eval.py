@@ -107,6 +107,9 @@ def test_ladder_is_monotone(tables, names):
 @pytest.mark.slow
 @pytest.mark.fullset
 def test_refused_playout_raises(tables, names):
+    # Normalize is reachable only artificially: no Kaizo Pokemon holds it, and vanilla
+    # Skitty's is engine-UNSUPPORTED (coverage would refuse the fight first). The AI reads its
+    # decomp id 96 (species_abilities_decomp), so the refusal named is the AI's, not the engine's.
     # test_playout.py::test_refused_playout_cannot_be_counted_as_a_loss's state: the AI's
     # Normalize refusal stops every playout on its first turn.
     s = _state(tables, names, player_species="Skitty", player_ability="Normalize")

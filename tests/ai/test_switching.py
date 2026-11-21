@@ -222,6 +222,9 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     if change == "opp_move":
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
     elif change == "ability":  # Skitty's second ability is Normalize
+        # Normalize is reachable only artificially: no Kaizo Pokemon holds it, and vanilla
+        # Skitty's is engine-UNSUPPORTED (coverage would refuse the fight first). The AI reads its
+        # decomp id 96 (species_abilities_decomp), so the refusal named is the AI's, not the engine's.
         s = as_species(tables, s, 0, 5, names.species("Skitty"), ability_slot=1)
     else:  # Chansey (Natural Cure) on Roark's bench: AI_IsAsleepWithNaturalCure
         s = as_species(tables, s, 1, 1, names.species("Chansey"))
