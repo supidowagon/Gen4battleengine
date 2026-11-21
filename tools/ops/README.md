@@ -28,14 +28,16 @@ Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` sec
 - `nightly_brief.md`: the brief for the nightly run.
 - `day/push_bin.sh`: once per pod (safe to repeat); sends `day/bootstrap.sh` and prints the exec-pod body that runs it in `/work/_bin/new`.
 - `day/bootstrap.sh`: pod side, once per pod; apt tools, uv, Python 3.12, runpodctl checksum, decomp clone; ends with `BOOTSTRAP_OK`.
-- `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`, `day/pod/weights.py`, `day/pod/weights.txt`; refuses forbidden files and tables outside `TABLE_ALLOW`; sends; prints the exec-pod body.
+- `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`, `day/pod/weights.py`, `day/pod/weights.txt`; refuses forbidden files, tables outside `TABLE_ALLOW` and pod scripts that differ from `main`'s; writes `GATE_VERSION` and `POD_SCRIPTS` into `meta.env`; sends; prints the exec-pod body.
+- `day/podcheck_body.sh`: prints the exec-pod body that runs `day/pod/podcheck.sh` (HEAD's copy, with `gate.sh`) on the pod before a pack: active runs with their `GATE_VERSION` and `POD_SCRIPTS`, memory and limit, claims, `PODCHECK OK` or `PODCHECK MIXED`.
 - `day/collect.sh <run> <code>`: receives a run's `results.tgz` and unpacks it.
 - `day/nightly_files.txt`: the nightly test list.
 - `day/weights_from_agg.py <weights.txt> <agg.txt>...`: prints `weights.txt` with its generated part rebuilt from run results (one line per measured file); DAYBOX.md, Send a run step 2.
 - `day/pod/setup.sh`: checkout, tables, env, collection, chunked units, each unit's expected peak (`out/<unit>.w`); starts the runner.
 - `day/pod/weights.py`, `day/pod/weights.txt`: list-line parsing and each unit's expected peak; the tracked table of measured peaks of heavy tests and files, each with the run it was measured in.
 - `day/pod/runner.sh`: starts units under the pod-wide memory and process gate, the expected-peak gate (container memory + the unreached expected peaks of every live unit on the pod + the next unit's expected peak under `GATE_GB`; with no live unit on the pod: memory under `GATE_GB` and memory + expected peak under `KILL_GB`, a unit that can never fit alone at once, or after `IDLE_WAIT_S`), checked and started under the pod-wide lock `RUNNER_LOCK`; a head that does not fit lets a later unit of its run that fits start, and after `CLAIM_S` claims the pod so other runs start nothing until it has started, and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
-- `day/pod/gate.sh`: sourced by `runner.sh`; the gate's arithmetic and claims (`wgb`, `podgate`, `admit`, `choose`, `claim_state`, `claim_write`).
+- `day/pod/gate.sh`: sourced by `runner.sh`, `setup.sh`, `status.sh`, `agg.sh`, `podcheck.sh`; the gate's arithmetic and claims (`wgb`, `podgate`, `admit`, `choose`, `claim_state`, `claim_write`, `unit_overdue`) and `cgmem`, the container memory reader (cgroup v2, else v1).
+- `day/pod/podcheck.sh`: the pod check (`day/podcheck_body.sh`).
 - `day/pod/unit.sh`: one pytest process over one unit's ids.
 - `day/pod/status.sh`: progress, memory, collection failures, failing units, other active runs.
 - `day/pod/notify.sh`: started by the exec-pod body before `setup.sh`; offers the first-failure beacon and the results under the run's codes `WATCH_F` and `WATCH_D`.

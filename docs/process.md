@@ -108,9 +108,12 @@ per day is the rate used for estimates.
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
   - 256 GB (the memory-optimized 32 vCPU type): `GATE_GB` 176, `MAXP` 20,
     `KILL_GB` 236, and `SNAP_GATE_GB` 176 for `snap.sh`.
-  Read the shape before sending a body: exec `cat /sys/fs/cgroup/memory.max` on the pod
-  (bytes; `max` or a value under 200 GB means the 128 GB limits). Never pass the 256 GB
-  limits to a 128 GB pod.
+  Read the shape before sending a body: exec
+  `{"command":["sh","-c","cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes"],"timeoutSeconds":25}`
+  on the pod (cgroup v2's `memory.max`, else cgroup v1's `memory.limit_in_bytes`: some rented
+  hosts are v1), or the `limit` of the pod check (DAYBOX.md, Send a run step 3). Bytes; `max`,
+  a value of 2^60 bytes or more (v1 without a limit: 9223372036854771712) or a value under
+  200 GB means the 128 GB limits. Never pass the 256 GB limits to a 128 GB pod.
   Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
@@ -167,7 +170,8 @@ per day is the rate used for estimates.
   file never measured), raised to the list line's `<GB>G` field when that is larger. A
   live chunk of a run packed before weights (no `out/<unit>.w`) counts `DEFAULT_WEIGHT_GB`
   12 GB: the 90th percentile of 7183 measured chunks, as those runs are mostly fast-tier
-  chunks of measured files. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`) plus
+  chunks of measured files. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`, on cgroup v1
+  `/sys/fs/cgroup/memory/memory.usage_in_bytes`) plus
   the unreached expected peaks of every live chunk on the pod (all runs) plus its own
   expected peak stays under `GATE_GB`, and run at most `MAXP` chunks at once across all runs
   on the pod (Test pod above: 88 GB and 10, or 176 GB and 20). With no other live chunk on
@@ -177,7 +181,11 @@ per day is the rate used for estimates.
   chunk that does not fit lets the first later chunk of its run that fits start; after
   `CLAIM_S` (120 s) it claims the pod, and no other run starts a chunk until it has started.
   Heavy tests need no hand placement: list them with their weights and the runner keeps them
-  apart. Old-script runners ignore claims: never send a run to a pod they keep full.
+  apart. A claim older than `CLAIM_MAX_S` (3600 s) is dropped; a chunk running longer than
+  `UNIT_MAX_S` (14400 s) is killed and counts as a failure. Old-script runners ignore claims:
+  never send a run to a pod they keep full. Every pack is preceded by the pod check
+  (DAYBOX.md, Send a run step 3), and `pack.sh` packs only `main`'s pod scripts, so runs of
+  old and new scripts share a pod only when the run's report states it.
   Near `KILL_GB` (118 or 236 GB) kill this run's newest chunk and queue it again, at most
   twice per chunk; a third kill counts as a failure. Never signal PID 1.
 - **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed
