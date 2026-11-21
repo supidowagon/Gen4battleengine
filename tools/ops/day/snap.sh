@@ -99,10 +99,11 @@ procscan() { local f s pid st pp pg
     pid=${s%% *}; read -r st pp pg _ <<< "${s##*) }"
     case "$pid$pp$pg" in ''|*[!0-9]*) continue;; esac
     PS_ST[pid]=$st; PS_PP[pid]=$pp; PS_PG[pid]=$pg; done; }
-# snapmembers <groups> <except pid>: SM = the pids of procscan's processes that are not zombies,
-# are not <except pid> and belong to one of the process groups <groups> (ids 0 and 1 never count).
+# snapmembers <groups> <except pid> [<except group>]: SM = the pids of procscan's processes that
+# are not zombies, are not <except pid> and belong to one of the process groups <groups> (ids 0
+# and 1 never count, nor <except group>).
 snapmembers() { local p g gs=""; SM=""
-  for g in $1; do case "$g" in ''|*[!0-9]*|0|1) ;; *) gs="$gs $g";; esac; done
+  for g in $1; do case "$g" in ''|*[!0-9]*|0|1|"${3:-x}") ;; *) gs="$gs $g";; esac; done
   for p in "${!PS_ST[@]}"; do
     if [ "${PS_ST[p]}" = Z ] || [ "$p" = "$2" ]; then continue; fi
     case "$gs " in *" ${PS_PG[p]} "*) SM="$SM $p";; esac; done; }
@@ -112,11 +113,13 @@ snapmembers() { local p g gs=""; SM=""
 # belongs to process group <pid> (run.sh leads its own group under setsid) or to a group in
 # <lock dir>/groups (the job's groups, snapwatch): so a KILLed run.sh whose driver or parts
 # still run keeps the lock, as podgate counts a unit live while its group has a live member.
+# The waiting shell's own group ($$; run.sh leads its group) never counts: a holder group id
+# reused by this waiter would otherwise make it wait on itself.
 snaplive() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac
   procscan
   if [ -n "${PS_ST[$1]}" ] && [ "${PS_ST[$1]}" != Z ] &&
      tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -qE '/run\.sh( |$)'; then return 0; fi
-  snapmembers "$1 $(tr -cs '0-9' ' ' < "$2/groups" 2>/dev/null)" ""; [ -n "$SM" ]; }
+  snapmembers "$1 $(tr -cs '0-9' ' ' < "$2/groups" 2>/dev/null)" "" "$$"; [ -n "$SM" ]; }
 # snaplock <dir> <times.txt>: take the lock (mkdir <dir>; <dir>/pid = this shell's pid, <dir>/name
 # = $W). Held by a live holder (snaplive): wait, printing "lock wait <time>: <holder> holds <dir>"
 # once a minute. Stale (its holder not live; its pid is this shell's own, a pid reused since the
@@ -144,13 +147,21 @@ snaplock() { local d="$1" t="$2" p q n=0 e=0
   done; }
 # snapunlock <dir>: release the lock when this shell holds it.
 snapunlock() { [ "$(cat "$1/pid" 2>/dev/null)" = "$$" ] && rm -rf "$1"; return 0; }
+# sgprune: drop from SG every group with no member left in procscan's scan (no process that is
+# not a zombie has it as its group), so a group id the system reuses later for an unrelated
+# process is not stopped (snapstop) or counted (snaplive) as the job's.
+sgprune() { local p g lg="" n=""
+  for p in "${!PS_ST[@]}"; do [ "${PS_ST[p]}" = Z ] || lg="$lg ${PS_PG[p]}"; done
+  for g in $SG; do case "$lg " in *" $g "*) n="$n $g";; esac; done
+  SG=${n# }; }
 # snapwatch <pid> <lock dir>: wait for the job <pid> (a child of this shell) and return its exit
-# code. Every 2 s it adds the process group of each descendant of this shell to SG (set by
-# run.sh to its own pid) and, when SG grows while this shell holds the lock, writes it to
-# <lock dir>/groups: a job process in a group of its own (should uv or the driver start one)
-# still holds the lock (snaplive) and is still stopped (snapstop).
+# code. Every 2 s it drops the groups with no member left from SG (sgprune), adds the process
+# group of each descendant of this shell to SG (set by run.sh to its own pid) and, when SG
+# changed while this shell holds the lock, writes it to <lock dir>/groups: a job process in a
+# group of its own (should uv or the driver start one) still holds the lock (snaplive) and is
+# still stopped (snapstop).
 snapwatch() { local p q o
-  while procscan; [ -n "${PS_ST[$1]}" ] && [ "${PS_ST[$1]}" != Z ]; do o=$SG
+  while procscan; [ -n "${PS_ST[$1]}" ] && [ "${PS_ST[$1]}" != Z ]; do o=$SG; sgprune
     for p in "${!PS_PP[@]}"; do q=${PS_PP[p]}
       while [ -n "$q" ] && [ "$q" -gt 1 ] && [ "$q" != "$$" ]; do q=${PS_PP[q]}; done
       if [ "$q" = "$$" ]; then case " $SG " in *" ${PS_PG[p]} "*) ;; *) SG="$SG ${PS_PG[p]}";; esac; fi
@@ -160,11 +171,11 @@ snapwatch() { local p q o
   done
   wait "$1"; }
 # snapstop <times.txt>: stop what is left of the job: every process, other than this shell, that
-# is not a zombie and belongs to a group in SG. Logs "JOB_LEFT <pids> <epoch>" in <times.txt> when
-# any is left, TERMs them, KILLs what is left after 30 s and returns once none is left (at most
-# 40 s).
+# is not a zombie and belongs to a group in SG (pruned on every scan, sgprune). Logs "JOB_LEFT
+# <pids> <epoch>" in <times.txt> when any is left, TERMs them, KILLs what is left after 30 s and
+# returns once none is left (at most 40 s).
 snapstop() { local i
-  for ((i = 0; i <= 40; i++)); do procscan; snapmembers "$SG" "$$"
+  for ((i = 0; i <= 40; i++)); do procscan; sgprune; snapmembers "$SG" "$$"
     [ -n "$SM" ] || return 0
     if [ "$i" = 0 ]; then echo "JOB_LEFT$SM $(date +%s)" >> "$1"; kill -TERM $SM 2>/dev/null; fi
     [ "$i" -ge 30 ] && kill -KILL $SM 2>/dev/null
@@ -302,7 +313,7 @@ cat > "$O/run.sh" <<EOS
 # $MODE of $SHA; written by tools/ops/day/snap.sh
 export PATH=/root/.local/bin:/work/_bin:\$PATH UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 W="$W"; printf '%s\n' "$CAP" > "\$W/reads"; cd "\$W/repo"
-$(declare -f cgused procscan snapmembers snaplive snaplock snapunlock snapwatch snapstop snapgate reserve_knobs podgate)
+$(declare -f cgused procscan snapmembers snaplive snaplock snapunlock sgprune snapwatch snapstop snapgate reserve_knobs podgate)
 L=/work/.snaplock; SG=\$\$
 # Exit (TERM included) releases the pod lock; a TERM first writes TERM <epoch> to times.txt and
 # stops the job (snapstop: run.sh's process group, which it leads under setsid, and every group

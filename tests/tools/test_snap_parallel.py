@@ -525,7 +525,7 @@ def test_snap_sh_capture_run_sh_passes_workers_gate_and_takes_the_lock(snap_dry)
     assert ("trap 'trap \"\" TERM; echo \"TERM $(date +%s)\" >> \"$W/times.txt\"; snapstop "
             "\"$W/times.txt\"; exit 143' TERM") in lines  # fmt: skip
     for fn in ("cgused", "procscan", "snapmembers", "snaplive", "snaplock", "snapunlock",
-               "snapwatch", "snapstop", "snapgate", "reserve_knobs", "podgate"):  # fmt: skip
+               "sgprune", "snapwatch", "snapstop", "snapgate", "reserve_knobs", "podgate"):  # fmt: skip
         assert f"{fn} () " in run_sh
     order = ["MAP_COUNT_LOW", "SYNC_RC=", 'snaplock "$L" "$W/times.txt"; echo "SNAP_LOCK',
              "snap-fetch", 'snapgate 88 "$W/times.txt"; echo "CAPTURE_START', "CAPTURE_RC=$rc",
@@ -685,6 +685,69 @@ def test_snaplive_counts_a_dead_leader_s_live_group_and_the_groups_file(tmp_path
         _bash(f"kill -9 {kid}")
     assert _until(lambda: _bash(live.format(leader)).stdout.strip() == "GONE", 10)
     assert _bash(live.format(dead)).stdout.strip() == "GONE"
+
+
+def _own_group_bash(script):
+    """Run ``script`` in a bash that leads its own process group (as run.sh under setsid)."""
+    from tests.tools.test_pod_gate import BASH, _clean_env
+
+    return subprocess.run([BASH, "-c", 'read -r s < /proc/$$/stat; read -r _ _ pg _ <<< "${s##*) }"; '
+                           '[ "$pg" = "$$" ] || { echo NOT_LEADER; exit 0; }; ' + script],
+                          check=False, capture_output=True, text=True, timeout=60, env=_clean_env(),
+                          start_new_session=True)  # fmt: skip
+
+
+def test_snaplive_never_counts_the_waiting_shell_s_own_group(tmp_path, fns):
+    """A dead holder whose groups file names the waiter's own group id (a reused id): the waiter
+    is a member of that group, but it does not wait on itself."""
+    lock = tmp_path / "lock"
+    lock.mkdir()
+    dead = _bash("echo $$").stdout.strip()
+    (lock / "pid").write_text(dead + "\n")
+    r = _own_group_bash(f". '{fns.as_posix()}'; echo $$ > '{lock.as_posix()}/groups'; "
+                        f"snaplive {dead} '{lock.as_posix()}' && echo LIVE || echo GONE")  # fmt: skip
+    assert r.stdout.strip() == "GONE", r.stdout + r.stderr
+
+
+def _group_leader(s=60):
+    """A live sleep leading a process group of its own: (Popen, its pid as bash numbers it)."""
+    from tests.tools.test_pod_gate import BASH, _clean_env
+
+    p = subprocess.Popen([BASH, "-c", "echo $$; exec sleep %d" % s], stdout=subprocess.PIPE,
+                         text=True, env=_clean_env(), start_new_session=True)  # fmt: skip
+    return p, p.stdout.readline().strip()
+
+
+def test_sgprune_drops_a_group_once_it_has_no_member(tmp_path, fns):
+    p, g = _group_leader()
+    try:
+        keep = _bash(f". '{fns.as_posix()}'; SG=\"$$ {g}\"; procscan; sgprune; echo \"$SG\"")
+        assert keep.stdout.split()[1:] == [g], keep.stdout + keep.stderr
+    finally:
+        _bash(f"kill -9 {g}")  # by bash's pid (Git Bash: Popen.kill may miss the exec'd sleep)
+        p.kill()
+        p.wait()
+    assert _until(lambda: _bash(f"kill -0 {g} 2>/dev/null || echo dead").stdout.strip(), 10)
+    gone = _bash(f". '{fns.as_posix()}'; SG=\"$$ {g}\"; procscan; sgprune; echo \"$$ $SG\"")
+    me, *sg = gone.stdout.split()
+    assert sg == [me], gone.stdout + gone.stderr
+
+
+def test_snapwatch_drops_a_dead_group_from_sg_and_the_groups_file(tmp_path, fns):
+    """snapwatch re-checks SG on every scan: a job group with no member left leaves SG and the
+    lock's groups file, so snapstop cannot later TERM a process that reused its id."""
+    p, g = _group_leader()
+    _bash(f"kill -9 {g}")
+    p.kill()
+    p.wait()
+    assert _until(lambda: _bash(f"kill -0 {g} 2>/dev/null || echo dead").stdout.strip(), 10)
+    lock = tmp_path / "lock"
+    lock.mkdir()
+    r = _bash(f". '{fns.as_posix()}'; L='{lock.as_posix()}'; echo $$ > \"$L/pid\"; SG=\"$$ {g}\"; "
+              f"sleep 3 & snapwatch $! \"$L\"; echo \"rc=$? $$|$SG|$(cat \"$L/groups\")\"")  # fmt: skip
+    head, sg, groups = r.stdout.strip().split("|")
+    rc, me = head.split()
+    assert (rc, sg.split(), groups.split()) == ("rc=0", [me], [me]), r.stdout + r.stderr
 
 
 # --- the generated run.sh, run with a fake uv ---------------------------------------------
