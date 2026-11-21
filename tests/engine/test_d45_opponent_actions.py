@@ -152,8 +152,7 @@ def test_four_state_other_formats_draw_bags(tables, names):
     """Test 8: DOUBLES and TWO_TRAINERS draws still give non-empty bags in some example."""
     seen = {DOUBLES: False, TWO_TRAINERS: False}
 
-    for fmt in seen:
-
+    def runner(fmt):
         @settings(
             max_examples=20,
             deadline=None,
@@ -161,10 +160,13 @@ def test_four_state_other_formats_draw_bags(tables, names):
             suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
         )
         @given(data=st.data())
-        def run(data, fmt=fmt):
+        def run(data):
             s = data.draw(four_state(tables, names, fmt))
             if np.asarray(s.trainer_item_count).any():
                 seen[fmt] = True
 
-        run()
+        return run
+
+    for fmt in seen:
+        runner(fmt)()
     assert all(seen.values())
