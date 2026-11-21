@@ -14,7 +14,17 @@ test in `tests/ai/test_kaizo_commands.py`, which also checks this table against 
   comes from `src/battle/trainer_ai/trainer_ai.c` (line given). Both paths are
   relative to `external/pokeplatinum`.
 - **Battler argument.** `D` is the player's active Pokemon (`AI_BATTLER_DEFENDER`)
-  and `A` is Roark's active Pokemon (`AI_BATTLER_ATTACKER`).
+  and `A` is Roark's active Pokemon (`AI_BATTLER_ATTACKER`). `D partner` and `A partner`
+  (`AI_BATTLER_DEFENDER_PARTNER`, `AI_BATTLER_ATTACKER_PARTNER`, `trainer_ai.h:28-31`) are battlers
+  2 and 3. In a single battle they hold the zeroed `BattleMon` (`battle_controller_player.c:180-182`,
+  `:223-227`): hp% 0, ability 0, species 0, types Normal, status, volatile and move-effect masks 0,
+  stat stages 0 (not the neutral 6), no moves, no held item, and an AI record of 0
+  (`commands.CLEARED`). `LoadTypeFrom` `ATTACKER_PARTNER_TYPE_1` / `_2` read
+  `BattleSystem_GetPartner(attacker)` (`battle_system.c:394-411`), the attacker itself in a single
+  battle. Per command: `IfMoveKnown` / `IfMoveNotKnown` `A partner` never jump with no HP
+  (`:1650-1653`), `D partner` never jumps (`:1678-1679`); `CheckBattlerAbility` takes the
+  knowledge branch for both `D` arguments and the raw ability for both `A` arguments (`:1223`);
+  `IfHeldItemEqualTo` reads the true item of a battler on the attacker's side (`:1925-1926`).
 - **Jumps.** `jump` is a label. In JAX the scripts are straight-line: every command
   runs, masked by the conditions of the branches that lead to it. A jump command
   therefore yields its condition, and the masks follow it.
@@ -83,6 +93,11 @@ test in `tests/ai/test_kaizo_commands.py`, which also checks this table against 
 | `LoadBattleType` | none | Sets `calcTemp` to `battleSys->battleType` (`:2504-2508`): `Tables.battle_type`, set per fight from `Trainer.format` as `Encounter_NewVsTrainer` sets it (`encounter.c:724-740`; `data.tables.BATTLE_TYPES`). | no | `load_battle_type` |
 | `LoadProtectChain` | battler | Sets `calcTemp` to `protectSuccessTurns`, or 0 when `moveProtect` is not Protect, Detect or Endure (`:2538-2552`): `BattleState.protect_count`, which folds that reset in (engine/STATE.md). | no | `load_protect_chain` |
 | `LoadTurnCount` | none | Sets `calcTemp` to `totalTurns` (`:931-935`), `BattleState.turn` at a decision: 0 on the battle's first turn (the battle increments it once a turn ends, `battle_controller_player.c:1852`). SETUP_FIRST_TURN (`script.s:6421`) and WEATHER (`:7983`) use it. | no | `load_turn_count` |
+| `FlagBattlerIsType` | battler, type | Sets `calcTemp` to 1 when the battler has the type (`MON_HAS_TYPE`: `BattleMon_Get` type 1 or type 2 equals it), else 0 (`:991-1004`). The types are the current ones (`state.types`; an Arceus with Multitype has its plate's). A battler the format lacks (a partner argument in a single battle) has types 0, 0, so it has Normal only. | no | `flag_battler_is_type` |
+| `IfActivatedFlashFire` | battler, `jump` | Jumps when the battler's `moveEffectsData.flashFire` is set (`:2641-2652`; `BattleState.flash_fire`). Never for a battler the format lacks. | no | `if_activated_flash_fire` |
+| `IfBattlerFainted` | partner battler, `jump` | Jumps when `battlersSwitchingMask` has the battler's bit (`:2438-2452`; `actions.absent_now`). Partner arguments only. In a single battle battlers 2 and 3 are set from the start (`battle_lib.c:2031-2034`), so it always jumps. | no | `if_battler_fainted` |
+| `LoadBattlerSpeedRank` | battler | Sets `calcTemp` to the battler's position in the speed order (`:2056-2094`), sorted by `CompareBattlerSpeed(.., TRUE)` as `BattleSystem_SortMonSpeedOrder` does. At B = 2 the one compare of battlers 0 and 1 (`order.compare_speed`, Quick Claw from `qc_roll`); a battler not in the order (a partner argument) leaves `calcTemp` unchanged. A tie at equal speed is one read of probability 1/2. B = 4 is not transcribed. | yes: the tie bit, 1/2 | `load_battler_speed_rank` |
+| `CheckIfHighestDamageWithPartner` | `bool` (`USE_MAX_DAMAGE` / `ROLL_FOR_DAMAGE`) | Like `FlagMoveDamageScore` (`:2369-2436`), but over two sweeps: the attacker's moves, then its partner's (`BattleSystem_GetPartner`). `AI_MOVE_IS_HIGHEST_DAMAGE` when no value of either sweep exceeds this slot's sweep-1 value. In a single battle the partner is the attacker, so sweep 2 estimates the same moves with fresh Psywave and Magnitude draws; with no such move it equals `FlagMoveDamageScore` and makes no read. One read when a move draws. B = 2 only. | yes: the estimate's draws (`_calc_read`) | `check_if_highest_damage_with_partner` |
 
-**Count check.** `grep -c '^|' docs/ai/script_commands.md` gives 60: 58 command rows
+**Count check.** `grep -c '^|' docs/ai/script_commands.md` gives 65: 63 command rows
 plus the header and separator lines (`test_script_commands_table_matches_the_module`).

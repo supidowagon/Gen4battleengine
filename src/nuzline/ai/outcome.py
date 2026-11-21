@@ -91,7 +91,8 @@ Kaizo's Triple Axel (149) and Bulldoze (222) sit on those ids. Every damage comm
 afresh for each such move it estimates: ``FlagMoveDamageScore`` (:1041, ``CalcAllDamage`` over
 the attacker's four moves), ``IfCurrentMoveKills`` (:1560), ``IfPartyMemberDealsMoreDamage``
 (:2130, :2156, the attacker's moves then every living party member's), ``IfBattlerDealsMoreDamage``
-(:2210, :2228) and ``CheckIfHighestDamageWithPartner`` (:2402, doubles only). Each draw's law
+(:2210, :2228) and ``CheckIfHighestDamageWithPartner`` (:2402, the attacker's moves, then its partner's: in a
+single battle the attacker's again, with fresh draws, script.s:6684). Each draw's law
 (``CALC_DRAW_P``, by ``calc_draw_kind``): the class ``calc_draw_class`` of a uniform u16, Psywave's
 ``% 11`` (65536 = 11 * 5957 + 9: classes 0-8 have 5958 values, 9-10 5957) and Magnitude's
 bucket of ``% 100`` (65536 = 100 * 655 + 36: residues 0-35 have 656 values, 36-99 655).
