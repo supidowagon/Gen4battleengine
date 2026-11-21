@@ -67,7 +67,7 @@ def test_tracked_defaults_load_with_one_entry_per_id():
     entries = [e for e, _ in table]
     assert len(entries) == len(set(entries))
     assert all(e.startswith("tests/") and gb >= 1 for e, gb in table)
-    assert w.id_weight("tests/search/test_stage_b_budget.py::test_protected_line_matches_exhaustive", table) > 80
+    assert w.id_weight("tests/prep/test_search.py::test_team_phase_halving", table) > 80
 
 
 def test_the_entry_index_finds_what_the_longest_match_finds():
