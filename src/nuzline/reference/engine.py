@@ -5227,6 +5227,11 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         status = Status.BURN
     else:
         return
+    # The trigger (lib.c:4214-4224, :4303-4313, :4321-4331: an attacker with no status, the roll)
+    # makes the attacker the sideEffectMon before the subscript's blocks below (H-M2).
+    if not (turn.outcome.contact_proc[target][hit] and attacker.status == Status.NONE):
+        return
+    turn.sync_mon = side
     if status == Status.PARALYSIS and _ability(s, attacker) == AbilityId.LIMBER:
         return
     # Its own Immunity / Water Veil stops Poison Point / Flame Body, silently (H-2).
@@ -5235,7 +5240,7 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
     # The attacker's own Leaf Guard in sun, silent for an ABILITY side effect (G-14).
     if _ability(s, attacker) == AbilityId.LEAF_GUARD and _sunny(turn.tables, s):
         return
-    if turn.outcome.contact_proc[target][hit] and _can_have_status(turn.tables, s, side, status):
+    if _can_have_status(turn.tables, s, side, status):
         attacker.status = status
         attacker.status_counter = 0
         _status_landed(turn, side, status)  # TriggerAbilityOnHit: sideEffectMon = attacker

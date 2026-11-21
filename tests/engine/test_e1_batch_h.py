@@ -1159,6 +1159,75 @@ def test_a_u_turn_user_felled_by_a_later_pursuer_keeps_the_charmed_one_as_side_e
     assert int(out.infatuated[1]) != 0 and int(out.infatuated[2]) != 0, np.asarray(out.infatuated)
 
 
+@pytest.mark.slow  # a singles step per case, engine and reference (58-144 s locally)
+@pytest.mark.parametrize(
+    "foe_ability, own",
+    [
+        (AbilityId.STATIC, AbilityId.LIMBER),  # subscript_paralyze.s:5
+        (AbilityId.POISON_POINT, AbilityId.IMMUNITY),  # subscript_poison.s:6-16
+        (AbilityId.FLAME_BODY, AbilityId.WATER_VEIL),  # subscript_burn.s:6-23
+    ],
+)
+def test_singles_a_blocked_contact_trigger_moves_side_effect_mon_unseen(
+    tables, names, foe_ability, own
+):
+    """H-M2, B = 2: the trigger (battle_lib.c:4214-4224, :4303-4313, :4321-4331) makes the
+    attacker the sideEffectMon before its subscript stops on the attacker's own ability. In
+    singles no later step can tell: the Synchronize step's attacker branch would pass the
+    attacker's own status, none (the trigger needs MON_CONDITION_NONE, :4216), and its defender
+    branch needs the sideEffectMon to be the defender, whose ability is the contact one, not
+    Synchronize; the knot needs an INFATUATED flag no such hit sets. Engine == reference."""
+    s = roark_state(tables, names, player_moves=("Tackle",), opp_moves=("Leer",))
+    s = s._replace(ability=s.ability.at[1, 0].set(foe_ability).at[0, 0].set(own))
+    out = assert_matches_reference(tables, s, A("Tackle", "Leer", s, names), _procs(opp=1))
+    assert int(out.status[0, 0]) == Status.NONE
+
+
+@pytest.mark.slow  # a B = 4 action phase, engine and reference (over 60 s)
+def test_a_blocked_flame_body_trigger_moves_side_effect_mon_off_a_synchronize_pursuer(
+    tables, names
+):
+    """H-M2, B = 4, the MODE_PURSUIT tail (subscript_attack_then_switch_out.s:55): foe battler 1
+    (Flame Body) U-turns at battler 0. Battler 0's Pursuit hit is burned by the Flame Body
+    (sideEffectMon = 0, battle_lib.c:4331; SYSCTL_TRY_SYNCHRONIZE_STATUS on, subscript_burn.s:79-84);
+    battler 2's (Water Veil) hit fells the user and passes the trigger too, so sideEffectMon = 2
+    although subscript_burn.s:20-23 stops the burn. At AfterMoveEffects the defender, battler 0's
+    Synchronize, is not the sideEffectMon (battle_lib.c:4499-4502): no burn passed to the felled
+    user, no Synchronize message (subscript_burn.s:68, the AI's record). Before H-M2 both engines
+    kept sideEffectMon = 0 and passed it. Engine == reference."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.format import DOUBLES
+    from nuzline.engine.outcome import outcome_to_py
+    from nuzline.reference.convert import from_ref, to_ref
+    from nuzline.reference.engine import ref_step
+    from tests.engine.d2_states import party_of, with_ability, with_hp
+    from tests.engine.test_d3_action_loop import hp, play, speed_ordered
+    from tests.engine.test_d3_pause import base
+
+    s = with_moves(base(tables, names), names, 1, ["U-turn"])
+    for b in (0, 2):
+        s = with_moves(s, names, b, ["Pursuit"])
+    s = with_ability(with_ability(s, 1, AbilityId.FLAME_BODY), 0, AbilityId.SYNCHRONIZE)
+    s = with_ability(s, 2, AbilityId.WATER_VEIL)
+    s = speed_ordered(s, [1, 0, 2, 3])
+    outcome = empty_outcome(DOUBLES)._replace(
+        contact_proc=jnp.zeros((4, MAX_HITS), jnp.int8).at[1].set(1)
+    )
+    targets = (1, 0, 1, 0)
+    probe = from_ref(
+        ref_step(
+            to_numpy(tables), to_ref(s), (0, 0, 0, 0), outcome_to_py(outcome), list(targets),
+            actions_only=True,
+        )
+    )  # fmt: skip
+    both = int(s.hp[party_of(s, 1), int(s.active[1])]) - hp(probe, 1)
+    s = with_hp(s, 1, both // 2 + 1)  # the first hit leaves it, the second fells it
+    out, _ = play(tables, s, [0, 0, 0, 0], None, targets=targets, outcome=outcome)
+    assert hp(out, 1) == 0 and int(out.pivot_battler) == 0
+    assert int(out.status[0, int(s.active[0])]) == Status.BURN
+    assert int(out.ai_ability_known[int(s.active[0])]) == 0
+
+
 def test_the_h4_items_have_their_own_ids_and_the_inert_ones_one_shared_set(tables, names):
     from nuzline.engine.coverage import IMPLEMENTED_ITEMS
     from nuzline.engine.ids import NO_IN_BATTLE_HOLD_EFFECT_ITEMS, ItemId

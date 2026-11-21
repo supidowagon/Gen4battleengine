@@ -2699,11 +2699,29 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `test_the_resumed_knot_reads_the_last_pursuers_cute_charm_trigger` (4 cases: superseded by a failed or a landed
   later trigger, the last charmed is the knot holder, only the second charmed),
   `test_a_u_turn_user_felled_by_a_later_pursuer_keeps_the_charmed_one_as_side_effect_mon`. Snapshot class: B = 2
-  none (one pursuer: only 1 occurs, and its fainted-tail trigger cannot pass). Not built (both engines, all B):
-  a Static / Poison Point / Flame Body trigger whose status the subscript then blocks (the attacker's Limber,
-  Immunity, Water Veil, Leaf Guard, type) moves sideEffectMon in the decomp, but both engines move it only on a
-  landing (`sync_landed`, reference `_status_landed`). Known effect: B = 4 MODE_PURSUIT tail only, a Synchronize
-  pursuer statused earlier in the chain then still passes its status to the felled user. Owed (H-M2).
+  none (one pursuer: only 1 occurs, and its fainted-tail trigger cannot pass).
+- H-M2 (found building H-M1) Built, all B: a blocked Static / Poison Point / Flame Body trigger still moves
+  sideEffectMon. BattleSystem_TriggerAbilityOnHit sets sideEffectMon = attacker once the trigger passes (battle_lib.c:
+  4214-4224 Static, :4303-4313 Poison Point, :4321-4331 Flame Body: attacker HP, attacker status NONE, no
+  MOVE_STATUS_NO_EFFECTS, no FIRST_OF_MULTI_TURN / UTURN_ACTIVE, damage taken, contact, the roll; a substitute hit
+  returns first, :4209), before the subscript, which then stops silently on the attacker's own Limber / Immunity /
+  Water Veil, Leaf Guard in sun, or type (subscript_paralyze.s:5-8, subscript_poison.s:6-16, :34-37,
+  subscript_burn.s:6-23; an ABILITY side effect skips Safeguard and the substitute, subscript_paralyze.s:33, :43; a
+  status already is excluded by the trigger itself). Only a landing toggles SYSCTL_TRY_SYNCHRONIZE_STATUS
+  (subscript_paralyze.s:50-56 and the like). Effect Spore (:4273-4300) is the same shape but the ability is not
+  modelled (dropped in batch F, no Kaizo holder). Built: engine `effects._contact_ability` returns `sem_proc` (Cute
+  Charm's trigger, H-4, or the status trigger; `MoveHit.charm_proc` renamed `sem_proc`), which `_use_move`'s
+  `sync_sem` and the Pursuit pass (H-M1: `ts_loved`, `pursuit_sync`) read; reference `_contact_ability` sets
+  `turn.sync_mon` at the trigger, before the blocks. B = 2: no later step can tell (the Synchronize step's attacker
+  branch passes the attacker's own status, none by the trigger's test; its defender branch needs the defender, whose
+  ability is the contact one, to have Synchronize; the knot needs an INFATUATED flag such a hit never sets), so no
+  snapshot change expected. B = 4 visible on the MODE_PURSUIT tail: a Synchronize pursuer burned earlier in the
+  chain no longer passes its burn (and its Synchronize reveal) to the user a later pursuer felled. Tests (test_e1_batch_h.py):
+  `test_singles_a_blocked_contact_trigger_moves_side_effect_mon_unseen` (3 cases),
+  `test_a_blocked_flame_body_trigger_moves_side_effect_mon_off_a_synchronize_pursuer` (slow; fails without either
+  engine's change), the singles test slow too. Not in scope, same
+  shape: a damaging move's secondary sets sideEffectMon at MapSideEffectToSubscript (battle_lib.c:7511-7523) before
+  its subscript's blocks; both engines move it only on a landing (`def_landed`); not checked for visibility.
 
 ## Stream state (restart point, 2026-11-19)
 

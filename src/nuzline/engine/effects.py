@@ -3008,11 +3008,16 @@ def _struggle_recoil(state: BattleState, h: _Hit, struggling) -> BattleState:
 def _contact_ability(
     tables, state, h: _Hit, outcome: Outcome, move_type
 ) -> tuple[BattleState, jnp.ndarray]:
-    """``(state, charm_proc)``: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200-4371)
+    """``(state, sem_proc)``: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200-4371)
     after hit ``h``; ``move_type`` is the action's ``battleCtx->moveType`` or the table type
-    (``move_type_of``), which Color Change reads. ``charm_proc``: Cute Charm's trigger passed
-    (the attacker not in love, the roll), which moves ``sideEffectMon`` to the attacker before
-    ``subscript_infatuate.s`` tries the infatuation (:4344-4346), whether or not it lands (H-4)."""
+    (``move_type_of``), which Color Change reads. ``sem_proc``: a trigger that moved
+    ``sideEffectMon`` to the attacker before its subscript ran, whether or not that lands: Cute
+    Charm's (the attacker not in love, the roll; :4339-4350, H-4) and Static's, Poison Point's and
+    Flame Body's (an attacker with no status, the roll; :4214-4224, :4303-4313, :4321-4331, H-M2),
+    whose subscript may then stop on the attacker's Limber, Immunity, Water Veil, Leaf Guard in sun
+    or type (subscript_paralyze.s:5-8, subscript_poison.s:6-16, :34-37, subscript_burn.s:6-14,
+    :20-23; an ABILITY side effect skips Safeguard and the substitute, subscript_paralyze.s:33,
+    :43)."""
     fmt = format_of(state)
     # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4200-4371): Battler_Ability.
     ability = battler_ability(state, h.target_side, h.target)
@@ -3044,14 +3049,15 @@ def _contact_ability(
     # Then the attacker's own Leaf Guard in sun (paralyze :6-8, poison :14-16, burn :21-23; ruling
     # G-14): an ABILITY side effect ends silently (:_170, :_177, :_264).
     leaf = _sunny(tables, state) & (battler_ability(state, h.side, h.user) == AbilityId.LEAF_GUARD)
-    cond = (
+    # The trigger itself (ATTACKING_MON.status == MON_CONDITION_NONE, the roll): sideEffectMon =
+    # the attacker (battle_lib.c:4224, :4313, :4331) before the subscript's blocks (H-M2).
+    status_proc = (
         (status != Status.NONE)
         & hit
         & h.contact_proc
-        & ~own_block
-        & ~leaf
-        & can_have_status(tables, state, h.side, h.user, status)
+        & (state.status[party(fmt, h.side), h.user] == Status.NONE)
     )
+    cond = status_proc & ~own_block & ~leaf & can_have_status(tables, state, h.side, h.user, status)
     # Rough Skin (battle_lib.c:4257-4271): no roll; subscript_rough_skin.s takes
     # BattleSystem_Divide(maxHP, 8) from the attacker (it may faint).
     # battle_lib.c:4259: not on a Magic Guard attacker (Battler_Ability).
@@ -3134,7 +3140,7 @@ def _contact_ability(
     state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond | charm)
     # subscript_aftermath.s:6 tags BTLSCR_DEFENDER's ability (BattleMessage_AbilityTag).
     state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough | aftermath)
-    return _set_status(state, h.side, h.user, status, cond), charm_proc
+    return _set_status(state, h.side, h.user, status, cond), charm_proc | status_proc
 
 
 SYNC_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
@@ -3676,8 +3682,9 @@ class MoveHit(NamedTuple):
     # trickRoomActivated (effect_script_0259.s:18; battle_script.c:7859-7866), so the action's
     # MoveEnd re-sorts the order (bcp.c:3989-3994; battle_lib.c:7276-7300), SF2 (k).
     trick_room: jnp.ndarray
-    # Cute Charm's trigger passed on this hit: sideEffectMon is the attacker (H-4).
-    charm_proc: jnp.ndarray
+    # A contact-ability trigger passed on this hit (Cute Charm, H-4; Static, Poison Point, Flame
+    # Body, H-M2): sideEffectMon is the attacker, landed or not (``_contact_ability``).
+    sem_proc: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -4390,7 +4397,7 @@ def play_hit(
         # (BattleSystem_Defender, battle_lib.c:1665-1669): the foe's Shaymin is left as it is.
         on_foe = h.landed & ~targets_user(tables, move, ghost_user(state, side))
         state = shaymin_land(tables, state, target_side, on_foe)
-    state, charm_proc = _contact_ability(tables, state, h, outcome, move_type)
+    state, sem_proc = _contact_ability(tables, state, h, outcome, move_type)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)
     # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431; the substitute's share, :3361, :3366)
@@ -4415,5 +4422,5 @@ def play_hit(
         & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
         & ~((effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)),
         trick_room=trick_room_runs(h),
-        charm_proc=charm_proc,
+        sem_proc=sem_proc,
     )
