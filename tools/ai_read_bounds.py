@@ -162,7 +162,7 @@ def flag_reads(
             elif cmd == "IfSpeedCompareEqualTo":
                 reads = int(args[0] != "COMPARE_SPEED_SLOWER")  # the tie (E1 Ruling R8)
             elif cmd == "LoadBattlerSpeedRank":
-                reads = 1  # the one tied compare of a single battle (E4-A0; B = 4 has up to six)
+                reads = 1  # the one tied compare of a single battle (E4-A0; B = 4: 2)
             elif cmd == "IfBattlerDealsMoreDamage":
                 reads = 1
             elif cmd == "IfPartyMemberDealsMoreDamage":

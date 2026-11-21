@@ -1315,10 +1315,10 @@ class ReadKind(IntEnum):
     # outcome.CALC_DRAW_P[CALC_PSYWAVE] (11 classes) or [CALC_MAGNITUDE] (7)
     CALC_PSYWAVE = 5
     CALC_MAGNITUDE = 6
-    # LoadBattlerSpeedRank at B = 4 (E4-A decision 6): the whole call is ONE read of the rank, its
-    # law the joint law of the call's tie bits (``speed_rank_law``), a class of the
-    # ``RandNext() % 256`` read (every probability a multiple of 1/64). The loose oracle does not
-    # use it: it draws each tied compare (``SPEED_TIE_DRAWN``).
+    # LoadBattlerSpeedRank at B = 4 (E4-A decision 6): the call's rank, its law the joint law of
+    # the call's tie bits (``speed_rank_law``), read as up to two binary reads (the pair {0, 1}
+    # or {2, 3}, then which of the pair), each with its conditional probability. The loose oracle
+    # draws the same two bits (the second at one of two indices, by pair).
     SPEED_RANK = 7
 
 
@@ -1327,8 +1327,6 @@ def read_radix(kind: int) -> int:
     radix): a damage draw's classes (11 for Psywave's ``% 11``, 7 Magnitude buckets), else 2."""
     if kind == ReadKind.CALC_PSYWAVE:
         return CALC_DRAW_CLASSES
-    if kind == ReadKind.SPEED_RANK:
-        return 4
     return 7 if kind == ReadKind.CALC_MAGNITUDE else 2
 
 
@@ -2971,7 +2969,9 @@ def if_any_party_member_is_wounded(ctx: AiContext, battler: Battler) -> AiContex
     """``IfAnyPartyMemberIsWounded`` (trainer_ai.c:1968-1985): a party member of the battler's
     party other than ``selectedPartySlot[battler]`` whose HP is not its max HP. No HP or species
     test: a fainted member counts, and so does the partner's active in a shared party (only the
-    battler's own slot is skipped; an absent battler's is 6, so skips none)."""
+    battler's own slot is skipped; an absent battler's is 6, so skips none). The ``species != 0``
+    test stands in for the loop's ``BattleSystem_GetPartyCount`` bound (:1976) and changes
+    nothing: a padded slot has HP 0 of max HP 0."""
     state, b = ctx.state, _battler(ctx, battler)
     row = _row(state, b)
     slots = jnp.arange(state.species.shape[1])
@@ -2983,7 +2983,9 @@ def if_any_party_member_used_pp(ctx: AiContext, battler: Battler) -> AiContext:
     """``IfAnyPartyMemberUsedPP`` (trainer_ai.c:1987-2012): a party member of the battler's party
     other than ``selectedPartySlot[battler]`` with a move whose PP is not its max PP
     (``MoveTable_CalcMaxPP`` with the PP Ups, ``hooks.max_pp``); an empty move slot has 0 of 0.
-    The partner's active in a shared party counts, with the engine's PP of it."""
+    The partner's active in a shared party counts, with the engine's PP of it. The
+    ``species != 0`` test stands in for the loop's ``BattleSystem_GetPartyCount`` bound (:1996)
+    and changes nothing: a padded slot has no moves, PP 0 of max PP 0."""
     state, b = ctx.state, _battler(ctx, battler)
     row = _row(state, b)
     slots = jnp.arange(state.species.shape[1])
@@ -3070,8 +3072,10 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
 
     B = 4 (E4-A decision 4): the compare is ``order.compare_full(attacker, defender)``, the defender
     traced. The two battlers' ``written`` entries are set only when both or neither have HP
-    (:1204-1211 return before the stores, :1372-1373), so a fainted unreplaced battler as the
-    defender leaves the record, and a later Gyro Ball estimate reads the old ``speed_rec``."""
+    (:1204-1211 return before the stores, :1372-1373). Here the gate never acts:
+    ``TrainerAI_MainDoubles`` evaluates no target without HP (trainer_ai.c:362-367) and the
+    attacker has HP. It matters for ``LoadBattlerSpeedRank``, whose sort compares all four
+    battlers, a fainted unreplaced one among them (``_sort_four``)."""
     value = int(value)
     assert value in (COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE), value
     tables, state = ctx.tables, ctx.state
@@ -3257,12 +3261,11 @@ def speed_rank_law(tables: Tables, state: BattleState, battler) -> jnp.ndarray:
 
     Every compare that sees equal speed in a branch that tests it draws ``RandNext() & 1`` and
     TIE swaps (lib.c:1401-1447); which compares draw depends on the earlier swaps, but the script
-    reads only the rank (never a tie bit), so the call is ONE read whose law is the joint law of
-    all its tie bits. A bit is exactly 1/2, so the law is the mean of the sort over all ``2**6``
-    assignments of the six pair bits (a pair that does not draw ignores its bit): every
-    probability a multiple of 1/64, and so a class of the ``RandNext() % 256`` read
-    (``_rank_of_draw``). The ``monSpeedValues`` writes of the call do not depend on the bits
-    (``_sort_four``), so they are not part of the read."""
+    reads only the rank (never a tie bit), so the call's one random quantity is the rank, whose law
+    is the joint law of all its tie bits. A bit is exactly 1/2, so the law is the mean of the sort
+    over all ``2**6`` assignments of the six pair bits (a pair that does not draw ignores its
+    bit): every probability a multiple of 1/64. The ``monSpeedValues`` writes of the call do not
+    depend on the bits (``_sort_four``), so they are not part of the law."""
     ties = (jnp.arange(2 ** len(PAIRS))[:, None] >> jnp.arange(len(PAIRS))) & 1  # [64, 6]
     orders = jax.vmap(lambda t: sort_mon_speed(tables, state, state.qc_roll, t)[0])(ties)
     rank = jnp.argmax(orders == battler, axis=1)  # [64]
@@ -3271,8 +3274,10 @@ def speed_rank_law(tables: Tables, state: BattleState, battler) -> jnp.ndarray:
 
 
 def _rank_of_draw(law: jnp.ndarray, r) -> jnp.ndarray:
-    """The rank the ``RandNext() % 256`` read ``r`` (a u8) stands for: the classes of ``law`` (a
-    multiple of 1/64 each, so of 4 draws) in rank order, a rank with no mass skipped."""
+    """The rank a uniform u8 ``r`` stands for in a sampled outcome: the classes of ``law`` (a
+    multiple of 1/64 each, so of 4 draws) in rank order, a rank with no mass skipped. Its pair
+    ({0, 1} or {2, 3}) is the one ``r < round((law[0] + law[1]) * 256)`` gives
+    (``_speed_rank_four``)."""
     first_of_next = jnp.round(jnp.cumsum(law[:-1]) * 256).astype(_I32)
     return jnp.sum(jnp.asarray(r, _I32) >= first_of_next).astype(_I32)
 
@@ -3318,12 +3323,21 @@ def load_battler_speed_rank(ctx: AiContext, battler: Battler) -> AiContext:
 
     B = 4 (E4-A decision 6, manager ruling 21 Nov): the sort runs over the four battlers (six
     compares, the dead-battler rule and the record gate of ``compare_full``); ``calcTemp`` is the
-    argument battler's position, always found. Exact layout: ONE read per call,
-    ``ReadKind.SPEED_RANK``, its law ``speed_rank_law`` (the joint law of the call's tie bits),
-    the read's ``RandNext() % 256`` draw taken to the rank whose class holds it
-    (``_rank_of_draw``); no read when the rank is certain. The loose oracle draws each pair that
-    reads its tie bit (``SPEED_TIE_DRAWN``, up to six). Every pair past the dead rule writes both
-    its speeds to ``written`` (:1372-1373)."""
+    argument battler's position, always found. Its law is ``speed_rank_law`` (the joint law of the
+    call's tie bits), read as up to two binary reads (``ReadKind.SPEED_RANK``, decision 6): the
+    first, the pair {0, 1} against {2, 3} with probability ``law[0] + law[1]``; the second, which
+    of that pair, with the pair's conditional law; each read skipped when its split is certain,
+    so a call makes 0, 1 or 2 reads and the read bound counts 2 per call (decision 10). Exact
+    layout: each a ``_slot_read`` like the other binary reads: an enumeration pattern's draw
+    (``READ_DRAWS``: 1 the lower side, 254 the upper) is below the split's threshold
+    ``round(p * 256)`` or not, every threshold of a split that draws lying in 4..252, and each
+    read's weight is its conditional probability, so the path weights of a call sum to 1 and
+    give ``speed_rank_law``. A sampled outcome (raw ``calc_draws``) takes the rank from the
+    first draw's class (``_rank_of_draw``; the second draw when the first split is certain, at
+    the same read index), exact for a uniform u8, and the second read only counts. The loose
+    oracle draws the same two bits (the second at one of two indices, by pair, each live only in
+    its pair). Every pair past the dead rule writes both its speeds to ``written``
+    (:1372-1373)."""
     battler = Battler(int(battler))
     tables, state = ctx.tables, ctx.state
     side = _battler(ctx, battler)
@@ -3358,22 +3372,49 @@ def _speed_rank_four(ctx: AiContext, battler) -> AiContext:
     tables, state = ctx.tables, ctx.state
     _, written = _sort_four(tables, state, lambda p, reads: 0)
     ctx = _write_compares(ctx, ctx.live & jnp.any(written), written)
+    law = speed_rank_law(tables, state, battler)
+    p_low = law[0] + law[1]  # the first split: the pair {0, 1}
+    first = (p_low > 0) & (p_low < 1)
+
+    def pair_split(high):
+        lo, hi = jnp.where(high, law[2], law[0]), jnp.where(high, law[3], law[1])
+        mass = jnp.where(lo + hi > 0, lo + hi, 1.0)
+        return lo / mass, (lo > 0) & (hi > 0), lo == 0  # P(lower), drawn, upper when certain
+
     if ctx.loose is not None:
-
-        def bit_of(p, reads):
-            nonlocal ctx
-            ctx, bit = _loose_read(ctx, 0.5, ReadKind.SPEED_TIE_DRAWN, live=ctx.live & reads)
-            return bit
-
-        order, _ = _sort_four(tables, state, bit_of)
-        return ctx._replace(calc_temp=jnp.argmax(order == battler).astype(_I32))
+        ctx, bit = _loose_read(ctx, 1 - p_low, ReadKind.SPEED_RANK, live=ctx.live & first)
+        high = jnp.where(first, bit == 1, p_low == 0)
+        members = []
+        for pair in (False, True):
+            p_lower, second, upper = pair_split(jnp.asarray(pair))
+            live = ctx.live & second & (high == pair)
+            ctx, bit = _loose_read(ctx, 1 - p_lower, ReadKind.SPEED_RANK, live=live)
+            members.append(jnp.where(second, bit == 1, upper))
+        rank = 2 * high.astype(_I32) + jnp.where(high, members[1], members[0]).astype(_I32)
+        return ctx._replace(calc_temp=rank)
     if not per_slot(ctx):
         raise AssertionError("a speed rank is transcribed for the per-slot layout only")
-    law = speed_rank_law(tables, state, battler)
-    drawn = jnp.max(law) < 1.0  # a certain rank is no read
-    ctx, r = _slot_read(ctx, lambda r: (law[_rank_of_draw(law, r)], drawn))
-    rank = jnp.where(drawn, _rank_of_draw(law, r), jnp.argmax(law))
-    return ctx._replace(calc_temp=rank.astype(_I32))
+    calc = ctx.outcome.calc_draws
+    if calc is None:
+        raise ValueError("an AiOutcome carries calc_draws (outcome.no_calc_draws)")
+    pattern = calc.shape[-1] == 0  # an enumeration pattern, else a sampled outcome (static)
+
+    def below(r, p):
+        return jnp.asarray(r, _I32) < jnp.round(p * 256).astype(_I32)
+
+    ctx, r1 = _slot_read(ctx, lambda r: (jnp.where(below(r, p_low), p_low, 1 - p_low), first))
+    sampled = _rank_of_draw(law, r1)
+    high = sampled >= 2 if not pattern else jnp.where(first, ~below(r1, p_low), p_low == 0)
+    p_lower, second, upper = pair_split(high)
+
+    def member(r):
+        if not pattern:
+            return (sampled & 1) == 1
+        return jnp.where(second, ~below(r, p_lower), upper)
+
+    ctx, r2 = _slot_read(ctx, lambda r: (jnp.where(member(r), 1 - p_lower, p_lower), second))
+    rank = 2 * high.astype(_I32) + member(r2).astype(_I32)
+    return ctx._replace(calc_temp=rank)
 
 
 def if_can_use_last_resort(ctx: AiContext, battler: Battler) -> AiContext:

@@ -113,3 +113,10 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   39168d89 pinned names that are not in the data, so `load_game` raised `GameDataError` for both
   games; the review read the code and did not run it. Rule from now on: a tip goes to the pod only
   after it has passed `load_game` of both games and the four guards' fast parts locally.
+
+- **E4-12. B = 2 change: the trainer AI uses no item under Embargo** (E4-A W1). `policy._use_item`
+  (`maybe_use_item`) tests the AI battler's `embargo` (ai:4076-4078; Embargo is modelled, E2
+  B13-29). Before W1 an Embargoed AI with a usable bag item took the item action; now it takes
+  `NO_ITEM` and scores its moves. Expected in the differential and any snapshot compare of B = 2
+  states with the AI under Embargo and a usable item; outside `tests/ai/b2_snapshot.py` (commands
+  only). Test: tests/ai/test_policy.py `test_no_item_under_embargo`.

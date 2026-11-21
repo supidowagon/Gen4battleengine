@@ -20,7 +20,7 @@ from nuzline.engine.field import with_trick_room
 from nuzline.engine.format import DOUBLES, MULTI, format_of
 from nuzline.engine.ids import Stat, Status, Type
 from nuzline.engine.order import sort_mon_speed
-from nuzline.engine.state import MOVES
+from nuzline.engine.state import MOVES, ai_record_moves
 from tests.ai.b2_snapshot import snapshot
 from tests.ai.fixtures import outcome
 from tests.engine.d2_states import four, with_hp, with_moves
@@ -712,50 +712,115 @@ ONE_READ_CASES = [
 RANK_ARGS = (Battler.ATTACKER, Battler.ATTACKER_PARTNER, Battler.DEFENDER, Battler.DEFENDER_PARTNER)
 
 
-@pytest.mark.parametrize("speeds, alive", ONE_READ_CASES)
-def test_speed_rank_one_read_law(tables, names, speeds, alive):
-    # The exact layout: ONE read per call whose class of the RandNext() % 256 draw is the rank:
-    # over the 256 draws the ranks have exactly speed_rank_law's frequencies, the read's weight is
-    # the rank's probability (a certain rank is no read), and the call writes the battlers some
-    # compare of the sort stored (a lone member of its alive-or-dead class is not).
-    t = _tables4(tables, DOUBLES)
-    s = _speed_state(t, names, speeds, alive=alive)
+def _quick_claw(t, names, s, holders):
+    """``s`` with every battler of ``holders`` holding an activated Quick Claw (``qc_roll``)."""
+    for b in holders:
+        p, slot = _at(s, b)
+        s = s._replace(item=s.item.at[p, slot].set(names.item("Quick Claw")))
+        s = s._replace(qc_roll=s.qc_roll.at[b].set(1))
+    return s
+
+
+# The enumerator's patterns of one call (policy._enumerated: READ_DRAWS[bit] at the slot's reads
+# 0 and 1, READ_DRAWS[0] past them; 2 reads per call, decision 10).
+_RANK_PATTERNS = np.asarray(READ_DRAWS, np.uint8)[
+    np.asarray(list(itertools.product((0, 1), repeat=2)))
+]
+
+
+@jax.jit
+def _rank_paths(t, s):
+    """Per argument of ``RANK_ARGS`` (attacker 1, defender 0) and per pattern of
+    ``_RANK_PATTERNS``: ``(calc_temp, reads, weight, canonical)``, ``canonical`` the pattern's
+    draws past its reads all ``READ_DRAWS[0]`` (``policy._canonical``)."""
     base = _rank_ctx(t, s, 1, 0)
-    for arg in RANK_ARGS:
-        b = _resolve(arg, 1, 0)
-        law = np.asarray(_law(t, s, b), np.float64)
 
-        @jax.jit
-        def sweep(base, arg=arg):
-            def one(r):
-                o = base.outcome._replace(
-                    script_rolls=base.outcome.script_rolls.at[0, 0].set(r.astype(jnp.uint8))
-                )
-                return c.load_battler_speed_rank(base._replace(outcome=o), arg)
+    def one(arg, draws):
+        script = base.outcome.script_rolls.at[0, :2].set(draws)
+        out = c.load_battler_speed_rank(
+            base._replace(outcome=base.outcome._replace(script_rolls=script)), arg
+        )
+        reads = out.reads[0]
+        canonical = jnp.all((jnp.arange(2) < reads) | (draws == READ_DRAWS[0]))
+        return out.calc_temp, reads, out.weight[0], canonical
 
-            return jax.vmap(one)(jnp.arange(256))
+    return [
+        jax.vmap(lambda d, arg=arg: one(arg, d))(jnp.asarray(_RANK_PATTERNS)) for arg in RANK_ARGS
+    ]
 
-        out = sweep(base)
-        ranks = np.asarray(out.calc_temp)
-        np.testing.assert_allclose(np.bincount(ranks, minlength=4) / 256, law, atol=0, rtol=0)
-        reads = int(law.max() < 1.0)
-        assert np.asarray(out.reads[:, 0]).tolist() == [reads] * 256
-        weight = np.asarray(out.weight[:, 0], np.float64)
-        np.testing.assert_allclose(weight, law[ranks] if reads else 1.0, rtol=1e-6)
+
+RANK_LAW_CASES = [(speeds, alive, trick, ()) for speeds, alive, trick in SPEED_CASES] + [
+    ((50, 50, 50, 50), (1, 1, 1, 1), False, (0,)),  # an activated Quick Claw holder in a tie
+    ((50, 50, 50, 40), (1, 1, 1, 1), False, (0, 2)),  # two holders
+]
+
+
+@pytest.mark.parametrize("speeds, alive, trick, holders", RANK_LAW_CASES)
+def test_speed_rank_patterns_give_the_law(tables, names, speeds, alive, trick, holders):
+    # The exact layout read the way the enumerator builds its patterns (READ_DRAWS only, two bits
+    # per call): the canonical patterns' path weights sum to 1 and, by rank, give speed_rank_law
+    # (re-derived as exact by the brute force, test_speed_rank_law_equals_the_brute_force), with
+    # at most 2 reads per call and none when the rank is certain. The call writes the battlers
+    # some compare of the sort stored (a lone member of its alive-or-dead class is not).
+    t = _tables4(tables, DOUBLES)
+    s = _quick_claw(
+        t, names, _speed_state(t, names, speeds, alive=alive, trick_room=trick), holders
+    )
+    for arg, (rank, reads, weight, canonical) in zip(RANK_ARGS, _rank_paths(t, s)):
+        law = np.asarray(_law(t, s, _resolve(arg, 1, 0)), np.float64)
+        got = np.zeros(4)
+        for r, w, ok in zip(
+            np.asarray(rank), np.asarray(weight, np.float64), np.asarray(canonical)
+        ):
+            if ok:
+                got[r] += w
+        np.testing.assert_allclose(got, law, atol=1e-6)
+        assert abs(got.sum() - 1.0) < 1e-6
+        reads = np.asarray(reads)
+        assert reads.max() <= 2 and (reads.max() == 0) == (law.max() == 1.0)
     classes = [sum(a == alive[x] for a in alive) for x in range(4)]
-    written = c.load_battler_speed_rank(base, Battler.ATTACKER).written
+    written = c.load_battler_speed_rank(_rank_ctx(t, s, 1, 0), Battler.ATTACKER).written
     assert written.tolist() == [n > 1 for n in classes]
 
 
-@pytest.mark.parametrize("speeds, alive", ONE_READ_CASES)
-def test_speed_rank_loose_law_equals_the_one_read(tables, names, speeds, alive):
-    # The loose oracle draws each pair that reads its tie bit as its own read (SPEED_TIE_DRAWN,
-    # up to six); over every pattern, each live read weighing 1/2, it gives the same law as the
-    # exact layout's one read: the brute-force check of the ruling on the real command.
+def test_speed_rank_sampled_is_the_law(tables, names):
+    # A sampled outcome (raw calc_draws, a uniform u8 per read): over the 256 first draws the
+    # ranks have exactly speed_rank_law's frequencies (the second draw only counts), on a law of
+    # three ranks (speeds 50, 50, 50, 40: [1/4, 3/8, 3/8, 0] for battler 0).
+    t = _tables4(tables, DOUBLES)
+    s = _speed_state(t, names, (50, 50, 50, 40))
+    base = _rank_ctx(t, s, 1, 0)
+    base = base._replace(
+        outcome=base.outcome._replace(calc_draws=jnp.zeros((MOVES, 8, 1), jnp.uint16))
+    )
+    law = np.asarray(_law(t, s, 0), np.float64)
+    assert law.tolist() == [0.25, 0.375, 0.375, 0.0]
+
+    @jax.jit
+    def sweep(base):
+        def one(r):
+            script = base.outcome.script_rolls.at[0, 0].set(r.astype(jnp.uint8))
+            ctx = base._replace(outcome=base.outcome._replace(script_rolls=script))
+            return c.load_battler_speed_rank(ctx, Battler.DEFENDER)
+
+        return jax.vmap(one)(jnp.arange(256))
+
+    out = sweep(base)
+    ranks = np.asarray(out.calc_temp)
+    np.testing.assert_allclose(np.bincount(ranks, minlength=4) / 256, law, atol=0, rtol=0)
+    weight = np.asarray(out.weight[:, 0], np.float64)
+    np.testing.assert_allclose(weight, law[ranks], rtol=1e-6)
+
+
+@pytest.mark.parametrize("speeds, alive", ONE_READ_CASES + [((50, 50, 50, 40), (1, 1, 1, 1))])
+def test_speed_rank_loose_law_equals_the_exact_reads(tables, names, speeds, alive):
+    # The loose oracle draws the same two bits (SPEED_RANK): the pair, then which of it, at one of
+    # two indices by pair, each live only in its pair; over every pattern, each live read weighing
+    # its p, it gives speed_rank_law.
     t = _tables4(tables, DOUBLES)
     s = _speed_state(t, names, speeds, alive=alive)
-    all_bits = np.zeros((64, MOVES, c.LOOSE_READS), np.int8)
-    all_bits[:, 0, :6] = list(itertools.product((0, 1), repeat=6))
+    all_bits = np.zeros((8, MOVES, c.LOOSE_READS), np.int8)
+    all_bits[:, 0, :3] = list(itertools.product((0, 1), repeat=3))
     for arg in (Battler.ATTACKER, Battler.DEFENDER, Battler.DEFENDER_PARTNER):
         b = _resolve(arg, 1, 0)
         base = _rank_ctx(t, s, 1, 0, loose_bits=all_bits[0])
@@ -770,17 +835,19 @@ def test_speed_rank_loose_law_equals_the_one_read(tables, names, speeds, alive):
             return jax.vmap(one)(bits)
 
         out = sweep(jnp.asarray(all_bits))
-        assert np.asarray(out.loose.count[:, 0]).tolist() == [6] * 64
-        kinds = set(np.asarray(out.loose.kind[:, 0, :6]).ravel().tolist())
-        assert kinds == {int(c.ReadKind.SPEED_TIE_DRAWN)}
-        live = np.asarray(out.loose.live[:, 0, :6])
-        bits = all_bits[:, 0, :6].astype(bool)
+        assert np.asarray(out.loose.count[:, 0]).tolist() == [3] * 8
+        kinds = set(np.asarray(out.loose.kind[:, 0, :3]).ravel().tolist())
+        assert kinds == {int(c.ReadKind.SPEED_RANK)}
+        live = np.asarray(out.loose.live[:, 0, :3])
+        p = np.asarray(out.loose.p[:, 0, :3], np.float64)
+        bits = all_bits[:, 0, :3].astype(bool)
+        assert live.sum(axis=1).max() <= 2
         canonical = ~np.any(bits & ~live, axis=1)  # a bit past the live reads repeats a shorter one
         law = np.zeros(4)
-        for rank, ok, n in zip(np.asarray(out.calc_temp), canonical, live.sum(axis=1)):
-            if ok:
-                law[rank] += 0.5 ** int(n)
-        np.testing.assert_allclose(law, np.asarray(_law(t, s, b), np.float64), atol=1e-12)
+        for k in np.flatnonzero(canonical):
+            w = np.prod(np.where(live[k], np.where(bits[k], p[k], 1 - p[k]), 1.0))
+            law[int(out.calc_temp[k])] += w
+        np.testing.assert_allclose(law, np.asarray(_law(t, s, b), np.float64), atol=1e-6)
 
 
 def test_speed_rank_certain_and_masked(tables, names):
@@ -803,9 +870,12 @@ def test_speed_rank_certain_and_masked(tables, names):
 
 
 def test_speed_compare_record_gate_b4(tables, names):
-    # IfSpeedCompare* writes the two compared battlers only when both or neither have HP
-    # (battle_lib.c:1204-1211 return first; :1372-1373 store): a fainted unreplaced battler as the
-    # defender writes nothing, and a Gyro Ball estimate that follows still reads the old speed_rec.
+    # A unit test of the record gate of compare_full: IfSpeedCompare* writes the two compared
+    # battlers only when both or neither have HP (battle_lib.c:1204-1211 return first; :1372-1373
+    # store). TrainerAI_MainDoubles never evaluates a defender without HP (trainer_ai.c:362-367),
+    # so the fainted defender below is not a state the script reaches; the gate matters for
+    # LoadBattlerSpeedRank, whose sort compares all four battlers. A Gyro Ball estimate that
+    # follows a gated compare still reads the old speed_rec.
     t = _tables4(tables, DOUBLES)
     speeds = (50, 40, 30, 60)
     s = _speed_state(t, names, speeds)
@@ -862,3 +932,54 @@ def test_speed_compare_b4_results(tables, names):
             assert bool(c.if_speed_compare_equal_to(ctx, TIE).jump) == tie
             assert bool(c.if_speed_compare_equal_to(ctx, FASTER).jump) == (not tie)
             assert float(c.if_speed_compare_equal_to(ctx, TIE).weight[0]) == 0.5
+
+
+def _traced_sweep(t, s, d):
+    """The changed commands of E4-A W1 at attacker 1 and defender ``d`` (traced under vmap): the
+    role commands by argument, the context's damage and Gyro Ball pattern pick, a traced
+    ``def_side`` estimate, ``defender_ability`` and the AI record."""
+    ctx = c.at_slot(c.new_context(t, s, _slot_outcome((READ_DRAWS[1], READ_DRAWS[0])), 1, d), 0)
+    out = {"partner": c.if_target_is_partner(ctx).jump, "seen": ctx.seen_moves}
+    for arg in ARGS:
+        n = arg.name
+        out[f"ability_{n}"] = c.load_battler_ability(ctx, arg).calc_temp
+        out[f"item_{n}"] = c.load_held_item(ctx, arg).calc_temp
+        out[f"turns_{n}"] = c.load_battler_turn_count(ctx, arg).calc_temp
+        out[f"stages_{n}"] = c.sum_positive_stat_stages(ctx, arg).calc_temp
+        out[f"alive_{n}"] = c.count_alive_party_battlers(ctx, arg).calc_temp
+        out[f"wounded_{n}"] = c.if_any_party_member_is_wounded(ctx, arg).jump
+        out[f"prev_{n}"] = c.load_battler_previous_move(ctx, arg).calc_temp
+        out[f"flash_{n}"] = c.if_activated_flash_fire(ctx, arg).jump
+        out[f"gender_{n}"] = c.load_gender(ctx, arg).calc_temp
+        out[f"hp_{n}"] = c.if_hp_percent_less_than(ctx, arg, 50).jump
+        rank = c.load_battler_speed_rank(ctx, arg)
+        out[f"rank_{n}"] = jnp.stack([rank.calc_temp, rank.reads[0]])
+        if arg in (Battler.ATTACKER_PARTNER, Battler.DEFENDER_PARTNER):
+            out[f"fainted_{n}"] = c.if_battler_fainted(ctx, arg).jump
+    for value in (FASTER, SLOWER, TIE):
+        cmp = c.if_speed_compare_equal_to(ctx, value)
+        out[f"cmp_{value}"] = jnp.concatenate([cmp.jump[None], cmp.written])
+    out["damage"] = ctx.damage.value
+    for written in itertools.product((False, True), repeat=4):  # the Gyro Ball pattern pick
+        part = ctx._replace(written=jnp.asarray(written))
+        out[f"gyro_{written}"] = c.seen_damage(part).value
+    out["estimate"] = c.estimate(t, s, c.AI_GYRO_BALL, c.SIM_ROLL_MAX, atk_side=1, def_side=d).value
+    out["def_ability"] = jnp.stack([c.defender_ability(t, s, g, d) for g in (0, 1)])
+    out["record"] = ai_record_moves(s, d)
+    return out
+
+
+def test_traced_defender_jit_vmap_equals_eager(world, tables, names):
+    # One jit + vmap over the traced defender in {0, 2, 3} at B = 4 equals the eager result of each
+    # defender, for every changed command (a Python branch on the defender would fail to trace or
+    # give one target's value to all).
+    t = _tables4(tables, world["fmt"])
+    s = with_moves(world["s"], names, 1, ("Gyro Ball", "Tackle", "Earthquake", "Curse"))
+    targets = (0, 2, 3)
+    traced = jax.jit(jax.vmap(lambda d: _traced_sweep(t, s, d)))(jnp.asarray(targets))
+    for i, d in enumerate(targets):
+        eager = _traced_sweep(t, s, d)
+        for key, want in eager.items():
+            np.testing.assert_array_equal(
+                np.asarray(traced[key][i]), np.asarray(want), err_msg=f"{key} d={d}"
+            )
