@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 # PC SIDE (Git Bash). Usage: pack.sh <commit> <tables.tar.xz> <run> <files.txt>
 # Bundles the git archive of <commit> + built tables + the test list + the pod scripts of
-# tools/ops/day/pod (*.sh, weights.py, weights.txt; from git at this checkout's HEAD, LF) into $RENT/out/<run>/payload.tar,
+# tools/ops/day/pod (*.sh, weights.py, weights.txt; from git at HEAD of the checkout that runs
+# pack.sh, LF, not from <commit>) into $RENT/out/<run>/payload.tar,
 # lists it, refuses forbidden files, starts a detached send and prints the exec-pod body that
 # receives the payload into /work/<run>, starts bin/notify.sh, then bin/setup.sh there; a failed
 # receive or unpack ends setup.log with RECEIVE_FAILED or UNPACK_FAILED. <run>: [a-z0-9_-], used once.
 # Refuses: uncommitted changes under tools/ops/day/pod; pod scripts at HEAD that differ from local
-# main's (`git diff --quiet main HEAD -- tools/ops/day/pod`: a stale stream worktree would pack
-# old scripts; PACK_OFF_MAIN_POD=1 overrides, for testing an ops branch only); a files.txt line outside the list format
+# main's (common.sh pod_main_check: run pack.sh from a checkout at main, the main checkout;
+# PACK_OFF_MAIN_POD=1 overrides, for a road test of an ops branch only); a files.txt line outside the list format
 # (tools/ops/day/pod/setup.sh); forbidden files; table entries (directories included) with '..'
 # or a leading '/' or './'; table entries outside TABLE_ALLOW or in TABLE_DENY; a grep error in
 # any check (the checks fail closed). Any failure after $RENT/out/<run> is created removes it.
 # Env: MARK (pytest -m for lines without A; default "not slow and not fullset": the per-tip run;
 # MARK=fullset for the merge-candidate run, DAYBOX.md "Merge candidate"), runner knobs go in the exec body.
-# meta.env also gets GATE_VERSION (2: weights, reserves, gate lock, claims) and POD_SCRIPTS (sha256
-# over the packed bin/ files, sorted by name, common.sh pod_sum; setup.sh copies both to gate.env
-# for podcheck.sh, which podcheck_body.sh runs before a send),
+# meta.env also gets GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
+# pod_sum: the packed *.sh and weights.py) and POD_WEIGHTS (pod_wsum: weights.txt); setup.sh copies
+# them to gate.env for podcheck.sh, which podcheck_body.sh runs before every pack,
 # and WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
 # tools/ops/day/wait.sh.
 set -euo pipefail
@@ -44,9 +45,7 @@ TOP=$(git -C "$HERE" rev-parse --show-toplevel)
 DIRTY=$(git -C "$TOP" status --porcelain -- tools/ops/day/pod)
 [ -z "$DIRTY" ] || refuse "uncommitted changes in tools/ops/day/pod; commit them first" "$DIRTY"
 OPS=$(git -C "$TOP" rev-parse HEAD)
-if [ "${PACK_OFF_MAIN_POD:-}" != 1 ] && ! git -C "$TOP" diff --quiet main HEAD -- tools/ops/day/pod; then
-  refuse "tools/ops/day/pod at HEAD differs from main's; merge main (or set PACK_OFF_MAIN_POD=1 to test an ops branch)" \
-    "$(git -C "$TOP" diff --stat main HEAD -- tools/ops/day/pod)"; fi
+pod_main_check "$TOP"
 [ -f "$LIST" ] || refuse "no such test list" "$LIST"
 
 mkdir -p "$P/bin"
@@ -76,8 +75,8 @@ draw() { local a=abcdefghijklmnopqrstuvwxyz l="" b
 WF=$(draw); WD=$(draw)
 while [ "${WD:0:3}" = "${WF:0:3}" ]; do WD=$(draw); done
 for w in "$WF" "$WD"; do echo "$w" | grep -qE '^[a-z]{3}[0-9a-f]{30}$' || refuse "could not draw a random beacon code" "${#w} characters"; done
-PODSUM=$(pod_sum "$P/bin")
-printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$WF" "$WD" > "$P/meta.env"
+PODSUM=$(pod_sum "$P/bin"); PODW=$(pod_wsum "$P/bin")
+printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$PODW" "$WF" "$WD" > "$P/meta.env"
 CT=$(tar -tf "$P/code.tar"); TALL=$(tar -tJf "$P/tables.tar.xz")   # TALL: directories included
 T=$(printf '%s\n' "$TALL" | pick -v '/$') || exit 3                  # T: files only
 deny "tables entry with '..', a leading '/' or './'" "$TALL" -E "$BADPATH"

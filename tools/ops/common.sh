@@ -38,5 +38,17 @@ pod_bin() { local s; s=$(mktemp -d "$RENT/podsrc.XXXXXX") || return 1; mkdir -p 
   for f in "$s"/tools/ops/day/pod/*.sh "$s"/tools/ops/day/pod/weights.py "$s"/tools/ops/day/pod/weights.txt; do
     tr -d '\r' < "$f" > "$3/$(basename "$f")" || { rm -rf "$s"; return 1; }; done
   rm -rf "$s"; }
-# pod_sum <dir>: POD_SCRIPTS, sha256 over the sha256sum lines of <dir>'s files sorted by name.
-pod_sum() { (cd "$1" && LC_ALL=C ls | LC_ALL=C sort | while read -r f; do sha256sum "$f"; done | sha256sum | cut -d' ' -f1); }
+# pod_sum <dir>: POD_SCRIPTS, sha256 over the sha256sum lines of <dir>'s *.sh and weights.py (the
+# files that decide gate behaviour) sorted by name. pod_wsum <dir>: POD_WEIGHTS, sha256 of weights.txt.
+pod_sum() { (cd "$1" && LC_ALL=C ls -- *.sh weights.py | LC_ALL=C sort | while read -r f; do sha256sum "$f"; done | sha256sum | cut -d' ' -f1); }
+pod_wsum() { sha256sum "$1/weights.txt" | cut -d' ' -f1; }
+# pod_main_check <checkout>: the pod scripts a payload carries come from the checkout that runs
+# pack.sh or podcheck_body.sh (its HEAD), not from the commit under test; refuse (exit 3) unless
+# that HEAD's tools/ops/day/pod equals local main's. PACK_OFF_MAIN_POD=1: a road test of an ops
+# branch only.
+pod_main_check() { [ "${PACK_OFF_MAIN_POD:-}" = 1 ] && return 0
+  git -C "$1" diff --quiet main HEAD -- tools/ops/day/pod 2>/dev/null && return 0
+  echo "REFUSED: tools/ops/day/pod at this checkout's HEAD differs from main's (or there is no main)."
+  echo "The pod scripts come from the checkout that runs this script, not from the commit under test:"
+  echo "run it from a checkout at main (the main checkout). PACK_OFF_MAIN_POD=1 overrides, for a road test of an ops branch only."
+  git -C "$1" diff --stat main HEAD -- tools/ops/day/pod 2>/dev/null; exit 3; }
