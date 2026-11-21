@@ -1821,3 +1821,20 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   not listed (`src/map_header.c:298-303`), `Learnsets.evolution_methods` the method names.
   Tests: tests/prep/test_growth.py, tests/tools/test_extract_decomp.py (map table cases), tests/tools/rom/test_code_tables.py
   (symbol, shape errors, slow ROM matches). Not run locally (RAM below the 8000 MB rule): all of them, for the pod.
+
+- E3-B3-13 GT-13 evolution applied (`src/nuzline/prep/growth.py`). No table input changed.
+  `evolve(tables, learnsets, member, target, method, bag, party, settings, *, personality, learn_answers=None)` ->
+  `(member, extra | None, bag)` on `PokemonSpec` (no Carry type yet: GT-4 is blocked on D3-8b); `bag` is a plain mapping item id ->
+  count, the result a new dict. Order as `src/evolution.c`: species, ability (`BoxPokemon_CalcAbility`, `src/pokemon.c:4746-4763`),
+  level from experience on the new species' table (`:633-637`, `:2379-2392`), stats and HP + max-HP gain (`:640-651`) at
+  `:433-437`; learn loop `:461-480` (`Pokemon_LevelUpMove`, `src/pokemon.c:3935-3966`; `Pokemon_AddMove`, `:3852-3874`); then
+  effects `:708-790`. Empty slot: learns, slot PP Ups kept; four moves: `learn_answers[move]` = slot, PP Ups 0 (`:631-633`),
+  missing / None = give up (`:525`, `:570`, `:590-595`); an HM slot raises ValueError
+  (`src/applications/pokemon_summary_screen/main.c:814-820`; the sheet's `battle_party.c` lines are the in-battle screen).
+  Held item set to none for trade_with_held_item, level_with_held_item_day/night (`:782-787`; the sheet lists only day/night).
+  Shedinja (`:718-780`): only for level_ninjask / level_shedinja, `settings["shedinja"] == "allowed"`, a Poke Ball (item 4,
+  `generated/items.txt:5`) and fewer than 6 party members (`party` includes the evolving member); copy of the evolved member:
+  species, item 0, status 0, ability, gender, level, stats, HP 1 recomputed; ball, markings, ribbons, nickname flag, mail, ball
+  capsule not in `PokemonSpec`. Dead member: unchanged. A form the new species has no row for becomes form 0
+  (`Pokemon_GetFormNarcIndex`, `src/pokemon.c:4929+`).
+  Tests: tests/prep/test_growth.py. Not run locally (stream order: no local pytest): for the pod.

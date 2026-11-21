@@ -1,24 +1,34 @@
 """Evolution conditions (E3-B3-12): ``prep.growth.evolution_target`` against the rows of
 ``Learnsets.evolutions`` (synthetic rows where the table has no case), and the map method table.
-Rules: ``Pokemon_GetEvolutionTargetSpecies``, ``src/pokemon.c:3528-3790``."""
+Rules: ``Pokemon_GetEvolutionTargetSpecies``, ``src/pokemon.c:3528-3790``.
+
+Evolution applied (E3-B3-13): ``prep.growth.evolve`` against the learn loop and
+``Evolution_ProcessEvolutionEffects`` of ``src/evolution.c:433-480``, ``:708-790``."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from nuzline.data import tables as table_data
+from nuzline.data.gauntlet import Origin, Resolved, Settings
 from nuzline.data.learnsets import Learnsets
 from nuzline.data.spec import PokemonSpec
+from nuzline.engine.state import spec_stats
 from nuzline.prep.growth import (
     EVO_CLASS_BY_ITEM,
     EVO_CLASS_BY_LEVEL,
     EVO_CLASS_BY_TRADE,
     EVO_CLASS_UNUSED_02,
     HOLD_EFFECT_NO_EVOLVE,
+    ITEM_POKE_BALL,
+    MAX_PARTY_SIZE,
     SPECIES_KADABRA,
     evolution_target,
+    evolve,
 )
 
 DECOMP = Path("external/pokeplatinum")
@@ -454,3 +464,244 @@ def test_evolution_rows_equal_the_decomp(names, learnsets, manifest):
         sid = names.species(species)
         assert learnsets.evolutions(sid) == tuple(tuple(r) for r in want[str(sid)]), species
     assert manifest["evolution_methods"][EVO_NONE] == "none"
+
+
+# --- evolution applied (E3-B3-13) ---------------------------------------------------------
+
+KADABRA, ALAKAZAM, NINCADA, NINJASK, SHEDINJA = 64, 65, 290, 291, 292
+TACKLE, GROWL, CONFUSION, MIRACLE_EYE = 33, 45, 93, 357  # Alakazam learns Miracle Eye at 22
+HELD_ITEM = 17
+
+
+def mon(**fields):
+    base = spec(species=KADABRA, level=22, moves=(TACKLE, GROWL, CONFUSION, 0))
+    return replace(base, **fields)
+
+
+def shedinja_setting(value):
+    return Settings(
+        values={"shedinja": Resolved(value, Origin.DEFAULT, "test")},
+        gaps={},
+        locked=(),
+        locked_source="",
+    )
+
+
+def run_evolve(tables, learnsets, member, **kw):
+    args = {
+        "target": ALAKAZAM,
+        "method": 0,
+        "bag": {},
+        "party": [member],
+        "settings": shedinja_setting("forbidden"),
+        "personality": 0,
+        "learn_answers": None,
+    }
+    args.update(kw)
+    return evolve(
+        tables,
+        learnsets,
+        member,
+        args["target"],
+        args["method"],
+        args["bag"],
+        args["party"],
+        args["settings"],
+        personality=args["personality"],
+        learn_answers=args["learn_answers"],
+    )
+
+
+def test_poke_ball_and_party_size_constants_equal_the_decomp():
+    if not DECOMP.exists():
+        pytest.skip("decomp not cloned")
+    items = (DECOMP / "generated/items.txt").read_text(encoding="utf-8").split()
+    assert items[ITEM_POKE_BALL] == "ITEM_POKE_BALL"
+    header = (DECOMP / "include/constants/pokemon.h").read_text(encoding="utf-8")
+    assert f"#define MAX_PARTY_SIZE  {MAX_PARTY_SIZE}" in header
+
+
+def test_evolving_at_partial_hp_raises_hp_by_the_max_hp_gain(tables, learnsets):
+    member = mon(current_hp=30)
+    old_max = int(spec_stats(tables, member)[0])
+    evolved, extra, _ = run_evolve(tables, learnsets, member)
+    new_stats = spec_stats(tables, evolved)
+    assert extra is None and evolved.species == ALAKAZAM and evolved.level == 22
+    assert evolved.stats is None  # recomputed from Alakazam's base stats
+    assert int(new_stats[0]) > old_max  # Alakazam's base HP is above Kadabra's
+    assert evolved.current_hp == 30 + int(new_stats[0]) - old_max  # src/pokemon.c:640-651
+    fresh = spec_stats(tables, replace(member, species=ALAKAZAM))
+    assert list(new_stats) == list(fresh)
+
+
+def test_stored_stats_are_replaced_by_the_new_species_stats(tables, learnsets):
+    member = mon(stats=(100, 11, 12, 13, 14, 15))
+    evolved, _, _ = run_evolve(tables, learnsets, member)
+    assert list(spec_stats(tables, evolved)) == list(
+        spec_stats(tables, replace(member, species=ALAKAZAM, stats=None))
+    )
+
+
+def test_full_hp_stays_full_and_dead_member_does_not_evolve(tables, learnsets):
+    full, _, _ = run_evolve(tables, learnsets, mon())
+    assert full.current_hp is None and full.species == ALAKAZAM
+    dead = mon(current_hp=0)
+    out, extra, bag = run_evolve(tables, learnsets, dead, bag={ITEM_POKE_BALL: 2})
+    assert out == dead and extra is None and bag == {ITEM_POKE_BALL: 2}
+
+
+@pytest.mark.parametrize(("pid", "slot"), [(0, 0), (1, 1), (2, 0), (0xFFFF0003, 1)])
+def test_ability_slot_is_personality_bit_zero(tables, learnsets, pid, slot):
+    row = np.asarray(tables.species_abilities_decomp)[ALAKAZAM]
+    assert int(row[1]) != 0  # two abilities: bit 0 chooses (src/pokemon.c:4746-4763)
+    evolved, _, _ = run_evolve(tables, learnsets, mon(ability_slot=1 - slot), personality=pid)
+    assert evolved.ability_slot == slot
+
+
+def test_single_ability_species_ignores_the_personality_bit(tables, learnsets):
+    assert int(np.asarray(tables.species_abilities_decomp)[SHEDINJA][1]) == 0
+    evolved, _, _ = run_evolve(tables, learnsets, mon(), target=SHEDINJA, personality=1)
+    assert evolved.ability_slot == 0
+
+
+def test_learn_into_an_empty_slot_keeps_the_slots_pp_ups(tables, learnsets):
+    assert (22, MIRACLE_EYE) in learnsets.level_up(ALAKAZAM)
+    member = mon(pp=(1, 2, 3, 4), pp_ups=(0, 0, 0, 2))
+    evolved, _, _ = run_evolve(tables, learnsets, member)
+    assert evolved.moves == (TACKLE, GROWL, CONFUSION, MIRACLE_EYE)
+    base = int(np.asarray(tables.move_pp)[MIRACLE_EYE])
+    assert evolved.pp == (1, 2, 3, base + base * 20 * 2 // 100)  # src/pokemon.c:3925-3933
+    assert evolved.pp_ups == (0, 0, 0, 2)
+
+
+def test_a_known_move_is_skipped_and_other_levels_offer_nothing(tables, learnsets):
+    known = mon(moves=(MIRACLE_EYE, TACKLE, GROWL, CONFUSION))
+    assert run_evolve(tables, learnsets, known)[0].moves == known.moves
+    other = mon(level=23)
+    assert (23, MIRACLE_EYE) not in learnsets.level_up(ALAKAZAM)
+    assert run_evolve(tables, learnsets, other)[0].moves == other.moves
+
+
+def test_full_slots_replace_with_pp_ups_reset_or_give_up(tables, learnsets):
+    member = mon(moves=(TACKLE, GROWL, CONFUSION, 98), pp=(9, 9, 9, 9), pp_ups=(1, 3, 2, 0))
+    swapped, _, _ = run_evolve(tables, learnsets, member, learn_answers={MIRACLE_EYE: 2})
+    assert swapped.moves == (TACKLE, GROWL, MIRACLE_EYE, 98)
+    assert swapped.pp_ups == (1, 3, 0, 0)  # the replaced slot's PP Ups are 0 (:631-633)
+    assert swapped.pp == (9, 9, int(np.asarray(tables.move_pp)[MIRACLE_EYE]), 9)
+    for answers in (None, {}, {MIRACLE_EYE: None}):
+        kept, _, _ = run_evolve(tables, learnsets, member, learn_answers=answers)
+        assert kept.moves == member.moves and kept.pp_ups == member.pp_ups
+        assert kept.pp == member.pp
+
+
+def test_an_hm_slot_cannot_be_replaced(tables, learnsets):
+    hms = np.flatnonzero(np.asarray(tables.move_is_hm))
+    assert len(hms) > 0
+    hm = int(hms[0])
+    member = mon(moves=(TACKLE, hm, CONFUSION, GROWL))
+    with pytest.raises(ValueError, match="HM"):
+        run_evolve(tables, learnsets, member, learn_answers={MIRACLE_EYE: 1})
+    ok, _, _ = run_evolve(tables, learnsets, member, learn_answers={MIRACLE_EYE: 0})
+    assert ok.moves == (MIRACLE_EYE, hm, CONFUSION, GROWL)
+    with pytest.raises(ValueError, match="slot"):
+        run_evolve(tables, learnsets, member, learn_answers={MIRACLE_EYE: 4})
+
+
+@pytest.mark.parametrize(
+    ("name", "uses_up"),
+    [
+        ("level_with_held_item_day", True),
+        ("level_with_held_item_night", True),
+        ("trade_with_held_item", True),
+        ("level", False),
+        ("use_item", False),
+    ],
+)
+def test_held_item_methods_use_up_the_item(tables, learnsets, method, name, uses_up):
+    evolved, extra, _ = run_evolve(tables, learnsets, mon(item=HELD_ITEM), method=method[name])
+    assert extra is None
+    assert evolved.item == (0 if uses_up else HELD_ITEM)  # src/evolution.c:782-787
+
+
+def nincada(**fields):
+    base = spec(species=NINCADA, level=20, moves=(TACKLE, GROWL, 0, 0), gender=1)
+    return replace(base, item=HELD_ITEM, status=4, status_counter=2, **fields)
+
+
+def ninjask_run(tables, learnsets, method, setting, bag, party_size=3, name="level_ninjask", **kw):
+    member = nincada(**kw)
+    return member, run_evolve(
+        tables,
+        learnsets,
+        member,
+        target=NINJASK,
+        method=method[name],
+        bag=bag,
+        party=[member] * party_size,
+        settings=shedinja_setting(setting),
+        personality=1,
+    )
+
+
+def test_shedinja_is_added_with_ball_free_slot_and_allowed(tables, learnsets, method):
+    bag = {ITEM_POKE_BALL: 3, 5: 1}
+    member, (ninjask, extra, out) = ninjask_run(tables, learnsets, method, "allowed", bag)
+    assert ninjask.species == NINJASK and ninjask.item == HELD_ITEM  # Ninjask keeps its item
+    assert out == {ITEM_POKE_BALL: 2, 5: 1} and bag == {ITEM_POKE_BALL: 3, 5: 1}  # :779
+    assert extra is not None and extra.species == SHEDINJA  # :733-734
+    assert extra.item == 0  # :740
+    assert extra.status == 0 and extra.status_counter == 0  # :757
+    assert extra.gender == 2  # genderless, :769-770
+    assert extra.ability_slot == 0  # Shedinja has one ability, :767
+    assert int(spec_stats(tables, extra)[0]) == 1  # :640-643
+    assert extra.moves == ninjask.moves  # :731 copy
+    assert (extra.ivs, extra.evs, extra.nature, extra.friendship) == (
+        member.ivs,
+        member.evs,
+        member.nature,
+        member.friendship,
+    )
+    assert extra is not ninjask
+
+
+def test_shedinja_hp_is_one_for_a_wounded_copy(tables, learnsets, method):
+    _, (_, extra, _) = ninjask_run(
+        tables, learnsets, method, "allowed", {ITEM_POKE_BALL: 1}, current_hp=7
+    )
+    assert extra.current_hp == 1
+
+
+@pytest.mark.parametrize(
+    ("setting", "bag", "party_size"),
+    [
+        ("allowed", {}, 3),
+        ("allowed", {ITEM_POKE_BALL: 0}, 3),
+        ("allowed", {ITEM_POKE_BALL: 4}, MAX_PARTY_SIZE),
+        ("forbidden", {ITEM_POKE_BALL: 4}, 3),
+    ],
+)
+def test_no_shedinja_without_ball_free_slot_or_allowed(
+    tables, learnsets, method, setting, bag, party_size
+):
+    _, (ninjask, extra, out) = ninjask_run(tables, learnsets, method, setting, bag, party_size)
+    assert extra is None and out == bag and ninjask.species == NINJASK
+
+
+@pytest.mark.parametrize(
+    ("name", "added"),
+    [
+        ("level", False),
+        ("level_with_held_item_day", False),
+        ("use_item", False),
+        ("level_ninjask", True),
+        ("level_shedinja", True),
+    ],
+)
+def test_only_the_ninjask_and_shedinja_methods_add_a_shedinja(
+    tables, learnsets, method, name, added
+):
+    _, (_, extra, out) = ninjask_run(
+        tables, learnsets, method, "allowed", {ITEM_POKE_BALL: 1}, name=name
+    )
+    assert (extra is not None) == added
+    assert out == {ITEM_POKE_BALL: 0 if added else 1}
