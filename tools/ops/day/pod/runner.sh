@@ -4,18 +4,20 @@
 # memory/memory.usage_in_bytes; the runner exits at once when neither is readable) < GATE_GB, fewer than MAXP live
 # units across every run on the pod (/work/*/out/run/* and /work/*/*/out/run/*), fewer than
 # RUNMAXP units of this run in run/, and the memory gate: memory + reserve + w < GATE_GB, where w
-# is the next unit's expected peak (out/<unit>.w, written by setup.sh) and reserve sums, over every
-# live unit on the pod (every run), its expected peak minus its current RSS (process group sum),
-# where positive. A unit without a .w file (a run packed before weights) counts DEFAULT_WEIGHT_GB.
+# is the next unit's expected peak (out/<unit>.w, written by setup.sh) and reserve covers the
+# gaps (expected peak minus current RSS, process group sum, where positive) of the live units on
+# the pod (every run): every gap of a unit with w >= RESERVE_FULL_GB, and the RESERVE_TOP largest
+# gaps of the lighter ones (gate.sh podgate). A unit without a .w file (a run packed before
+# weights) counts DEFAULT_WEIGHT_GB.
 # With no live unit on the pod (memory < GATE_GB still holds) a unit starts when memory + w <
 # KILL_GB, so a unit heavier than GATE_GB runs alone; one with w >= KILL_GB starts alone anyway
 # ("start-over-kill"), and one kept out only by memory no unit holds starts after IDLE_WAIT_S
 # ("start-idle-wait"), so no unit waits forever (gate.sh admit). When the head unit does not fit,
 # the first later pending unit that fits starts ("skip-ahead"), while the head's hold is younger
 # than CLAIM_S. A head held CLAIM_S s gets a pod-wide claim, CLAIMS/<run>.<unit> ("<epoch> <weight>
-# <runner pid>"): while the oldest live claim on the pod is another run's, this runner starts
-# nothing; while it is its own, only the claimed head may start, as soon as it fits; the claim is
-# removed at the start. A claim whose runner pid is dead or a zombie is deleted (gate.sh choose,
+# <runner pid>"): while the oldest live claim on the pod is another run's, this runner starts only
+# a unit that fits beside it (reserve + claim weight; "claim-fit"); while it is its own, only the
+# claimed head may start, as soon as it fits; the claim is removed at the start. A claim whose runner pid is dead or a zombie is deleted (gate.sh choose,
 # claim_state). The check and the start happen under the pod-wide lock RUNNER_LOCK (flock), so two
 # runners never pass the gate, or claim, on the same reading.
 # A unit is live while its pid (run/<unit>: the pid of `setsid bash unit.sh`, which becomes the
@@ -36,7 +38,9 @@
 # after its start, which a longer spacing used to wait out), KILL_GB (118), DEFAULT_WEIGHT_GB (12: weight of a
 # unit without a .w file, a run packed before weights; those runs are mostly fast-tier chunks of
 # measured files and 12 GB is the 90th percentile of 7183 measured units),
-# IDLE_WAIT_S (300), RUNNER_LOCK (/work/.runner.lock), CLAIM_S (120), CLAIMS (/work/.claims),
+# RESERVE_TOP (2: light units reserved at once; 18 mixed units under a memory-only gate peaked at
+# 185-229 GB, 0.6-0.73 x their weight sum), RESERVE_FULL_GB (40: units this heavy keep their whole
+# gap reserved), IDLE_WAIT_S (300), RUNNER_LOCK (/work/.runner.lock), CLAIM_S (120), CLAIMS (/work/.claims),
 # CLAIM_MAX_S (3600: a claim whose pid is alive but no runner, a reused pid, is deleted once
 # older, "claim-expired"; a dead runner's claim goes at once, "claim-dead"; a live runner's claim never expires
 # by time; this runner's own lost claim lets its head be gated again with a fresh hold timer),
@@ -55,7 +59,7 @@ D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
 GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; RUNMAXP="${RUNMAXP:-$MAXP}"; SPACING="${SPACING:-4}"; KILL_GB="${KILL_GB:-118}"
 NO_W_FILE_GB="${DEFAULT_WEIGHT_GB:-12}"; IDLE_WAIT_S="${IDLE_WAIT_S:-300}"; LOCK="${RUNNER_LOCK:-/work/.runner.lock}"
 CLAIMS="${CLAIMS:-/work/.claims}"; CLAIM_S="${CLAIM_S:-120}"; CLAIM_MAX_S="${CLAIM_MAX_S:-3600}"; RUN=$(basename "$D")
-UNIT_MAX_S="${UNIT_MAX_S:-21600}"; WORK="${WORK:-/work}"
+UNIT_MAX_S="${UNIT_MAX_S:-21600}"; WORK="${WORK:-/work}"; RESERVE_TOP="${RESERVE_TOP:-2}"; RESERVE_FULL_GB="${RESERVE_FULL_GB:-40}"
 cd "$O"; mkdir -p run
 . "$D/bin/gate.sh"   # cgmem, wgb, podgate, admit, choose, claims, unit_overdue
 memgb() { local b; b=$(cgmem current) || return 1; echo $(( b / 1000000000 )); }
@@ -141,10 +145,10 @@ while :; do
     [ "$plive" -eq 0 ] || idle0=""; [ "$plive" -eq 0 ] && [ -z "${idle0:-}" ] && idle0=$now
     waited=$(( now - ${idle0:-$now} ))
     [ "${h0u:-}" = "$u" ] || { h0u=$u; h0t=$now; }   # the head's hold age counts from its first hold
-    read -r cs cu <<< "$(claim_state "$RUN")"
+    read -r cs cu cw <<< "$(claim_state "$RUN")"
     [ "$cs" = mine ] && [ "$cu" != "$u" ] && { claim_drop "$RUN" "$cu"; cs=none; }   # stale: not the head
     [ -n "${claimed:-}" ] && [ "$cs" != mine ] && { claimed=""; h0t=$now; }   # claim expired: fresh hold
-    if [ "$mem" -lt "$GATE_GB" ]; then read -r d su a cl <<< "$(choose "$plive" "$pres" "$mem" "$waited" $(( now - h0t )) "$cs")"
+    if [ "$mem" -lt "$GATE_GB" ]; then read -r d su a cl <<< "$(choose "$plive" "$pres" "$mem" "$waited" $(( now - h0t )) "$cs" "${cw:-0}")"
     else d=none; a=hold-mem; cl=""; idle0=""; fi
     if [ "$d" = start ]; then
       grep -v "^$su " pending.txt > p.new; mv p.new pending.txt; sf=$(grep "^$su " queue.txt | cut -d' ' -f2); sw=$(wgb "$su.w")

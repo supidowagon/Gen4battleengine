@@ -1,7 +1,7 @@
 # POD SIDE, sourced by runner.sh, setup.sh, status.sh, agg.sh and podcheck.sh: the start gate's
 # arithmetic (tests/tools/test_pod_gate.py runs it with a fake ps) and the container memory reader.
 # Functions only. Reads NO_W_FILE_GB, MAXP, GATE_GB, KILL_GB, IDLE_WAIT_S, CLAIMS, CLAIM_S,
-# CLAIM_MAX_S, UNIT_MAX_S from the caller.
+# CLAIM_MAX_S, UNIT_MAX_S, RESERVE_TOP (default 2), RESERVE_FULL_GB (default 40) from the caller.
 
 # cgmem <current|max|peak>: container memory in bytes. cgroup v2 first (<CGROOT>/memory.current,
 # memory.max, memory.peak), else cgroup v1 (<CGROOT>/memory/memory.usage_in_bytes,
@@ -26,16 +26,23 @@ wgb() { local w; w=$(cat "$1" 2>/dev/null); case "$w" in ''|*[!0-9]*) echo "$NO_
 # pid of the unit's setsid bash, which becomes its process group id; its weight is ../<unit>.w),
 # from one ps snapshot. A unit is live while that pid exists and is not a zombie (a unit that has
 # not called setsid yet) or its group has a member that is not a zombie; ids 0 and 1 and malformed
-# ids never count. Its reserve is weight - group RSS (GB = 10^9 bytes) when positive. The reserve
-# total is rounded up.
+# ids never count. A live unit's gap is weight - group RSS (GB = 10^9 bytes) when positive.
+# Reserve = every gap of a heavy unit (weight >= RESERVE_FULL_GB) + the RESERVE_TOP largest gaps
+# of the light units; the other light units count only at their RSS, which memory already holds:
+# light units do not reach their peaks together (measured pod peak 0.6-0.73 x the live weight sum
+# at 12+ live units, 21 Nov), heavy ones are too large to bet on. The reserve is rounded up.
 podgate() {
   local f
   { for f in "$@"; do [ -f "$f" ] || continue
       echo "U $(cat "$f" 2>/dev/null) $(cat "${f%/run/*}/${f##*/}.w" 2>/dev/null)"; done
-    ps -eo pid=,pgid=,stat=,rss= | awk '{print "P", $1, $2, $3, $4}'; } | awk -v d="$NO_W_FILE_GB" '
+    ps -eo pid=,pgid=,stat=,rss= | awk '{print "P", $1, $2, $3, $4}'; } |
+  awk -v d="$NO_W_FILE_GB" -v top="${RESERVE_TOP:-2}" -v full="${RESERVE_FULL_GB:-40}" '
     $1 == "P" { if ($4 !~ /^Z/) { live[$2] = 1; live[$3] = 1 }; rss[$3] += $5; next }
     $1 == "U" && $2 ~ /^[0-9]+$/ && $2 > 1 { n++; g[n] = $2; w[n] = ($3 ~ /^[0-9]+$/) ? $3 : d }
-    END { for (i = 1; i <= n; i++) if (live[g[i]]) { c++; r = w[i] - rss[g[i]] * 1024 / 1e9; if (r > 0) t += r }
+    END { for (i = 1; i <= n; i++) if (live[g[i]]) { c++; r = w[i] - rss[g[i]] * 1024 / 1e9
+            if (r > 0) { if (w[i] >= full) t += r; else gap[++m] = r } }
+          for (k = 1; k <= top; k++) { b = 0; for (j = 1; j <= m; j++) if (gap[j] > 0 && (b == 0 || gap[j] > gap[b])) b = j
+            if (b == 0) break; t += gap[b]; gap[b] = 0 }
           printf "%d %d\n", c, (t == int(t)) ? t : int(t) + 1 }'
 }
 
@@ -70,19 +77,20 @@ pidlive() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac
 
 # Pod-wide claims (CLAIMS dir, default /work/.claims): a unit held CLAIM_S s gets a claim file
 # <run>.<unit> = "<epoch> <weight> <runner pid>"; the oldest live claim (epoch, then name) wins and
-# every other runner starts nothing while it exists. Callers hold the pod lock.
+# while it exists every runner starts only units that fit beside it (choose). Callers hold the pod lock.
 # claim_write <run> <unit> <weight> <epoch>: written through a temp file, with this shell's pid.
 claim_write() { mkdir -p "$CLAIMS"; local t="$CLAIMS/.$1.$2.tmp"
   echo "$4 $3 ${CLAIM_PID:-$$}" > "$t" && mv -f "$t" "$CLAIMS/$1.$2"; }
 claim_drop() { rm -f "$CLAIMS/$1.$2"; }
-# claim_state <run>: "none" | "mine <unit>" | "other <run>.<unit>" for the oldest live claim;
+# claim_state <run>: "none" | "mine <unit> <weight>" | "other <run>.<unit> <weight>" for the
+# oldest live claim (weight: the claim file's, a malformed one counts NO_W_FILE_GB);
 # deletes on the way malformed claims, claims whose pid is dead (or a zombie: logged "<epoch>
 # claim-dead <name> pid <pid> age <s> s" on stderr) and claims whose pid is alive but no runner
 # (runnerpid: a reused pid) once older than CLAIM_MAX_S (logged "<epoch> claim-expired <name> age
 # <s> s" on stderr). A live runner's claim never expires by time: it ends when that runner starts
 # the claimed unit or dies.
 claim_state() {
-  local c n e w p best="" be=""
+  local c n e w p best="" be="" bw=""
   for c in "$CLAIMS"/*; do [ -f "$c" ] || continue; n=${c##*/}
     read -r e w p < "$c" 2>/dev/null || { rm -f "$c"; continue; }
     case "$e" in ''|*[!0-9]*) rm -f "$c"; continue;; esac
@@ -90,26 +98,36 @@ claim_state() {
       echo "${NOW:-$(date +%s)} claim-dead $n pid $p age $(( ${NOW:-$(date +%s)} - e )) s" >&2; continue; }
     if ! runnerpid "$p" && [ $(( ${NOW:-$(date +%s)} - e )) -gt "${CLAIM_MAX_S:-3600}" ]; then rm -f "$c"
       echo "${NOW:-$(date +%s)} claim-expired $n age $(( ${NOW:-$(date +%s)} - e )) s" >&2; continue; fi
-    if [ -z "$best" ] || [ "$e" -lt "$be" ] || { [ "$e" -eq "$be" ] && [[ "$n" < "$best" ]]; }; then best=$n; be=$e; fi
+    if [ -z "$best" ] || [ "$e" -lt "$be" ] || { [ "$e" -eq "$be" ] && [[ "$n" < "$best" ]]; }; then best=$n; be=$e; bw=$w; fi
   done
+  case "$bw" in ''|*[!0-9]*) bw=$NO_W_FILE_GB;; esac
   if [ -z "$best" ]; then echo none
-  elif [ "${best%%.*}" = "$1" ]; then echo "mine ${best#*.}"
-  else echo "other $best"; fi
+  elif [ "${best%%.*}" = "$1" ]; then echo "mine ${best#*.} $bw"
+  else echo "other $best $bw"; fi
 }
 
 # choose <live> <reserve GB> <memory GB> <s waited idle> <head hold age s> <claim: none|mine|other>
-# over pending.txt (lines "<unit> <file>", weights in ./<unit>.w): which unit to start.
-# Prints four fields "<start|none> <unit|-> <how> <claim|->":
-#   "start <unit> <admit result> -" the head fits (admit start*)
+# [<claim weight GB>, with "other"] over pending.txt (lines "<unit> <file>", weights in ./<unit>.w): which unit
+# to start. Prints four fields "<start|none> <unit|-> <how> <claim|->":
+#   "start <unit> <admit result> -" the head fits (admit start*); not with "other"
 #   "start <unit> skip-ahead -"     the head does not fit, its hold is younger than CLAIM_S, no claim
 #                                   is live, and <unit> is the first later unit that fits (admit start)
+#   "start <unit> claim-fit -"      another run's claim is the oldest live one, units are live, and
+#                                   <unit> is the first pending unit that fits beside the claimed
+#                                   unit (reserve + claim weight): it takes only room the claim does
+#                                   not need (memory fell since the claimant's last check)
 #   "none - <admit result of the head> <claim|->"  nothing starts; "claim": the head has been held
 #                                   CLAIM_S s and no claim is live, so the caller claims it
-#   "none - claim-other -"          another run's claim is the oldest live one
+#   "none - claim-other -"          another run's claim is the oldest live one and no unit fits beside it
 # With "mine" only the head (the claimed unit) may start.
 choose() {
-  local live=$1 res=$2 mem=$3 waited=$4 age=$5 cl=$6 u f a w
-  [ "$cl" = other ] && { echo "none - claim-other -"; return; }
+  local live=$1 res=$2 mem=$3 waited=$4 age=$5 cl=$6 cw=${7:-0} u f a w
+  if [ "$cl" = other ]; then
+    if [ "$live" -gt 0 ]; then while read -r u f; do
+        [ "$(admit "$live" $((res + cw)) "$mem" "$(wgb "$u.w")" "$waited")" = start ] && { echo "start $u claim-fit -"; return; }
+      done < pending.txt; fi
+    echo "none - claim-other -"; return
+  fi
   read -r u f < pending.txt; w=$(wgb "$u.w")
   a=$(admit "$live" "$res" "$mem" "$w" "$waited")
   case "$a" in start*) echo "start $u $a -"; return;; esac
