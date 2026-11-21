@@ -2,14 +2,19 @@
 # PC SIDE (Git Bash). Builds the vanilla and Kaizo tables:
 #   build_tables.sh --here     in place, in the checkout or worktree you are in (git toplevel of $PWD)
 #   build_tables.sh <commit>   in a temporary worktree $RENT/wt_<short>, then packs the uploadable
-#                              tables (common.sh TABLE_ALLOW) into $RENT/tables_<short>.tar.xz and
-#                              removes the worktree (also on failure)
+#                              tables (common.sh TABLE_ALLOW) into $RENT/tables/tables_k<key16>.tar.xz
+#                              and removes the worktree (also on failure)
+# Reuse: <key> = tools/ops/table_key.py over the worktree (every module the table tools import, the
+# tracked data, the interpreter and its packages, node, the decomp, the symbols map, the local inputs
+# by content). When $RENT/tables/tables_k<key16>.tar.xz exists the build is skipped. Either way
+# $RENT/tables_<short>.tar.xz is that archive (hard link, else a copy), $RENT/tables_<short>.key holds
+# <key>, and $RENT/tables/index.txt gets the line "<full sha> <key>".
 # Inputs from the main checkout ($REPO): data/local.toml (paths to the ROM, patch, calc zip,
 # docs sheet; copied into the build checkout when it has none), .cache/decomp/<commit>/main.nef.xMAP
 # (symbols) and external/pokeplatinum (linked when the build checkout has none). These stay on the PC.
 # Python: $NUZLINE_PY (an existing venv's python, run with PYTHONPATH) or else `uv run --group rom python`.
 set -euo pipefail
-. "$(cd "$(dirname "$0")" && pwd)/common.sh"
+OPS_DIR=$(cd "$(dirname "$0")" && pwd); . "$OPS_DIR/common.sh"
 ARG="${1:?usage: build_tables.sh --here | <commit>}"
 [ -f "$REPO/data/local.toml" ] || { echo "ERROR: $REPO/data/local.toml missing (see data/local.example.toml)"; exit 2; }
 [ -d "$REPO/external/pokeplatinum" ] || { echo "ERROR: $REPO/external/pokeplatinum missing"; exit 2; }
@@ -64,6 +69,18 @@ DC=$("${PY[@]}" -c "from tools.rom.symbols import DECOMP_COMMIT; print(DECOMP_CO
 SYM="$B/.cache/decomp/$DC/main.nef.xMAP"; [ -f "$SYM" ] || SYM="$REPO/.cache/decomp/$DC/main.nef.xMAP"
 [ -f "$SYM" ] || { echo "ERROR: symbols map missing: $SYM (docs/rom_pipeline.md, Decomp build)"; exit 2; }
 
+if [ "$MODE" = commit ]; then
+  wp() { if command -v cygpath >/dev/null; then cygpath -w "$1"; else echo "$1"; fi; }
+  KEY=$("${PY[@]}" "$(wp "$OPS_DIR/table_key.py")" --root "$(wp "$B")" --decomp "$(wp "$B/external/pokeplatinum")" \
+    --symbols "$(wp "$SYM")" --config "$(wp "$B/data/local.toml")" | tr -d '\r')
+  echo "$KEY" | grep -qE '^[0-9a-f]{64}$' || { echo "ERROR: table_key.py printed no key: $KEY"; exit 2; }
+  FULL=$(git -C "$REPO" rev-parse "$C^{commit}"); TD="$RENT/tables"; KA="$TD/tables_k${KEY:0:16}.tar.xz"; mkdir -p "$TD"
+  record() {  # tables_<short>.tar.xz is the key's archive; the key and the sha -> key line are kept
+    rm -f "$RENT/tables_$C.tar.xz"; ln -f "$KA" "$RENT/tables_$C.tar.xz" 2>/dev/null || cp "$KA" "$RENT/tables_$C.tar.xz"
+    echo "$KEY" > "$RENT/tables_$C.key"; echo "$FULL $KEY" >> "$TD/index.txt"; }
+  if [ -f "$KA" ]; then record; echo "BUILD_OK $RENT/tables_$C.tar.xz (reused $KA, key ${KEY:0:16})"; exit 0; fi
+fi
+
 "${PY[@]}" -m tools.extract_decomp --decomp external/pokeplatinum --out data/intermediate
 "${PY[@]}" -m tools.build_tables
 "${PY[@]}" -m tools.extract_rom --game kaizo --out data/intermediate_kaizo/rom --symbols "$SYM"
@@ -74,9 +91,9 @@ SYM="$B/.cache/decomp/$DC/main.nef.xMAP"; [ -f "$SYM" ] || SYM="$REPO/.cache/dec
 [ "$MODE" = here ] && { echo "BUILD_OK in place: $B"; exit 0; }
 
 L="$RENT/tables_$C.list"
-{ git ls-files -o -i --exclude-standard -- data; git diff --name-only -- 'data/gen4_platinum*/'; } | sort -u \
+{ git ls-files -o -i --exclude-standard -- data; git diff --name-only -- data/gen4_platinum data/gen4_platinum_kaizo; } | sort -u \
   | grep -E "$TABLE_ALLOW" | grep -vE "$TABLE_DENY" | while read -r f; do [ -f "$f" ] && echo "$f"; done > "$L"
 grep -q '^data/gen4_platinum_kaizo/manifest.json$' "$L"
-tar -cJf "$RENT/tables_$C.tar.xz" -T "$L"
+tar -cJf "$KA.tmp" -T "$L"; mv -f "$KA.tmp" "$KA"; record
 cd "$RENT"
-echo "BUILD_OK $RENT/tables_$C.tar.xz ($(wc -l < "$L") files)"
+echo "BUILD_OK $RENT/tables_$C.tar.xz ($(wc -l < "$L") files, key ${KEY:0:16})"
