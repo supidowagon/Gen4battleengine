@@ -17,11 +17,15 @@ New value of a line of GB g with fresh measurement m: m when m > g; else the lar
 and nothing lower: floor(m) = ceil(m x 1.1) when m >= 40, else ceil(max(m x 1.25, m + 2)); a line
 moves down to floor(m) only when floor(m) < g. A line with no fresh measurement stays. Also stays:
 a hand-kept line whose cite has the word "keep" (never lowered), a hand-kept per-test line whose
-test is in a counted rc 137 or rc 98 unit (never lowered), a file line whose fresh units do not
-cover the mark of the run its line cites (never lowered: a fast-tier run does not lower a line a
-slow-tier run measured). Covered: a unit without -m filter (out/<unit>.m "A"), the same mark, or
-"not slow" by both "not slow and not fullset" and "fullset". The cited run's mark is read from
-<out>/<run>/results/meta.env or <out>/<run>/meta.env beside the given agg.txt files.
+test is in a counted rc 137 or rc 98 unit (never lowered), and any line whose old peak the fresh
+results did not run again (_old_peak_rerun): a line goes down to n only when the run its line cites
+is among the given agg.txt files (counted or not) with a per-unit table, and every unit of that run
+holding an id of the line (a file line: an id of the file without a hand-kept line; a per-test
+line: an id it matches) that peaked above n lists all its ids (out/<unit>.ids, as many as its ids
+column) and each such id ran again in a counted unit: for a file line a unit of rc 0 or 1, for a
+per-test line a passed 1-id unit. The ids file lists what ran under the unit's mark, so a slow id
+of an "A" unit is not run again by a default-mark run; a cited run that is missing, has no unit
+table or no unit of the line keeps the line.
 Output: <weights.txt> up to the line MARK with hand-kept lines changed as above (a changed line
 becomes "<entry padded to 74> <GB> <run>"), then the file lines (largest first, then by name),
 then the per-test lines by name: every old one (as above) and a new one for each test peak,
@@ -159,7 +163,8 @@ class Unit(NamedTuple):
     mib: int
     rc: str
     mark: str
-    alone: bool   # 1 id, rc 0, its log ends "1 passed"
+    alone: bool
+    count: int   # the ids column: how many ids the unit ran   # 1 id, rc 0, its log ends "1 passed"
 
 
 def read_units(aggs: list[Path], since: Since) -> tuple[list[Unit], dict[str, tuple[int, str, str]]]:
@@ -197,28 +202,22 @@ def read_units(aggs: list[Path], since: Since) -> tuple[list[Unit], dict[str, tu
             mf = out / f"{p[0]}.m"
             umark = "A" if mf.is_file() and mf.read_text(encoding="utf-8").strip() == "A" else mark
             alone = p[1] == "1" and len(ids) == 1 and p[4] == "0" and int(p[2]) > 0 and passed_alone(out / f"{p[0]}.log")
-            units.append(Unit(run, p[0], ids, int(p[2]), p[4], umark, alone))
+            units.append(Unit(run, p[0], ids, int(p[2]), p[4], umark, alone, int(p[1]) if p[1].isdigit() else 0))
     return units, flat
 
 
-def _covers(marks: set[str], old: str | None) -> bool:
-    if old is None:
+def _old_peak_rerun(holds, n: int, cite: str, by_run: dict[str, list[Unit]], rerun: set[str]) -> bool:
+    """May a line whose ids are those `holds` accepts go down to n GB? Only when its cited run's
+    units that peaked above n are known id by id and every such id of the line is in `rerun`."""
+    units = [u for u in by_run.get(cite, []) if any(holds(t) for t in u.ids)]
+    if not units:
         return False
-    if "A" in marks or old in marks:
-        return True
-    return old == "not slow" and {DEFAULT_MARK, "fullset"} <= marks
-
-
-def _cited_marks(aggs: list[Path]) -> dict[str, str]:
-    """run name -> MARK, for every run folder beside the given results."""
-    roots = {(a.parent.parent.parent if a.parent.name == "results" else a.parent.parent) for a in aggs}
-    marks = {}
-    for root in roots:
-        for d in root.iterdir() if root.is_dir() else []:
-            for m in (d / "results", d):
-                if (m / "meta.env").is_file():
-                    marks.setdefault(d.name, _meta(m).get("MARK", DEFAULT_MARK))
-    return marks
+    for u in units:
+        if u.mib <= 0 or gb(u.mib) <= n:
+            continue
+        if len(u.ids) != u.count or not all(t in rerun for t in u.ids if holds(t)):
+            return False
+    return True
 
 
 def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, since: list[str] | None = None,
@@ -236,7 +235,22 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
             old[b[0]] = (int(b[1]), " ".join(b[2:]))
     weights.load_lines(gen)   # the same format check as the pod's
     units, flat = read_units(aggs, Since(since or []))
+    by_run: dict[str, list[Unit]] = {}
+    for u in read_units(aggs, Since([]))[0]:
+        by_run.setdefault(u.run, []).append(u)
+    ran: dict[str, set[str]] = {}   # file -> ids a counted unit of rc 0 or 1 ran
+    for u in units:
+        if u.rc in ("0", "1"):
+            for t in u.ids:
+                ran.setdefault(t.split("::")[0], set()).add(t)
     w: list[str] = []
+
+    def may_lower(e: str, n: int, cite: str) -> bool:
+        cite = cite.split()[0] if cite.split() else ""
+        if "::" in e:
+            return _old_peak_rerun(lambda t: weights._matches(e, t), n, cite, by_run, set(test_m))
+        return _old_peak_rerun(lambda t: t.split("::")[0] == e and not _hand_covered(t, hand), n, cite, by_run,
+                               ran.get(e, set()))
 
     test_m: dict[str, tuple[int, str]] = {}
     killed: set[str] = set()
@@ -248,10 +262,8 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
 
     best: dict[str, tuple[int, str]] = {}
     low: dict[str, tuple[int, str, str]] = {}
-    marks: dict[str, set[str]] = {}
-    for f, (mib, run, mark) in flat.items():
+    for f, (mib, run, _mark) in flat.items():
         best[f] = (mib, run)
-        marks.setdefault(f, set()).add(mark)
     for u in units:
         f = u.ids[0].split("::")[0]
         if u.rc == "98":
@@ -267,7 +279,6 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
             continue
         if not u.alone and all(_hand_covered(t, hand) or (t in test_m and _lineable(t)) for t in u.ids):
             continue
-        marks.setdefault(f, set()).add(u.mark)
         d = low if u.rc == "137" else best
         if f not in d or u.mib > d[f][0]:
             d[f] = (u.mib, u.run) if u.rc != "137" else (u.mib, u.run, u.name)
@@ -293,7 +304,7 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
         else:
             m, frozen = best.get(e), "keep" in b[2:]
         n = new_value(g, None if m is None else gb(m[0]))
-        if frozen and n < g:
+        if n < g and (frozen or not may_lower(e, n, " ".join(b[2:]))):
             n = g
         if n == g:
             new_head.append(ln)
@@ -302,7 +313,6 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
             new_head.append(f"{e:<74} {n} {m[1]}")
 
     hand_entries = {e for e, _ in hand}
-    cited = _cited_marks(aggs)
     files: dict[str, tuple[int, str]] = {}
     for e, (g, cite) in old.items():
         if "::" in e:
@@ -314,11 +324,9 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
         mg = gb(m[0])
         if mg > g:
             files[e] = (mg, m[1])
-        elif _covers(marks.get(e, set()), cited.get(cite.split()[0] if cite else "")):
-            n = new_value(g, mg)
-            files[e] = (n, m[1]) if n != g else (g, cite)
         else:
-            files[e] = (g, cite)
+            n = new_value(g, mg)
+            files[e] = (n, m[1]) if n < g and may_lower(e, n, cite) else (g, cite)
         if files[e][0] != g:
             changes.append((g, files[e][0], e))
     for f, (mib, run) in best.items():
@@ -329,7 +337,8 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
     for e, (g, cite) in old.items():
         if "::" in e:
             m = test_m.get(e)
-            tests[e] = (g, cite) if m is None else (new_value(g, gb(m[0])), m[1] if new_value(g, gb(m[0])) != g else cite)
+            n = g if m is None else new_value(g, gb(m[0]))
+            tests[e] = (n, m[1]) if n > g or (n < g and may_lower(e, n, cite)) else (g, cite)
             if tests[e][0] != g:
                 changes.append((g, tests[e][0], e))
     for t, (mib, run) in test_m.items():
