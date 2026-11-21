@@ -92,3 +92,70 @@ def test_wgb_falls_back_to_the_default(tmp_path):
 ])
 def test_admit(args, want):
     assert _run(f"admit {args}") == want
+
+
+# Skip-ahead and pod-wide claims (choose, claim_state, claim_write). A fake ps answers both
+# formats the gate uses: process groups (pgid,stat,rss) and runner pids (pid,stat).
+def _fake_ps(pids: dict[int, str]) -> str:
+    rows = " ".join(f"'{p} {s}'" for p, s in pids.items())
+    return ("ps() { case \"$*\" in *pid=,stat=,rss=*) :;; *pid=,stat=*) printf '%s\n' " + rows
+            + ";; esac; }")
+
+
+def _run_dir(root: Path, name: str, units: list[tuple[str, int]]) -> Path:
+    d = root / name / "out"
+    d.mkdir(parents=True)
+    (d / "pending.txt").write_text("".join(f"{u} tests/{u}.py\n" for u, _ in units), encoding="utf-8")
+    for u, gb in units:
+        (d / f"{u}.w").write_text(f"{gb}\n", encoding="utf-8")
+    return d
+
+
+def _in(d: Path, claims: Path, script: str, pids: dict[int, str] = {}) -> str:
+    env = (f"DEFW=20 MAXP=20 GATE_GB=176 KILL_GB=236 IDLE_WAIT_S=300 CLAIM_S=120 "
+           f"CLAIMS='{claims.as_posix()}'")
+    return _run(f"{_fake_ps(pids)}\ncd '{d.as_posix()}'\n{script}", env)
+
+
+def test_a_heavy_head_lets_a_later_unit_that_fits_start(tmp_path):
+    d = _run_dir(tmp_path, "r1", [("u_001", 30), ("u_002", 30), ("u_003", 9)])
+    # 256 GB pod: 137 + 10 + 30 >= 176 holds the head; 137 + 10 + 9 < 176 lets u_003 start
+    assert _in(d, tmp_path / "c", "choose 18 10 137 0 0 none") == "start u_003 skip-ahead -"
+    assert _in(d, tmp_path / "c", "choose 18 30 137 0 0 none") == "none - hold -"   # nothing fits
+    assert _in(d, tmp_path / "c", "choose 18 0 100 0 0 none") == "start u_001 start -"  # the head fits
+
+
+def test_the_head_is_claimed_after_claim_s_and_skip_ahead_stops(tmp_path):
+    d = _run_dir(tmp_path, "r1", [("u_001", 30), ("u_002", 9)])
+    assert _in(d, tmp_path / "c", "choose 18 10 137 0 119 none") == "start u_002 skip-ahead -"
+    assert _in(d, tmp_path / "c", "choose 18 10 137 0 120 none") == "none - hold claim"
+    assert _in(d, tmp_path / "c", "choose 18 10 137 0 500 mine") == "none - hold -"
+    assert _in(d, tmp_path / "c", "choose 18 0 100 0 500 mine") == "start u_001 start -"
+    assert _in(d, tmp_path / "c", "choose 1 0 0 0 0 other") == "none - claim-other -"
+
+
+def test_claim_hand_over_between_two_runners(tmp_path):
+    claims = tmp_path / "claims"
+    a = _run_dir(tmp_path, "run-a", [("u_001", 30)])
+    b = _run_dir(tmp_path, "run-b", [("u_001", 9), ("u_002", 9)])
+    live = {4001: "S", 4002: "S"}
+    _in(a, claims, "CLAIM_PID=4001 claim_write run-a u_001 30 1000", live)
+    assert (claims / "run-a.u_001").read_text(encoding="utf-8").split() == ["1000", "30", "4001"]
+    assert _in(a, claims, "claim_state run-a", live) == "mine u_001"
+    assert _in(b, claims, "claim_state run-b", live) == "other run-a.u_001"
+    # b's own later claim does not outrank the older one
+    _in(b, claims, "CLAIM_PID=4002 claim_write run-b u_001 9 1005", live)
+    assert _in(b, claims, "claim_state run-b", live) == "other run-a.u_001"
+    # a starts its unit and drops the claim: b's claim is now the oldest
+    _in(a, claims, "claim_drop run-a u_001", live)
+    assert _in(b, claims, "claim_state run-b", live) == "mine u_001"
+    assert _in(a, claims, "claim_state run-a", live) == "other run-b.u_001"
+
+
+def test_a_dead_or_zombie_claimant_is_ignored_and_deleted(tmp_path):
+    claims = tmp_path / "claims"
+    b = _run_dir(tmp_path, "run-b", [("u_001", 9)])
+    _in(b, claims, "CLAIM_PID=5001 claim_write run-a u_001 30 1000; CLAIM_PID=5002 claim_write run-c u_004 30 1001")
+    (claims / "run-d.u_002").write_text("garbage\n", encoding="utf-8")
+    assert _in(b, claims, "claim_state run-b", {5002: "Z"}) == "none"
+    assert sorted(p.name for p in claims.iterdir()) == []
