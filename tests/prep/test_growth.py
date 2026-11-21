@@ -304,10 +304,13 @@ def test_everstone_blocks_level_not_stone(tables, names, manifest, method):
     ls = synthetic(manifest, method, [("level", 10, A), ("use_item", stone, B)])
     assert target(tables, ls, spec(level=10)) == (A, method["level"])
     held = spec(level=10, item=everstone)
-    assert target(tables, ls, held) is None  # src/pokemon.c:3541-3547
-    # The item class passes the Everstone, and so does class 2 (the switch shares the case).
-    for cls in (EVO_CLASS_BY_ITEM, EVO_CLASS_UNUSED_02):
-        assert target(tables, ls, held, cls=cls, param=stone) == (B, EVO_NONE)
+    assert target(tables, ls, held) is None  # src/pokemon.c:3543-3547
+    # Only the item class passes the Everstone (:3545). Class 2 shares the item case
+    # (:3749-3750) but the guard before the switch stops it.
+    assert target(tables, ls, held, cls=EVO_CLASS_BY_ITEM, param=stone) == (B, EVO_NONE)
+    assert target(tables, ls, held, cls=EVO_CLASS_UNUSED_02, param=stone) is None
+    bare = spec(level=10)
+    assert target(tables, ls, bare, cls=EVO_CLASS_UNUSED_02, param=stone) == (B, EVO_NONE)
 
 
 def test_everstone_does_not_stop_kadabra(tables, names, manifest, method):
