@@ -446,6 +446,10 @@ three structs has a row.
   Chatter's parameter 0 / 1 / 2 (`ids.CHATTER_CHANCES`, sound_chatot.c:193-213), a battle constant
   like `terrain`: every enemy's is 0 (`ChatotCry_New` is invalid, field_battle_data_transfer.c:97,
   chatot_cry.c:13-25), the player's is the save's (`make_state(chatot_cry=...)`, party 0 (`[P]`, battle_system.c:915-924)).
+- **battleParticipantMask -> `sent_out`** (D45-18): per battler (`u8[MAX_BATTLERS]`, battle_system.h:118),
+  bit = the battler's party slot; set by both send-out emitters (battle_controller.c:282, :332), the start
+  included, never cleared. Read only by `BattleSystem_SetBurmyForm` (battle_system.c:926-971, `mask[0]` only)
+  at the battle's end; not `exp_mask` (`sideGetExpMask`), whose bits it contains.
 - **BattleMon vs. party moves** (G-68): `moves` / `pp` of the active slot are the BattleMon's;
   Mimic writes only those (battle_script.c:4502-4516), flags the slot in `mimic_slots` and keeps the
   party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots
@@ -975,3 +979,4 @@ three structs has a row.
 | Struct.field | pytree field | status |
 |---|---|---|
 | `BattleSystem.terrain` | `terrain` | mapped |
+| `BattleSystem.battleParticipantMask` | `sent_out` | mapped |

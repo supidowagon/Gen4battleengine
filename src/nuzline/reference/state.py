@@ -201,6 +201,7 @@ class RefBattler:
     ts_helping_hand: int  # turnFlags.helpingHand, 0 between turns (D3 fix B)
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
+    sent_out: int  # battleParticipantMask[b]: bit = party slot sent out by b this battle (D45-18)
 
 
 @dataclass

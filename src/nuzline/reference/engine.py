@@ -3883,10 +3883,18 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     _source_leaves(s, side, baton)
 
 
+def _mark_sent_out(s: RefState, side: int) -> None:
+    """``battleParticipantMask[side] |= FlagIndex(selectedPartySlot[side])`` (battle_system.c:
+    973-976) at battler ``side``'s send-out (BattleController_EmitShowPokemon, battle_controller.c:
+    332; every switch, drag and replacement subscript, before its hazards check). Never cleared."""
+    s.battlers[side].sent_out |= 1 << s.battlers[side].active
+
+
 def _send_out_exp(s: RefState, side: int) -> None:
     """``BtlCmd_PokemonSendOut`` (script.c:543-635) for battler ``side``'s newcomer: a player
     send-out flags the enemy (:571-572, :592-593, :607-608, :622-623), an enemy send-out
     clears the mask, then flags (:580-581, :595-596, :610-611, :625-626).
+    Also the send-out mask (``_mark_sent_out``, D45-18).
     ``BattleSystem_ClearSideExpGain`` (lib.c:1456-1459) sets ``sideGetExpMask`` to 0;
     ``BattleSystem_FlagBattlerExpGain`` (lib.c:1461-1479) ORs in
     ``selectedPartySlot[PLAYER_1]``'s bit when the enemy's ``curHP`` is nonzero (``PLAYER_2``
@@ -3897,6 +3905,7 @@ def _send_out_exp(s: RefState, side: int) -> None:
     enemy send-out of ``e`` clears and flags its own entry only. A flag ORs the active slot of
     player battler 0, then 2 (only 0 for MULTI, lib.c:1475-1477), each not in
     ``battlersSwitchingMask`` (``_absent_now``), when ``e`` has HP (:1467-1469)."""
+    _mark_sent_out(s, side)
     fmt = _fmt(s)
     if fmt.B == 2:
         if side == 1:

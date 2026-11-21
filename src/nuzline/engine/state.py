@@ -289,7 +289,8 @@ Encodings:
   level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
   ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask`` as a
   bitmask over the player's party slots, one entry per enemy battler at B = 4 (D3-8b): the
-  player's leads at the start, then written by every send-out (``step._switch_in``).
+  player's leads at the start, then written by every send-out (``step._switch_in``). ``sent_out``
+  is ``battleParticipantMask``, per battler, not ``exp_mask`` (``STATE.md`` "sent_out").
   ``learn_level`` / ``learn_cursor`` (the pending learnset scan) are 0 until the payout and the
   learn resolve set them. E3-B2-21: a payout's learn prompt pauses the turn
   (``learn_site``, ``levelup.LEARN_*``), with the scratch ``ts_ran``, ``ts_move_cur``,
@@ -729,6 +730,10 @@ class BattleState(NamedTuple):
     # int8[B], 1 + BattleContext.lastHitByBattler[b] (D2-14; bcp.c:3347, :3357): the battler that
     # last dealt damage to b's slot, 0 = none yet; never cleared (not by a switch or a faint)
     last_hit_by: jnp.ndarray
+    # int8[B], BattleSystem.battleParticipantMask[b] (battle_system.h:118; battle_system.c:973-976):
+    # bit i = party slot i of b's party was sent out by b this battle; set at every send-out, the
+    # start's included, never cleared (D45-18)
+    sent_out: jnp.ndarray
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
@@ -1194,6 +1199,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_helping_hand": (_BATTLER, np.int8),
     "chosen_target": (_BATTLER, np.int8),
     "last_hit_by": (_BATTLER, np.int8),
+    "sent_out": (_BATTLER, np.int8),
 }
 
 
@@ -1495,7 +1501,7 @@ def initial_arrays(
     battle_lib.c:1461-1479). At B = 4 (D3-8b) both entries (one per enemy battler) hold the bits
     of the player battlers' leads: battler 0's, and battler 2's unless the format is ``MULTI``
     (the loop stops after player battler 0 for ``BATTLE_TYPE_TRAINER_WITH_AI_PARTNER``,
-    battle_lib.c:1475-1477). The learn fields start at 0."""
+    battle_lib.c:1475-1477). ``sent_out[b] = 1 << leads[b]`` (D45-18). The learn fields start at 0."""
     if len(parties) != fmt.P:
         raise ValueError(f"a {fmt.B}-battler fight has {fmt.P} parties, got {len(parties)}")
     if leads is None:
@@ -1525,6 +1531,10 @@ def initial_arrays(
     if fmt.B == 4 and fmt != MULTI:
         bits |= 1 << leads[2]
     a["exp_mask"][...] = bits
+    # D45-18: the start's PokemonSlideIn of every battler (subscript_start_encounter.s:84, :91;
+    # BattleController_EmitShowEncounter, battle_controller.c:282) sets its lead's bit.
+    for b in range(fmt.B):
+        a["sent_out"][b] = 1 << leads[b]
     # D2-1 rule 8: the game's zero is never read (every battler selects on turn 1); b ^ 1 keeps
     # a hand-built state's lock on today's defender.
     a["chosen_target"][...] = np.arange(fmt.B) ^ 1

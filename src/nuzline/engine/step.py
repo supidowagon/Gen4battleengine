@@ -775,7 +775,8 @@ def _switch_in(
     outgoing Pokemon is the source of end (``_source_leaves``: the Bind it put on the other
     side, the other side's infatuation), ``fake_out_turn`` becomes ``entry_turn`` and the AI
     forgets the battler's record (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
-    Then the send-out updates the participation mask (``_flag_exp``). ``baton``: a Baton Pass
+    Then the send-out updates the participation mask (``_flag_exp``) and the send-out mask
+    (``_mark_sent_out``). ``baton``: a Baton Pass
     switch (``_reset_battler``)."""
     state = _restore_transform(state, side, True)
     state = _restore_types(tables, state, side, True)
@@ -797,7 +798,16 @@ def _switch_in(
     state = _forget(state, side, True)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
-    return _flag_exp(_source_leaves(state, side, True, baton), side)
+    return _mark_sent_out(_flag_exp(_source_leaves(state, side, True, baton), side), side)
+
+
+def _mark_sent_out(state: BattleState, side) -> BattleState:
+    """``battleParticipantMask[side] |= FlagIndex(selectedPartySlot[side])`` (battle_system.c:
+    973-976) at battler ``side``'s send-out (BattleController_EmitShowPokemon, battle_controller.c:
+    332; every switch, drag and replacement subscript, before its hazards check). Never cleared."""
+    bit = jnp.left_shift(jnp.int32(1), state.active[side].astype(_I32))
+    value = state.sent_out[side].astype(_I32) | bit
+    return state._replace(sent_out=state.sent_out.at[side].set(value.astype(state.sent_out.dtype)))
 
 
 def _flag_exp(state: BattleState, side) -> BattleState:
