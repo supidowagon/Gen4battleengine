@@ -48,8 +48,9 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    inside the diff range and is checked against the compare log). Verdict: MERGE or FIX. When
    only tests or docs changed since an already-reviewed commit, a diff stat of `src` and
    `tools` replaces the review.
-9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, send the stream the
-   new tip and the non-blocking notes, and tell the user in at most three lines.
+9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, then
+   `bash tools/ops/offsite.sh` (section 12, Off-site copy), send the stream the new tip and the
+   non-blocking notes, and tell the user in at most three lines.
 
 **Merge train.** When two or more batches are expected to be merge-ready within one gate run
 of each other (about 3 hours), the managing session names a train order.
@@ -269,6 +270,7 @@ or clear. Times are local cron expressions; the scheduler adds jitter.
 | `47 9,21 * * *` | Fallback check: watchdog plus usage; silent unless something is wrong |
 | `7 22 * * *` | Dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier on `ci-day-big` when that is up, else on `ci-nightly`, and deletes `ci-nightly` itself |
 | `57 22 * * *` | Delete the test pod if nothing is queued and no nightly runs on it, verify with a pod listing, log the cost |
+| `37 23 * * *` | `bash tools/ops/offsite.sh` from the main checkout (section 12, Off-site copy); report only a non-zero exit (a refusal, a rejected branch, an abort or a failed push) |
 
 ## 8. Usage rules
 
@@ -348,6 +350,55 @@ pod work. This section is the source of the handoff procedure; a copy in
   `HOME` set to `_scratch/rent/home` (DAYBOX.md, Paths).
 - The watch scripts: `tools/ops/watch_flags.ps1` and `tools/ops/watchdog.ps1` with the stream
   list `_scratch/manager/streams.json` (section 6; command line in `_scratch/handoff/MANAGER.md`).
+
+### Off-site copy
+
+The private GitHub repo added as git remote `offsite` in the main checkout. Never push it to
+`origin`, never make it public. It never receives ROMs, saves, save states, keys, tokens,
+table archives or run outputs.
+- `bash tools/ops/offsite.sh` (Git Bash, from the main checkout's root) pushes every local
+  branch (`git push offsite --all`: no force, no delete; rejected branches are reported) and
+  mirrors the state files into the clone `_scratch/offsite/state/` as commits on the branch
+  `scratch-state`, which has no common history with the code. Deletions are mirrored inside
+  that clone only; git history keeps old versions. `--dry-run` prints what would be pushed and
+  copied and changes nothing. Temp files go to `_scratch/offsite/tmp/`.
+- Refusals (exit 2), checked before any push: a push URL of `offsite` (every one, after
+  `insteadOf`/`pushInsteadOf`) that names the same repo as any URL of `origin` (compared as
+  lower-case `host/owner/repo`, so a trailing `/`, a missing `.git`, letter case and `git@` vs
+  `https://` do not matter); a repo that `gh repo view <host/owner/repo> --json isPrivate` does
+  not report private (also when `gh` is missing or not logged in); `remote.offsite.mirror` or
+  `remote.offsite.push` set; a local branch named `scratch-state`; a leftover
+  `_scratch/offsite/state/.git/index.lock`. The state clone gets the checked push URLs, `core.autocrlf=false`,
+  `core.longpaths=true`, and the remote `offsite` when it is missing. Other exits: 1 error,
+  3 offender in the state tree (nothing committed), 4 a branch rejected or a push failed.
+  `NUZLINE_OFFSITE_TEST_LOCAL=1` lets the tests use local-path remotes; it never skips the
+  check for a network URL.
+- Runs after every push of `main` (section 2 step 9) and nightly (section 7).
+- State files, paths relative to `_scratch/`: `handoff/`; the text files of `manager/` and of
+  each stream folder `e<n>/` (rule sheets, family lists, plans, podlists, notes, small
+  scripts and logs); in `rent/` the `*.md` notes, the pod id files (`POD_ID*`, `*POD*.txt`),
+  `lists/*.txt` and the top-level helper scripts. Folder names are lower case: a top-level
+  folder such as `E5/` or `Handoff/` is reported (`dir:not-lower-case`) and skipped. Folders
+  named `src`, `tests`, `tools`, `docs`, `data`, `out`, `bin`, `home` (and the cache and
+  emulator folders) are skipped at any depth, inside stream folders too.
+- Never copied (the script enforces it and re-checks the whole state tree before every
+  commit; an offender aborts the commit): worktrees and nested repos, `.cache/`, `.venv/`,
+  `external/`, cache, code-copy and table-copy folders, ROM, save and archive files
+  (`*.nds`, `*.sav`, `*.dsv`, `*.ds<n>`, `*.zip`, `*.7z`, `*.tar*`, `*.npz`, `*.npy`,
+  `*.pkl`, `*.bin`, ...; extensions in any letter case), keys and credentials
+  (`_scratch/rent/home/.runpod/`, `*.key`, `*.pem`, `.env*`, `*.env`, `local.toml`, `*.b64`),
+  files with a NUL byte whatever their extension, files whose content looks like a key or
+  token (private keys, Runpod/GitHub/OpenAI/AWS/Slack/Hugging Face/Google keys, JWTs,
+  `user:password@` in URLs, `Bearer` tokens, `api_key=`/`apiKey:`/`PASSWORD=`-style
+  assignments in any letter case), `rent/out/` and other run outputs, logs over 1 MB, files
+  over 2 MB, anything inside a folder named `backup*`, copied `.gitignore`, `.gitattributes`
+  and `.gitmodules` files. A content scan that cannot run (grep error) refuses too.
+- Restore on a new machine: `git clone -o offsite <off-site repo> <project folder>` gives
+  every branch (`git checkout <branch>`), then in it `git remote add origin <public repo>`.
+  Then `git clone -c core.autocrlf=false -o offsite -b scratch-state <off-site repo>
+  _scratch/offsite/state` and copy its files (not `.git`) into `_scratch/`. Worktrees, tables,
+  `.cache/`, the runpodctl key and the inputs are rebuilt or supplied as in "What you must
+  supply yourself".
 
 ### What does not travel
 
