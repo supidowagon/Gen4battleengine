@@ -28,7 +28,7 @@ Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` sec
 - `nightly_brief.md`: the brief for the nightly run.
 - `day/push_bin.sh`: once per pod (safe to repeat); sends `day/bootstrap.sh` and prints the exec-pod body that runs it in `/work/_bin/new`.
 - `day/bootstrap.sh`: pod side, once per pod; apt tools, uv, Python 3.12, runpodctl checksum, decomp clone; ends with `BOOTSTRAP_OK`.
-- `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`, `day/pod/weights.py`, `day/pod/weights.txt`; refuses forbidden files, tables outside `TABLE_ALLOW` and pod scripts that differ from `main`'s; writes `GATE_VERSION` and `POD_SCRIPTS` into `meta.env`; sends; prints the exec-pod body.
+- `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`, `day/pod/weights.py`, `day/pod/weights.txt` (from HEAD of the checkout that runs it, not from `<commit>`: run it from a checkout at `main`); refuses forbidden files, tables outside `TABLE_ALLOW` and pod scripts that differ from `main`'s; writes `GATE_VERSION`, `POD_SCRIPTS` and `POD_WEIGHTS` into `meta.env`; sends; prints the exec-pod body.
 - `day/podcheck_body.sh`: prints the exec-pod body that runs `day/pod/podcheck.sh` (HEAD's copy, with `gate.sh`) on the pod before a pack: active runs with their `GATE_VERSION` and `POD_SCRIPTS`, memory and limit, claims, `PODCHECK OK` or `PODCHECK MIXED`.
 - `day/collect.sh <run> <code>`: receives a run's `results.tgz` and unpacks it.
 - `day/nightly_files.txt`: the nightly test list.

@@ -181,11 +181,14 @@ per day is the rate used for estimates.
   chunk that does not fit lets the first later chunk of its run that fits start; after
   `CLAIM_S` (120 s) it claims the pod, and no other run starts a chunk until it has started.
   Heavy tests need no hand placement: list them with their weights and the runner keeps them
-  apart. A claim older than `CLAIM_MAX_S` (3600 s) is dropped; a chunk running longer than
-  `UNIT_MAX_S` (14400 s) is killed and counts as a failure. Old-script runners ignore claims:
-  never send a run to a pod they keep full. Every pack is preceded by the pod check
-  (DAYBOX.md, Send a run step 3), and `pack.sh` packs only `main`'s pod scripts, so runs of
-  old and new scripts share a pod only when the run's report states it.
+  apart. A claim lasts while its runner lives: a dead runner's claim is dropped at once, a
+  claim whose pid was reused by another process after `CLAIM_MAX_S` (3600 s); a live
+  runner's claim never expires by time. A chunk running longer than `UNIT_MAX_S` (21600 s;
+  the longest measured chunk, 10080 s, ran on an uncontended pod) is killed and counts as a
+  failure. Old-script runners ignore claims: never send a run to a pod they keep full. Every
+  pack is preceded by the pod check (DAYBOX.md, Send a run step 3), and `pack.sh` runs from a
+  checkout at `main` (the pod scripts come from that checkout, not from the commit under
+  test), so runs of old and new scripts share a pod only when the run's report states it.
   Near `KILL_GB` (118 or 236 GB) kill this run's newest chunk and queue it again, at most
   twice per chunk; a third kill counts as a failure. Never signal PID 1.
 - **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed
