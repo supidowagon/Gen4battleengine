@@ -36,7 +36,14 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from nuzline.engine.format import MULTI, blackout_parties, party_sides, side_of, side_out_parties
+from nuzline.engine.format import (
+    MULTI,
+    ai_battlers,
+    blackout_parties,
+    party_sides,
+    side_of,
+    side_out_parties,
+)
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import party as _party
 from nuzline.engine.ids import (
@@ -8730,34 +8737,33 @@ def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, boo
 
 
 def _record_last_moves(tables, s: RefState, actions, choices) -> None:
-    """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717) for the turn, as
-    ``engine.step._record_last_move`` (ruling D3-1a): when any enemy battler (1, or 1 and 3 at
-    four battlers, ``TrainerAI_MainDoubles`` :362-375) takes its FIGHT path (no forced Struggle,
-    bcp.c:433; no locked move, :335; not encored, :442-454; not recharging, battle_lib.c:6228:
-    D45-4a), the AI adds ``movePrevByBattler`` of every party-0 battler
-    to its list of that battler's moves. At four battlers the enemy and the recorded battler must
-    have HP (:363); at two neither test applies (:295). A first free entry unless the move is
-    listed or the list is full (:2705-2716; Struggle is recorded too, G-68)."""
-    four = _fmt(s).B == 4
-    enemies = (1,) if not four else (1, 3)
-    fight = False
-    for e in enemies:
-        if (
-            _command(actions[e]) == FIGHT
-            and not choices[e][1]
-            and not choices[e][2]
-            and not s.battlers[e].encore_move  # bcp.c:442-454 (D45-4a)
-            and not s.battlers[e].recharge  # battle_lib.c:6228 (D45-4a)
-            and (not four or _active(s, e).hp > 0)
+    """``engine.step.record_last_moves`` for every deciding AI battler (``ai_battlers``): the
+    ``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717) of the AI battler ``a`` adds
+    ``movePrevByBattler[t]`` to ``battlerMoves[t]`` for the defenders it scores: B = 2 the foe
+    (:265, :295); four battlers every living battler of the other side (:362-375), a MULTI partner
+    included (one ``AIContext`` for the battle, ai_context.h:27-29). It records only on the FIGHT
+    path through the move menu: no forced Struggle (bcp.c:433-441), no locked move (:333-337), not
+    recharging (battle_lib.c:6228), not Encored (:442-454, D45-4a), and at four battlers with HP
+    (:329-332); a target needs HP at four battlers (:363). Each target row is written once, the
+    deciders' union (every decider writes the same ``movePrevByBattler``): first free entry unless
+    the move is listed or the list is full (:2705-2716; Struggle is recorded too, G-68)."""
+    fmt = _fmt(s)
+    four = fmt.B == 4
+    rows = set()
+    for a in ai_battlers(fmt):
+        if not (
+            _command(actions[a]) == FIGHT
+            and not choices[a][1]
+            and not choices[a][2]
+            and not s.battlers[a].recharge
+            and not s.battlers[a].encore_move
+            and (not four or _active(s, a).hp > 0)
         ):
-            fight = True
-    if not fight:
-        return
-    for b in range(_fmt(s).B):
-        if _party(_fmt(s), b) != 0 or (four and _active(s, b).hp <= 0):
             continue
-        player = s.battlers[b]
-        _record_seen_move(s.ai_seen_moves[b], player.last_move)
+        targets = [t for t in range(fmt.B) if side_of(t) != side_of(a)] if four else [_foe(a)]
+        rows.update(t for t in targets if not four or _active(s, t).hp > 0)
+    for t in sorted(rows):
+        _record_seen_move(s.ai_seen_moves[t], s.battlers[t].last_move)
 
 
 def ref_step(

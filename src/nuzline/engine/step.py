@@ -192,6 +192,7 @@ from nuzline.engine.effects import (
 from nuzline.engine.format import (
     MULTI,
     Format,
+    ai_battlers,
     blackout_parties,
     format_of,
     party,
@@ -576,50 +577,58 @@ def _set_last_move(state: BattleState, side, move, cond) -> BattleState:
     return state._replace(last_move=state.last_move.at[side].set(value))
 
 
-def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
-    """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717), at the start of the turn:
-    the AI adds the player's ``movePrevByBattler`` to its list of the player's moves
-    (``state.record_seen_move``). It runs only on the AI's FIGHT path (``TrainerAI_MainSingles``,
-    :295, after ``TrainerAI_PickCommand`` chose neither a switch nor an item, :3989; at four
-    battlers ``TrainerAI_MainDoubles`` records for every living opposing battler, :362-375), and not
-    when the opponent must Struggle: the move menu, and with it ``TrainerAI_Main``, is
-    skipped for ``STRUGGLING_ALL`` (battle_controller_player.c:433) and for a locked
-    opponent (:335). The list holds the moves by id (``ai_seen_moves``, G-68), so a Mimic copy, a
-    level-up's replacement and the player's own Struggle (``MOVE_STRUGGLE``) are recorded as the
-    decomp does.
+def record_last_moves(tables: Tables, state: BattleState, actions, deciders) -> BattleState:
+    """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717) for each deciding AI battler of
+    ``deciders``, at command selection (sheet D45-4). The AI battler ``a`` adds
+    ``movePrevByBattler[t]`` (``state.last_move[t]``) to ``battlerMoves[t]`` (``ai_seen_moves``
+    row ``t``) for the defenders it scores: singles ``TrainerAI_MainSingles`` records
+    ``BattleSystem_RandomOpponent`` (battler 0, :265, :295, no HP test); at four battlers
+    ``TrainerAI_MainDoubles`` records every living battler of the other side, never its ally
+    (:362-375). One ``AIContext`` serves the whole battle (ai_context.h:27-29), so a MULTI partner
+    (battler 2) records the enemy rows 1 and 3 as the enemies record 0 and 2.
 
-    D45-4a: an encored enemy (``encoredMove != 0``, bcp.c:442-454: the state goes to WAIT, never
-    to MOVE_SELECT_INIT) and a recharging one (battle_lib.c:6228) record nothing.
+    A decider records only on the FIGHT path through the move menu (``TrainerAI_Main`` runs only
+    from ``Task_TrainerShowMoveSelectMenu``, battle_display.c:3580-3590): not for a switch or item
+    command, not when every move is unusable (STRUGGLING_ALL, bcp.c:433-441), not when it picks
+    no command (``Battler_CanPickCommand``: locked, battle_lib.c:6224-6236; recharging, :6228;
+    bcp.c:333-337), not when Encored (bcp.c:442-454; D45-4a), and at four battlers not when it has
+    no HP (bcp.c:329-332: no living Pokemon left to send in).
 
-    Ruling D3-1a: the record is made when any enemy battler (1, or 1 and 3 at four battlers)
-    takes its FIGHT path, for every party-0 battler (row ``b`` of the record); at four battlers
-    the enemy and the recorded battler must have HP (:363), at two neither test applies
-    (:295)."""
+    Every decider that records ``t`` writes the same value (``movePrevByBattler`` does not change
+    during command selection) and the write is idempotent, so the result is order-free: row ``t``
+    takes ``last_move[t]`` once when at least one decider whose targets include ``t`` records.
+    MOVE_NONE matches the first empty entry and writes nothing (:2708-2710;
+    ``state.record_seen_move``). Rows that exist: DOUBLES / TWO_TRAINERS rows 0 and 2; MULTI rows
+    0-3; B = 2 row 0."""
     fmt = format_of(state)
     four = fmt.B == 4
-    enemies = (1,) if fmt.B == 2 else (1, 3)
-    fight = None
-    for e in enemies:
-        _, struggling = selected_move(tables, state, e, actions[e])
-        locked = locked_slot(state, e) >= 0  # a locked battler picks no command (:335)
-        fight_e = (actions[e] < MOVE_ACTIONS) & ~struggling & ~locked
-        # An encored battler's command never opens the move menu (bcp.c:442-454), nor does a
-        # recharging one's (``Battler_CanPickCommand``, battle_lib.c:6228): D45-4a.
-        fight_e = fight_e & (state.encore_move[e] == 0) & (state.recharge[e] == 0)
+    on = [False] * fmt.B  # one traced bool per target row; Python False: never a target
+    for a in deciders:
+        _, struggling = selected_move(tables, state, a, actions[a])
+        picks = (actions[a] < MOVE_ACTIONS) & ~struggling  # bcp.c:431-441
+        picks = picks & (locked_slot(state, a) < 0)  # bcp.c:333-337
+        picks = picks & (state.recharge[a] == 0)  # battle_lib.c:6228
+        picks = picks & (state.encore_move[a] == 0)  # bcp.c:442-454 (D45-4a)
         if four:
-            fight_e = fight_e & (state.hp[party(fmt, e), state.active[e]] > 0)
-        fight = fight_e if fight is None else fight | fight_e
-    for b in range(fmt.B):
-        if fmt.party_of[b] != 0:
+            picks = picks & (state.hp[party(fmt, a), state.active[a]] > 0)  # bcp.c:329-332
+            targets = [t for t in range(fmt.B) if side_of(t) != side_of(a)]  # trainer_ai.c:371-375
+        else:
+            targets = [_foe(a)]  # trainer_ai.c:265, :295
+        for t in targets:
+            live = state.hp[party(fmt, t), state.active[t]] > 0 if four else True  # :363
+            on[t] = on[t] | (picks & live)
+    for t in range(fmt.B):
+        if on[t] is False:
             continue
-        mon = state.active[b]
-        pending = state.last_move[b]
-        on = fight
-        if four:
-            on = on & (state.hp[0, mon] > 0)
-        seen = ai_record_moves(state, b)
-        state = ai_record_write(state, "ai_seen_moves", b, mon, record_seen_move(seen, pending), on)
+        row = record_seen_move(ai_record_moves(state, t), state.last_move[t])
+        state = ai_record_write(state, "ai_seen_moves", t, state.active[t], row, on[t])
     return state
+
+
+def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
+    """The turn's record: ``record_last_moves`` for every deciding AI battler
+    (``format.ai_battlers``), at the start of the turn (``_action_phase``)."""
+    return record_last_moves(tables, state, actions, ai_battlers(format_of(state)))
 
 
 def _forget(state: BattleState, side, cond) -> BattleState:

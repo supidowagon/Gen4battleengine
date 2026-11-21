@@ -149,7 +149,8 @@ def test_record_last_move_rows(tables, names):
     assert seen[0, 0] == tackle and seen[2, 0] == curse and not seen[[1, 3]].any()  # rows 0 and 2
     s = four(tables, names, MULTI)
     seen = _record(tables, s._replace(last_move=last.astype(s.last_move.dtype)), [0, 4 + 2, 0, 0])
-    assert seen[0, 0] == tackle and not seen[1:].any()  # MULTI: row 0 only
+    # MULTI: decider 3 records rows 0 and 2; rows 1 / 3 hold last_move 0 (D45-4)
+    assert seen[0, 0] == tackle and seen[2, 0] == curse and not seen[[1, 3]].any()
     s = roark_state(tables, names)
     s = s._replace(last_move=s.last_move.at[0].set(tackle))
     seen = _record(tables, s, [0, 0])
