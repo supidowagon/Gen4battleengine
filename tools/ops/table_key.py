@@ -22,8 +22,10 @@ The key is a sha256 over exactly what decides the archive's content:
   packages use undeclared optional imports (openpyxl reads with lxml when lxml is installed,
   openpyxl/xml/__init__.py:8-26, and does not require it), so a smaller set is not safe;
 - `node --version` (tools.extract_pkcalc runs node);
-- the decomp: HEAD of <decomp>, its `git diff HEAD` and its
-  `git status --porcelain --untracked-files=all`;
+- the decomp: HEAD of <decomp>, its `git diff HEAD`, its
+  `git status --porcelain --untracked-files=all` and the content of every untracked file
+  (`git ls-files -o --exclude-standard`). Files the decomp ignores (its .gitignore, build
+  outputs) are not covered: a change to one of those does not change the key;
 - the symbols map and the local inputs vanilla_rom, kaizo_patch, pkcalc_zip, kaizo_docs
   (environment NUZLINE_* first, then <config>, as tools/rom/inputs.py resolves them), by
   content; and the text of <config> (which holds paths) itself.
@@ -219,6 +221,9 @@ def entries(root: Path, decomp: Path | None, symbols: Path | None, config: Path 
         e.append(("decomp HEAD", _git(decomp, "rev-parse", "HEAD").decode().strip()))
         e.append(("decomp diff", _sha(_git(decomp, "diff", "HEAD"))))
         e.append(("decomp status", _sha(_git(decomp, "status", "--porcelain", "--untracked-files=all"))))
+        for p in sorted(x for x in _git(decomp, "ls-files", "-z", "-o", "--exclude-standard").decode().split("\0") if x):
+            f = decomp / p
+            e.append((f"decomp untracked {p}", _file_sha(f) if f.is_file() else "not a file"))
     if symbols is not None:
         e.append(("symbols", _file_sha(symbols)))
     if config is not None and config.is_file():

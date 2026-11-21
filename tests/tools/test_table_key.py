@@ -119,3 +119,17 @@ def test_key_depends_on_every_entry():
     e = [("module a", "1"), ("input b", "2")]
     assert tk.key_of(e) == tk.key_of(list(e))
     assert tk.key_of(e) != tk.key_of([("module a", "1"), ("input b", "3")])
+
+
+def test_key_follows_the_decomp_untracked_file_contents(tmp_path):
+    root, ops, dec = tmp_path / "r", tmp_path / "ops", tmp_path / "dec"
+    _git_repo(root, {"tools/__init__.py": "", "tools/m.py": ""})
+    _write(ops, {"build_tables.sh": "\"$PY\" -m tools.m\n", "common.sh": ""})
+    _git_repo(dec, {"src/a.c": "int a;\n", ".gitignore": "build/\n"}, untracked={"src/new.c": "int b;\n"})
+    subprocess.run(["git", "-C", str(dec), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], check=True)
+    key = lambda: tk.key_of(tk.entries(root, dec, None, None, ops))  # noqa: E731
+    k0 = key()
+    (dec / "src" / "new.c").write_text("int c;\n", encoding="utf-8")  # same status, new content
+    k1 = key()
+    _write(dec, {"build/out.o": "x"})  # ignored: not covered
+    assert k0 != k1 and key() == k1

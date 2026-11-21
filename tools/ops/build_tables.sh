@@ -95,6 +95,6 @@ L="$RENT/tables_$C.list"
 { git ls-files -o -i --exclude-standard -- data; git diff --name-only -- data/gen4_platinum data/gen4_platinum_kaizo; } | sort -u \
   | grep -E "$TABLE_ALLOW" | grep -vE "$TABLE_DENY" | while read -r f; do [ -f "$f" ] && echo "$f"; done > "$L"
 grep -q '^data/gen4_platinum_kaizo/manifest.json$' "$L"
-tar -cJf "$KA.tmp" -T "$L"; mv -f "$KA.tmp" "$KA"; chmod a-w "$KA"; record
+tar -cJf "$KA.tmp.$$" -T "$L"; mv -f "$KA.tmp.$$" "$KA"; chmod a-w "$KA"; record
 cd "$RENT"
 echo "BUILD_OK $RENT/tables_$C.tar.xz ($(wc -l < "$L") files, key ${KEY:0:16})"
