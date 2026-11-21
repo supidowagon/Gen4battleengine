@@ -150,6 +150,20 @@ def test_trainers_without_a_terrain_are_refused(tmp_path):
         load_trainers(tmp_path)
 
 
+def test_trainers_without_a_walking_partner_are_refused(tmp_path):
+    # An intermediate extracted before the walking partner was recorded (partnerfix, E3-B2-34).
+    row = _kaizo_row()
+    del row["walking_partner"]
+    (tmp_path / "trainers.json").write_text(json.dumps([row]), encoding="utf-8")
+    with pytest.raises(ValueError, match="has no walking_partner: re-run"):
+        load_trainers(tmp_path)
+
+
+def test_walking_partner_loads_as_a_tuple(tmp_path):
+    (t,) = _write(tmp_path, [_kaizo_row(walking_partner=[608])])
+    assert t.walking_partner == (608,)
+
+
 def test_terrain_fields_load(tmp_path):
     (known,) = _write(tmp_path, [_kaizo_row()])
     assert (known.terrain, known.terrains) == (9, (9,))
@@ -269,6 +283,7 @@ def _kaizo_row(**fields):
         "format": "single",
         "opponent_2": None,
         "partner": [],
+        "walking_partner": [],
         "terrain": 9,
         "terrains": [9],
     }

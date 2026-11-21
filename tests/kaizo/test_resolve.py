@@ -271,9 +271,10 @@ def test_refusing_overrides_apply_to_the_rom_trainer():
 def test_users_format_answer_applies_before_the_cross_check():
     buck = [{"trainer": 611, "starter": None, "player_gender": None}]
     rom = [
-        {"id": 556, "format": "multi", "opponent_2": None, "partner": buck},
-        {"id": 521, "format": "unknown", "opponent_2": 527, "partner": None},
-        {"id": 202, "format": "multi", "opponent_2": None, "partner": buck},
+        {"id": 556, "format": "single", "opponent_2": None, "partner": [], "walking_partner": [611]},
+        {"id": 521, "format": "unknown", "opponent_2": 527, "partner": None, "walking_partner": []},
+        # A lone walk-map enemy is a single in the ROM (encounter.c:738-739), partner [].
+        {"id": 202, "format": "single", "opponent_2": None, "partner": [], "walking_partner": [611]},
     ]
     ov = Overrides(
         fields={
@@ -283,12 +284,12 @@ def test_users_format_answer_applies_before_the_cross_check():
         }
     )
     out = with_overrides(rom, ov)
-    assert [(t["format"], t["opponent_2"], t["partner"]) for t in out] == [
-        ("double_two_trainer", 557, []),  # the ROM's partner goes with its structure
-        ("multi", 527, [{"trainer": 864, "starter": None, "player_gender": None}]),
-        ("multi", None, buck),  # no partner named: the ROM's stands
+    assert [(t["format"], t["opponent_2"], t["partner"], t["walking_partner"]) for t in out] == [
+        ("double_two_trainer", 557, [], []),  # the partner and the walking partner go with it
+        ("multi", 527, [{"trainer": 864, "starter": None, "player_gender": None}], []),
+        ("multi", None, buck, [611]),  # no partner named: the walking partner's
     ]
-    assert rom[0]["partner"] == buck  # the input is not changed
+    assert rom[0]["walking_partner"] == [611]  # the input is not changed
 
 
 def test_provenance_hash_ignores_line_endings(tmp_path):
@@ -328,7 +329,8 @@ def test_two_placement_trick_room_rule():
 
 def _trainer(tid, **kw):
     t = {"id": tid, "name": f"T{tid}", "party": [], "start_condition": "none",
-         "format": "single", "opponent_2": None, "class_gender": 0, "class_id": 0}  # fmt: skip
+         "format": "single", "opponent_2": None, "partner": [], "walking_partner": [],
+         "class_gender": 0, "class_id": 0}  # fmt: skip
     return {**t, **kw}
 
 
@@ -371,6 +373,26 @@ def _record(cites, fields=None):
     ov = Overrides(fields={1: fields} if fields else {}, sources={"fields.1": "user, 2026-11-07"})
     src = Sources({"learnsets": {}, "species": []}, [], [], {1: [5]}, {}, {})
     return trainer_record(_trainer(1), ctx, ov, src, {}, {}, rows)
+
+
+def test_sight_pair_of_a_lone_walk_enemy_is_a_multi_beside_the_walking_partner():
+    # A lone walk-map enemy is a single in the ROM (encounter.c:738-739); two of them seeing
+    # the player in one step run StartTrainerBattle t1, t2 under the partner flag
+    # (scripts_battles.s:192-213): multi with the partner. Several partner ids leave it None.
+    from tools.kaizo.resolve import SIGHT_CITE, Sources, TrainerContext, trainer_record
+
+    src = Sources({"learnsets": {}, "species": []}, [], [], {1: [5]}, {}, {})
+    ctx = TrainerContext({}, {}, {1: (2, 203), 3: (4, 203)}, {})
+    for tid, ids, want in (
+        (1, [608], [{"trainer": 608, "starter": None, "player_gender": None}]),
+        (3, [800, 801], None),
+    ):
+        t = trainer_record(
+            _trainer(tid, walking_partner=ids), ctx, Overrides(), src, {}, {}, {}
+        )
+        assert (t["format"], t["partner"], t["walking_partner"]) == ("multi", want, ids)
+        assert t["sources"]["format"] == SIGHT_CITE.format(header=203)
+        assert t["sources"]["walking_partner"] == t["sources"]["format"]
 
 
 def test_headers_that_disagree_give_unknown():  # M3

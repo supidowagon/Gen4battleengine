@@ -474,14 +474,21 @@ def trainer_rows(
             if fmt.sight:
                 rom_pair, _header = _sight(m.id, fmt, trainer_maps)
                 row("sight_pair", rom_pair, fmt.pk_pair, fmt.sheet_pair)
-                if not (t["format"] == "single" and fmt.pk_format == "double_two_trainer"):
-                    row("format", t["format"], fmt.pk_format, fmt.sheet_format)
+                # A lone walk-map enemy is a single in the ROM; the sight pair makes it a
+                # multi beside the walking partner (resolve.trainer_record).
+                rom_fmt = (
+                    "multi" if t["format"] == "single" and t["walking_partner"] else t["format"]
+                )
+                if not (rom_fmt == "single" and fmt.pk_format == "double_two_trainer"):
+                    row("format", rom_fmt, fmt.pk_format, fmt.sheet_format)
             else:
                 row("format", t["format"], fmt.pk_format, fmt.sheet_format)
                 row("opponent_2", fmt.rom_pair, fmt.pk_pair, fmt.sheet_pair)
             row(
                 "partner_present",
-                t["partner"] is None or len(t["partner"]) > 0,
+                t["partner"] is None
+                or len(t["partner"]) > 0
+                or (fmt.sight and bool(t["walking_partner"])),
                 fmt.pk_partner,
                 fmt.sheet_partner,
             )
