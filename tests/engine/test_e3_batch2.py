@@ -1186,10 +1186,10 @@ def test_role_play_fails_on_its_listed_conditions_and_still_shows_the_attack_mes
 
 def test_a_skill_swap_into_wonder_guard_fails_and_swaps_nothing(tables, names):
     """Review b2 #2: Skill Swap fails on a defender with Wonder Guard (subscript_exchange_abilities.s:7
-    jumps to :156, MOVE_STATUS_FAILED) before :17-27 write the Truant parity and the abilities, so the
+    jumps to _156, MOVE_STATUS_FAILED) before :17-24 write the Truant parity and the abilities, so the
     Monferno keeps Blaze, the Shedinja keeps Wonder Guard and neither ``truant`` changes; against a
     Geodude the same Skill Swap exchanges the abilities. CheckMoveFailure sends the failure to
-    subscript_missed.s with commandNext LOOP_FAINTED (battle_controller_player.c:3324-3327),
+    subscript_missed.s with commandNext LOOP_FAINTED (battle_controller_player.c:3325-3328),
     skipping AfterMoveEffects. That skip has no observable effect on this path: its switch-in pass
     (bcp.c:3672) and held-item states (TriggerHeldItem :3684-3694, whose hold effects all sit in
     TriggerHeldItemOnStatus, battle_lib.c:4576 vs :4967; HELD_ITEM_STATUS :3730-3745) are repeated
@@ -1204,6 +1204,7 @@ def test_a_skill_swap_into_wonder_guard_fails_and_swaps_nothing(tables, names):
             [_spec(n, "Monferno", 40, ("Skill Swap",), "Sitrus Berry")],
             [_spec(n, foe, 20, (foe_move,))],
         )
+        s = s._replace(turn=jnp.asarray(1, s.turn.dtype))  # :17-20 would write totalTurns & 1 = 1
         assert int(s.stats[0, 0, SPE]) > int(s.stats[1, 0, SPE])
         mine, theirs = int(s.ability[0, 0]), int(s.ability[1, 0])
         assert mine == AbilityId.BLAZE and theirs != AbilityId.NONE
@@ -1212,10 +1213,11 @@ def test_a_skill_swap_into_wonder_guard_fails_and_swaps_nothing(tables, names):
         if foe == "Shedinja":
             assert theirs == AbilityId.WONDER_GUARD
             assert got == [mine, theirs]  # a swap would give [theirs, mine]
-            assert out.truant.tolist() == s.truant.tolist()
+            assert out.truant.tolist() == [0, 0]
         else:
             assert got == [theirs, mine]
-        assert int(out.item[0, 0]) == n.item("Sitrus Berry")  # full HP: the berry stays held
+            assert out.truant.tolist() == [1, 1]
+        assert int(out.item[0, 0]) == n.item("Sitrus Berry")  # sanity check: full HP, kept
 
 
 def test_role_play_reads_the_raw_ability_through_gastro_acid(tables, names):

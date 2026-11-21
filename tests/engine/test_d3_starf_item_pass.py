@@ -1,20 +1,23 @@
 """D3-15 x F-O3 (batch G): a Starf Berry eaten inside an action is a read of the turn's queue
 entry 0 (``enumerate._starf_reads``; battle_lib.c:5286-5288), in both formats.
 
-A lead at its pinch cannot start a turn with its Starf uneaten (ShowBattleMon's pass,
-battle_controller_player.c:254-267, battle_lib.c:4151-4165, ``step._turn_start_items``), so each
-board reaches the pinch during the turn:
+ShowBattleMon's pass at every turn start (battle_controller_player.c:254-267, battle_lib.c:
+4151-4165, ``step._turn_start_items``) eats a Starf whose holder is at its pinch with a stat below
++6, so a board either reaches the pinch during the turn or starts with all five stats at +6, where
+the Starf has no stat to raise and is kept (battle_lib.c:5278-5286):
 
 - B = 2, at the foe's action: the holder starts one HP above its pinch (curHP <= maxHP / 4,
   battle_lib.c:4850-4855); the faster foe's Tackle lands it there and the holder, the defender,
   eats in that action's AfterMoveEffects (bcp.c:3672, :3691), before its own move; its own
   ATTACKER_ITEM then finds no berry.
-- B = 4, at its own MoveEnd: battler 0's confusion self-hit (bcp.c:2629-2639) lands it at the
-  pinch and skips AfterMoveEffects, so the berry is eaten by MoveEnd's TriggerEffectOnSwitch
-  (bcp.c:3973; SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS over monSpeedOrder, lib.c:4151-4165; D3-15).
-  A battler that is neither attacker nor defender has no such board: every action that reaches
-  AfterMoveEffects checks every battler's item there (bcp.c:3672, :3730-3756), and the paths that
-  skip it (a self-hit, a crash, a failed move) change only the attacker's HP.
+- B = 4, at its own MoveEnd: battler 0 acts last; its confusion self-hit (bcp.c:2629-2639) lands it
+  at the pinch and skips AfterMoveEffects, so the berry is eaten by MoveEnd's TriggerEffectOnSwitch
+  (bcp.c:3973; SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS over monSpeedOrder, lib.c:4151-4165,
+  TriggerHeldItemOnStatus's Starf case lib.c:5278; D3-15).
+- B = 4, at another battler's action, as neither attacker nor defender: battler 0 starts at its
+  pinch with all five stats at +6; battler 3's Haze (RANGE_FIELD: its defender is its user,
+  lib.c:1665-1669) zeroes every stage and battler 0 eats in that action's AfterMoveEffects
+  (bcp.c:3672 -> lib.c:4151-4165, TriggerHeldItemOnStatus lib.c:5278).
 
 Every run is checked against the reference engine."""
 
@@ -30,7 +33,7 @@ from nuzline.engine.enumerate import outcome_laws
 from nuzline.engine.format import DOUBLES
 from nuzline.engine.ids import Stat
 from nuzline.engine.outcome import empty_outcome
-from tests.engine.d2_states import four, with_hp
+from tests.engine.d2_states import four, with_hp, with_moves
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_d3_action_loop import _all_moves, _set_item, play
 from tests.engine.test_e1_batch_g import _acts, _boosts, _consumed_starf, _draws, _starf_fight
@@ -76,3 +79,30 @@ def test_a_b4_self_hit_starf_is_eaten_at_its_move_end_with_entry_0(tables, names
     assert all(stages(col, 3) == {"ATK": 2} for col in (1, 2, 3))
     laws = jax.tree.map(np.asarray, outcome_laws(tables, s, jnp.zeros(4, jnp.int32)))
     assert laws.relevant.starf.tolist() == [[True, False, False, False]] + [[False] * 4] * 3
+
+
+@pytest.mark.slow
+def test_a_b4_haze_lets_a_non_participant_eat_its_starf_with_entry_0(tables, names):
+    """DOUBLES: battler 0 (Starf Berry) at its pinch with Attack to Speed at +6 keeps the berry
+    (lib.c:5278-5286) and acts first (+6 Speed; its Swords Dance changes nothing). Battler 3's Haze
+    is the next action; its user is its only defender (lib.c:1665-1669), so battler 0 is neither.
+    Haze zeroes every stage and battler 0 eats the Starf in that action's AfterMoveEffects
+    (bcp.c:3672 -> lib.c:4151-4165): entry 0 of its queue picks the stat (draw 0: Attack; draw 3:
+    Sp. Atk), entries 1-3 are unread, and the law reads battler 0's entry 0."""
+    s = _all_moves(four(tables, names, DOUBLES), names, "Swords Dance")
+    s = with_moves(s, names, 3, ["Haze"])
+    s = _set_item(s, 0, names.item("Starf Berry"))
+    s = s._replace(stages=s.stages.at[0, Stat.ATK : Stat.SPE + 1].set(6))
+    s = with_hp(s, 0, int(s.max_hp[0, 0]) // 4)
+    base = empty_outcome(DOUBLES)
+
+    def stages(col, draw):
+        o = base._replace(starf=base.starf.at[0, col].set(draw))
+        out, _ = play(tables, s, [0, 0, 0, 0], (0, 3, 1, 2), outcome=o)
+        assert int(out.item[0, 0]) == 0 and not np.any(np.asarray(out.stages[3]))
+        return {Stat(i).name: int(v) for i, v in enumerate(np.asarray(out.stages[0])) if v}
+
+    assert stages(0, 0) == {"ATK": 2} and stages(0, 3) == {"SPA": 2}
+    assert all(stages(col, 3) == {"ATK": 2} for col in (1, 2, 3))
+    laws = jax.tree.map(np.asarray, outcome_laws(tables, s, jnp.zeros(4, jnp.int32)))
+    assert laws.relevant.starf[0].tolist() == [True, False, False, False]
