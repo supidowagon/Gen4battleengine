@@ -467,3 +467,24 @@ def test_stop_refuses_bad_names_and_missing_runs(tmp_path):
         assert (r.returncode, r.stdout.startswith("STOP_REFUSED")) == (2, True), name
     r = subprocess.run([BASH, STOP.as_posix(), "nope", tmp_path.as_posix()], check=False, capture_output=True, text=True)
     assert (r.returncode, r.stdout.strip()) == (2, f"STOP_REFUSED: no folder {tmp_path.as_posix()}/nope")
+
+
+
+def test_stop_body_carries_heads_stop_sh_and_the_run_name():
+    import base64
+    import json
+    import re
+    env = {**os.environ, "PACK_OFF_MAIN_POD": "1"}   # this checkout may be an ops branch
+    body_sh = (ROOT / "tools" / "ops" / "day" / "stop_body.sh").as_posix()
+    r = subprocess.run([BASH, body_sh, "run-x"], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
+    if "REFUSED: uncommitted changes" in r.stdout:
+        pytest.skip("tools/ops/day/pod has uncommitted changes")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"][2]
+    m = re.fullmatch(r"mkdir -p /work/_podcheck && echo ([A-Za-z0-9+/=]+) \| base64 -d > /work/_podcheck/stop.sh && "
+                     r"bash /work/_podcheck/stop.sh run-x", cmd)
+    assert m
+    head = subprocess.run(["git", "show", "HEAD:tools/ops/day/pod/stop.sh"], check=True, capture_output=True, cwd=ROOT).stdout
+    assert base64.b64decode(m.group(1)) == head.replace(b"\r", b"")
+    bad = subprocess.run([BASH, body_sh, "Bad/name"], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
+    assert bad.returncode == 2
