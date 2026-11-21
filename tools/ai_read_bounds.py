@@ -7,7 +7,8 @@ loops, so the most reads over every walk is a depth-first maximum. A read is a d
 per-slot layout keys by path order (E1 Ruling R4): ``IfRandomLessThan`` (trainer_ai.c:528-538)
 and ``LoadBattlerAbility`` on the defender, which flips a coin when the AI does not know the
 player's ability (trainer_ai.c:1170-1209; counted always, an upper bound).
-``CheckBattlerAbility`` draws nothing (:1212-1265). ``IfSpeedCompareEqualTo``'s tie is a read of the exact layout only for COMPARE_SPEED_FASTER (E1 Ruling R8; plan K3c Ruling 3 for SLOWER).
+``CheckBattlerAbility`` draws nothing (:1212-1265). ``LoadBattlerSpeedRank`` (:2056-2094) makes one
+read, the tie of a single battle's one compare (E4-A0). ``IfSpeedCompareEqualTo``'s tie is a read of the exact layout only for COMPARE_SPEED_FASTER (E1 Ruling R8; plan K3c Ruling 3 for SLOWER).
 
 Branches whose outcome is fixed by the move are decided, so the bound follows the move:
 
@@ -24,7 +25,9 @@ Branches whose outcome is fixed by the move are decided, so the bound follows th
   when it equals the first, battle_lib.c:2635);
 * ``IfMoveEqualTo`` (:834) never jumps when the named move's battle effect in the Kaizo move
   table (``Tables.move_ai_effect``, the effect the scripts read) is not the current one;
-* ``IfTargetIsPartner`` never jumps in singles;
+* ``IfTargetIsPartner`` never jumps in singles; at B = 2 the partner arguments name the zeroed
+  battlers 2 and 3 (``_HP_START``): their HP percent is 0, ``IfBattlerFainted`` on one jumps and
+  ``IfMoveKnown AI_BATTLER_ATTACKER_PARTNER`` does not (E4-A0);
 * ``IfHPPercentLessThan`` / ``GreaterThan`` / ``EqualTo`` / ``NotEqualTo`` (trainer_ai.c:588-646)
   compare a battler's ``curHP * 100 / maxHP``, which no AI command changes, so the path keeps
   each battler argument's percent range (0-100) and a compare the range already fixes is
@@ -40,7 +43,8 @@ bound also follows the moveset (``drawn``): ``IfBattlerDealsMoreDamage`` (:2187-
 (the player's last move may be one; the layout does not know the player's moves);
 ``IfPartyMemberDealsMoreDamage`` (:2106-2174) when the fight's moves include a drawing one;
 ``IfCurrentMoveKills`` (:1525-1567) when the scored move is one (and damaging);
-``FlagMoveDamageScore`` (:1012-1063) when the fight has one, the move is damaging and a later
+``FlagMoveDamageScore`` (:1012-1063) and ``CheckIfHighestDamageWithPartner`` (:2369-2436) when the
+fight has one, the move is damaging and a later
 compare reads the result as other than ``AI_NO_COMPARISON_MADE`` (counted at that compare;
 script.s:62, :112, :6511 and :6572 compare only with it and are no read). ``READ_BOUNDS`` holds
 the fights without a drawing move, ``DRAWN_READ_BOUNDS`` (keyed by ``current``, the scored move
@@ -71,6 +75,7 @@ FLAG_LABELS = {
     4: "Risky_Main",
     5: "PrioritizeExtremes_Main",
     6: "BatonPass_Main",
+    7: "TagStrategy_Main",
     8: "CheckHP_Main",
     9: "Weather_Main",
     10: "Harrassment_Main",
@@ -149,6 +154,8 @@ def flag_reads(
                 reads = int(args[0] == "AI_BATTLER_DEFENDER")
             elif cmd == "IfSpeedCompareEqualTo":
                 reads = int(args[0] != "COMPARE_SPEED_SLOWER")  # the tie (E1 Ruling R8)
+            elif cmd == "LoadBattlerSpeedRank":
+                reads = 1  # the one tied compare of a single battle (E4-A0; B = 4 has up to six)
             elif cmd == "IfBattlerDealsMoreDamage":
                 reads = 1
             elif cmd == "IfPartyMemberDealsMoreDamage":
@@ -185,6 +192,11 @@ def flag_reads(
     return most(script.labels[FLAG_LABELS[bit]] + 1, ("unknown",))
 
 
+# The partner arguments of a single battle name battlers 2 and 3, whose ``BattleMon`` is zeroed
+# (battle_controller_player.c:180-182, :223-227): ``curHP * 100 / maxHP`` is ``0 / 0``, which the
+# ROM's division returns as the dividend, 0 (ruling G-53; A-8 section 9.1). So their HP compares
+# are decided (E4-A0: Tag Strategy at B = 2; B = 4 is E4-A's, and the format gate refuses it).
+_HP_START = {"AI_BATTLER_DEFENDER_PARTNER": (0, 0), "AI_BATTLER_ATTACKER_PARTNER": (0, 0)}
 _HP_COMPARES = {
     "IfHPPercentLessThan",
     "IfHPPercentGreaterThan",
@@ -202,7 +214,7 @@ def _hp_branch(cmd: str, args, hp: tuple) -> tuple[bool | None, tuple, tuple]:
         return None, hp, hp
     v = int(value)
     ranges = {b: (lo, hi) for b, lo, hi in hp}
-    lo, hi = ranges.get(battler, (0, 100))
+    lo, hi = ranges.get(battler, _HP_START.get(battler, (0, 100)))
 
     def narrowed(*keep):
         # keep: the percents the branch allows, as (lo, hi) pieces; the range is their hull.
@@ -232,7 +244,7 @@ def _hp_branch(cmd: str, args, hp: tuple) -> tuple[bool | None, tuple, tuple]:
 def _next_calc(cmd: str, calc: tuple, effect: int, damaging: bool, drawn: int = 0) -> tuple:
     if cmd == "LoadCurrentMoveEffect":
         return ("effect", effect)
-    if cmd == "FlagMoveDamageScore":
+    if cmd in ("FlagMoveDamageScore", "CheckIfHighestDamageWithPartner"):
         return ("compared", damaging, drawn >= 1 and damaging)
     if cmd.startswith("If") or cmd in _KEEPS_CALC:
         return calc
@@ -243,6 +255,12 @@ def _decided(script, cmd, args, calc, effect, damaging, can_quad) -> bool | None
     """True / False when the jump of ``cmd`` is fixed by the move, else None."""
     if cmd == "IfTargetIsPartner":
         return False
+    if cmd == "IfBattlerFainted" and args[0] in _HP_START:
+        return (
+            True  # battlersSwitchingMask has the bits of battlers 2 and 3 (battle_lib.c:2031-2034)
+        )
+    if cmd == "IfMoveKnown" and args[0] == "AI_BATTLER_ATTACKER_PARTNER":
+        return False  # curHP 0: no jump (trainer_ai.c:1650-1653)
     if cmd in ("IfCurrentMoveEffectEqualTo", "IfCurrentMoveEffectNotEqualTo"):
         same = script.effect_id(args[0]) == effect
         return same if cmd.endswith("EqualTo") and "Not" not in cmd else not same

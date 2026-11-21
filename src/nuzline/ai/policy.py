@@ -69,6 +69,7 @@ from nuzline.ai.layout import (
     PRIORITIZE_EXTREMES,
     RISKY,
     SETUP_FIRST_TURN,
+    TAG_STRATEGY,
     VANILLA,
     WEATHER,
     AiLayout,
@@ -4483,12 +4484,449 @@ def _check_hp(ctx: AiContext) -> AiContext:
     return c.pop_or_end(ctx)
 
 
+_AP, _DP = Battler.ATTACKER_PARTNER, Battler.DEFENDER_PARTNER
+# TagStrategy_Main's flat-damage effects (script.s:6644-6648)
+_TAG_FLAT_EFFECTS = (
+    BattleEffect.ONE_HIT_KO,
+    BattleEffect.DAMAGE_FLAT_40,
+    BattleEffect.LEVEL_DAMAGE_FLAT,
+    BattleEffect.RANDOM_DAMAGE_1_TO_150_LEVEL,
+    BattleEffect.DAMAGE_FLAT_20,
+)
+
+
+def _tag_flat(ctx: AiContext) -> tuple[AiContext, jnp.ndarray]:
+    """Five ``IfCurrentMoveEffectEqualTo`` over ``_TAG_FLAT_EFFECTS``: the fall-through
+    context and the paths that jump (a flat-damage effect)."""
+    flat = jnp.zeros_like(ctx.live)
+    for effect in _TAG_FLAT_EFFECTS:
+        ctx, t = _split(c.if_current_move_effect_equal_to(ctx, effect))
+        flat = flat | t
+    return ctx, flat
+
+
+def _add_end(ctx: AiContext, mask, value: int) -> AiContext:
+    """``AddToMoveScore value`` then ``PopOrEnd`` on the paths in ``mask``: a ``ScoreMinusN`` /
+    ``ScorePlusN`` label (script.s:1567-1621) or an ``AddToMoveScore`` before an ending
+    ``GoTo``."""
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, mask), value))
+
+
+def _tag_have(ctx: AiContext, battler: Battler, ability: str) -> tuple[AiContext, jnp.ndarray]:
+    """``CheckBattlerAbility battler, ability``, ``IfLoadedEqualTo AI_HAVE``: the fall-through
+    context and the paths that jump."""
+    ctx = c.check_battler_ability(ctx, battler, _ABILITY[ability])
+    return _split(c.if_loaded_equal_to(ctx, c.AI_HAVE))
+
+
+def _tag_type(ctx: AiContext, battler: Battler, type_name: str) -> tuple[AiContext, jnp.ndarray]:
+    """``FlagBattlerIsType battler, type``, ``IfLoadedEqualTo AI_HAVE``."""
+    ctx = c.flag_battler_is_type(ctx, battler, _TYPE[type_name])
+    return _split(c.if_loaded_equal_to(ctx, c.AI_HAVE))
+
+
+def _tag_grounded(ctx: AiContext, battler: Battler) -> tuple[AiContext, jnp.ndarray]:
+    """The three tests of ``TagStrategy_Gravity``'s blocks (script.s:6934-6975): Levitate,
+    a Flying type, Magnet Rise. The fall-through context and the paths where one holds."""
+    ctx, hit = _tag_have(ctx, battler, "Levitate")
+    ctx, t = _tag_type(ctx, battler, "Flying")
+    hit = hit | t
+    ctx, t = _split(c.if_move_effect(ctx, battler, c.MoveEffectMask.MAGNET_RISE))
+    return ctx, hit | t
+
+
+def _tag_strategy(ctx: AiContext) -> AiContext:
+    """``TagStrategy_Main`` (script.s:6637-7338; docs/ai/script_commands.md), label block by
+    label block in script order. Every jump is forward, so each block runs under the union of
+    the paths that reach it (``_at``), a fall-through into the next label joins that union
+    with ``ctx.live``, and a path that reaches ``PopOrEnd`` is dropped. The partner arguments
+    (``AIScript_Battler``) read the zeroed battlers 2 and 3 at B = 2 (``commands.CLEARED``), so
+    the partner blocks run and change nothing on a singles path. ``IfTargetIsPartner`` (:6638)
+    never jumps in singles: ``TagStrategy_Partner`` (:7339) is not transcribed. The unused
+    labels ``TagStrategy_Unused_1`` / ``_2`` (:7116-7125) have no jump to them. Fall-throughs
+    the decomp's comments omit: ``SunnyDay_SelfHasSolarPower`` falls into the 50 % roll
+    (:6815-6821); ``SpreadFire``'s Dry Skin is ``ScoreMinus3`` (:7320, the comment says +3)."""
+    # TagStrategy_Main (:6637)
+    ctx, _ = _split(c.if_target_is_partner(ctx))  # -> TagStrategy_Partner
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)  # :6641
+    ctx, special = _split(c.if_loaded_equal_to(ctx, c.AI_NO_COMPARISON_MADE))  # :6642
+    ctx, score_move = _tag_flat(ctx)
+    ctx, minus1 = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.HALF))
+    ctx, minus2 = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUARTER))
+    score_move = score_move | ctx.live  # GoTo TagStrategy_ScoreMove
+
+    # TagStrategy_TryScoreMinus1 (:6658), _TryScoreMinus2 (:6670): at B = 2 the target's
+    # partner (battler 2) has hp% 0, so both reach ScoreMove with no roll.
+    for reached, value, line in ((minus1, -1, 6666), (minus2, -2, 6678)):
+        ctx, kills = _split(c.if_current_move_kills(_at(ctx, reached), c.USE_MAX_DAMAGE))
+        ctx, last = _split(c.if_hp_percent_equal_to(ctx, _DP, 0))
+        ctx, rolled = _split(c.if_random_less_than(ctx, 64, line))
+        ctx = c.add_to_move_score(ctx, value)
+        score_move = score_move | kills | last | rolled | ctx.live
+
+    # TagStrategy_ScoreMove (:6682)
+    ctx = c.check_if_highest_damage_with_partner(_at(ctx, score_move), c.USE_MAX_DAMAGE)
+    ctx, before = _split(c.if_loaded_not_equal_to(ctx, c.AI_MOVE_IS_HIGHEST_DAMAGE))
+    ctx, t = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
+    special = special | t
+    ctx, priority = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.PRIORITY_1))
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 6694))
+    before = before | t
+    ctx = c.add_to_move_score(ctx, 1)
+    special = special | ctx.live  # GoTo TagStrategy_CheckSpecialScoring
+
+    # TagStrategy_TryScorePlus1 (:6700)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, priority), 50, 6702))
+    before = before | t
+    ctx = c.add_to_move_score(ctx, 1)
+    special = special | ctx.live
+
+    # TagStrategy_CheckBeforeScoring (:6706)
+    ctx, t = _tag_flat(_at(ctx, before))
+    special = special | t
+    ctx, double = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.DOUBLE))
+    ctx, quad = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUADRUPLE))
+    special = special | ctx.live
+
+    # TagStrategy_TryPrioritizingDoubleEffective (:6720), _QuadEffective (:6726)
+    for reached, n, line in ((double, 100, 6722), (quad, 64, 6728)):
+        ctx, t = _split(c.if_random_less_than(_at(ctx, reached), n, line))
+        ctx = c.add_to_move_score(ctx, 1)
+        special = special | t | ctx.live
+
+    # TagStrategy_CheckSpecialScoring (:6732)
+    ctx, skill_swap = _split(c.if_move_equal_to(_at(ctx, special), _MOVE["Skill Swap"]))
+    ctx = c.load_type_from(ctx, LoadType.MOVE_TYPE)
+    ctx, quake = _split(c.if_move_equal_to(ctx, _MOVE["Earthquake"]))
+    ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Magnitude"]))
+    quake = quake | t
+    ctx, future = _split(c.if_move_equal_to(ctx, _MOVE["Future Sight"]))
+    ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Doom Desire"]))
+    future = future | t
+    ctx, rain = _split(c.if_move_equal_to(ctx, _MOVE["Rain Dance"]))
+    ctx, sun = _split(c.if_move_equal_to(ctx, _MOVE["Sunny Day"]))
+    ctx, hail = _split(c.if_move_equal_to(ctx, _MOVE["Hail"]))
+    ctx, sand = _split(c.if_move_equal_to(ctx, _MOVE["Sandstorm"]))
+    ctx, gravity = _split(c.if_move_equal_to(ctx, _MOVE["Gravity"]))
+    ctx, trick_room = _split(c.if_move_equal_to(ctx, _MOVE["Trick Room"]))
+    ctx, follow_me = _split(c.if_move_equal_to(ctx, _MOVE["Follow Me"]))
+    ctx = c.load_type_from(ctx, LoadType.MOVE_TYPE)
+    ctx, electric = _split(c.if_loaded_equal_to(ctx, _TYPE["Electric"]))
+    ctx, fire = _split(c.if_loaded_equal_to(ctx, _TYPE["Fire"]))
+    ctx, water = _split(c.if_loaded_equal_to(ctx, _TYPE["Water"]))
+    ctx, helping_hand = _split(c.if_move_known(ctx, _AP, _MOVE["Helping Hand"]))  # not at B = 2
+    # PopOrEnd: the rest ends.
+
+    # TagStrategy_RainDance (:6754)
+    ctx = c.load_battler_ability(_at(ctx, rain), _A)
+    ctx, hydration = _split(c.if_loaded_equal_to(ctx, _ABILITY["Hydration"]))
+    ctx, dry_skin = _split(c.if_loaded_equal_to(ctx, _ABILITY["Dry Skin"]))
+    partner = ctx.live  # GoTo _CheckPartner
+    ctx, t = _split(c.if_not_status(_at(ctx, hydration), _A, c.MonCondition.ANY))  # :6767
+    partner = partner | t
+    ctx = c.add_to_move_score(_at(ctx, ctx.live | dry_skin), 2)  # _SelfScorePlus2
+    partner = partner | ctx.live
+    ctx, hydration = _tag_have(_at(ctx, partner), _AP, "Hydration")  # _CheckPartner (:6773)
+    ctx, plus2 = _tag_have(ctx, _AP, "Dry Skin")  # GoTo _End for the rest
+    ctx, _ = _split(c.if_not_status(_at(ctx, hydration), _AP, c.MonCondition.ANY))  # :6781
+    ctx = _add_end(ctx, ctx.live | plus2, 2)  # _PartnerScorePlus2
+
+    # TagStrategy_SunnyDay (:6788)
+    ctx = c.load_battler_ability(_at(ctx, sun), _A)
+    ctx, leaf_guard = _split(c.if_loaded_equal_to(ctx, _ABILITY["Leaf Guard"]))
+    ctx, plus2 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Flower Gift"]))
+    ctx, minus2 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Dry Skin"]))
+    ctx, solar = _split(c.if_loaded_equal_to(ctx, _ABILITY["Solar Power"]))
+    partner = ctx.live  # GoTo _CheckPartner
+    ctx, t = _split(c.if_status(_at(ctx, leaf_guard), _A, c.MonCondition.ANY))  # _SelfHasLeafGuard
+    partner = partner | t
+    ctx, t = _split(c.if_hp_percent_less_than(ctx, _A, 30))
+    partner = partner | t
+    ctx = c.add_to_move_score(_at(ctx, ctx.live | plus2), 2)  # _SelfScorePlus2
+    partner = partner | ctx.live
+    ctx = c.add_to_move_score(_at(ctx, minus2), -2)  # _SelfScoreMinus2
+    partner = partner | ctx.live
+    ctx, roll = _split(c.if_hp_percent_less_than(_at(ctx, solar), _A, 50))  # _SelfHasSolarPower
+    ctx = c.add_to_move_score(ctx, 1)  # hp% >= 50 falls into the roll (:6815-6821)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, ctx.live | roll), 128, 6820))
+    partner = partner | t
+    ctx = c.add_to_move_score(ctx, -2)  # _SelfTryScoreMinus2, falls into _CheckPartner
+    partner = partner | ctx.live
+    ctx, leaf_guard = _tag_have(_at(ctx, partner), _AP, "Leaf Guard")  # _CheckPartner (:6823)
+    ctx, plus2 = _tag_have(ctx, _AP, "Flower Gift")
+    ctx, minus2 = _tag_have(ctx, _AP, "Dry Skin")
+    ctx, solar = _tag_have(ctx, _AP, "Solar Power")  # GoTo _End for the rest
+    ctx, _ = _split(c.if_status(_at(ctx, leaf_guard), _AP, c.MonCondition.ANY))  # -> _End
+    ctx, _ = _split(c.if_hp_percent_less_than(ctx, _AP, 30))
+    ctx = c.add_to_move_score(_at(ctx, ctx.live | plus2), 2)  # _PartnerScorePlus2 -> _End
+    ctx = c.add_to_move_score(_at(ctx, minus2), -2)  # _PartnerScoreMinus2 -> _End
+    ctx, roll = _split(c.if_hp_percent_less_than(_at(ctx, solar), _AP, 50))
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, ctx.live | roll), 128, 6851))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -2))
+
+    # TagStrategy_Hail (:6857)
+    ctx = c.load_battler_ability(_at(ctx, hail), _A)
+    ctx, plus2 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Ice Body"]))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Snow Cloak"]))
+    plus2 = plus2 | t
+    ctx, t = _split(c.if_move_known(ctx, _A, _MOVE["Blizzard"]))
+    plus2 = plus2 | t
+    partner = ctx.live  # GoTo _CheckPartner
+    ctx = c.add_to_move_score(_at(ctx, plus2), 2)  # _SelfScorePlus2
+    ctx, plus2 = _tag_have(_at(ctx, partner | ctx.live), _AP, "Ice Body")  # _CheckPartner
+    ctx, t = _tag_have(ctx, _AP, "Snow Cloak")
+    plus2 = plus2 | t
+    ctx, t = _split(c.if_move_known(ctx, _AP, _MOVE["Blizzard"]))  # GoTo _End for the rest
+    ctx = _add_end(ctx, plus2 | t, 2)  # _PartnerScorePlus2
+
+    # TagStrategy_Sandstorm (:6886)
+    ctx = c.load_battler_ability(_at(ctx, sand), _A)
+    ctx, plus2 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Sand Veil"]))
+    for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+        ctx, t = _split(c.if_loaded_equal_to(c.load_type_from(ctx, target), _TYPE["Rock"]))
+        plus2 = plus2 | t
+    partner = ctx.live  # GoTo _CheckPartner
+    ctx = c.add_to_move_score(_at(ctx, plus2), 2)  # _SelfScorePlus2
+    ctx, plus2 = _tag_have(_at(ctx, partner | ctx.live), _AP, "Sand Veil")  # _CheckPartner
+    for target in (LoadType.ATTACKER_PARTNER_TYPE_1, LoadType.ATTACKER_PARTNER_TYPE_2):
+        ctx, t = _split(c.if_loaded_equal_to(c.load_type_from(ctx, target), _TYPE["Rock"]))
+        plus2 = plus2 | t  # GoTo _End for the rest
+    ctx = _add_end(ctx, plus2, 2)  # _PartnerScorePlus2
+
+    # TagStrategy_Gravity (:6918)
+    ctx, active = _split(c.if_field_conditions_mask(_at(ctx, gravity), c.FieldCondition.GRAVITY))
+    ctx = _score(ctx, active, -30)  # TagStrategy_PartnerScoreMinus30 (:7692)
+    ctx, minus5 = _tag_grounded(ctx, _A)
+    partner = ctx.live  # GoTo _CheckPartner
+    ctx = c.add_to_move_score(_at(ctx, minus5), -5)  # _SelfScoreMinus5
+    partner = partner | ctx.live
+    ctx, minus5 = _tag_grounded(_at(ctx, partner), _AP)  # _CheckPartner (:6954)
+    target = ctx.live
+    ctx = c.add_to_move_score(_at(ctx, minus5), -5)  # _PartnerScoreMinus5
+    target = target | ctx.live
+    ctx, plus3 = _tag_grounded(_at(ctx, target), _D)  # _CheckTarget (:6955)
+    target_partner = ctx.live
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus3), 64, 6959))  # _TargetTryScorePlus3
+    target_partner = target_partner | t
+    ctx = c.add_to_move_score(ctx, 3)
+    target_partner = target_partner | ctx.live
+    ctx, plus3 = _tag_grounded(_at(ctx, target_partner), _DP)  # _CheckTargetPartner (:6965)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus3), 64, 6972))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 3))
+
+    # TagStrategy_TrickRoom (:6979): ScoreMinus30 for each of the three tests that holds
+    ctx = _at(ctx, trick_room)
+    for battler in (_AP, _DP, _D):
+        ctx, t = _split(c.if_hp_percent_equal_to(ctx, battler, 0))
+        ctx = _score(ctx, t, -30)
+    ctx = c.load_battler_speed_rank(ctx, _A)
+    ctx, first = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx, second = _split(c.if_loaded_equal_to(ctx, 1))
+    ctx, third = _split(c.if_loaded_equal_to(ctx, 2))
+    ctx, last = _split(c.if_loaded_equal_to(ctx, 3))  # GoTo _End for the rest
+    ctx = c.load_battler_speed_rank(_at(ctx, first), _AP)  # _SelfMovesFirst (:6998)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 1))
+    ctx = _score(ctx, t, -30)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx = _score(ctx, t, -30)
+    minus5 = ctx.live  # GoTo _ScoreMinus5
+    ctx = c.load_battler_speed_rank(_at(ctx, second), _AP)  # _SelfMovesSecond (:7000)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx = _score(ctx, t, -30)
+    minus5 = minus5 | ctx.live
+    for reached, partner_rank, line in ((third, 3, 7012), (last, 2, 7022)):
+        ctx = c.load_battler_speed_rank(_at(ctx, reached), _AP)  # _SelfMovesThird / _Last
+        ctx, t = _split(c.if_loaded_not_equal_to(ctx, partner_rank))
+        minus5 = minus5 | t
+        ctx, t = _split(c.if_random_less_than(ctx, 64, line))
+        minus5 = minus5 | t
+        ctx = c.pop_or_end(c.add_to_move_score(ctx, 5))
+    ctx = _add_end(ctx, minus5, -5)  # _ScoreMinus5
+
+    # TagStrategy_FollowMe (:7032)
+    ctx, high = _split(c.if_hp_percent_greater_than(_at(ctx, follow_me), _A, 90))
+    ctx, medium = _split(c.if_hp_percent_greater_than(ctx, _A, 50))
+    ctx, low = _split(c.if_hp_percent_greater_than(ctx, _A, 30))
+    ctx, _ = _split(c.if_random_less_than(ctx, 64, 7053))  # -> _End
+    ctx = _add_end(ctx, ctx.live, -5)  # GoTo ScoreMinus5
+    zero = jnp.zeros_like(ctx.live)
+    m1, m2, p1, p2, p3 = zero, zero, zero, zero, zero
+    ctx, t = _split(c.if_hp_percent_greater_than(_at(ctx, high), _AP, 90))  # _SelfHighHP
+    m1 = m1 | t
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _AP, 50))
+    p1 = p1 | t
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _AP, 30))
+    p2 = p2 | t
+    p3 = ctx.live
+    ctx, t = _split(c.if_hp_percent_greater_than(_at(ctx, medium), _AP, 90))  # _SelfMediumHP
+    m2 = m2 | t
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _AP, 50))
+    m1 = m1 | t
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _AP, 30))
+    p1 = p1 | t
+    p2 = p2 | ctx.live
+    ctx, t = _split(c.if_hp_percent_greater_than(_at(ctx, low), _AP, 90))  # _SelfLowHP
+    m2 = m2 | t
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _AP, 50))
+    m2 = m2 | t
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _AP, 30))
+    p1 = p1 | t
+    p2 = p2 | ctx.live
+    for reached, value, line in (
+        (m1, -1, 7075),  # _TryScoreMinus1
+        (m2, -2, 7080),
+        (p1, 1, 7085),
+        (p2, 2, 7090),
+        (p3, 3, 7095),
+    ):
+        ctx, _ = _split(c.if_random_less_than(_at(ctx, reached), 64, line))  # -> _End
+        ctx = c.pop_or_end(c.add_to_move_score(ctx, value))
+
+    # TagStrategy_PartnerKnowsHelpingHand (:7102)
+    ctx, _ = _tag_flat(_at(ctx, helping_hand))  # a flat-damage effect: -> _End
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)  # :7110
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, c.AI_NO_COMPARISON_MADE))
+    ctx = _score(ctx, t, 1)
+    ctx = c.pop_or_end(ctx)
+
+    # TagStrategy_Earthquake (:7127): the attacker's partner, first match
+    ctx, plus2 = _split(c.if_move_effect(_at(ctx, quake), _AP, c.MoveEffectMask.MAGNET_RISE))
+    ctx, t = _tag_have(ctx, _AP, "Levitate")
+    plus2 = plus2 | t
+    ctx, t = _tag_type(ctx, _AP, "Flying")
+    plus2 = plus2 | t
+    minus10 = jnp.zeros_like(ctx.live)
+    for type_name in ("Fire", "Electric", "Poison", "Rock"):
+        ctx, t = _tag_type(ctx, _AP, type_name)
+        minus10 = minus10 | t
+    ctx = _add_end(ctx, ctx.live, -3)  # GoTo ScoreMinus3
+    ctx = _add_end(ctx, plus2, 2)
+    ctx = _add_end(ctx, minus10, -10)
+
+    # TagStrategy_FutureSight (:7150)
+    ctx, _ = _split(c.if_hp_percent_equal_to(_at(ctx, future), _AP, 0))  # -> _End
+    ctx, check = _split(c.if_move_known(ctx, _AP, _MOVE["Future Sight"]))
+    ctx, t = _split(c.if_move_known(ctx, _AP, _MOVE["Doom Desire"]))
+    check = check | t  # GoTo _End for the rest
+    ctx = c.load_battler_speed_rank(_at(ctx, check), _A)  # _CheckSelfSpeed (:7160)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 3))
+    ctx = _score(ctx, t, -3)
+    ctx, third = _split(c.if_loaded_equal_to(ctx, 2))
+    ctx, second = _split(c.if_loaded_equal_to(ctx, 1))
+    ctx, first = _split(c.if_loaded_equal_to(ctx, 0))  # GoTo _End for the rest
+    ctx = c.load_battler_speed_rank(_at(ctx, third), _AP)  # _SelfMovesThird (:7170)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx = _score(ctx, t, -3)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 1))
+    ctx = _score(ctx, t, -3)
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 7173))
+    ctx = c.load_battler_speed_rank(ctx, _AP)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 2))
+    ctx = _add_end(ctx, t, -3)
+    ctx = c.load_battler_speed_rank(_at(ctx, second), _AP)  # _SelfMovesSecond (:7178)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx = _score(ctx, t, -3)
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 7181))
+    ctx = c.load_battler_speed_rank(ctx, _AP)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 1))
+    ctx = _add_end(ctx, t, -3)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, first), 128, 7187))  # _SelfMovesFirst (:7185)
+    ctx = c.load_battler_speed_rank(ctx, _AP)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx = _add_end(ctx, t, -3)
+
+    # TagStrategy_SkillSwap (:7195)
+    ctx = c.load_battler_ability(_at(ctx, skill_swap), _A)
+    plus5 = jnp.zeros_like(ctx.live)
+    for name in ("Truant", "Slow Start", "Stall", "Klutz"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        plus5 = plus5 | t
+    ctx = c.load_battler_ability(ctx, _D)
+    plus2 = jnp.zeros_like(ctx.live)
+    for name in (
+        "Shadow Tag",
+        "Pure Power",
+        "Huge Power",
+        "Mold Breaker",
+        "Solid Rock",
+        "Filter",
+        "Flower Gift",
+    ):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        plus2 = plus2 | t
+    ctx = _add_end(ctx, plus5, 5)
+    ctx = _add_end(ctx, plus2, 2)
+
+    # TagStrategy_CheckElectricMove (:7215)
+    ctx, spread = _split(c.if_move_equal_to(_at(ctx, electric), _MOVE["Discharge"]))
+    ctx, rod = _tag_have(ctx, _DP, "Lightning Rod")
+    partner_rod = ctx.live  # GoTo _PartnerHasLightningRod
+    ctx = c.add_to_move_score(_at(ctx, rod), -1)  # _TargetProtectedByLightningRod
+    ctx = c.flag_battler_is_type(ctx, _DP, _TYPE["Ground"])
+    ctx, t = _split(c.if_loaded_equal_to(ctx, c.AI_NOT_HAVE))
+    partner_rod = partner_rod | t
+    ctx = c.add_to_move_score(ctx, -8)
+    ctx, rod = _tag_have(_at(ctx, partner_rod | ctx.live), _AP, "Lightning Rod")  # :7232
+    ctx = _score(ctx, rod, -10)
+    ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Discharge"]))  # GoTo _CheckElectric_End
+    spread = spread | t
+    # TagStrategy_SpreadElectricMove (:7240)
+    ctx, plus3 = _tag_have(_at(ctx, spread), _AP, "Motor Drive")
+    ctx, t = _tag_have(ctx, _AP, "Volt Absorb")
+    plus3 = plus3 | t
+    ctx, minus10 = _tag_type(ctx, _AP, "Water")
+    ctx, t = _tag_type(ctx, _AP, "Flying")
+    minus10 = minus10 | t
+    ctx, t = _tag_type(ctx, _AP, "Ground")
+    plus3 = plus3 | t
+    ctx = _add_end(ctx, ctx.live, -3)
+    ctx = _add_end(ctx, plus3, 3)
+    ctx = _add_end(ctx, minus10, -10)
+
+    # TagStrategy_CheckWaterMove (:7265)
+    ctx, spread = _split(c.if_move_equal_to(_at(ctx, water), _MOVE["Surf"]))
+    ctx = c.check_battler_ability(ctx, _DP, _ABILITY["Storm Drain"])
+    ctx, partner_drain = _split(c.if_loaded_equal_to(ctx, c.AI_NOT_HAVE))
+    ctx = c.add_to_move_score(ctx, -1)  # HAVE or UNKNOWN
+    ctx, drain = _tag_have(_at(ctx, partner_drain | ctx.live), _AP, "Storm Drain")  # :7279
+    ctx = _score(ctx, drain, -10)
+    ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Surf"]))  # "should never branch"
+    spread = spread | t
+    # TagStrategy_SpreadWaterMove (:7287)
+    ctx, plus3 = _tag_have(_at(ctx, spread), _AP, "Dry Skin")
+    ctx, t = _tag_have(ctx, _AP, "Water Absorb")
+    plus3 = plus3 | t
+    ctx, minus10 = _tag_type(ctx, _AP, "Ground")
+    ctx, t = _tag_type(ctx, _AP, "Fire")
+    minus10 = minus10 | t
+    ctx = _add_end(ctx, ctx.live, -3)
+    ctx = _add_end(ctx, plus3, 3)
+    ctx = _add_end(ctx, minus10, -10)
+
+    # TagStrategy_CheckFireMove (:7304)
+    ctx, flash_fire = _split(c.if_activated_flash_fire(_at(ctx, fire), _A))
+    lava = ctx.live  # GoTo _CheckLavaPlume
+    ctx = c.add_to_move_score(_at(ctx, flash_fire), 1)  # _FlashFireScorePlus1
+    ctx, spread = _split(c.if_move_equal_to(_at(ctx, lava | ctx.live), _MOVE["Lava Plume"]))
+    # TagStrategy_SpreadFireMove (:7318); GoTo _CheckFire_End for the rest
+    ctx, minus3 = _tag_have(_at(ctx, spread), _AP, "Dry Skin")  # ScoreMinus3 (:7320)
+    ctx, plus3 = _tag_have(ctx, _AP, "Flash Fire")
+    minus10 = jnp.zeros_like(ctx.live)
+    for type_name in ("Grass", "Steel", "Ice", "Bug"):
+        ctx, t = _tag_type(ctx, _AP, type_name)
+        minus10 = minus10 | t
+    ctx = _add_end(ctx, ctx.live | minus3, -3)
+    ctx = _add_end(ctx, plus3, 3)
+    return _add_end(ctx, minus10, -10)
+
+
 def _flags(layout: AiLayout) -> tuple:
     """The flag scripts the policy runs: those of ``layout.flags``' set bits, in bit order
     (``TrainerAI_MainSingles`` runs a flag's script only when its bit is set, low bit first,
     trainer_ai.c:297-308; ``FlagTable``, script.s:18-30): BASIC (bit 0), EVAL_ATTACK (1),
     EXPERT (2), SETUP_FIRST_TURN (3), RISKY (4), PRIORITIZE_EXTREMES (5), BATON_PASS (6),
-    CHECK_HP (8), WEATHER (9), HARRASSMENT (10). Vanilla runs 7 (roark.md 1);
+    TAG_STRATEGY (7), CHECK_HP (8), WEATHER (9), HARRASSMENT (10). Vanilla runs 7 (roark.md 1);
     Kaizo the trainer's set (E1 Ruling
     R2), Roark's 23. A bit without a transcribed script raises (``layout.kaizo_layout``
     builds no such layout; coverage refuses the trainer). A ``runtime_flags`` layout
@@ -4520,6 +4958,7 @@ def _flag_scripts(layout: AiLayout) -> tuple:
         RISKY: _risky,
         PRIORITIZE_EXTREMES: _prioritize_extremes,
         BATON_PASS: _baton_pass,
+        TAG_STRATEGY: _tag_strategy,
         CHECK_HP: _check_hp,
         WEATHER: _weather,
         HARRASSMENT: _harrassment,

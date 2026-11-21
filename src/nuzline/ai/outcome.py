@@ -470,13 +470,36 @@ SITE_N: dict[int, int] = {
     4499: 100,  # Expert_MagicCoat (to _CheckUserFirstTurn when it jumps, else -1), E3-B2-6
     4505: 150,  # Expert_MagicCoat_CheckUserFirstTurn (first turn: to _End when it jumps, else +1)
     4511: 30,  # Expert_MagicCoat_TryScoreMinus1 (to _End when it jumps, else -1)
+    # E4-A0: TagStrategy_Main (script.s:6637-7338), A-8 section 7: each jump skips the label's
+    # change or ends the script.
+    6666: 64,  # TagStrategy_TryScoreMinus1 (-1 when it does NOT jump; B = 2: never reached)
+    6678: 64,  # TagStrategy_TryScoreMinus2 (-2 when it does NOT jump; B = 2: never reached)
+    6694: 128,  # TagStrategy_ScoreMove (+1 when it does NOT jump)
+    6702: 50,  # TagStrategy_TryScorePlus1 (+1 when it does NOT jump)
+    6722: 100,  # TagStrategy_TryPrioritizingDoubleEffective (+1 when it does NOT jump)
+    6728: 64,  # TagStrategy_TryPrioritizingQuadEffective (+1 when it does NOT jump)
+    6820: 128,  # TagStrategy_SunnyDay_SelfTryScoreMinus2 (-2 when it does NOT jump)
+    6851: 128,  # TagStrategy_SunnyDay_PartnerTryScoreMinus2 (B = 2: never reached)
+    6959: 64,  # TagStrategy_Gravity_TargetTryScorePlus3 (+3 when it does NOT jump)
+    6972: 64,  # TagStrategy_Gravity_TargetPartnerTryScorePlus3 (B = 2: never reached)
+    7012: 64,  # TagStrategy_TrickRoom_SelfMovesThird (B = 2: never reached)
+    7022: 64,  # TagStrategy_TrickRoom_SelfMovesLast (B = 2: never reached)
+    7053: 64,  # TagStrategy_FollowMe, own HP 30 % or less (-5 when it does NOT jump)
+    7075: 64,  # TagStrategy_FollowMe_TryScoreMinus1 (the change when it does NOT jump)
+    7080: 64,  # TagStrategy_FollowMe_TryScoreMinus2
+    7085: 64,  # TagStrategy_FollowMe_TryScorePlus1
+    7090: 64,  # TagStrategy_FollowMe_TryScorePlus2
+    7095: 64,  # TagStrategy_FollowMe_TryScorePlus3
+    7173: 128,  # TagStrategy_FutureSight_SelfMovesThird (B = 2: never reached)
+    7181: 128,  # TagStrategy_FutureSight_SelfMovesSecond (B = 2: never reached)
+    7187: 128,  # TagStrategy_FutureSight_SelfMovesFirst (B = 2: never reached)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
 # the EVAL_ATTACK site, columns 1.. the move's EXPERT sites in script order (_SITES). None:
 # a line no vanilla-transcribed move reaches (:6374 is HALVE_DEFENSE's only, script.s:6365;
 # the K3c Task 6 lines are labels of effects no vanilla-transcribed move has, and RISKY is
-# not a vanilla flag); it reads an unused index, which never rolls 1.
+# not a vanilla flag; nor are E4-A0's Tag Strategy lines); it reads an unused index, which never rolls 1.
 _VANILLA_COLUMN = {6383: 0, 2328: 1, 3726: 1, 3731: 2, 6274: 1} | {
     line: None for line in SITE_N if line not in (6383, 2328, 3726, 3731, 6274)
 }

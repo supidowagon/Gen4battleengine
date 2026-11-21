@@ -1159,6 +1159,14 @@ ABILITY_IDS = {
     # Immunity, Magic Guard and Water Veil above).
     "Klutz": 103,
     "Guts": 62,
+    # E4-A0, TagStrategy_Main (script.s:6637-7338); generated/abilities.txt (line - 1).
+    "Dry Skin": 87,
+    "Snow Cloak": 81,
+    "Sand Veil": 8,
+    "Pure Power": 74,
+    "Huge Power": 37,
+    "Lightning Rod": 31,
+    "Storm Drain": 114,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -1210,6 +1218,22 @@ MOVE_IDS = {
     # E3-2-2: Basic_CheckWorrySeed (script.s:1436-1437, with Snore above), Expert_WorrySeed (:5979).
     "Sleep Talk": 214,
     "Rest": 156,
+    # E4-A0, TagStrategy_Main (script.s:6732-6752, :7215-7304); generated/moves.txt (line - 1).
+    # Kaizo's move on id 222 is Bulldoze: the script tests the id (ai:834-844).
+    "Skill Swap": 285,
+    "Magnitude": 222,
+    "Future Sight": 248,
+    "Doom Desire": 353,
+    "Rain Dance": 240,
+    "Sunny Day": 241,
+    "Hail": 258,
+    "Sandstorm": 201,
+    "Gravity": 356,
+    "Follow Me": 266,
+    "Helping Hand": 270,
+    "Discharge": 435,
+    "Surf": 57,
+    "Lava Plume": 436,
 }
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
