@@ -502,10 +502,94 @@ def test_a_store_stopped_by_timeout_leaves_no_key_and_no_temp(tmp_path):
     assert not (tmp_path / "vol" / "snap" / KEY).exists() and _temps(tmp_path / "vol") == []
 
 
-def test_setup_seeds_under_a_timeout_with_a_warning():
-    setup = (ROOT / "tools" / "ops" / "day" / "pod" / "setup.sh").read_text(encoding="utf-8")
-    assert 'timeout -k 30 900 bash "$D/bin/cache_sync.sh" seed' in setup
-    assert "WARNING: cache seed timed out after 900 s" in setup
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="timeout signals a bash shim's process group: Linux only (WSL runner, the pod)")
+@pytest.mark.skipif(not _has("flock"), reason="seed takes a flock; no flock here (Git Bash): runs on the pod")
+def test_a_seed_stopped_partway_keeps_the_renamed_batches_and_the_next_seed_finishes(tmp_path):
+    vol = tmp_path / "vol" / "jax" / VT
+    names = [f"e{i:02d}-cache" for i in range(10)]
+    for i, n in enumerate(names):
+        _entry(vol, n, _blob(i))
+    # the copy of e05 hangs (a volume that stops answering) until the timeout stops the seed
+    path = _shim(tmp_path, "cp", f'case "$*" in *e05-cache*) [ -f "$SHIMOFF" ] || sleep 60;; esac\nexec "{_real("cp")}" "$@"\n')
+    env = _env(tmp_path, PATH=path, SHIMOFF=(tmp_path / "off").as_posix(), CACHE_JAXVER=VER, CACHE_SEED_BATCH="2")
+    r = subprocess.run(["timeout", "-k", "5", "3", BASH, SYNC.as_posix(), "seed"], env=env,
+                       capture_output=True, text=True, check=False)
+    assert r.returncode == 124, r.stdout + r.stderr
+    loc = tmp_path / "local" / VER
+    assert sorted(p.name for p in loc.iterdir()) == names[:4]   # the two batches renamed before it stay
+    assert not (tmp_path / "local" / f".seeded-{VER}").exists() and _temps(tmp_path / "local") == []
+    (tmp_path / "off").touch()
+    r = subprocess.run([BASH, SYNC.as_posix(), "seed"], env=env, capture_output=True, text=True, check=False)
+    assert r.returncode == 0 and f"seed done: {VER} 6 entries copied, 0 skipped" in r.stdout, r.stdout + r.stderr
+    assert sorted(p.name for p in loc.iterdir()) == names
+    assert all((loc / n).read_bytes() == (vol / n).read_bytes() for n in names)
+    assert (tmp_path / "local" / f".seeded-{VER}").is_file()
+    assert _sync(tmp_path, "seed", CACHE_JAXVER=VER, CACHE_SEED_BATCH="0")[0] == 2
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="timeout signals a bash shim's process group: Linux only (WSL runner, the pod)")
+@pytest.mark.parametrize("earlier", [True, False])
+def test_a_compares_fetch_stopped_before_the_rename_leaves_the_folder_as_before(tmp_path, earlier):
+    """times.txt is written before snap/ is renamed into place; a stop in between puts the earlier
+    one back, so no complete snap/ ever sits beside a times.txt without ALL_DONE."""
+    w = _capture(tmp_path / "work" / "w", {"step.0": "ok"})
+    assert _sync(tmp_path, "snap-publish", w.as_posix(), KEY)[0] == 0
+    dest = tmp_path / "work2" / "snapmain-aaaaaaa"
+    dest.mkdir(parents=True)
+    old = "START 1\nCAPTURE_RC=1 4\nALL_DONE\n"
+    if earlier:
+        (dest / "times.txt").write_text(old, newline="\n")
+    path = _shim(tmp_path, "mv", f'case "$*" in "-T "*.snapfetch.*/snap*) sleep 60;; esac\nexec "{_real("mv")}" "$@"\n')
+    r = subprocess.run(["timeout", "-k", "5", "3", BASH, SYNC.as_posix(), "snap-fetch", KEY, dest.as_posix()],
+                       env=_env(tmp_path, PATH=path), capture_output=True, text=True, check=False)
+    assert r.returncode == 124 and "stopped by a signal" in r.stdout, r.stdout + r.stderr
+    assert not (dest / "snap").exists() and _temps(tmp_path / "work2") == []
+    if earlier:
+        assert (dest / "times.txt").read_text() == old
+    else:
+        assert not (dest / "times.txt").exists()
+    assert not (dest / "times.txt.before-fetch").exists()
+    rc, out = _sync(tmp_path, "snap-fetch", KEY, dest.as_posix())     # the next use fetches it whole
+    assert rc == 0 and (dest / "snap" / "capture.json").is_file(), out
+    assert (dest / "times.txt").read_text().splitlines()[-1] == "ALL_DONE"
+    assert (dest / "times.txt.before-fetch").exists() == earlier
+
+
+def test_seed_and_publish_run_under_their_timeout_knobs():
+    pod = ROOT / "tools" / "ops" / "day" / "pod"
+    setup = (pod / "setup.sh").read_text(encoding="utf-8")
+    assert 'SEED_T="${CACHE_SEED_TIMEOUT:-900}"' in setup
+    assert 'timeout -k 30 "$SEED_T" bash "$D/bin/cache_sync.sh" seed' in setup
+    assert "WARNING: cache seed timed out after $SEED_T s" in setup
+    names = next(x for x in setup.splitlines() if x.startswith("RUN_ENV_NAMES=")).strip('"').split()
+    assert "CACHE_SEED_TIMEOUT" in names and "CACHE_PUBLISH_TIMEOUT" in names   # kept in run.env
+    runner = (pod / "runner.sh").read_text(encoding="utf-8")
+    assert 'PUB_T="${CACHE_PUBLISH_TIMEOUT:-900}"' in runner
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="timeout signals a bash shim's process group: Linux only (WSL runner, the pod)")
+@pytest.mark.parametrize("hang", [True, False])
+def test_runners_publish_warns_in_its_log_when_its_timeout_fires(tmp_path, hang):
+    """The publish lines at the end of runner.sh, run as written (in the foreground), with a
+    cache_sync.sh that hangs or ends."""
+    runner = (ROOT / "tools" / "ops" / "day" / "pod" / "runner.sh").read_text(encoding="utf-8")
+    block = runner[runner.index('if mountpoint -q "${CACHE_VOL:-/vol}"'):]
+    block = block[block.index("\n") + 1:block.index("\nfi")]
+    d = tmp_path / "run"
+    (d / "bin").mkdir(parents=True)
+    (d / "bin" / "cache_sync.sh").write_text("sleep 60\n" if hang else "echo 'cache_sync: publish done'\n",
+                                             encoding="utf-8", newline="\n")
+    script = block.replace("setsid nohup ", "").rstrip().removesuffix("&").rstrip()
+    r = subprocess.run([BASH, "-c", f"D='{d.as_posix()}'; CACHE_PUBLISH_TIMEOUT=2\n{script}\necho rc=$?"],
+                       env=_clean_env(), capture_output=True, text=True, check=False, timeout=60)
+    log = (d / "cache_sync.log").read_text()
+    if hang:
+        assert "cache_sync: WARNING: publish timed out after 2 s (rc 124)" in log and "rc=124" in r.stdout, (log, r.stdout)
+    else:
+        assert "WARNING" not in log and "publish done" in log and "rc=0" in r.stdout, (log, r.stdout)
 
 
 # snap.sh: the store key and the run.sh lines (dry runs on a throwaway repo)
@@ -543,9 +627,9 @@ def fake_repo(tmp_path):
     return repo, sha, rent, tb
 
 
-def _snap(tmp_path: Path, repo: Path, *args: str) -> tuple[int, str]:
-    env = _clean_env()
-    env.update(NUZLINE_REPO=repo.as_posix(), NUZLINE_SCRATCH=(tmp_path / "scratch").as_posix())
+def _snap(tmp_path: Path, repo: Path, *args: str, **kw: str) -> tuple[int, str]:
+    env = {k: v for k, v in _clean_env().items() if not k.startswith("CACHE_")}
+    env.update(NUZLINE_REPO=repo.as_posix(), NUZLINE_SCRATCH=(tmp_path / "scratch").as_posix(), **kw)
     r = subprocess.run([BASH, SNAP.as_posix(), *args, "--dry-run"], env=env, capture_output=True, text=True, check=False)
     return r.returncode, r.stdout + r.stderr
 
@@ -657,3 +741,13 @@ def test_snap_run_sh_puts_every_volume_call_under_a_timeout(tmp_path, fake_repo)
     assert f'timeout -k 30 900 bash "$W/cache_sync.sh" snap-fetch {skey} "/work/snapmain-{sha[:7]}"' in run
     assert f'NO_CAPTURE {cap} ' in run and "VOLUME_TIMEOUT fetch" in run
     assert run.count("cache_sync.sh") == run.count("timeout -k 30 900 bash")
+    # the knobs: a fetch limit and a store limit of their own; a bad value is refused
+    assert _snap(tmp_path, repo, "capture", sha, tb.as_posix(), "snapmain-t2",
+                 CACHE_FETCH_TIMEOUT="50", CACHE_STORE_TIMEOUT="70")[0] == 0
+    run = (rent / "out" / "snapmain-t2" / "run.sh").read_text()
+    assert f'timeout -k 30 50 bash "$W/cache_sync.sh" snap-fetch {skey} "$W" own' in run
+    assert f'timeout -k 30 70 bash "$W/cache_sync.sh" snap-publish "$W" {skey}' in run
+    assert "timed out after 50 s" in run and "timed out after 70 s" in run
+    for i, bad in enumerate(("CACHE_FETCH_TIMEOUT", "CACHE_STORE_TIMEOUT")):
+        rc, out = _snap(tmp_path, repo, "capture", sha, tb.as_posix(), f"snapmain-t3{i}", **{bad: "15m"})
+        assert rc == 3 and f"REFUSED: {bad} '15m' is not a whole number" in out, out

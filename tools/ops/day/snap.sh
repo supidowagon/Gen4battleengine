@@ -51,7 +51,8 @@
 #   capture.json is still missing after it, times.txt ends NO_CAPTURE <dir> <epoch> and run.sh
 #   exits 1 (no compare, no ALL_DONE). Without a key nothing is stored or fetched (NOTE line); on
 #   a pod without /vol run.sh does what it did before the volume. Every volume call runs under
-#   timeout -k 30 900 (VT): one that times out (rc 124 or 137) writes VOLUME_TIMEOUT fetch|store
+#   timeout -k 30 <s>: CACHE_FETCH_TIMEOUT for a fetch, CACHE_STORE_TIMEOUT for a store (PC env,
+#   default 900 each, whole seconds, else refused): one that times out (rc 124 or 137) writes VOLUME_TIMEOUT fetch|store
 #   <epoch> to times.txt and a WARNING to run.out; a capture's timed-out fetch removes what it
 #   may have left (snap/, .snapfetch.*) and captures as without the volume; a compare's leaves
 #   only a complete, checked snap/ (renamed whole) or none, so NO_CAPTURE; a timed-out store
@@ -305,7 +306,11 @@ SRC="$SHA"; [ -z "$TSHA" ] || SRC="$TSHA"; PAR=""
 SC=$(git -C "$REPO" show "$SRC:tools/snap_compare.py") || refuse "no tools/snap_compare.py at $SRC"
 if [[ "$SC" == *'"--workers"'* ]]; then PAR=" --workers $WORKERS --gate-gb $GATE"
 else echo "NOTE: tools/snap_compare.py at ${SRC:0:8} has no --workers: its parts run one after another"; fi
-VOLQ="mountpoint -q /vol 2>/dev/null"; PRE=":"; POST=":"; VT=900   # VT: timeout -k 30 of every volume call
+VOLQ="mountpoint -q /vol 2>/dev/null"; PRE=":"; POST=":"
+# timeout -k 30 of the volume calls (PC env, written into run.sh): a fetch, a store
+VTF="${CACHE_FETCH_TIMEOUT:-900}"; VTS="${CACHE_STORE_TIMEOUT:-900}"
+[[ "$VTF" =~ ^[1-9][0-9]*$ ]] || refuse "CACHE_FETCH_TIMEOUT '$VTF' is not a whole number of seconds"
+[[ "$VTS" =~ ^[1-9][0-9]*$ ]] || refuse "CACHE_STORE_TIMEOUT '$VTS' is not a whole number of seconds"
 if [ "$MODE" = capture ]; then
   SCRIPT="tools/snap_compare.py"; [ -z "$TSHA" ] || SCRIPT="$W/tool/tools/snap_compare.py"
   JOB="CAPTURE"; CMD="uv run --frozen python \"$SCRIPT\" capture \"\$W/snap\" 0-199 --repo \"\$W/repo\" --commit $SHA$PAR -v > \"\$W/capture.log\" 2>&1"
@@ -313,13 +318,13 @@ if [ "$MODE" = capture ]; then
   if [ -n "$TSHA" ]; then echo "NOTE: a --tool re-capture is not stored on the network volume"
   elif [ -z "$K" ]; then echo "NOTE: no table key for $TB (no .key file beside it and no tables_k<key16> name, or it differs from the build its key names; index.txt is not used for a capture): the capture is neither fetched from nor stored on the network volume"
   else SKEY="$SHA-$K"; echo "capture store key $SKEY (fetched instead of captured when the pod's volume has it)"
-    PRE="if $VOLQ; then vr=0; timeout -k 30 $VT bash \"\$W/cache_sync.sh\" snap-fetch $SKEY \"\$W\" own > \"\$W/store.log\" 2>&1 || vr=\$?
+    PRE="if $VOLQ; then vr=0; timeout -k 30 $VTF bash \"\$W/cache_sync.sh\" snap-fetch $SKEY \"\$W\" own > \"\$W/store.log\" 2>&1 || vr=\$?
   if [ \"\$vr\" = 0 ]; then echo \"CAPTURE_FROM_VOLUME $SKEY \$(date +%s)\" >> \"\$W/times.txt\"; echo \"CAPTURE_RC=0 \$(date +%s)\" >> \"\$W/times.txt\"; echo ALL_DONE >> \"\$W/times.txt\"; exit 0; fi
   if [ \"\$vr\" = 124 ] || [ \"\$vr\" = 137 ]; then echo \"VOLUME_TIMEOUT fetch \$(date +%s)\" >> \"\$W/times.txt\"; rm -rf \"\$W/snap\" \"\$W\"/.snapfetch.*
-    echo \"WARNING: the volume fetch of $SKEY timed out after $VT s (rc \$vr): captured instead\"; fi
+    echo \"WARNING: the volume fetch of $SKEY timed out after $VTF s (rc \$vr): captured instead\"; fi
 fi"
-    POST="if [ \"\$rc\" = 0 ] && $VOLQ; then sr=0; timeout -k 30 $VT bash \"\$W/cache_sync.sh\" snap-publish \"\$W\" $SKEY >> \"\$W/store.log\" 2>&1 || sr=\$?
-  if [ \"\$sr\" = 124 ] || [ \"\$sr\" = 137 ]; then echo \"VOLUME_TIMEOUT store \$(date +%s)\" >> \"\$W/times.txt\"; echo \"WARNING: the volume store of $SKEY timed out after $VT s (rc \$sr): not stored\"; fi
+    POST="if [ \"\$rc\" = 0 ] && $VOLQ; then sr=0; timeout -k 30 $VTS bash \"\$W/cache_sync.sh\" snap-publish \"\$W\" $SKEY >> \"\$W/store.log\" 2>&1 || sr=\$?
+  if [ \"\$sr\" = 124 ] || [ \"\$sr\" = 137 ]; then echo \"VOLUME_TIMEOUT store \$(date +%s)\" >> \"\$W/times.txt\"; echo \"WARNING: the volume store of $SKEY timed out after $VTS s (rc \$sr): not stored\"; fi
   echo \"STORE_RC=\$sr \$(date +%s)\" >> \"\$W/times.txt\"
 fi"
   fi
@@ -332,10 +337,10 @@ else
     [ -z "$CS" ] || K=$(table_key16 compare "$CS" "$RENT/tables_${CS:0:8}.tar.xz"); fi
   if [ -z "$K" ]; then echo "NOTE: no store key for $CAP (only /work/snapmain-<short>/snap of a commit with a table key in $RENT/tables): a capture missing on the pod is not fetched from the network volume"
   else CKEY="$CS-$K"; echo "capture store key $CKEY (fetched when $CAP is not on the pod)"
-    PRE="if [ ! -f \"$CAP/capture.json\" ] && $VOLQ; then vr=0; timeout -k 30 $VT bash \"\$W/cache_sync.sh\" snap-fetch $CKEY \"${CAP%/snap}\" > \"\$W/store.log\" 2>&1 || vr=\$?
+    PRE="if [ ! -f \"$CAP/capture.json\" ] && $VOLQ; then vr=0; timeout -k 30 $VTF bash \"\$W/cache_sync.sh\" snap-fetch $CKEY \"${CAP%/snap}\" > \"\$W/store.log\" 2>&1 || vr=\$?
   echo \"FETCH_RC=\$vr \$(date +%s)\" >> \"\$W/times.txt\"
   if [ \"\$vr\" = 124 ] || [ \"\$vr\" = 137 ]; then echo \"VOLUME_TIMEOUT fetch \$(date +%s)\" >> \"\$W/times.txt\"; rm -rf \"${CAP%/snap}\"/.snapfetch.*
-    echo \"WARNING: the volume fetch of $CKEY timed out after $VT s (rc \$vr)\"; fi
+    echo \"WARNING: the volume fetch of $CKEY timed out after $VTF s (rc \$vr)\"; fi
   if [ ! -f \"$CAP/capture.json\" ]; then echo \"NO_CAPTURE $CAP \$(date +%s)\" >> \"\$W/times.txt\"; exit 1; fi
 fi"
   fi

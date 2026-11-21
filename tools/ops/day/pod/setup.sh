@@ -23,7 +23,7 @@ printf 'GATE_VERSION=%s\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\n' "${GATE_VERSION:-}" "
 # live in meta.env only), as "export NAME=<value>" lines, so a runner restart repeats them
 # (DAYBOX.md, Housekeeping, "Restart a runner"). A knob left unset is not written. Values are in
 # POSIX single quotes (a ' as '\''), so sh (dash, the restart body's shell) and bash read them alike.
-RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_S RUNNER_LOCK CLAIM_S CLAIMS CLAIM_MAX_S UNIT_MAX_S RESERVE_TOP RESERVE_FULL_GB RESERVE_PCT WORK DUR COLLECTP WATCH_HOURS WARMUP WARMUP_S NUZLINE_TEST_COMPILE_CACHE NUZLINE_HYPOTHESIS_PROFILE NUZLINE_REQUIRE_NODE CGROOT"
+RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_S RUNNER_LOCK CLAIM_S CLAIMS CLAIM_MAX_S UNIT_MAX_S RESERVE_TOP RESERVE_FULL_GB RESERVE_PCT WORK DUR COLLECTP WATCH_HOURS WARMUP WARMUP_S NUZLINE_TEST_COMPILE_CACHE NUZLINE_HYPOTHESIS_PROFILE NUZLINE_REQUIRE_NODE CGROOT CACHE_SEED_TIMEOUT CACHE_PUBLISH_TIMEOUT"
 for n in $RUN_ENV_NAMES; do if [ -n "${!n+x}" ]; then
   printf "export %s='%s'\n" "$n" "$(printf '%s' "${!n}" | sed "s/'/'\\\\''/g")"; fi; done > "$D/run.env"
 . "$D/bin/gate.sh"   # cgmem: container memory, cgroup v2 or v1
@@ -52,13 +52,15 @@ if command -v npm >/dev/null && [ -f "$R/tools/smogon_calc/package-lock.json" ];
 elif [ "${NUZLINE_REQUIRE_NODE:-}" = 1 ]; then echo "ERROR: npm or tools/smogon_calc/package-lock.json missing"; exit 1; fi
 # Compile cache seed from the network volume (bin/cache_sync.sh seed: once per pod and jax version),
 # only when /vol (CACHE_VOL; tests point it elsewhere) is a mountpoint; a pod without the volume runs exactly as before. A failed seed
-# only means cold compiles. The seed runs under timeout -k 30 900 (a hung volume never holds the
-# setup; a full seed takes 25-100 s): rc 124 or 137 prints "WARNING: cache seed timed out".
+# only means cold compiles. The seed runs under timeout -k 30 CACHE_SEED_TIMEOUT (default 900 s;
+# a hung volume never holds the setup; a full seed takes 25-100 s): rc 124 or 137 prints
+# "WARNING: cache seed timed out"; the entries it renamed stay and the next seed goes on from them.
 if mountpoint -q "${CACHE_VOL:-/vol}" 2>/dev/null; then
+  SEED_T="${CACHE_SEED_TIMEOUT:-900}"; [[ "$SEED_T" =~ ^[1-9][0-9]*$ ]] || { echo "WARNING: CACHE_SEED_TIMEOUT '$SEED_T' is not a whole number: 900 used"; SEED_T=900; }
   src=0; JV=$(cd "$R" && uv run --frozen python -c 'from nuzline.jaxcache import jax_version; print(jax_version())') || src=$?
-  if [ "$src" = 0 ]; then CACHE_JAXVER="$JV" CACHE_PY="$R/.venv/bin/python" timeout -k 30 900 bash "$D/bin/cache_sync.sh" seed || src=$?; fi
+  if [ "$src" = 0 ]; then CACHE_JAXVER="$JV" CACHE_PY="$R/.venv/bin/python" timeout -k 30 "$SEED_T" bash "$D/bin/cache_sync.sh" seed || src=$?; fi
   case "$src" in 0) ;;
-    124|137) echo "WARNING: cache seed timed out after 900 s (rc $src: the volume did not answer); this run compiles what the pod lacks" ;;
+    124|137) echo "WARNING: cache seed timed out after $SEED_T s (rc $src: the volume did not answer); this run compiles what the pod lacks" ;;
     *) echo "WARNING: cache seed failed (rc $src); this run compiles what the pod lacks" ;; esac
 fi
 rm -rf col out; mkdir -p col out

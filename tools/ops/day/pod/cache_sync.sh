@@ -46,12 +46,20 @@
 # against the folder name, and the copy against the volume (diff -r) and the same way again.
 # snap-fetch into a job's own folder ("own": the capture's run.sh) leaves its times.txt alone;
 # into another folder (a compare's) it writes times.txt anew (the volume's lines, then
-# FETCHED_FROM_VOLUME <key> <epoch>, ALL_DONE) and keeps an earlier one as times.txt.before-fetch.
-# A TERM or INT (timeout, run.sh and setup.sh run every call under timeout -k 30 900) removes this
-# call's temp copies and releases the prune lock it holds, then exits 143.
+# FETCHED_FROM_VOLUME <key> <epoch>, ALL_DONE) and keeps an earlier one as times.txt.before-fetch,
+# before it renames snap/ into place: a stop (timeout) in between puts the earlier times.txt back
+# while snap/ has no capture.json, so a complete snap/ never sits beside a times.txt without
+# ALL_DONE (the snapshot guard's FAILED).
+# A TERM or INT (timeout: setup.sh, runner.sh and run.sh run every call under timeout -k 30 <s>,
+# the limits CACHE_SEED_TIMEOUT, CACHE_PUBLISH_TIMEOUT, CACHE_FETCH_TIMEOUT, CACHE_STORE_TIMEOUT
+# of DAYBOX.md "Network volume") removes this call's temp copies and releases the prune lock it
+# holds, then exits 143.
 # seed: once per pod and <ver> (marker <cache>/.seeded-<ver>), under the local flock
 #   CACHE_SEED_LOCK (/work/.cache_seed.lock, waited for at most 600 s), so concurrent setups seed
-#   once; under it the temp copies of a seed stopped earlier are removed first.
+#   once; under it the temp copies of a seed stopped earlier are removed first. Entries go in
+#   batches of CACHE_SEED_BATCH (50): each batch is copied, checked and renamed before the next,
+#   so a seed stopped partway (its timeout) keeps every batch it renamed and the next seed copies
+#   only what is still missing; the marker is written only after a complete pass.
 # prune (also run by publish and snap-publish): under jax/.prune.lock (a lock older than
 #   CACHE_LOCK_STALE_S, 3600 s, is taken over: re-checked to still have the owner and age read
 #   before it is renamed aside, and the renamed one checked again; a held one skips the prune;
@@ -75,7 +83,8 @@ PY="${CACHE_PY:-python3}"; POD="${CACHE_POD:-${RUNPOD_POD_ID:-$(hostname 2>/dev/
 POD=$(printf '%s' "$POD" | tr -c 'A-Za-z0-9_' '_')
 MIN_AGE_S="${CACHE_MIN_AGE_S:-600}"; KEEP_DAYS="${CACHE_KEEP_DAYS:-7}"; CAP_BYTES="${CACHE_CAP_BYTES:-21474836480}"
 LOCK_STALE_S="${CACHE_LOCK_STALE_S:-3600}"; TMP_STALE_S="${CACHE_TMP_STALE_S:-3600}"; SNAP_KEEP="${CACHE_SNAP_KEEP:-10}"
-FREE_WARN_GB="${CACHE_FREE_WARN_GB:-3}"; SEED_LOCK="${CACHE_SEED_LOCK:-/work/.cache_seed.lock}"
+FREE_WARN_GB="${CACHE_FREE_WARN_GB:-3}"; SEED_LOCK="${CACHE_SEED_LOCK:-/work/.cache_seed.lock}"; SEED_BATCH="${CACHE_SEED_BATCH:-50}"
+[[ "$SEED_BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "cache_sync: CACHE_SEED_BATCH '$SEED_BATCH' is not a whole number above 0"; exit 2; }
 J="$VOL/jax"; S="$VOL/snap"
 
 say() { echo "cache_sync: $*"; }
@@ -95,8 +104,15 @@ host_tag() { local f="${CACHE_CPUINFO:-/proc/cpuinfo}" m fl
 newest() { find "$1" -printf '%T@\n' 2>/dev/null | sort -n | tail -1 | cut -d. -f1; }
 # A TERM or INT (timeout) removes this call's temp copies (TMPS) and releases a prune lock it
 # holds (LOCKED), then exits 143.
-TMPS=(); LOCKED=""
-on_term() { trap '' TERM INT; [ "${#TMPS[@]}" -eq 0 ] || rm -rf -- "${TMPS[@]}"; [ -z "$LOCKED" ] || lock_release
+TMPS=(); LOCKED=""; UNDO_TIMES=""; UNDO_TMP=""
+# undo_times: a compare's snap-fetch wrote <dest>/times.txt (UNDO_TIMES) before renaming snap/
+# into place; while <dest>/snap has no capture.json it removes that times.txt and puts back the
+# one it replaced (kept in UNDO_TMP until the rename), so the folder is as before the fetch.
+undo_times() { [ -n "$UNDO_TIMES" ] || return 0
+  if [ ! -f "$UNDO_TIMES/snap/capture.json" ]; then rm -f "$UNDO_TIMES/times.txt"
+    [ ! -f "$UNDO_TMP/times.txt.before-fetch" ] || mv -f "$UNDO_TMP/times.txt.before-fetch" "$UNDO_TIMES/times.txt"; fi
+  UNDO_TIMES=""; }
+on_term() { trap '' TERM INT; undo_times; [ "${#TMPS[@]}" -eq 0 ] || rm -rf -- "${TMPS[@]}"; [ -z "$LOCKED" ] || lock_release
   say "stopped by a signal: temp copies removed"; exit 143; }
 trap on_term TERM INT
 
@@ -254,20 +270,25 @@ seed() {
   mkdir -p "$src" && touch "$src/used-$(date -u +%Y%m%d)" || say "seed: cannot write $src (read only?)"
   t0=$(date +%s)
   names=$(pyh list "$src" "$dst") || { say "seed: helper failed ($PY)"; return 1; }
-  local tmps=()
-  while read -r n; do [ -n "$n" ] || continue
-    p="$dst/.$n.tmp.$$"
-    TMPS+=("$p")
-    if cp "$src/$n" "$p" 2>/dev/null; then tmps+=("$p"); else rm -f "$p"; bad=$((bad + 1)); say "seed: skip $n: copy failed"; fi
-  done <<< "$names"
-  if [ "${#tmps[@]}" -gt 0 ]; then
+  # Batches of SEED_BATCH entries: each batch is copied, checked and renamed before the next, so
+  # a seed stopped partway (timeout) keeps every batch it renamed, and the next seed copies only
+  # what is still missing. The marker is written only after a complete pass.
+  local tmps=() i=0
+  seed_batch() { [ "${#tmps[@]}" -gt 0 ] || return 0
     while IFS=$'\t' read -r st p why; do
       n=${p##*/.}; n=${n%.tmp.$$}
       if [ "$st" = OK ] && [ ! -e "$dst/$n" ]; then mv -f "$p" "$dst/$n" && ok=$((ok + 1))
       elif [ "$st" = OK ]; then rm -f "$p"   # JAX wrote it meanwhile: keep the local one
       else rm -f "$p"; bad=$((bad + 1)); say "seed: skip $n: $why (a bad entry on the volume: delete $src/$n while no publish runs)"; fi
     done < <(pyh verify "${tmps[@]}")
-  fi
+    rm -f "${tmps[@]}"; tmps=(); TMPS=(); }
+  while read -r n; do [ -n "$n" ] || continue
+    p="$dst/.$n.tmp.$$"
+    TMPS+=("$p")
+    if cp "$src/$n" "$p" 2>/dev/null; then tmps+=("$p"); else rm -f "$p"; bad=$((bad + 1)); say "seed: skip $n: copy failed"; fi
+    i=$((i + 1)); [ $((i % SEED_BATCH)) -ne 0 ] || seed_batch
+  done <<< "$names"
+  seed_batch
   rm -f "$dst"/.*.tmp.$$; TMPS=()
   touch "$LC/.seeded-$ver"
   say "seed done: $ver $ok entries copied, $bad skipped, $(( $(date +%s) - t0 )) s"
@@ -275,7 +296,7 @@ seed() {
 
 publish() {
   vol_ok || { say "no volume mounted at $VOL: publish skipped"; return 0; }
-  local d ver out ok bad st n why tmp any=0 ht V
+  local d ver out ok bad st n why tmp any=0 ht V t0; t0=$(date +%s)
   if ht=$(host_tag); then
   for d in "$LC"/*/; do ver=${d%/}; ver=${ver##*/}; ver_ok "$ver" || continue; d=${d%/}; any=1; V="$J/$ver-$ht"
     mkdir -p "$V" || { say "publish: cannot create $V"; continue; }
@@ -294,6 +315,7 @@ publish() {
   [ "$any" = 1 ] || say "publish: no local cache folder under $LC"
   else say "publish: no model name or flags in ${CACHE_CPUINFO:-/proc/cpuinfo}: no host tag, nothing published"; fi
   prune
+  say "publish wall $(( $(date +%s) - t0 )) s"
   say "publish done"
 }
 
@@ -373,7 +395,7 @@ capture_ok() { local why
   why=$(pyh capture "$1/snap" 2>&1) || { echo "${why:-capture check failed}"; return 1; }; }
 
 snap_publish() {
-  local W="${1:-}" KEY="${2:-}" tmp why
+  local W="${1:-}" KEY="${2:-}" tmp why t0; t0=$(date +%s)
   vol_ok || { say "no volume mounted at $VOL: snap-publish skipped"; return 0; }
   key_ok "$KEY" || { say "snap-publish: key '$KEY' is not <sha40>-<key16>"; return 2; }
   why=$(capture_ok "$W") || { say "snap-publish: $W is not a complete capture ($why): not stored"; return 1; }
@@ -383,7 +405,7 @@ snap_publish() {
   if ! { cp -r "$W/snap" "$tmp/snap" && cp "$W/times.txt" "$tmp/times.txt" && diff -rq "$W/snap" "$tmp/snap" > /dev/null \
          && why=$(capture_ok "$tmp") && echo "$KEY" > "$tmp/KEY"; }; then
     rm -rf "$tmp"; TMPS=(); say "snap-publish: copy to the volume failed${why:+ ($why)}"; return 1; fi
-  if mv -T "$tmp" "$S/$KEY" 2>/dev/null; then TMPS=(); say "snap-publish: $KEY stored"
+  if mv -T "$tmp" "$S/$KEY" 2>/dev/null; then TMPS=(); say "snap-publish: $KEY stored ($(( $(date +%s) - t0 )) s)"
   else rm -rf "$tmp"; TMPS=()
     [ -d "$S/$KEY/snap" ] || { say "snap-publish: rename to $S/$KEY failed"; return 1; }
     say "snap-publish: $KEY was stored by another pod meanwhile: kept, not overwritten"; fi
@@ -391,7 +413,7 @@ snap_publish() {
 }
 
 snap_fetch() {
-  local KEY="${1:-}" DEST="${2:-}" OWN="${3:-}" tmp why k
+  local KEY="${1:-}" DEST="${2:-}" OWN="${3:-}" tmp why k t0; t0=$(date +%s)
   vol_ok || { say "no volume mounted at $VOL: snap-fetch skipped"; return 1; }
   key_ok "$KEY" || { say "snap-fetch: key '$KEY' is not <sha40>-<key16>"; return 2; }
   [ -n "$DEST" ] || { say "snap-fetch: no capture folder given"; return 2; }
@@ -406,15 +428,22 @@ snap_fetch() {
   tmp="$DEST/.snapfetch.$$"; TMPS=("$tmp"); rm -rf "$tmp"; mkdir "$tmp" || return 1
   if ! { cp -r "$S/$KEY/snap" "$tmp/snap" && diff -rq "$S/$KEY/snap" "$tmp/snap" > /dev/null && why=$(pyh capture "$tmp/snap" 2>&1); }; then
     rm -rf "$tmp"; TMPS=(); say "snap-fetch: the copy of $KEY failed or is not a complete capture${why:+ ($why)}"; return 1; fi
-  if ! mv -T "$tmp/snap" "$DEST/snap" 2>/dev/null; then rm -rf "$tmp"; TMPS=()
-    [ -f "$DEST/snap/capture.json" ] && { say "snap-fetch: $DEST/snap was fetched by another job meanwhile"; return 0; }
-    say "snap-fetch: rename to $DEST/snap failed"; return 1; fi
-  if [ -z "$OWN" ]; then   # a compare's fetch makes the folder a finished capture; a stale times.txt is kept aside
-    { cat "$S/$KEY/times.txt" 2>/dev/null; echo "FETCHED_FROM_VOLUME $KEY $(date +%s)"; echo ALL_DONE; } > "$tmp/times.txt" \
-      && { [ ! -f "$DEST/times.txt" ] || mv -f "$DEST/times.txt" "$DEST/times.txt.before-fetch"; } \
-      && mv -f "$tmp/times.txt" "$DEST/times.txt"; fi
+  # A compare's fetch makes the folder a finished capture: its times.txt (a stale one is kept
+  # aside) is written before snap/ is renamed into place, so a stop between the two never leaves
+  # a complete snap/ beside a times.txt without ALL_DONE (the snapshot guard's FAILED). A stop
+  # or failed rename after it puts the earlier times.txt back (UNDO_TIMES, also run by on_term).
+  if [ -z "$OWN" ]; then
+    { cat "$S/$KEY/times.txt" 2>/dev/null; echo "FETCHED_FROM_VOLUME $KEY $(date +%s)"; echo ALL_DONE; } > "$tmp/times.txt" || {
+      rm -rf "$tmp"; TMPS=(); say "snap-fetch: cannot write $tmp/times.txt"; return 1; }
+    UNDO_TMP="$tmp"; UNDO_TIMES="$DEST"; [ ! -f "$DEST/times.txt" ] || mv -f "$DEST/times.txt" "$tmp/times.txt.before-fetch"
+    mv -f "$tmp/times.txt" "$DEST/times.txt"; fi
+  if ! mv -T "$tmp/snap" "$DEST/snap" 2>/dev/null; then
+    if [ -f "$DEST/snap/capture.json" ]; then UNDO_TIMES=""; [ ! -f "$tmp/times.txt.before-fetch" ] || mv -f "$tmp/times.txt.before-fetch" "$DEST/times.txt.before-fetch"
+      rm -rf "$tmp"; TMPS=(); say "snap-fetch: $DEST/snap was fetched by another job meanwhile"; return 0; fi
+    undo_times; rm -rf "$tmp"; TMPS=(); say "snap-fetch: rename to $DEST/snap failed"; return 1; fi
+  UNDO_TIMES=""; [ ! -f "$tmp/times.txt.before-fetch" ] || mv -f "$tmp/times.txt.before-fetch" "$DEST/times.txt.before-fetch"
   echo "$KEY" > "$DEST/store_key"; rm -rf "$tmp"; TMPS=()
-  say "snap-fetch: $KEY fetched into $DEST/snap"
+  say "snap-fetch: $KEY fetched into $DEST/snap ($(( $(date +%s) - t0 )) s)"
 }
 
 case "${1:-}" in
