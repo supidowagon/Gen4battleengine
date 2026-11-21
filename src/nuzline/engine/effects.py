@@ -353,6 +353,7 @@ from nuzline.engine.state import (
     STAGE_MIN,
     BattleState,
     ai_record_ability,
+    ai_record_kept,
     ai_record_write,
     battler_ability,
     field_index,
@@ -2355,7 +2356,7 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     record = ai_record_ability(state, side).astype(_I32)
     # Raw: the record is BattleAI_SetAbility's BattleMon.ability (battle_script.c:11805-11806).
     own_id = decomp_abilities(tables, state)[party(fmt, side), user]
-    settled = jnp.where(cond & (party(fmt, side) == 0) & (record < 0), own_id, record)
+    settled = jnp.where(cond & ai_record_kept(fmt, side) & (record < 0), own_id, record)
 
     def put(arr, index, value):
         return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
@@ -2651,8 +2652,8 @@ def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndar
 def know_ability(state: BattleState, side, slot, cond) -> BattleState:
     """A message tags the ability of ``side``'s party ``slot`` (``BattleAI_SetAbility``,
     battle_script.c:11806): the AI knows it, in the row of battler ``side`` while it holds
-    ``slot``, for a party-0 battler (ruling D3-1a)."""
-    on = jnp.asarray(cond) & (party(format_of(state), jnp.asarray(side, _I32)) == 0)
+    ``slot``, where ``ai_record_kept`` (sheet D45-2 rule 4)."""
+    on = jnp.asarray(cond) & ai_record_kept(format_of(state), side)
     # Raw: BattleMessage_AbilityTag reads BattleMon.ability (battle_script.c:11805).
     record = decomp_ability_id(
         state.ability[party(format_of(state), jnp.asarray(side, _I32)), slot]
@@ -3616,7 +3617,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> tuple[BattleState
     )
     stopped = reached & ~poison_type & blocks
     state = ai_record_write(
-        state, "ai_ability_known", side, mon, ability, stopped & (party(fmt, side) == 0)
+        state, "ai_ability_known", side, mon, ability, stopped & ai_record_kept(fmt, side)
     )
     poisoned = (
         reached

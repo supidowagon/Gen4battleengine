@@ -32,21 +32,27 @@ def _known(s):
 
 def test_ability_tag_battler_2_doubles(tables, names):
     s = with_ability(four(tables, names, DOUBLES), 2, AbilityId.INTIMIDATE)
+    s = with_ability(s, 1, AbilityId.INTIMIDATE)
     slot = int(s.active[2])
     out = know_ability(s, 2, slot, True)
     r = to_ref(s)
     ref._know_ability(r, 2)
     assert _known(out)[2] != 0
     assert _known(out) == r.ai_ability_known
-    assert _known(know_ability(s, 1, int(s.active[1]), True)) == _known(s)  # the enemy: nothing
+    # the enemy's row is kept at B = 4 too (sheet D45-2 rule 4)
+    enemy = know_ability(s, 1, int(s.active[1]), True)
+    ref._know_ability(r, 1)
+    assert _known(enemy)[1] != 0 and _known(enemy)[0] == _known(enemy)[2] == 0
+    assert _known(enemy) == [0, r.ai_ability_known[1], 0, 0]
 
 
-def test_ability_tag_battler_2_multi_writes_nothing(tables, names):
+def test_ability_tag_battler_2_multi_records_row_2(tables, names):
     s = with_ability(four(tables, names, MULTI), 2, AbilityId.INTIMIDATE)
     out = know_ability(s, 2, int(s.active[2]), True)
     r = to_ref(s)
     ref._know_ability(r, 2)
-    assert _known(out) == _known(s) == r.ai_ability_known
+    assert _known(out)[2] != 0
+    assert _known(out) == r.ai_ability_known
     out0 = know_ability(with_ability(s, 0, AbilityId.INTIMIDATE), 0, int(s.active[0]), True)
     assert _known(out0)[0] != 0  # battler 0 is party 0 in MULTI
 

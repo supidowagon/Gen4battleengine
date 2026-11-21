@@ -465,7 +465,7 @@ three structs has a row.
   `BTLSCR_ATTACKER` / `DEFENDER` / `MSG_BATTLER_TEMP` names it, battle_script.c:11726-11745:
   Leftovers and Black Sludge at the turn end, Sticky Barb's damage, Shell Bell's heal; cleared by
   `effects.forget_item` when the item goes, battle_lib.c:1819-1823, and on entry, :2153),
-  `battlerAbilities` (revealed abilities) -> `ai_ability_known`, `trainerItems`
+  `battlerAbilities` (abilities a message tagged or a script set, any kept battler: `hooks.reveal_ability` / `_know`, `effects.know_ability`, sheet D45-2) -> `ai_ability_known`, `trainerItems`
   -> `trainer_items`, `trainerItemCounts` (the bag's size at battle start, never
   decremented, read by `TrainerAI_ShouldUseItem`'s gate, trainer_ai.c:4092) ->
   `trainer_item_count`. Its scoring scratch is rebuilt every decision.

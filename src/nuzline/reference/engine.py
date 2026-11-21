@@ -711,12 +711,19 @@ def _personal_types(tables, mon: RefPokemon) -> list[int]:
     return _multitype_plate(tables, mon.species, ability, mon.item, types)
 
 
+def _record_kept(s: RefState, b: int) -> bool:
+    """Battler ``b``'s record row is one some trainer-AI battler reads, so it is kept (sheet D45-1
+    rule 6, manager ruling Q1): every battler at B = 4; at B = 2 the player's battler (party 0)
+    only: the AI battler 1 reads its own record never (trainer_ai.c:1179, :1908, :1925)."""
+    return _fmt(s).B == 4 or _party(_fmt(s), b) == 0
+
+
 def _know_ability(s: RefState, b: int) -> None:
     """``BattleAI_SetAbility`` (battle_script.c:12106-12109): the AI records the decomp id of
-    battler ``b``'s current ability (``ai_ability_known[b]``, the row of battler ``b``), 0 for one
-    the engine does not name (G-69); only for a party-0 battler (ruling D3-1a). Raw:
+    battler ``b``'s current ability (``ai_ability_known[b]``, the row of battler ``b``), -1 for one
+    the engine does not name (G-69); only where ``_record_kept`` (sheet D45-2 rule 4). Raw:
     BattleMessage_AbilityTag reads ``BattleMon.ability`` (script.c:11805)."""
-    if _party(_fmt(s), b) != 0:
+    if not _record_kept(s, b):
         return
     named = ABILITY_DECOMP_IDS.get(_active(s, b).ability, 0)
     s.ai_ability_known[b] = named if named > 0 else -1
@@ -782,7 +789,7 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
     if not foe_mon.hp or foe.semi_invulnerable or foe.transformed:
         return False
     fresh = not sd.transformed
-    if _party(_fmt(s), side) == 0 and s.ai_ability_known[side] < 0:
+    if _record_kept(s, side) and s.ai_ability_known[side] < 0:
         # the record of an ability the engine does not name settles to its id (effects._transform;
         # raw, the AI's record of BattleMon.ability, script.c:11805)
         s.ai_ability_known[side] = _decomp_ability(tables, mon)
@@ -3286,7 +3293,7 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> bool:
                     stopped = True
                     # "{0}'s {1} prevents poisoning!" (subscript_poison.s:80-82,
                     # _badly_poison.s:93-103): BattleAI_SetAbility (script.c:11806).
-                    if _party(_fmt(s), side) == 0:
+                    if _record_kept(s, side):
                         s.ai_ability_known[side] = ability  # the decomp id the message names
                 # subscript_poison.s:29 / _badly_poison.s:46: CheckSubstitute, silent (a Baton
                 # Pass newcomer keeps the substitute, B10-4).
@@ -3577,7 +3584,7 @@ def _run_states(
         weather = WEATHER_ABILITIES.get(_ability(s, mon))
         if act[b] and weather is not None and mon.hp:
             if not s.field_mask & WEATHER_PERM_BIT[weather]:
-                _know_ability(s, b)  # subscript_drought.s etc. (party 0 only)
+                _know_ability(s, b)  # subscript_drought.s etc. (kept battlers, D45-2)
             _weather_ability_bits(s, weather)
             s.battlers[b].weather_announced = 1
     for b in order:  # SWITCH_IN_CHECK_STATE_INTIMIDATE (lib.c:3795-3813)
@@ -3670,7 +3677,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int, flagged: int | None 
         weather = WEATHER_ABILITIES.get(_ability(s, _active(s, battler)))
         if weather is not None and _active(s, battler).hp:
             if not s.field_mask & WEATHER_PERM_BIT[weather]:
-                _know_ability(s, battler)  # subscript_drought.s etc. (party 0 only)
+                _know_ability(s, battler)  # subscript_drought.s etc. (kept battlers, D45-2)
             _weather_ability_bits(s, weather)
             s.battlers[battler].weather_announced = 1
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
@@ -3821,7 +3828,7 @@ def _move_end_switch_in(turn: _Turn, s: RefState) -> None:
         weather = WEATHER_ABILITIES.get(_ability(s, mon))
         if not sd.weather_announced and weather is not None and mon.hp:
             if not s.field_mask & WEATHER_PERM_BIT[weather]:
-                _know_ability(s, b)  # subscript_drought.s etc. (party 0 only)
+                _know_ability(s, b)  # subscript_drought.s etc. (kept battlers, D45-2)
             _weather_ability_bits(s, weather)
             sd.weather_announced = 1
     for b in battlers:
@@ -6304,10 +6311,8 @@ def bide_defender(s: RefState, battler: int, bit: int) -> int | None:
 
 def _reveal_redirect(s: RefState, tables, holder: int) -> None:
     """subscript_lightning_rod_redirected.s:9 tags the holder's ability: ``BattleAI_SetAbility``
-    for a player's Pokemon (D2-12 rule 10)."""
-    if _party_of(s, holder) is s.parties[0]:
-        mon = _active(s, holder)
-        s.ai_ability_known[holder] = ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
+    for every kept battler (D2-12 rule 10, sheet D45-2 rule 4)."""
+    _know_ability(s, holder)
 
 
 def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
