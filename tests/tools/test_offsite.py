@@ -14,15 +14,16 @@ SCRIPT = ROOT / "tools" / "ops" / "offsite.sh"
 
 
 def _bash() -> str | None:
-    """A POSIX bash: on Windows Git's bash (System32's bash.exe is WSL, which cannot see these
-    paths), elsewhere the bash on PATH."""
+    """A POSIX bash: on Windows Git's own usr/bin/bash.exe (the bash.exe in System32 or WindowsApps is
+    the WSL launcher, which cannot see these paths; Git's bin/bash.exe wrapper puts usr/bin ahead of
+    any PATH the test sets, so a stand-in command would never run), elsewhere the bash on PATH."""
     found = shutil.which("bash")
-    if found and "system32" not in found.lower():
+    if found and not any(d in found.lower() for d in ("system32", "windowsapps", "\\git\\bin\\")):
         return found
     git = shutil.which("git")
     if git:
         exec_path = subprocess.run([git, "--exec-path"], check=False, capture_output=True, text=True).stdout.strip()
-        for b in (Path(exec_path).parents[2] / "bin" / "bash.exe", Path(git).parents[1] / "bin" / "bash.exe"):
+        for b in (Path(exec_path).parents[2] / "usr" / "bin" / "bash.exe", Path(git).parents[1] / "usr" / "bin" / "bash.exe"):
             if b.is_file():
                 return str(b)
     return None
@@ -30,6 +31,14 @@ def _bash() -> str | None:
 
 BASH = _bash()
 pytestmark = pytest.mark.skipif(BASH is None, reason="no POSIX bash")
+
+
+def _with_bash_tools(env: dict[str, str]) -> dict[str, str]:
+    """On Windows, bash's own folder (find, sort, tar, ...) first on PATH, ahead of System32's find.exe
+    and sort.exe; a test that prepends a stand-in folder still comes first."""
+    if os.name == "nt" and BASH:
+        env["PATH"] = str(Path(BASH).parent) + os.pathsep + env.get("PATH", "")
+    return env
 
 # Token-shaped strings are assembled at run time so this file holds none.
 TOKENS = {
@@ -59,7 +68,7 @@ def _write(root: Path, rel: str, data: bytes | str = "note\n") -> None:
 
 
 def _env(scratch: Path) -> dict[str, str]:
-    env = dict(os.environ)
+    env = _with_bash_tools(dict(os.environ))
     env["NUZLINE_SCRATCH"] = str(scratch)
     return env
 
@@ -240,7 +249,7 @@ def _genv(tmp_path: Path) -> dict[str, str]:
     cfg = tmp_path / "gitconfig"
     if not cfg.exists():
         cfg.write_text("[user]\n\tname = t\n\temail = t@example.invalid\n[init]\n\tdefaultBranch = main\n")
-    env = dict(os.environ)
+    env = _with_bash_tools(dict(os.environ))
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(cfg), GIT_TERMINAL_PROMPT="0")
     return env
 
@@ -273,6 +282,14 @@ def proj(tmp_path: Path):
     _write(scratch, "misc/keep.md")  # outside the allow-list: never copied, never touched
     env.update(NUZLINE_REPO=str(repo), NUZLINE_SCRATCH=str(scratch), NUZLINE_OFFSITE_TEST_LOCAL="1")
     return repo, tmp_path / "offsite.git", env
+
+
+def _shim(folder: Path, name: str, body: str, executable: bool = True) -> None:
+    """A stand-in command <folder>/<name>: LF line endings, mode 755 (Linux runs no file without the
+    execute bit; Git Bash on Windows ignores it)."""
+    p = folder / name
+    p.write_text(body, newline="\n")
+    p.chmod(0o755 if executable else 0o644)
 
 
 def _off(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess:
@@ -327,11 +344,18 @@ def test_refuses_unless_gh_confirms_private(proj, tmp_path):
     shim = tmp_path / "shim"
     shim.mkdir()
     env = dict(env, PATH=str(shim) + os.pathsep + env["PATH"])
-    for body, frag in [("echo false", "not confirmed private"), ("echo 'not logged in' >&2; exit 1", "failed"),
-                       ("echo", "not confirmed private")]:
-        (shim / "gh").write_text(f"#!/bin/sh\n{body}\n", newline="\n")
+    for body, frag in [("echo false", "not confirmed private"), ("echo 'not logged in' >&2; exit 1", "failed (exit 1;"),
+                       ("echo", "not confirmed private"), ("echo true; exit 3", "failed (exit 3;")]:
+        _shim(shim, "gh", f"#!/bin/sh\n{body}\n")
         r = _off("--dry-run", env=env)  # the test switch never covers a network URL
         assert r.returncode == 2 and frag in r.stderr, (body, r.stderr)
+        assert "== branches" not in r.stdout
+    # A gh the shell finds but cannot run (no execute bit) is named as such, not as a login problem.
+    # POSIX only, and only with no other gh on PATH: the shell would run that one instead.
+    if os.name != "nt" and shutil.which("gh", path=os.environ.get("PATH", "")) is None:
+        _shim(shim, "gh", "#!/bin/sh\necho true\n", executable=False)
+        r = _off("--dry-run", env=env)
+        assert r.returncode == 2 and "cannot be run (exit 126" in r.stderr, r.stderr
         assert "== branches" not in r.stdout
     _git("remote", "set-url", "offsite", (tmp_path / "offsite.git").as_posix(), cwd=repo, env=env)
     env.pop("NUZLINE_OFFSITE_TEST_LOCAL")
@@ -417,11 +441,33 @@ def test_run_aborts_on_an_offender_in_the_copy(proj, tmp_path):
     repo, off, env = proj
     shim = tmp_path / "shim"
     shim.mkdir()
-    (shim / "tar").write_text(
-        '#!/bin/bash\n/usr/bin/tar "$@"; rc=$?\n'
-        'if [ "$3" = -xf ]; then printf "x\\n%s\\n" "$LEAK" > "$2/handoff/MANAGER.md"; fi\nexit $rc\n', newline="\n")
+    _shim(shim, "tar",
+          '#!/bin/bash\n/usr/bin/tar "$@"; rc=$?\n'
+          'if [ "$3" = -xf ]; then printf "x\\n%s\\n" "$LEAK" > "$2/handoff/MANAGER.md"; fi\nexit $rc\n')
     env = dict(env, PATH=str(shim) + os.pathsep + env["PATH"], LEAK=TOKENS["github"])
     r = _off(env=env)
     assert r.returncode == 3, r.stdout + r.stderr
     assert "OFFENDER secret-like-content handoff/MANAGER.md" in r.stdout and "ABORTED" in r.stdout
     assert "refs/heads/scratch-state" not in _refs(off, env)
+
+
+def test_run_aborts_on_an_offender_left_in_the_clone(proj):
+    """No stand-in command: a symlink planted in the state clone is not a selected file, so the mirror
+    step neither removes nor overwrites it; the pre-commit re-check catches it (exit 3), nothing is
+    left staged and the state branch on offsite stays where it was."""
+    repo, off, env = proj
+    scratch = repo / "_scratch"
+    state = scratch / "offsite" / "state"
+    r = _off(env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    before = _refs(off, env)["refs/heads/scratch-state"]
+    try:
+        (state / "handoff" / "link.md").symlink_to(scratch / "misc" / "keep.md")
+    except OSError as exc:  # Windows without the symlink privilege
+        pytest.skip(f"cannot create a symlink here: {exc}")
+    _write(scratch, "handoff/MANAGER.md", "changed\n")
+    r = _off(env=env)
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "OFFENDER not-a-regular-file handoff/link.md" in r.stdout and "ABORTED" in r.stdout
+    assert _refs(off, env)["refs/heads/scratch-state"] == before
+    assert _git("diff", "--cached", "--name-only", cwd=state, env=env) == ""

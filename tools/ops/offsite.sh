@@ -232,10 +232,16 @@ check_private() {
   IFS=/ read -r h o r x <<< "$KEY"
   if [ -z "$o" ] || [ -z "$r" ] || [ -n "$x" ]; then
     echo "REFUSED: cannot read owner/repo from offsite push URL $1" >&2; return 1; fi
-  command -v gh > /dev/null 2>&1 \
+  local gh_path rc
+  gh_path=$(command -v gh) \
     || { echo "REFUSED: gh (GitHub CLI) is missing; cannot confirm that $h/$o/$r is private" >&2; return 1; }
-  ans=$(gh repo view "$h/$o/$r" --json isPrivate --jq .isPrivate 2>&1) \
-    || { echo "REFUSED: gh repo view $h/$o/$r failed (gh missing a login, or no access): $(printf '%s' "$ans" | head -c 300)" >&2; return 1; }
+  ans=$(gh repo view "$h/$o/$r" --json isPrivate --jq .isPrivate 2>&1); rc=$?
+  # 126/127: the shell could not run gh (no execute permission, bad interpreter); gh itself never ran.
+  if [ $rc -eq 126 ] || [ $rc -eq 127 ]; then
+    echo "REFUSED: gh at $gh_path cannot be run (exit $rc; check its execute permission); cannot confirm that $h/$o/$r is private: $(printf '%s' "$ans" | head -c 300)" >&2; return 1
+  elif [ $rc -ne 0 ]; then
+    echo "REFUSED: gh repo view $h/$o/$r failed (exit $rc; gh missing a login, or no access): $(printf '%s' "$ans" | head -c 300)" >&2; return 1
+  fi
   [ "$ans" = true ] || { echo "REFUSED: $h/$o/$r is not confirmed private (gh: isPrivate=$ans)" >&2; return 1; }
 }
 
