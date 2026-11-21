@@ -715,8 +715,8 @@ def test_committed_facts_recorded():
     assert raw["gauntlet"] and all("rules" not in g for g in raw["gauntlet"])
     o = load_overrides()
     assert all(g.facts is not None for g in o.gauntlets)
-    elite = next(g for g in o.gauntlets if g.name == "Elite Four + Champion")
-    assert elite.trainers == (866, 867, 868, 869, 870) and elite.facts.pc_gaps == (1, 2, 3, 4)
+    # Elite Four + Champion is not a gauntlet group until batch 4 (B4-19).
+    assert not any(t in g.trainers for g in o.gauntlets for t in range(866, 871))
     wayward = next(g for g in o.gauntlets if g.name == "Wayward Cave")
     assert len(wayward.facts.orders) == 2 and wayward.facts.partner.trainer == 612
     route = next(g for g in o.gauntlets if g.name == "Route 213")

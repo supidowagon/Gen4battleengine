@@ -475,9 +475,14 @@ def test_wayward_walkout_closes_the_start_without_the_partner(rom_files):
 
 
 @pytest.mark.slow
-def test_elite_four_pc_gaps_are_the_four_lifts(derived):
-    d = derived["Elite Four + Champion"]
+def test_elite_four_pc_gaps_are_the_four_lifts(rom_files):
+    # The facts B4-19 restores the Elite Four + Champion group with; no group in batch 3.
+    from tools.kaizo.gauntlet_map import RomMaps, escape, league_facts
+
+    maps = RomMaps(rom_files)
+    d = league_facts(maps)
     assert d["orders"] == [[[866], [867], [868], [869], [870]]] and d["pc_gaps"] == [1, 2, 3, 4]
+    assert escape(maps, d["escape_header"]) is False
 
 
 def test_a_matching_coord_outside_the_strict_headers_is_only_recorded():

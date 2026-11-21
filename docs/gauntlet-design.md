@@ -15,12 +15,12 @@ Principle:
 - Fights are numbered 1..n along the resolved order; n is per order. Gap k sits after the k-th fight played (1 <= k <= n-1).
 - `Trainer.gauntlet` stays a pair: `(group, fight_id)`, where `fight_id` is the first trainer id of the trainer's pair as the sheet lists it (both ids of a pair share it). Positions and n come from `gauntlet_facts` per resolved order. Today `tools/kaizo/resolve.py:522-527` writes a position; that is replaced. Readers: `src/nuzline/cli.py:1637-1639` prints `fight <id>` in place of `#<position>`; `tests/data/test_trainer.py:391-394` and `tests/test_cli.py:977` keep the pair shape.
 - Every setting that names a member names a fight by its first trainer id.
-- Totals at 8b89ca3c (`docs/kaizo/mechanics_backlog.md:38`, `:90-131`): 27 battles need a gauntlet group; for 20 the gauntlet is the last blocker. The other 7 stay blocked by E2 formats: 15 Liv & Liz (double, AI_FLAG_TAG_STRATEGY) and the 6 Wayward Cave multis. Expected whole-game runnable: 230 -> 250 of 387. The 5 E4 + Champion fights (866-870) join as a new group with no new blocker and stay runnable. GT-18 re-counts.
+- Totals at 8b89ca3c (`docs/kaizo/mechanics_backlog.md:38`, `:90-131`): 27 battles need a gauntlet group; for 20 the gauntlet is the last blocker. The other 7 stay blocked by E2 formats: 15 Liv & Liz (double, AI_FLAG_TAG_STRATEGY) and the 6 Wayward Cave multis. Expected whole-game runnable: 230 -> 250 of 387. The E4 + Champion group (866-870) is not in batch 3: batch 4 adds it with the chain (B4-15, B4-19), so the five fights stay runnable as single fights until then (manager ruling 21 Nov); its facts are kept in section 2 for that. GT-18 re-counts.
 
 ## 2. Game facts per group (tracked data)
 
 Stored in `overrides.toml` per `[[gauntlet]]` and resolved into the tables. Only these keys, each with its source:
-- `source`: the citation, checked by `_SOURCE` as today (`tools/kaizo/overrides.py:93-98`; `_source` `:163-170`). E4 + Champion: `source = "rom:scr 188/190/192/194/196"`. No separate cite or kind field: `check_gauntlet_members` skips every non-sheet source (`overrides.py:630`, `_SHEET.fullmatch`).
+- `source`: the citation, checked by `_SOURCE` as today (`tools/kaizo/overrides.py:93-98`; `_source` `:163-170`). E4 + Champion (B4-19): `source = "rom:scr 188/190/192/194/196"`. No separate cite or kind field: `check_gauntlet_members` skips every non-sheet source (`overrides.py:630`, `_SHEET.fullmatch`).
 - `orders`: the fight orders the map allows, a list of orders, each a list of fights (lists of trainer ids), with `orders_source`. One order means the game fixes it; there is no separate forced order.
 - `leave_gaps`: gaps after which the player can leave the group's map on foot without entering an undefeated member's sight line; one list per order where they differ (Building #1).
 - `escape`: whether the header allows Escape Rope and Dig (F6). A partner blocks both (Wayward Cave facts).
@@ -66,7 +66,7 @@ v5.4 (20 Nov): the read now applies every coord's var condition. In Wayward Cave
 | Eterna Building #3 (74) | 412, 422 only. 412 = obj 2 (scr 3411) at (27,20), facing west, range 3, sight (26,20)-(24,20); every warp panel leads to warp 4 = (25,20), inside it. 422 = obj 4 (scr 3421) at (23,18), facing east, range 4, reachable only after 412 | no | no | none |
 | Route 213 (373) | all 120 orders | after every fight: yes, lobby door (706,818) -> header 376. After a swimmer (106, 103, 105) the player is surfing. | no: escape bit 0 | after every fight: the lobby healer, header 376 obj 1 at (11,4), talked to across the table tile (11,5); scr 462 entry 2 `HealParty` @74, no payment check |
 | Wayward Cave (284) | 383+443, 380+458, 450+496, 459+460, 454+455, 749+750; or 459 and 460 split (Wayward Cave facts) | no (the walk-out runs only before Mira joins, before fight 1) | header yes; refused at every gap (the partner is set from fight 1) | partner heal after every won fight; no PC tile |
-| Elite Four + Champion (175-186) | fixed by the game | no: doors | no: map type 4 | PC in the lifts between rooms; no healer |
+| Elite Four + Champion (175-186; group added by B4-19) | fixed by the game | no: doors | no: map type 4 | PC in the lifts between rooms; no healer |
 
 Across the three Eterna Building groups (headers 72-75): 410 is reachable before any Building #1 fight; 423 only after 410; 412 only after 423. After 421 alone the only continuation is 831; after 412 alone it is 422. Every other point where another building group's fight is reachable is a leave gap or lies before a group's first fight, so the groups stay separate chains. A fight of another group taken at a leave gap is the player's choice; the next re-run starts from the save (section 5).
 
@@ -83,7 +83,7 @@ Tracked facts that follow:
 | Eterna Building #3 | [[412],[422]] | `leave_gaps = []`, `escape = false` | `rom:header 74 ev 73` obj 2, warp 4 (25,20) and the panels leading to it |
 | Route 213 | all 120 one-id orders | `leave_gaps` all, `heal_gaps` all, `escape = false` | `rom:header 373 ev 359`; door (706,818) -> header 376; `rom:scr 462 entry 2` `HealParty` @74 |
 | Wayward Cave | [[383,443],[380,458],[450,496],[459,460],[454,455],[749,750]] and the same with [459],[460] in place of [459,460] | `leave_gaps = []`, `escape = true` (header), `pc_gaps = []`, `heal_gaps = []`, `partner = { trainer = 612, join_before = [1] }` | `rom:header 284 ev 273`; `rom:scr 318 entry 2` `SetHasPartner` @171; coord script 6 (85,8)-(85,10); Wayward Cave facts |
-| Elite Four + Champion | [[866],[867],[868],[869],[870]] | `pc_gaps = [1, 2, 3, 4]`, `leave_gaps = []`, `escape = false`; no heal, tutor or relearner | Elite Four facts |
+| Elite Four + Champion (B4-19) | [[866],[867],[868],[869],[870]] | `pc_gaps = [1, 2, 3, 4]`, `leave_gaps = []`, `escape = false`; no heal, tutor or relearner | Elite Four facts |
 
 Eterna Gym facts (rom header 67, events 66; scr 73):
 - No member is a sight trainer: objects 2 (19,12), 3 (3,12), 4 (2,8) have trainer type NONE. Fights start from scripts: coord (19,13) -> entry 7 (324); coord (3,13) or talking to obj 3 -> entry 8 (259); talking to obj 4 -> entry 5 (260). The coord events use var 0, which always matches (`sub_0203CC14`, `src/unk_0203C954.c:218`; `FieldSystem_TryGetVar`, `src/script_manager.c:432-433`, `:447-448`).
@@ -103,7 +103,7 @@ Wayward Cave facts (rom header 284, events 273; scr 318):
 - No walk-out at any gap: with 0x4091 == 1 neither entry 6 nor row 48 runs. The header allows Escape Rope and Dig (map type 3, escape bit 1), but the partner is set at every gap, so both are refused at every gap (`src/item_use_functions.c:943-945`; Dig `src/field_move_tasks.c:764`; Teleport `:717`).
 - Heal: after every won battle (the partner flag is set at every fight), `Party_HealAllMembers` on the save party (`src/encounter.c:197-199`; `src/item_use_pokemon.c:603-628`): HP to max for every member, fainted ones included, status cleared, PP restored. This is game behaviour, applied by the transition (section 5), not a setting. No PC tile (behaviour 0x83) in header 284.
 
-Elite Four facts:
+Elite Four facts (kept for batch 4: B4-19 restores the `[[gauntlet]]` entry in `data/kaizo/overrides.toml` and adds `league_facts` (`tools/kaizo/gauntlet_map.py`) to `derive_groups`. The entry: `name = "Elite Four + Champion"`, `trainers = [866, 867, 868, 869, 870]`, `source = orders_source = "rom:scr 188/190/192/194/196"`, `orders = [[[866], [867], [868], [869], [870]]]`, `leave_gaps = []`, `escape = false`, `pc_gaps = [1, 2, 3, 4]`, `pc_gaps_source = "rom:headers 178, 180, 182 (6,11), 184 (6,19) tile behaviour 0x83"`, `heal_gaps = []`, `locked_gaps = []`):
 - Order and doors. After a win the room script removes the exit door (`res/field/scripts/scripts_pokemon_league_aaron_room.s:24`) and returns control (`:30`). The exit warp leads to the next lift (`res/field/events/events_pokemon_league_aaron_room.json`: (8,2) -> `ELEVATOR_TO_BERTHA_ROOM`), and the lift's warp to the next room (`events_pokemon_league_elevator_to_bertha_room.json`: (4,2) -> `BERTHA_ROOM`). Entering a room adds the entrance door behind the player (`scripts_pokemon_league_aaron_room.s:62-69`). The Kaizo files have the same structure (rom: scr 188-196, init entry 2 `AddObject` @142, @180). The order is fixed and the player cannot walk back.
 - Bag and party menu. Each fight ends in `ReleaseAll` (rom: scr 188/190/194 @118, scr 192 @156), so the bag and the party menu are open at every gap (F1, F2). No script in scr 188-196 or the lift files disables the start menu.
 - PC. The lifts between rooms each have a tile with behaviour 0x83 `TILE_BEHAVIOR_PC` (`include/constants/field/map_tile_behaviors.h:142`), reachable from the lift's arrival: headers 178, 180, 182 at (6,11) and 184 at (6,19) (gaps 1-4; rom scan re-run 20 Nov; header 176 is the lift before Aaron). Vanilla `res/field/maps/data/map_data_306.bin`-`308.bin` hold 0 at those tiles: Kaizo added them. Facing it north runs `CommonScript_PC` (`src/overlay005/field_control.c:654-655`; `res/field/scripts/scripts_common.s:47`).
@@ -328,7 +328,7 @@ Both engines: the reference state type differs (`RefState`; `reference/engine.py
 - No `Support.NONE` row for gauntlet facts: the loader refuses an option without a transition (section 3), so no stored fact can lack one. Settings are never a coverage row.
 - A fight is supported only when every remaining fight of its chain is, in every form the facts allow (Wayward: multis, and 459, 460 as singles beside the partner). A later fight's refusal is listed as `chain: <fight>: <reason>` under that fight's own blocker group, so it is not counted twice.
 - The evolution line (`coverage.py:1115`) is replaced when evolution lands.
-- Backlog (`tools/kaizo/backlog.py`, regenerated): the 33 per-position gauntlet rows go to 0; 20 battles leave; 7 stay under their E2 format blockers; the 5 E4 + Champion fights enter as members with no new blocker.
+- Backlog (`tools/kaizo/backlog.py`, regenerated): the 33 per-position gauntlet rows go to 0; 20 battles leave; 7 stay under their E2 format blockers; the 5 E4 + Champion fights enter as members with no new blocker (B4-19 adds the group).
 
 ## 9. State and doubles-readiness
 
@@ -346,7 +346,7 @@ Both engines: the reference state type differs (`RefState`; `reference/engine.py
 | # | Group | Sections | Needed by |
 |---|---|---|---|
 | GT-1 | `data/gauntlet.py`: `OPTIONS`, kinds, per-gap values and caps, precedence, defaults; `GauntletFacts` replaces `Trainer.gauntlet_rules`; `Trainer.gauntlet` readers | 1, 3 | all |
-| GT-2 | Group facts: `orders` as fight lists, `leave_gaps`, `escape`, `pc_gaps`, `heal_gaps`, `locked_gaps`, `partner`, sources; `tools/kaizo/gauntlet_map.py` (the map read, with arrival check, doors, tables, coords); loader checks; E4 + Champion group; `rules`/`RULE_KEYS` removed; table field; vanilla and Kaizo rebuild | 1, 2 | all |
+| GT-2 | Group facts: `orders` as fight lists, `leave_gaps`, `escape`, `pc_gaps`, `heal_gaps`, `locked_gaps`, `partner`, sources; `tools/kaizo/gauntlet_map.py` (the map read, with arrival check, doors, tables, coords); loader checks; E4 + Champion facts (`league_facts`; the group entry moved to B4-19); `rules`/`RULE_KEYS` removed; table field; vanilla and Kaizo rebuild | 1, 2 | all |
 | GT-3 | Settings: flags, `--rules FILE`, `data/local.toml [run]`; `tools/rom/inputs.py` skips `[run]`; `data/local.example.toml` `[run]` block; re-run inputs `--dead`, `--swaps-left`, `--bench`; errors; report of origins | 3 | all |
 | GT-4 | `carry_out` per section 7, calling `party_held_item`; reference twin | 7 | all |
 | GT-5 | Fight start: `slot_of`, lead rule, `barred`, format per fight, `write_carry`; re-run root from the save with `--dead`, deaths left and root sit-outs; battle-start friendship; level-cap sit-out | 3, 5, 7 | all |
@@ -379,7 +379,7 @@ Owners named by the 18 Nov rulings: playout learn answer GT-16 = E3; evolution G
 | `tools/kaizo/overrides.py` | `RULE_KEYS` :71 removed; `Gauntlet` :137-141 gains the fact keys; `_gauntlets` :224-; drafting |
 | `tools/kaizo/resolve.py:522-527`, `:592-596` | fight numbering from `orders`; pair check after `trainer_record`; copy facts only |
 | `tools/kaizo/gauntlet_map.py` | new: the read-only map read |
-| `data/kaizo/overrides.toml:478-550` | fact keys with sources; `rules` removed; E4 + Champion group |
+| `data/kaizo/overrides.toml:478-550` | fact keys with sources; `rules` removed; E4 + Champion group (B4-19) |
 | `tools/build_tables.py` | trainer field; item field-effect table; MANIFEST_VERSION bump; vanilla and Kaizo rebuild |
 | `src/nuzline/engine/coverage.py` | `_check_kaizo_fields` :991-998; evolution line :1115 |
 | `tools/kaizo/backlog.py`, `docs/kaizo/mechanics_backlog.md` | `chain:` lines; regenerate |

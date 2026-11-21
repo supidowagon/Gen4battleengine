@@ -631,19 +631,7 @@ orders_source = "rom:header 284 events 273; scr 318 entries 2, 4, 5, 6; split: o
 leave_gaps_source = "rom:scr 318 entry 6 @271-311, @399 Warp 350 (310,608); coord (85,8)-(85,10) runs only while 0x4091 == 0, i.e. before fight 1"
 escape_source = "rom:header 284 map type 3 escape bit 1"
 
-# Elite Four and Champion: the five rooms in script order (not a drafted sheet group).
-[[gauntlet]]
-name = "Elite Four + Champion"
-trainers = [866, 867, 868, 869, 870]
-source = "rom:scr 188/190/192/194/196"
-orders = [[[866], [867], [868], [869], [870]]]
-leave_gaps = []
-escape = false
-pc_gaps = [1, 2, 3, 4]
-heal_gaps = []
-locked_gaps = []
-orders_source = "rom:scr 188/190/192/194/196"
-pc_gaps_source = "rom:headers 178, 180, 182 (6,11), 184 (6,19) tile behaviour 0x83"
+# Elite Four + Champion: moved to batch 4 (B4-19; facts in docs/gauntlet-design.md).
 
 # draft totals: 51 trick_room, 3 area conflicts, 1 gravity, 9 gauntlets, 0 unsettled gauntlets
 

@@ -1691,6 +1691,10 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   resolved `opponent_2` pair and every resolved pair inside a group is a two-id fight in at least one order, and
   `MANIFEST_VERSION` is 44. `overrides.py` drops `RULE_KEYS` and `rules`; a group with no facts (a draft) has
   `facts = None`. Elite Four + Champion trainers become gauntlet members, so coverage refuses them until GT-18.
+  Moved to batch 4 (manager ruling 21 Nov): batch 3 closes early and the chain groups (GT-4b, 5, 6, 7, 9, 18) go to
+  batch 4, so a batch-3 E4 + Champion group would refuse 866-870, runnable on main (a regression). The `[[gauntlet]]`
+  entry is removed and `derive_groups` no longer emits it; `league_facts` stays (tested on the ROM) and the entry's
+  facts are in `docs/gauntlet-design.md` section 2 (Elite Four facts). B4-15/B4-19 restore the group with the chain.
   Not modelled (stated, not guessed): the push direction of entrance and stairs warp tiles (a warp tile is a step into
   the warp, as in the oracle), the heal and PC tiles outside the group's own source list, coords whose variable the
   caller does not know (recorded in `Walk.crossed`).

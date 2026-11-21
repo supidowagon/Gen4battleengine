@@ -1083,7 +1083,9 @@ LEAGUE_HEADERS = tuple(range(175, 187))
 
 def league_facts(maps: RomMaps) -> dict:
     """The five rooms in script order; the PC gaps are the lifts after rooms 1..n-1 (warp 0 of a
-    room leads to its lift) whose PC tile can be reached from the lift's arrival."""
+    room leads to its lift) whose PC tile can be reached from the lift's arrival. Not a group of
+    ``derive_groups`` yet: batch 4 (B4-19) adds the Elite Four + Champion group with the chain
+    rules (``docs/gauntlet-design.md``)."""
     rooms = []
     for s in LEAGUE_SCRIPTS:
         found = [h for h in LEAGUE_HEADERS if maps.header(h).scripts == s]
@@ -1195,13 +1197,6 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
     way = wayward_facts(maps, scripts)
     out["Wayward Cave"] = _facts(
         way["orders"], way["leave_gaps"], escape(maps, WAYWARD_HEADER), partner=way["partner"]
-    )
-    league = league_facts(maps)
-    out["Elite Four + Champion"] = _facts(
-        league["orders"],
-        league["leave_gaps"],
-        escape(maps, league["escape_header"]),
-        pc_gaps=league["pc_gaps"],
     )
     return out
 
