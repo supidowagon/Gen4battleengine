@@ -20,11 +20,17 @@
 #   run.sh first writes /work/<name>/reads (the capture dir a compare reads; empty for a
 #   capture), then /work/<name>/times.txt: START, SYNC_RC=<n> (a failed uv sync stops here,
 #   without ALL_DONE), CAPTURE_START or COMPARE_START, CAPTURE_RC=<n> <epoch> or
-#   COMPARE_RC=<n> <epoch>, ALL_DONE.
+#   COMPARE_RC=<n> <epoch>, ALL_DONE. Before the job run.sh checks /proc/sys/vm/max_map_count: under
+#   1048576 (a pod with 65530 aborts JAX processes, rc 134) or unreadable ends times.txt with
+#   MAP_COUNT_LOW <value|none> <epoch>, without ALL_DONE.
 #   Env: SNAP_GATE_GB (default 88): run.sh starts the capture or compare only while container
 #   memory is under it; pass the shape's SNAP_GATE_GB (176 on a 256 GB pod). Memory is read by pod/gate.sh's
 #   cgmem (cgroup v2, else v1), copied into run.sh; with neither readable times.txt ends
-#   GATE_NO_CGROUP_MEMORY <epoch>, without ALL_DONE.
+#   GATE_NO_CGROUP_MEMORY <epoch>, without ALL_DONE. The same SNAP_GATE_GB is snap_compare's
+#   --gate-gb: a part starts only while container memory + the live parts' reserve + its own
+#   expected peak stays at or under it. SNAP_WORKERS (default 16): snap_compare's --workers, the
+#   parts run at once (1: one after another). Both are passed only when the snap_compare that
+#   runs (the commit's, or --tool's) has --workers; an older one runs its parts one by one.
 # fetch: receives what the pod sends (DAYBOX.md "Snapshot compare", Fetch) into
 #   $RENT/out/<name>/fetch-<epoch>/ and unpacks every .tgz received.
 set -euo pipefail
@@ -75,6 +81,7 @@ check_run_name "$NAME"
 TSHA=""; [ -z "$TOOL" ] || TSHA=$(git -C "$REPO" rev-parse --verify "$TOOL^{commit}") || refuse "unknown --tool commit $TOOL"
 DECOMP=$(git -C "$REPO/external/pokeplatinum" rev-parse HEAD) || refuse "no decomp checkout at $REPO/external/pokeplatinum"
 GATE="${SNAP_GATE_GB:-88}"; echo "$GATE" | grep -qE '^[1-9][0-9]*$' || refuse "SNAP_GATE_GB must be a whole number" "$GATE"
+WORKERS="${SNAP_WORKERS:-16}"; echo "$WORKERS" | grep -qE '^[1-9][0-9]*$' || refuse "SNAP_WORKERS must be a whole number of at least 1" "$WORKERS"
 O="$RENT/out/$NAME"; [ -e "$O" ] && refuse "$O exists; names are used once"
 
 FORBID='\.(nds|sav|dsv|ds[0-9]|zip|xlsx|ods)$|(^|/)\.cache/|(^|/)backups?/|desktop|local\.toml'
@@ -105,12 +112,17 @@ deny "tables entry outside the allowed data/ paths" "$T" -vE "$TABLE_ALLOW"
 tar -cf "$O/payload.tar" -C "$O" "${FILES[@]}"
 
 W="/work/$NAME"
+# --workers/--gate-gb only for a snap_compare that has them (older commits run their parts serially).
+SRC="$SHA"; [ -z "$TSHA" ] || SRC="$TSHA"; PAR=""
+SC=$(git -C "$REPO" show "$SRC:tools/snap_compare.py") || refuse "no tools/snap_compare.py at $SRC"
+if [[ "$SC" == *'add_argument("--workers"'* ]]; then PAR=" --workers $WORKERS --gate-gb $GATE"
+else echo "NOTE: tools/snap_compare.py at ${SRC:0:8} has no --workers: its parts run one after another"; fi
 if [ "$MODE" = capture ]; then
   SCRIPT="tools/snap_compare.py"; [ -z "$TSHA" ] || SCRIPT="$W/tool/tools/snap_compare.py"
-  JOB="CAPTURE"; CMD="uv run --frozen python \"$SCRIPT\" capture \"\$W/snap\" 0-199 --repo \"\$W/repo\" --commit $SHA -v > \"\$W/capture.log\" 2>&1"
+  JOB="CAPTURE"; CMD="uv run --frozen python \"$SCRIPT\" capture \"\$W/snap\" 0-199 --repo \"\$W/repo\" --commit $SHA$PAR -v > \"\$W/capture.log\" 2>&1"
 else
   JOB="COMPARE"; AN=""; [ -z "$ALLOW" ] || AN=" --allow-new $ALLOW"
-  CMD="uv run --frozen python tools/snap_compare.py compare \"$CAP\" 0-199 --repo \"\$W/repo\" --commit $SHA$AN -v > \"\$W/compare.log\" 2>&1"
+  CMD="uv run --frozen python tools/snap_compare.py compare \"$CAP\" 0-199 --repo \"\$W/repo\" --commit $SHA$AN$PAR -v > \"\$W/compare.log\" 2>&1"
 fi
 cat > "$O/run.sh" <<EOS
 #!/bin/bash
@@ -120,6 +132,7 @@ W="$W"; printf '%s\n' "$CAP" > "\$W/reads"; cd "\$W/repo"
 $(declare -f cgmem)
 gate() { local b; while b=\$(cgmem current) || { echo "GATE_NO_CGROUP_MEMORY \$(date +%s)" >> "\$W/times.txt"; exit 1; }; [ \$(( b / 1000000000 )) -ge $GATE ]; do echo "gate wait \$(date +%T)"; sleep 30; done; }
 echo "START \$(date +%s)" > "\$W/times.txt"
+m=\$(cat /proc/sys/vm/max_map_count 2>/dev/null); [ "\${m:-0}" -ge 1048576 ] 2>/dev/null || { echo "MAP_COUNT_LOW \${m:-none} \$(date +%s)" >> "\$W/times.txt"; exit 1; }
 (uv sync --frozen -q) > "\$W/sync.log" 2>&1; rc=\$?; echo "SYNC_RC=\$rc \$(date +%s)" >> "\$W/times.txt"; [ "\$rc" = 0 ] || exit 1
 gate; echo "${JOB}_START \$(date +%s)" >> "\$W/times.txt"
 $CMD; echo "${JOB}_RC=\$? \$(date +%s)" >> "\$W/times.txt"
