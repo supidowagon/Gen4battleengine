@@ -126,13 +126,20 @@ def test_unknown_battle_format_is_refused_explicitly(tables, names):
 
 
 @pytest.mark.parametrize(
-    ("name", "fmt"), [("Mars", "multi"), ("Ismael", "double_two_trainer"), ("Jack", "multi")]
+    ("name", "fmt", "tid"),
+    [("Mars", "multi", None), ("Ismael", "double_two_trainer", None), ("Grunt", "multi", 835)],
 )
 @pytest.mark.fullset
-def test_multi_and_two_trainer_battles_are_refused(tables, names, name, fmt):
-    # Mars @ Spear Pillar (tag), Artist Ismael (restaurant pair), Bug Catcher Jack (Eterna
-    # Forest, Cheryl)
-    t = next(t for t in load_trainers(INTERMEDIATE) if t.name == name and t.format == fmt)
+def test_multi_and_two_trainer_battles_are_refused(tables, names, name, fmt, tid):
+    # Mars @ Spear Pillar (tag), Artist Ismael (restaurant pair), Iron Island grunt 835
+    # (StartTrainerBattle 835, 836 beside Riley: a scripted pair on a walking-partner map). A
+    # lone enemy on a walking-partner map is a single (encounter.c:738-739), so Bug Catcher
+    # Jack (Eterna Forest) is no longer one.
+    t = next(
+        t
+        for t in load_trainers(INTERMEDIATE)
+        if t.name == name and t.format == fmt and tid in (None, t.id)
+    )
     r = check_opponent(tables, names, t, build_trainer_party(t, _inter()), 0)
     assert f"{name}: a {fmt} battle (battle format UNSUPPORTED)" in r.missing
     assert r.level == Support.NONE

@@ -1197,9 +1197,9 @@ source = "user, 2026-11-07"
 
 # Stark Mountain slots reused for Galactic HQ trainers: zone events 257 (map header 264
 # STARK_MOUNTAIN_ROOM_2, unchanged from vanilla) place them on a map whose script (scr_seq
-# 285) runs SetHasPartner with Buck 611 (a multi, K2a Ruling 3), and the patched Galactic HQ
-# events place them where no partner walks (PKCalc pairs 556 and 569 by sight, 561 is a
-# one-trainer double).
+# 285) runs SetHasPartner with Buck 611 (fought alone there: single, or double for 561's
+# double header when it spots the player; E3-B2-34), and the patched Galactic HQ events place
+# them where no partner walks (PKCalc pairs 556 and 569 by sight, 561 is a one-trainer double).
 
 # ROM: zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 556 Miranda beside partner Buck 611; zone events 298 (map header 310 GALACTIC_HQ_B2F) place it with no partner
 [fields.556]

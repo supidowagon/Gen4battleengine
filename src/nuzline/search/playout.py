@@ -447,15 +447,15 @@ def finish_turn(
 ) -> tuple[BattleState, jnp.ndarray]:
     """``(state, refused)``: ``send_replacements``, then while the player needs a
     replacement (``SLOTS - 1`` passes at most) ``replacement_pass`` with
-    ``replacement_policy``'s slot. The turn's learn-move prompts are resolved first
-    (``resolve_learns``), as ``TurnEnd`` runs them before ``ReplaceFainted``; the ones a newcomer's
-    hazard faint leaves inside the replacement loop (E3-B2-21) are resolved at its end: the
-    answers do not change the opponent's pick (it never reads the move list,
-    ``ai.replacement.post_ko_switch_in``), and ``resolve_learns`` answers give-up."""
-    state = resolve_learns(tables, state)
+    ``replacement_policy``'s slot. The turn's learn work is resolved first
+    (``resolve_learns``), as ``TurnEnd`` runs it before ``ReplaceFainted``; the work a newcomer's
+    hazard faint leaves in ``send_replacements`` or the passes (E3-B2-21) is resolved at the end:
+    the answers do not change the opponent's pick (it never reads the move list,
+    ``ai.replacement.post_ko_switch_in``), and ``resolve_learns`` answers give-up. A finished
+    battle keeps its learn work at both resolves (ruling D8)."""
+    state = _select(state.over != 0, state, resolve_learns(tables, state))
     state, refused = send_replacements(tables, state, ai_switched, power_mul)
     state, refused = _replace_while_needed(tables, state, refused, SLOTS - 1)
-    # A battle-ending payout leaves its prompts (ruling D8).
     state = _select(state.over != 0, state, resolve_learns(tables, state))
     return state, refused
 
@@ -624,6 +624,10 @@ def _resolve_pending(tables: Tables, state: BattleState, first_action):
     # A newcomer that faints on entry (Stealth Rock) leaves it pending again: finish_turn's
     # loop, with this pass counted in its SLOTS - 1.
     state, refused = _replace_while_needed(tables, state, refused, SLOTS - 2)
+    # The settle's send and the passes pay for a newcomer the hazards faint (``replace`` marks
+    # the work, no scan); TurnEnd answers it before the next turn (bcp.c:1844-1850), so before
+    # the first turn's decisions. A finished battle keeps it (ruling D8).
+    state = _select(state.over != 0, state, resolve_learns(tables, state))
     return state, jnp.where(pending, -1, first_action).astype(_I32), refused
 
 
@@ -856,6 +860,8 @@ def refusal_reason(
         if reason:
             return reason
         first = jnp.int32(-1)
+    if int(state.over) == 0:  # the root's hazard-faint learn work, as _resolve_pending
+        state = resolve_learns(tables, state)
     for turns in range(max_turns):
         if int(state.over) != 0:
             return None

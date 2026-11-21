@@ -217,7 +217,11 @@ class Trainer:
     "multi" (the player fights beside a partner, whose possible teams are ``partner``;
     None: a partner is present but the scripts do not say which, Kaizo only) from the field
     scripts (``tools/battle_scripts.py``). ``opponent_2`` is the other
-    enemy of a two-trainer or tag battle, else None.
+    enemy of a two-trainer or tag battle, else None. ``walking_partner`` is the trainer ids
+    of the walking partner a map's script can set where the trainer is placed: the fight may
+    be fought under the partner flag. The post-win heal (``encounter.c:197-199``) applies
+    only while the escort is active (``SetHasPartner`` runs in its own script, e.g.
+    ``scripts_eterna_forest.s:57-58``), a run input; empty off a walking-partner map.
 
     Kaizo fields (plan K2b Task 14; all defaulted to vanilla's reading): ``label`` names
     one of several trainers sharing a name; ``pid_routine`` is "vanilla" when
@@ -250,6 +254,7 @@ class Trainer:
     format: str
     opponent_2: int | None = None
     partner: tuple[PartnerVariant, ...] | None = ()
+    walking_partner: tuple[int, ...] = ()
     label: str | None = None
     pid_routine: str | None = "vanilla"
     player_starter: int | None = None
@@ -330,6 +335,10 @@ def load_trainers(dir: Path) -> list[Trainer]:
         raise ValueError(
             f"{Path(dir) / 'trainers.json'} has no battle terrain: re-run tools/extract_decomp.py"
         )
+    if rows and "walking_partner" not in rows[0]:
+        raise ValueError(
+            f"{Path(dir) / 'trainers.json'} has no walking_partner: re-run tools/extract_decomp.py"
+        )
     return [
         Trainer(
             id=t["id"],
@@ -348,6 +357,7 @@ def load_trainers(dir: Path) -> list[Trainer]:
             else tuple(
                 PartnerVariant(p["trainer"], p["starter"], p["player_gender"]) for p in t["partner"]
             ),
+            walking_partner=tuple(t["walking_partner"]),
             label=t.get("label"),
             pid_routine=t.get("pid_routine", "vanilla"),
             player_starter=t.get("player_starter"),

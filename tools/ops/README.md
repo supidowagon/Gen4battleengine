@@ -6,10 +6,10 @@ Environment variables (optional): `NUZLINE_REPO` (default: the main checkout, fo
 
 ## Watching the streams (PowerShell)
 
-- `watchdog.ps1`: per stream, last-commit age and uncommitted files; big Python processes; free RAM; the fast-tier lock (`$NUZLINE_SCRATCH/fast_tier.lock`). Flags: a stream without a commit for 120 min, a process over 12 GB or 150 min, under 3 GB free RAM, a dead or stale lock, and no process plus no commit for 90 min on every stream. `-FixLock` removes a lock whose owner is dead. `-Streams <path>` overrides the stream list.
-- `watch_flags.ps1`: runs the watchdog every `-EveryMin` minutes (default 10) and exits only on a flag for the managing session, or when the lock goes away. Flags that a progressing fast tier explains (lock held and an `ft_*.log` written in the last 150 min) are ignored. `-HoldUntil <time>` silences "has not committed" and "may have stopped" until then.
+- `watchdog.ps1`: per stream, last-commit age and uncommitted files; big Python processes; free RAM; the fast-tier lock (`-Lock`, default `$NUZLINE_SCRATCH/fast_tier.lock`). Flags: a stream without a commit for 120 min, a process over 12 GB or 150 min, under `-MinFreeGB` (default 1) GB free RAM, a dead or stale lock, and no process plus no commit for 90 min on every stream. `-FixLock` removes a lock whose owner is dead. `-Streams <path>` overrides the stream list.
+- `watch_flags.ps1`: runs the watchdog every `-EveryMin` minutes (default 10) and exits only on a flag for the managing session, or when the lock goes away. Flags that a progressing fast tier explains (lock held and an `ft_*.log` written in the last 150 min) are ignored. `-Streams`, `-Lock` and `-MinFreeGB` pass through. `-HoldUntil <time>` silences "has not committed" and "may have stopped" until then.
 
-Stream list: `$NUZLINE_SCRATCH/manager/streams.json`, edited by hand at every stream branch or worktree change. `worktree` and `logs` are relative to the repo; `logs` (optional) is the folder that receives the stream's local `ft_*.log` files.
+Parameters, lock path and the stream list's format: `docs/process.md` section 6. Stream list: `$NUZLINE_SCRATCH/manager/streams.json`, edited by hand at every stream branch or worktree change. `worktree` and `logs` are relative to the repo; `logs` (optional) is the folder that receives the stream's local `ft_*.log` files.
 
 ```json
 [
@@ -19,20 +19,30 @@ Stream list: `$NUZLINE_SCRATCH/manager/streams.json`, edited by hand at every st
 ]
 ```
 
+## Off-site copy (Git Bash on the PC)
+
+- `offsite.sh [--dry-run]`: pushes every local branch to the private remote `offsite` and mirrors the allow-listed state files under `_scratch/` into `_scratch/offsite/state/` (branch `scratch-state`), re-checked against the hard exclusions before each commit. `--list` prints the selection, `--check <dir>` checks a folder. Refuses (exit 2) a push URL that names `origin`, a repo `gh` does not report private, a mirror setting; exit 4 on a rejected branch or failed push. What it holds, the refusals and how to restore: `docs/process.md` section 12, Off-site copy.
+
 ## Test pod and nightly (Git Bash on the PC, bash on the pod)
 
 Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` section 5.
 
 - `common.sh`: sourced by the PC-side scripts; main checkout and scratch paths, the table upload rules (`TABLE_ALLOW`, `TABLE_DENY`), run-name check.
-- `build_tables.sh --here | <commit>`: builds the vanilla and Kaizo tables in place, or for a commit in a temporary worktree packed into `_scratch/rent/tables_<short>.tar.xz` (only `TABLE_ALLOW` files). Local inputs come from the main checkout. `NUZLINE_PY` selects an existing venv's python; default `uv run --group rom python`.
+- `build_tables.sh --here | <commit>`: builds the vanilla and Kaizo tables in place, or for a commit in a temporary worktree packed into `_scratch/rent/tables/tables_k<key16>.tar.xz` (only `TABLE_ALLOW` files) and copied to `_scratch/rent/tables_<short>.tar.xz`; when `table_key.py`'s key already has an archive the build is skipped (`tables_<short>.key` and `tables/index.txt` record commit and key). Local inputs come from the main checkout. `NUZLINE_PY` selects an existing venv's python; default `uv run --group rom python`.
 - `nightly_brief.md`: the brief for the nightly run.
 - `day/push_bin.sh`: once per pod (safe to repeat); sends `day/bootstrap.sh` and prints the exec-pod body that runs it in `/work/_bin/new`.
 - `day/bootstrap.sh`: pod side, once per pod; apt tools, uv, Python 3.12, runpodctl checksum, decomp clone; ends with `BOOTSTRAP_OK`.
-- `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`; refuses forbidden files and tables outside `TABLE_ALLOW`; sends; prints the exec-pod body.
+- `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`, `day/pod/weights.py`, `day/pod/weights.txt` (from HEAD of the checkout that runs it, not from `<commit>`: run it from a checkout at `main`); refuses forbidden files, tables outside `TABLE_ALLOW` and pod scripts that differ from `main`'s; writes `GATE_VERSION`, `POD_SCRIPTS` and `POD_WEIGHTS` into `meta.env`; sends; prints the exec-pod body.
+- `day/podcheck_body.sh`: prints the exec-pod body that runs `day/pod/podcheck.sh` (HEAD's copy, with `gate.sh`) on the pod before a pack: active runs with their `GATE_VERSION` and `POD_SCRIPTS`, memory and limit, claims, `PODCHECK OK` or `PODCHECK MIXED`.
+- `day/stop_body.sh <run>`: prints the exec-pod body that runs `day/pod/stop.sh <run>` (HEAD's copy) on the pod: kills every process of the run (setup, runner, notify, chunks, anything with its working folder in the run), deletes its claims, writes `STOPPED`.
 - `day/collect.sh <run> <code>`: receives a run's `results.tgz` and unpacks it.
 - `day/nightly_files.txt`: the nightly test list.
-- `day/pod/setup.sh`: checkout, tables, env, collection, chunked units; starts the runner.
-- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
+- `day/weights_from_agg.py <weights.txt> <agg.txt>...`: prints `weights.txt` with its generated part rebuilt from run results (one line per measured file); DAYBOX.md, Send a run step 2.
+- `day/pod/setup.sh`: checkout, tables, env, collection, chunked units, each unit's expected peak (`out/<unit>.w`); starts the runner.
+- `day/pod/weights.py`, `day/pod/weights.txt`: list-line parsing and each unit's expected peak; the tracked table of measured peaks of heavy tests and files, each with the run it was measured in.
+- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate, the expected-peak gate (container memory + the reserve + the next unit's expected peak under `GATE_GB`; the reserve: every gap, expected peak minus RSS, of a live unit on the pod weighing `RESERVE_FULL_GB` or more, and for the lighter ones the larger of their `RESERVE_TOP` largest gaps and `RESERVE_PCT` % of their weight sum minus their RSS; with no live unit on the pod: memory under `GATE_GB` and memory + expected peak under `KILL_GB`, a unit that can never fit alone at once, or after `IDLE_WAIT_S`), checked and started under the pod-wide lock `RUNNER_LOCK`; a head that does not fit lets a later unit of its run that fits start, and after `CLAIM_S` claims the pod so other runs start only units that fit beside it until it has started, and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
+- `day/pod/gate.sh`: sourced by `runner.sh`, `setup.sh`, `status.sh`, `agg.sh`, `podcheck.sh`; the gate's arithmetic and claims (`wgb`, `podgate`, `admit`, `choose`, `claim_state`, `claim_write`, `unit_overdue`) and `cgmem`, the container memory reader (cgroup v2, else v1).
+- `day/pod/podcheck.sh`: the pod check (`day/podcheck_body.sh`).
 - `day/pod/unit.sh`: one pytest process over one unit's ids.
 - `day/pod/status.sh`: progress, memory, collection failures, failing units, other active runs.
 - `day/pod/notify.sh`: started by the exec-pod body before `setup.sh`; offers the first-failure beacon and the results under the run's codes `WATCH_F` and `WATCH_D`.

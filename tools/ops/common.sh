@@ -30,3 +30,44 @@ check_run_name() {
 
 # Windows path quoted for PowerShell.
 psq() { printf "'%s'" "$(cygpath -w "$1" | sed "s/'/''/g")"; }
+
+# pod_bin <checkout> <commit> <dir>: tools/ops/day/pod's *.sh, weights.py and weights.txt as
+# committed at <commit> of <checkout>, LF, into <dir> (the payload's bin/).
+pod_bin() { local s; s=$(mktemp -d "$RENT/podsrc.XXXXXX") || return 1; mkdir -p "$3"
+  git -C "$1" -c core.autocrlf=false archive --format=tar "$2" tools/ops/day/pod | tar -xf - -C "$s" || { rm -rf "$s"; return 1; }
+  for f in "$s"/tools/ops/day/pod/*.sh "$s"/tools/ops/day/pod/weights.py "$s"/tools/ops/day/pod/weights.txt; do
+    tr -d '\r' < "$f" > "$3/$(basename "$f")" || { rm -rf "$s"; return 1; }; done
+  rm -rf "$s"; }
+# pod_sum <dir>: POD_SCRIPTS, sha256 over the sha256sum lines of <dir>'s *.sh and weights.py (the
+# files that decide gate behaviour) sorted by name. pod_wsum <dir>: POD_WEIGHTS, sha256 of weights.txt.
+pod_sum() { (cd "$1" && LC_ALL=C ls -- *.sh weights.py | LC_ALL=C sort | while read -r f; do sha256sum "$f"; done | sha256sum | cut -d' ' -f1); }
+pod_wsum() { sha256sum "$1/weights.txt" | cut -d' ' -f1; }
+# exec_body <tail> <name>=<file>...: prints the exec-pod JSON body (one line) that writes each
+# <file> to /work/_podcheck/<name> on the pod, byte for byte, and then runs <tail> under sh. The
+# exec-pod tool refuses an argv item over 4096 characters and an argv over 256 items, so the files
+# travel base64-encoded, cut into chunks of at most 4000 characters, as extra
+# arguments after the script: ["sh","-c",<script>,"_","=<name>",<chunk>,...]. The script holds no
+# double quote or backslash, so the body is valid JSON as printed. Refuses (exit 3) a body that
+# would break either limit. Chunks are a multiple of 4 long, so none starts with base64's '='
+# padding and only the markers do.
+exec_body() {
+  local tail="$1" a n f b c names="" script items="" k=0 lim=4000; shift
+  for a in "$@"; do n=${a%%=*}; f=${a#*=}; names="$names $n"
+    b=$(base64 -w0 < "$f") || { echo "REFUSED: cannot read $f"; exit 3; }
+    items="$items,\"=$n\""; k=$((k + 1))
+    while [ -n "$b" ]; do c=${b:0:$lim}; b=${b:$lim}; items="$items,\"$c\""; k=$((k + 1)); done; done
+  script="W=/work/_podcheck; mkdir -p \$W || exit 1; f=/dev/null; for a; do case \$a in =*) f=\$W/\${a#=}.b64; : > \$f || exit 1;; *) printf %s \$a >> \$f || exit 1;; esac; done; for n in$names; do base64 -d \$W/\$n.b64 > \$W/\$n.new && mv -f \$W/\$n.new \$W/\$n && rm -f \$W/\$n.b64 || exit 1; done; $tail"
+  case "$script" in *'"'*|*'\'*) echo "REFUSED: exec body script holds a double quote or backslash"; exit 3;; esac
+  [ "${#script}" -le "$lim" ] || { echo "REFUSED: exec body script is ${#script} characters, over $lim"; exit 3; }
+  [ $((k + 4)) -le 256 ] || { echo "REFUSED: exec body has $((k + 4)) argv items, over 256"; exit 3; }
+  echo "{\"command\":[\"sh\",\"-c\",\"$script\",\"_\"$items],\"timeoutSeconds\":25}"; }
+# pod_main_check <checkout>: the pod scripts a payload carries come from the checkout that runs
+# pack.sh or podcheck_body.sh (its HEAD), not from the commit under test; refuse (exit 3) unless
+# that HEAD's tools/ops/day/pod equals local main's. PACK_OFF_MAIN_POD=1: a road test of an ops
+# branch only.
+pod_main_check() { [ "${PACK_OFF_MAIN_POD:-}" = 1 ] && return 0
+  git -C "$1" diff --quiet main HEAD -- tools/ops/day/pod 2>/dev/null && return 0
+  echo "REFUSED: tools/ops/day/pod at this checkout's HEAD differs from main's (or there is no main)."
+  echo "The pod scripts come from the checkout that runs this script, not from the commit under test:"
+  echo "run it from a checkout at main (the main checkout). PACK_OFF_MAIN_POD=1 overrides, for a road test of an ops branch only."
+  git -C "$1" diff --stat main HEAD -- tools/ops/day/pod 2>/dev/null; exit 3; }

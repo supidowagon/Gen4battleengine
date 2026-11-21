@@ -1323,6 +1323,12 @@ HP_RESTORED_ALL, HP_RESTORED_HALF, HP_RESTORED_QUARTER = 0xFF, 0xFE, 0xFD
 # only while every holder has this param: ``game_constants`` asserts it for every game.
 QUICK_CLAW_PARAM = 20
 QUICK_CLAW_MODULUS = 100 // QUICK_CLAW_PARAM  # % 5
+# The decomp battle effects that put a held item on another battler during a turn (matched
+# against ``Tables.move_ai_effect``): STEAL_HELD_ITEM
+# (Thief, Covet; ``BtlCmd_TryStealItem``, battle_script.c:5093-5126) and SWITCH_HELD_ITEMS
+# (Trick, Switcheroo; ``BtlCmd_TrySwapItems``, :6336-6360), each between the attacker and the
+# defender on the field (``order.qc_transfer``).
+ITEM_TRANSFER_EFFECTS = (105, 177)
 
 # Focus Band's hold param (res/items/data/focus_band.json ``effectParam`` 10, the only
 # ``HOLD_EFFECT_MAYBE_ENDURE`` item): ``RandNext() % 100 < itemPower`` (bcp.c:3387,

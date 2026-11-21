@@ -212,19 +212,35 @@ def unplaced_ids(trainers: list[dict], trainer_maps: Mapping[int, list[int]]) ->
     return [t["id"] for t in trainers if t["party"] and not trainer_maps.get(t["id"])]
 
 
+def walk_partner(ids: list[int]) -> list | None:
+    """The ``partner`` of a multi fought beside the walking partner ``ids``
+    (``walking_partner``): one id names it, several leave it ``None`` (present, not
+    evaluated; ``fill_pk_partners`` fills it from calc)."""
+    if len(ids) == 1:
+        return [{"trainer": ids[0], "starter": None, "player_gender": None}]
+    return None
+
+
 def user_format(fields: Mapping[str, object], t: Mapping[str, Any]) -> dict:
-    """``format``, ``opponent_2`` and ``partner`` from the user's ``[fields.<id>] format``
-    answer (``load_overrides`` takes a concrete format from a ``"user, <date>"`` source
-    only). Only a multi has a partner: ``partner`` when the answer names one, else the ROM
-    trainer's (``None``: present, not evaluated)."""
+    """``format``, ``opponent_2``, ``partner`` and ``walking_partner`` from the user's
+    ``[fields.<id>] format`` answer (``load_overrides`` takes a concrete format from a
+    ``"user, <date>"`` source only). Only a multi has a partner: ``partner`` when the
+    answer names one, else the ROM trainer's; with none there and a walking partner, that
+    one (``None``: present, not evaluated). A format that is not multi drops the walking
+    partner too: conservative, no heal is assumed."""
     fmt = fields["format"]
+    out = {"format": fmt, "opponent_2": fields.get("opponent_2")}
     if fmt != "multi":
-        partner: list | None = []
-    elif "partner" in fields:
+        out.update(partner=[], walking_partner=[])
+        return out
+    if "partner" in fields:
         partner = [{"trainer": fields["partner"], "starter": None, "player_gender": None}]
     else:
         partner = t.get("partner")
-    return {"format": fmt, "opponent_2": fields.get("opponent_2"), "partner": partner}
+        if partner == [] and t["walking_partner"]:
+            partner = walk_partner(t["walking_partner"])
+    out["partner"] = partner
+    return out
 
 
 def with_overrides(
@@ -584,13 +600,22 @@ def trainer_record(
         fmt_source = fsrc
     elif tid in ctx.sight and t["format"] != UNKNOWN_FORMAT:
         pair, header = ctx.sight[tid]
-        if t["format"] == "single":
+        if t["format"] == "single" and t["walking_partner"]:
+            # A sight pair on a walking-partner map: multi beside the walking partner
+            # (scripts_battles.s:192-213 with the partner flag, encounter.c:730-735).
+            out["format"] = "multi"
+            out["partner"] = walk_partner(t["walking_partner"])
+        elif t["format"] == "single":
             out["format"] = "double_two_trainer"
         elif not (t["format"] == "multi" and t["opponent_2"] is None):
             raise ResolveError(f"trainer {tid}: sight pair {pair} beside ROM format {t['format']}")
         out["opponent_2"] = pair  # a walking-partner multi keeps multi (K2a Ruling 3)
         fmt_source = SIGHT_CITE.format(header=header)
+        if out["partner"]:
+            sources["partner"] = fmt_source
     sources["format"] = sources["opponent_2"] = fmt_source
+    if out["walking_partner"]:
+        sources["walking_partner"] = fmt_source
 
     pk_start = _pk_starter(label[0]) if label is not None else None
     sheet_start = _joined(h["tags"].get("player_starter") for _, h in sheet.get(tid, []))

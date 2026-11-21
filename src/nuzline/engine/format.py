@@ -72,3 +72,37 @@ def party(fmt: Format, b):
     if isinstance(b, int):
         return fmt.party_of[b]
     return jnp.asarray(fmt.party_of)[b]
+
+
+def party_sides(fmt: Format) -> tuple[int, ...]:
+    """The side of each party: the side of the battlers it sends to (``party_of``). SINGLES and
+    DOUBLES ``(0, 1)``; TWO_TRAINERS ``(0, 1, 1)``; MULTI ``(0, 1, 0, 1)``. Pure Python on the
+    static format."""
+    return tuple(side_of(fmt.party_of.index(p)) for p in range(fmt.P))
+
+
+def side_out_parties(fmt: Format, side: int) -> tuple[int, ...]:
+    """The parties whose total emptiness ends the battle against ``side`` (CheckBattleOver,
+    battle_controller_player.c:4181-4262, branches a / b / c): the player's party 0; the
+    opponent's party 1 in singles, else the sorted distinct parties of battlers 1 and 3 (DOUBLES
+    party 1; TWO_TRAINERS parties 1 and 2; MULTI parties 1 and 3). Pure Python on the static
+    format."""
+    if side == 0:
+        return (0,)
+    if fmt.B == 2:
+        return (1,)
+    return tuple(sorted({fmt.party_of[1], fmt.party_of[3]}))
+
+
+def blackout_parties(fmt: Format, b: int) -> tuple[int, ...]:
+    """The parties ``BtlCmd_CheckBlackOut`` (battle_script.c:8846-8915) sums for battler ``b``:
+    its own party in singles and DOUBLES; TWO_TRAINERS player battlers party 0, enemy battlers
+    parties 1 and 2; MULTI battler 0 party 0, battler 2 parties 2 and 0, enemy battlers parties
+    1 and 3."""
+    if fmt.B == 2 or fmt == DOUBLES:
+        return (party(fmt, b),)
+    if fmt == TWO_TRAINERS:
+        return (0,) if b % 2 == 0 else (1, 2)
+    if b % 2 == 1:
+        return (1, 3)
+    return (0,) if b == 0 else (2, 0)

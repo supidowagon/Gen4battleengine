@@ -39,6 +39,7 @@ from tools.battle_scripts import (
     battle_structures,
     has_partner,
     is_var,
+    lone_walk_formats,
     placed_enemies,
     structure_fields,
     var_ids,
@@ -1348,12 +1349,18 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       otherwise: trainerproc (``tools/dataproc/src/trainerproc.c``) turns it into
       ``TrainerHeader.battleType`` (``BATTLE_TYPE_DOUBLES`` or 0). The map scripts
       override it (``tools/battle_scripts.py``, plan Rulings 2-5): "multi" for an enemy
-      of a tag battle or one placed on a walking-partner map, else
+      of a tag battle or of a scripted pair on a walking-partner map, else
       "double_two_trainer" for an operand of a ``StartTrainerBattle`` with two trainer
-      constants. ``opponent_2`` is the other enemy of that pair or tag battle (else
+      constants. A lone enemy placed on a walking-partner map is "double" when its own
+      header or the walking partner's is double, else "single" (its base type,
+      ``src/encounter.c:736-739``, ORed with the last loaded trainer's type,
+      ``src/trainer_data.c:31-50``; ``lone_walk_formats``).
+      ``opponent_2`` is the other enemy of that pair or tag battle (else
       null), and ``partner`` the teams the player's partner can field
       ([{``trainer``, ``starter``, ``player_gender``}], a field the team does not
-      depend on being null; empty unless "multi").
+      depend on being null; empty unless "multi"). ``walking_partner`` is the sorted
+      trainer ids the walk map's script assigns to ``VAR_PARTNER_TRAINER_ID`` (``[]`` off
+      a walking-partner map).
     * ``start_condition`` comes from the weather of the maps where the trainer is
       fought (``_trainer_maps``, ``_weather_conditions``), assuming the player has
       not cleared fog with Defog (``src/field_map_change.c``). ``fog_headers`` lists a
@@ -1471,6 +1478,7 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 **terrains[tid],
             }
         )
+    lone_walk_formats(out)
     _write(out_dir / "trainers.json", out)
 
 

@@ -37,12 +37,14 @@ computed for every pair ``CompareBattlerSpeed`` compares, so it also orders two 
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
     MOVE_ACTIONS,
+    absent_now,
     choice_locked,
     gravity_banned,
     locked_slot,
@@ -57,6 +59,7 @@ from nuzline.engine.ids import (
     CANNOT_ENCORE_MOVES,
     GRAVITY_TURNS,
     INVOKER_MOVES,
+    ITEM_TRANSFER_EFFECTS,
     ME_FIRST_BANNED_MOVES,
     METRONOME_DRAW,
     METRONOME_HEAVY,
@@ -336,6 +339,30 @@ def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fight
     return jnp.where(ok, move, 0).astype(_I32)
 
 
+def me_first_target(tables: Tables, state: BattleState, side, picked):
+    """The battler whose chosen move ``side``'s Me First copies: the action's defender
+    (``BtlCmd_TryMeFirst`` reads ``DEFENDER_ACTION`` and ``Battler_SelectedMove(defender)``,
+    battle_script.c:7286-7312), ``targets.resolve``'s ``target_side`` for the move ``picked``. At
+    B = 2 it is the foe (``_foe(side)``). At B = 4 the resolver's draw bit is 0 and the order the
+    identity: the enumeration's stand-in (the draw and the order are the laws' D6-D7, as
+    ``enumerate.call_laws`` reads the other call kinds)."""
+    fmt = format_of(state)
+    if fmt.B == 2:
+        return _foe(side)
+    from nuzline.engine import targets  # lazy: targets imports effects, which imports this module
+
+    return targets.resolve(
+        tables,
+        state,
+        side,
+        picked,
+        targets.fight_randomizes(state, side, False),
+        state.chosen_target[side],
+        jnp.arange(fmt.B),
+        0,
+    ).target_side
+
+
 def invoked_move(
     tables: Tables, state: BattleState, side, move, call, move_prev=None, me_first=None, copied=None
 ):
@@ -431,9 +458,16 @@ def sealed_state(state: BattleState, sides) -> BattleState:
     """``state`` with ``MOVE_EFFECT_IMPRISON`` on every battler of the other side of ``sides``
     (``bool[2]``): a faster foe's Imprison this turn (``BtlCmd_TryImprison``, battle_script.c:
     6724), which then seals its moves for the Sleep Talk user (battle_script.c:4927; battle
-    b on side b in singles)."""
+    b on side b in singles). A battler gets the bit when any battler of the other side is in
+    ``sides`` (Move_Imprisoned's side test, battle_lib.c:3323-3324)."""
     fmt = format_of(state)
-    foe_of = jnp.asarray(sides)[_foe(jnp.arange(fmt.B))]
+    sides = jnp.asarray(sides)
+    foe_of = jnp.stack(
+        [
+            jnp.any(sides[np.asarray([x for x in range(fmt.B) if side_of(x) != side_of(b)])])
+            for b in range(fmt.B)
+        ]
+    )
     value = jnp.where(foe_of, 1, state.imprison)
     return state._replace(imprison=value.astype(state.imprison.dtype))
 
@@ -598,10 +632,12 @@ def used_moves(
     for side in range(fmt.B):
         foe = _foe(side)
         prev = jnp.where(after_foe[side], chosen[foe], state.move_prev.astype(_I32))
-        # Me First copies a target that has not acted: ``after_foe`` says it has (E3-2-3).
-        fights = (state.over == 0) & ~is_switch(actions[foe]) & ~is_item(actions[foe])
+        # Me First copies its action's defender's move, a target that has not acted: ``after_foe``
+        # says it has (E3-2-3; D3-5: the defender, the foe at B = 2).
+        target = me_first_target(tables, state, side, chosen[side])
+        fights = (state.over == 0) & ~is_switch(actions[target]) & ~is_item(actions[target])
         first = jnp.where(
-            after_foe[side], 0, me_first_copy(tables, state, foe, chosen[foe], fights)
+            after_foe[side], 0, me_first_copy(tables, state, target, chosen[target], fights)
         )
         # Mirror Move copies what the foe's move this turn recorded for its user (UpdateFlagsWhenHit,
         # bcp.c:4480-4486): the foe's chosen move when it has MoveFlag.MIRROR_MOVE and is aimed at
@@ -756,22 +792,47 @@ def custap_active(tables: Tables, state: BattleState) -> jnp.ndarray:
     return jnp.stack(out)
 
 
+def _alive_battlers(state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: each battler's active Pokemon has HP (``curHP`` of lib.c:1204-1211)."""
+    fmt = format_of(state)
+    return jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
+
+
+def _compared_fighters(state: BattleState, actions) -> jnp.ndarray:
+    """``bool[B]`` at B = 4: the battlers whose claw / pinch flag ``CalcTurnOrder`` writes
+    (rule 9, sheet D3-3): a FIGHT compare (``ignoreQuickClaw == FALSE``, bcp.c:773-786) with both
+    battlers alive has the battler on one side. Absent battlers are FIGHT entries that lose every
+    compare against a living one (lib.c:1204-1211), so they are never the other side of a write.
+    Every living FIGHT battler meets another living FIGHT battler in the position loop whenever
+    there is one (swaps stay inside a command group, the pairs cover every position pair, a
+    dead battler sinks past a living one): the flag is the closed form, whatever the tie bits
+    (checked over all 16 x 81 x 64 cases of alive masks, commands and swap results)."""
+    alive = _alive_battlers(state)
+    fight = (~is_switch(actions) & ~is_item(actions)) | ~alive  # an absent battler is FIGHT
+    eligible = fight & alive
+    others = jnp.sum(eligible.astype(_I32)) - eligible.astype(_I32)
+    return eligible & (others > 0)
+
+
 def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
-    """``bool[2]``: ``moveEffectsData.custapBerry`` after the turn order: ``CalcTurnOrder``
+    """``bool[B]``: ``moveEffectsData.custapBerry`` after the turn order: ``CalcTurnOrder``
     compares two FIGHT commands with ``ignoreQuickClaw = FALSE`` (bcp.c:772-786), which writes
     the flag of each activated holder (``custap_active`` on the turn-start ``state``,
     battle_lib.c:1296-1298, :1362-1364). The holder eats the berry when its move starts
     (``subscript_check_quick_claw.s:26-28``, ``step._use_move``); until then Pluck cannot take
     it (``hooks.pluck_berry``). ``BattleSystem_SortMonActionOrder`` (battle_lib.c:7276-7300)
     writes it too, through the same compare with ``ignoreQuickClaw = FALSE``, when a Trick
-    Room activation re-sorts the turn (bcp.c:3990-3993): ``resort_claw_flags`` re-sets it there."""
+    Room activation re-sorts the turn (bcp.c:3990-3993): ``resort_action_order`` (at B = 2
+    ``resort_claw_flags``, its flag part) re-sets it there."""
     actions = jnp.asarray(actions, _I32)
+    if format_of(state).B == 4:
+        return custap_active(tables, state) & _compared_fighters(state, actions)
     fight = ~is_switch(actions) & ~is_item(actions)
     return custap_active(tables, state) & fight[0] & fight[1]
 
 
 def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
-    """``bool[2]``: ``moveEffectsData.quickClaw`` after the turn order: ``CalcTurnOrder``'s
+    """``bool[B]``: ``moveEffectsData.quickClaw`` after the turn order: ``CalcTurnOrder``'s
     FIGHT-against-FIGHT compare (``ignoreQuickClaw = FALSE``, bcp.c:772-786) sets it for each
     activated Quick Claw (battle_lib.c:1283, :1349; ``quick_claw_active`` on the turn's
     ``qc_roll``). The holder's own BEFORE_MOVE_STATE_QUICK_CLAW clears it
@@ -779,8 +840,10 @@ def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     Knock Off reads it (subscript_knock_off.s:8), B10-6. The sort compares every pair of
     battlers whose commands are both FIGHT (bcp.c:766-778), so a FIGHT battler is compared when
     any other battler fights (doubles design section 5 rule 4). A Trick Room's MoveEnd re-sort
-    sets it again (``resort_claw_flags``)."""
+    sets it again (``resort_action_order``; at B = 2 ``resort_claw_flags``)."""
     actions = jnp.asarray(actions, _I32)
+    if format_of(state).B == 4:
+        return quick_claw_active(tables, state, state.qc_roll) & _compared_fighters(state, actions)
     fight = ~is_switch(actions) & ~is_item(actions)
     others = jnp.sum(fight.astype(_I32)) - fight.astype(_I32)
     return quick_claw_active(tables, state, state.qc_roll) & fight & (others > 0)
@@ -808,6 +871,52 @@ def resort_claw_flags(tables: Tables, state: BattleState, actions, qc):
     )
 
 
+def resort_action_order(tables: Tables, state: BattleState, order, real, qc, ties, struggling=None):
+    """``(order int32[B], claw_set bool[B], custap_set bool[B], read bool[6])``:
+    ``BattleSystem_SortMonActionOrder`` (battle_lib.c:7276-7300) at B = 4, which a Trick Room's
+    MoveEnd runs (battle_controller_player.c:3989-3991; D3-18). Over the CURRENT ``order`` (no
+    regrouping into ITEM / PARTY first, unlike CalcTurnOrder), for each position pair of ``PAIRS``
+    (i < j, :7283-7286) the battlers now at the two positions are compared only when their
+    SELECTED_COMMAND is equal (:7288; ITEM / PARTY / FIGHT from ``real``; a battler absent now
+    (``actions.absent_now``) is FIGHT, D3-3 rule 7), with ``ignoreQuickClaw = command != FIGHT``
+    (:7289-7293), and swapped on a result other than FASTER (:7295-7298). Every battler takes part,
+    MOVE_END or not. The compare (``compare_full``) reads ``state``, the state at the MoveEnd:
+    current speeds and Trick Room, Quick Claw from ``qc`` (``Outcome.quick_claw``: this turn's
+    ``speedRand``), Custap on the current HP, a FIGHT pair's priorities from the slot's move now
+    (``moveSlot``, ``BattleMon_Get(MOVE_1 + slot)``; Struggle where the turn's ``struggling`` says
+    so: lib.c:1375-1399). ``ties`` is ``Outcome.resort_tie[battler whose Trick Room it is]``;
+    ``read[p]`` whether pair ``p``'s compare drew its bit. ``claw_set`` / ``custap_set`` are
+    ``resort_claw_flags``: what the FIGHT-against-FIGHT compares with both alive write (they only
+    set)."""
+    fmt = format_of(state)
+    real = jnp.asarray(real, _I32)
+    switch, item = is_switch(real), is_item(real)
+    absent = jnp.stack([absent_now(state, b) for b in range(fmt.B)])
+    command = jnp.where(absent | (~switch & ~item), 0, jnp.where(item, 1, 2)).astype(_I32)
+    slot = jnp.clip(real, 0, MOVE_ACTIONS - 1)
+    moves = jnp.stack(
+        [state.moves[party(fmt, b), state.active[b], slot[b]].astype(_I32) for b in range(fmt.B)]
+    )
+    if struggling is not None:
+        moves = jnp.where(jnp.asarray(struggling, bool), MOVE_STRUGGLE, moves)
+    priority = tables.move_priority[moves].astype(_I32)
+    facts = _pair_facts(tables, state, qc)
+    order = jnp.asarray(order, _I32)
+    reads = []
+    for p, (i, j) in enumerate(PAIRS):
+        b1, b2 = order[i], order[j]
+        same = command[b1] == command[b2]
+        skip = command[b1] != 0
+        p1 = jnp.where(skip, 0, priority[b1])
+        p2 = jnp.where(skip, 0, priority[b2])
+        result, read = compare_full(tables, state, b1, b2, ties[p], qc, p1, p2, facts)
+        swap = same & (result != COMPARE_SPEED_FASTER)
+        order = order.at[i].set(jnp.where(swap, b2, b1)).at[j].set(jnp.where(swap, b1, b2))
+        reads.append(same & read)
+    claw_set, custap_set = resort_claw_flags(tables, state, real, qc)
+    return order, claw_set, custap_set, jnp.stack(reads)
+
+
 def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
     """``bool[2]``: each side's active battler holds a Quick Claw and its ``speedRand``
     draw ``qc`` (``int[2]``, 1 = ``speedRand % 5 == 0``) activates it (lib.c:1278-1286)."""
@@ -818,8 +927,52 @@ def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
     )
 
 
+def qc_transfer(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool``: a held item can move onto another battler in this turn: a party Pokemon (either
+    side) knows a move of an ``ITEM_TRANSFER_EFFECTS`` battle effect. Thief / Covet
+    (``BtlCmd_TryStealItem``, battle_script.c:5093-5126) and Trick / Switcheroo
+    (``BtlCmd_TrySwapItems``, :6336-6360) move it between the attacker and the defender, both on
+    the field; the defender may be the attacker's ally (another party in a tag battle): only a
+    side-1 attacker is blocked (:5102-5104, :6345-6346). The other paths that touch a held item
+    give no battler another's: Knock Off removes one (:6620-6628), ``BtlCmd_RemoveItem``
+    consumes the battler's own into its ``recycleItem`` (:8972-8979; Fling's
+    ``RemoveItem BTLSCR_ATTACKER``, effect_script_0233.s:18, Natural Gift, the eaten berries, the
+    defender's berry Bug Bite / Pluck eat, subscript_pluck_check.s:6), Sticky Barb moves only
+    itself (battle_lib.c:5385-5396, :7377-7384), Pickup's item comes after the battle
+    (``BtlCmd_GenerateEndOfBattleItem``, battle_script.c:7781-7797). Recycle gives the attacker
+    back its own ``recycleItem`` (:9000-9012), a flung Quick Claw included: ``qc_recycle``. A
+    battler uses Thief, Covet, Trick or Switcheroo only out of a moveset: Metronome and Assist
+    never call them (``sCannotMetronomeMoves``, battle_lib.c:7152-7179, read by
+    ``Move_CanBeMetronomed`` :7194-7210 in ``BtlCmd_Metronome``, battle_script.c:4554, and
+    ``BtlCmd_TryAssist``, :6430); Mirror Move, Me First, Mimic, Sleep Talk and Transform take a
+    move a Pokemon of the battle knows."""
+    effect = tables.move_ai_effect[state.moves]  # [P, 6, 4]
+    known = (state.moves != 0) & (state.species[..., None] != 0)
+    hit = jnp.zeros(effect.shape, bool)
+    for e in ITEM_TRANSFER_EFFECTS:
+        hit = hit | (effect == e)
+    return jnp.any(known & hit)
+
+
+def qc_recycle(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the battler's ``recycleItem`` is a Quick Claw (a flung one: Fling's
+    ``RemoveItem BTLSCR_ATTACKER``, effect_script_0233.s:18, stores it, battle_script.c:8978), so
+    a Recycle this turn can put it back on the battler (``BtlCmd_TryRecycle``, :9000-9012;
+    effect_script_0184.s:5-7) before the turn end's speed sort. ``recycleItem`` is per battler
+    and outlives a switch (nothing else writes it), and Recycle needs no moveset: Metronome can
+    call it (it is not in ``sCannotMetronomeMoves``, battle_lib.c:7152-7179), as can Assist,
+    Sleep Talk, Mimic, Sketch, Copycat and Mirror Move; so no move test (over-keeping only
+    splits states). The raw item, as ``qc_kept``."""
+    return tables.item_effect[state.recycle_item] == ItemId.QUICK_CLAW
+
+
 # BattleSystem_CompareBattlerSpeed's results (include/constants/battle.h:163-165).
 COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE = 0, 1, 2
+
+# CalcTurnOrder's position pairs (bcp.c:773-774) and their count per battler count: the length of
+# ``Outcome.order_tie`` (``TIE_PAIRS[2] = 0``: at B = 2 the one pair's bit is ``speed_tie``).
+PAIRS = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+TIE_PAIRS = {2: 0, 4: 6}
 
 
 def compare_speed(
@@ -836,10 +989,12 @@ def compare_speed(
     holders compare speeds reversed, the faster SLOWER, Trick Room ignored (:1412-1417). Else
     (Stall is unsupported) Trick Room reverses the speeds (:1432-1439). At equal speed each
     of these branches gives TIE when ``tie_roll`` (``RandNext() & 1``) is 1, else FASTER,
-    never SLOWER; the decomp draws that bit only there. The dead-battler short-circuit
-    (:1205-1211) is not part of this function, as it was not of ``player_second``; the
-    trainer AI compares at its decision, with both actives alive. A Custap Berry in its pinch
-    (``custap_active``) sets the same flag as an activated Quick Claw (:1288-1300)."""
+    never SLOWER; the decomp draws that bit only there. Before all of it the dead-battler
+    short-circuit (:1204-1211): ``battler1`` with no HP against a ``battler2`` with HP is
+    SLOWER, the reverse FASTER, so a fainted battler is last in the sort after the last action
+    (``BattleSystem_SortMonSpeedOrder``, :3364-3381; ``step.end_of_turn_order``), whatever its
+    Quick Claw or speed. A Custap Berry in its pinch (``custap_active``) sets the same flag as
+    an activated Quick Claw (:1288-1300)."""
     fmt = format_of(state)
     other = _foe(battler1) if battler2 is None else battler2
     speed = tuple(effective_speed(tables, state, b) for b in range(fmt.B))
@@ -859,6 +1014,11 @@ def compare_speed(
     )
     lone_claw = jnp.where(claw2, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER)
     result = jnp.where(claw1 != claw2, lone_claw, jnp.where(claw1, by_speed, lagging))
+    alive1 = state.hp[party(fmt, battler1), state.active[battler1]] > 0
+    alive2 = state.hp[party(fmt, other), state.active[other]] > 0
+    result = jnp.where(
+        alive1 == alive2, result, jnp.where(alive1, COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER)
+    )
     return result.astype(_I32)
 
 
@@ -878,13 +1038,146 @@ def player_second(tables: Tables, state: BattleState, tie_roll, qc) -> jnp.ndarr
     return battler_slower(tables, state, 0, tie_roll, qc)
 
 
+def _pair_facts(tables: Tables, state: BattleState, qc):
+    """``(speed int32[B], claw bool[B], lag bool[B])``: each battler's speed as
+    ``CompareBattlerSpeed`` computes it, its Quick Claw / Custap activation (``qc`` the
+    ``speedRand`` bits) and Lagging Tail, built once for every pair of a sort."""
+    fmt = format_of(state)
+    speed = jnp.stack([effective_speed(tables, state, b) for b in range(fmt.B)])
+    claw = quick_claw_active(tables, state, qc) | custap_active(tables, state)
+    lag = jnp.stack([_holds(tables, state, b, ItemId.LAGGING_TAIL) for b in range(fmt.B)])
+    return speed, claw, lag
+
+
+def compare_full(
+    tables: Tables,
+    state: BattleState,
+    b1,
+    b2,
+    tie_bit,
+    qc,
+    priority1=0,
+    priority2=0,
+    facts=None,
+):
+    """``(result int32, read bool)``: ``BattleSystem_CompareBattlerSpeed(b1, b2)`` (lib.c:1188-1454)
+    with the dead-battler short-circuit (:1204-1211: ``b1`` dead and ``b2`` alive is SLOWER,
+    ``b1`` alive and ``b2`` dead FASTER, nothing computed; two dead go through the compare).
+    Within equal priority the ladder is ``compare_speed``'s (Quick Claw / Custap, Lagging Tail,
+    Trick Room, speed; Stall is unsupported); a lower priority is SLOWER (:1448-1449). ``b1`` and
+    ``b2`` may be traced battler indices; ``priority1`` / ``priority2`` are the moves' priorities
+    (0 both where the caller skips priority). ``tie_bit`` is the pair's ``RandNext() & 1``;
+    ``read`` is true where the decomp draws it: both battlers alive, equal priority, a branch that
+    compares speeds (not a lone Quick Claw or Lagging Tail holder) at equal speed. ``facts``:
+    ``_pair_facts`` if the caller has it."""
+    speed, claw, lag = _pair_facts(tables, state, qc) if facts is None else facts
+    alive = _alive_battlers(state)
+    alive1, alive2 = alive[b1], alive[b2]
+    speed1, speed2 = speed[b1], speed[b2]
+    claw1, claw2 = claw[b1], claw[b2]
+    lag1, lag2 = lag[b1], lag[b2]
+    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | (fcm.trick_room_on(state) & ~lag1 & ~lag2))
+    slower = jnp.where(reversed_, speed1 > speed2, speed1 < speed2)
+    tie = (speed1 == speed2) & (jnp.asarray(tie_bit) != 0)
+    by_speed = jnp.where(
+        slower, COMPARE_SPEED_SLOWER, jnp.where(tie, COMPARE_SPEED_TIE, COMPARE_SPEED_FASTER)
+    )
+    lagging = jnp.where(
+        lag1 != lag2, jnp.where(lag1, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER), by_speed
+    )
+    lone_claw = jnp.where(claw2, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER)
+    ladder = jnp.where(claw1 != claw2, lone_claw, jnp.where(claw1, by_speed, lagging))
+    p1, p2 = jnp.asarray(priority1, _I32), jnp.asarray(priority2, _I32)
+    result = jnp.where(
+        p1 == p2,
+        ladder,
+        jnp.where(p1 < p2, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER),
+    )
+    result = jnp.where(
+        alive1 != alive2,
+        jnp.where(alive1, COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER),
+        result,
+    ).astype(_I32)
+    compares = (claw1 == claw2) & (claw1 | (lag1 == lag2))
+    # Two fainted entries: the decomp falls through to the compare and draws the tie bit
+    # (battle_lib.c:1204-1211 short-circuits only one dead; :1440-1446 draws), but the order of
+    # two fainted entries is never read by any later step, so not drawing it changes no result.
+    read = alive1 & alive2 & (p1 == p2) & compares & (speed1 == speed2)
+    return result, read
+
+
+def _four_order(tables: Tables, state: BattleState, actions, order_tie, qc):
+    """``(order int8[4], read bool[6])``: ``BattleControllerPlayer_CalcTurnOrder`` over four
+    battlers (bcp.c:754-786, rules 2, 3 and 7 of sheet D3-3). ITEM and PARTY commands first, then
+    the rest, each group in battler order (absent battlers are FIGHT entries); then for each
+    position pair of ``PAIRS`` (lexicographic, :773-774) the battlers *currently* at the two
+    positions, when their commands are equal, are compared (``compare_full``; priority only for
+    FIGHT, :779-780) and swapped on a result other than FASTER. ``order_tie[p]`` is pair ``p``'s
+    bit; ``read[p]`` whether that compare drew it."""
+    alive = _alive_battlers(state)
+    actions = jnp.asarray(actions, _I32)
+    switch, item = is_switch(actions), is_item(actions)
+    fight = (~switch & ~item) | ~alive
+    command = jnp.where(fight, 0, jnp.where(item, 1, 2)).astype(_I32)
+    moves = jnp.stack([selected_move(tables, state, b, actions[b])[0] for b in range(4)])
+    priority = tables.move_priority[moves].astype(_I32)
+    facts = _pair_facts(tables, state, qc)
+    # Stable sort on "is FIGHT": ITEM / PARTY battlers first, then the rest, each in battler order.
+    order = jnp.argsort(fight.astype(_I32), stable=True).astype(_I32)
+    reads = []
+    for p, (i, j) in enumerate(PAIRS):
+        b1, b2 = order[i], order[j]
+        same = command[b1] == command[b2]
+        skip = command[b1] != 0
+        p1 = jnp.where(skip, 0, priority[b1])
+        p2 = jnp.where(skip, 0, priority[b2])
+        result, read = compare_full(tables, state, b1, b2, order_tie[p], qc, p1, p2, facts)
+        swap = same & (result != COMPARE_SPEED_FASTER)
+        order = order.at[i].set(jnp.where(swap, b2, b1)).at[j].set(jnp.where(swap, b1, b2))
+        reads.append(same & read)
+    return order.astype(jnp.int8), jnp.stack(reads)
+
+
+def sort_mon_speed(tables: Tables, state: BattleState, qc, ties):
+    """``(order int32[B], read bool[len(PAIRS)])``: ``BattleSystem_SortMonSpeedOrder``
+    (lib.c:3364-3383) at B = 4, the sort before an action (bcp.c:888): ``order[i] = i``, then for
+    each position pair of ``PAIRS`` the battlers currently at the two positions are compared with
+    ``ignoreQuickClaw`` TRUE (``compare_full``, both priorities 0, the claw bits of ``qc`` and
+    Custap's pinch on the current HP still deciding) and swapped on a result other than FASTER.
+    Every pair is compared whatever the commands. ``ties``: one row of ``Outcome.sort_tie`` (the
+    acting battler's, ledger D3-4); ``read[p]``: whether pair ``p``'s compare drew its bit. Not
+    called at B = 2 (``speed_order`` stays ``arange(2)``)."""
+    facts = _pair_facts(tables, state, qc)
+    order = jnp.arange(4, dtype=_I32)
+    reads = []
+    for p, (i, j) in enumerate(PAIRS):
+        b1, b2 = order[i], order[j]
+        result, read = compare_full(tables, state, b1, b2, ties[p], qc, 0, 0, facts)
+        swap = result != COMPARE_SPEED_FASTER
+        order = order.at[i].set(jnp.where(swap, b2, b1)).at[j].set(jnp.where(swap, b1, b2))
+        reads.append(read)
+    return order, jnp.stack(reads)
+
+
+def action_order_reads(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
+    """``bool[TIE_PAIRS[B]]``: the elements of ``outcome.order_tie`` the order reads (the pair's
+    compare drew its bit); empty at B = 2, where ``speed_tie`` is the one bit."""
+    if format_of(state).B == 2:
+        return jnp.zeros((0,), bool)
+    return _four_order(tables, state, actions, outcome.order_tie, state.qc_roll)[1]
+
+
 def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
-    """``int8[2]``: the two sides in execution order. ``outcome.speed_tie`` decides
+    """``int8[B]``: the battlers in execution order. At B = 2, ``outcome.speed_tie`` decides
     equal speeds (0 = player first): the decomp swaps on ``RandNext() & 1``. Quick Claw
     reads ``state.qc_roll``, the draw of the turn before (module docstring), never the
-    outcome."""
+    outcome. At B = 4 (``_four_order``) the pairs' bits are ``outcome.order_tie``; absent
+    battlers (``battlersSwitchingMask``: PICK_COMMAND MOVE_END, bcp.c:330-333) lose every compare
+    against a living one (lib.c:1204-1211) and go last."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
+    if fmt.B == 4:
+        return _four_order(tables, state, actions, outcome.order_tie, state.qc_roll)[0]
     switch, item = is_switch(actions), is_item(actions)
     early = switch | item  # items and switches go before moves
     moves = jnp.stack(

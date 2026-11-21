@@ -94,10 +94,19 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   a data form is built as its game builds it (G-41, ``data.trainer.build_trainer_party``):
   the base species' ability and default moves, the form's types, and the form's stats in
   Kaizo or the base's in vanilla;
-* battle format: only "single". The engine models one battler per side, so a trainer
-  whose header is a double battle, who is fought beside a second enemy trainer
-  ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
-  battles and walking partners) is refused (``Trainer.format``);
+* battle format: only "single". A trainer whose header is a double battle, who is fought
+  beside a second enemy trainer ("double_two_trainer") or who is fought while the player has a
+  partner ("multi", tag battles and walking partners) is refused (``Trainer.format``,
+  ``IMPLEMENTED_FORMATS``), so no prep, search or CLI path plays a four-battler battle to a
+  result. Four-battler TURNS are no longer refused: ``FOUR_TURN_CLAUSES`` is empty (D3-16
+  deleted the last clause), so ``four_turn_refusals``, which every four-battler caller of
+  ``step`` still runs, refuses nothing, and ``step`` plays every four-battler turn. At B = 4
+  coverage checks only this battle-level format refusal. It must stay until D5 lands the Bind /
+  Attract source (``step._source_leaves`` ends only ``_foe(side)``'s Bind and Attract; the decomp
+  loops every battler, battle_lib.c:2088-2098, :2168-2183), D11 builds the four-battler
+  enumeration and distribution (``enumerate`` / ``outcome``), and E1 reads AI_CONTEXT.defender
+  in the AI's damage estimates (trainer_ai.c:1109): the ledger's "OWED D5" and "OWED D11 / E1"
+  lines;
 * Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
   (``Trainer.area_condition``; both are modelled: Gravity since the E1 trial batch, G-67, Trick
   Room since E3-2-4, ``start_trick_room``), a gauntlet (a chain
@@ -132,7 +141,7 @@ switch sites are every draw a party of six can make, so only vanilla can exceed 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -152,6 +161,7 @@ from nuzline.data.trainer import (
 )
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.format import foe as _foe
+from nuzline.engine.format import format_of
 from nuzline.engine.ids import (
     GRAVITY_TURNS,
     METRONOME_DRAW,
@@ -169,15 +179,8 @@ from nuzline.engine.ids import (
     Stat,
     Weather,
 )
-from nuzline.engine.levelup import (
-    HOLD_EFFECT_EVS_UP_SPEED_DOWN,
-    HOLD_EFFECT_EXP_SHARE,
-    HOLD_EFFECT_EXP_UP,
-    HOLD_EFFECT_FRIENDSHIP_UP,
-    MAX_LEVEL,
-    POWER_ITEM_HOLD_EFFECTS,
-)
-from nuzline.engine.state import make_state, spec_exp, spec_stats
+from nuzline.engine.levelup import HOLD_EFFECT_EXP_UP, MAX_LEVEL
+from nuzline.engine.state import BattleState, make_state, spec_exp, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
@@ -259,6 +262,77 @@ IMPLEMENTED_FORMATS: dict[str, Support] = {
     # tools/battle_scripts.py UNKNOWN_FORMAT), refused explicitly.
     "unknown": Support.NONE,
 }
+
+
+@dataclass(frozen=True)
+class TurnClause:
+    """One refusal of the four-battler turn (``four_turn_refusals``): the D3 ``group`` that
+    models ``feature`` and deletes this clause in its commit; ``refuses(tables, state, actions)``
+    is true where the turn uses it. ``tables``, ``state`` and ``actions`` are the arguments of
+    ``step`` (``actions``: one int per battler)."""
+
+    group: str
+    feature: str
+    refuses: Callable[[Tables, BattleState, np.ndarray], bool]
+
+
+# The effects whose move runs another move: a caller may become any move at all.
+CALLERS = frozenset(
+    {
+        EffectId.SLEEP_TALK,
+        EffectId.METRONOME,
+        EffectId.COPYCAT,
+        EffectId.ASSIST,
+        EffectId.ME_FIRST,
+        EffectId.NATURE_POWER,
+    }
+)
+
+
+def _present(state: BattleState, b: int) -> bool:
+    """Battler ``b``'s active Pokemon has HP (an absent battler's slot sits at 0 HP)."""
+    fmt = format_of(state)
+    return bool(np.asarray(state.hp)[fmt.party_of[b], int(np.asarray(state.active)[b])] > 0)
+
+
+def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
+    """A present battler whose move action selects a move whose effect is in ``effects`` or is a
+    caller (``CALLERS``; ``order.selected_move``)."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+    from nuzline.engine.order import selected_move
+
+    wanted = {int(e) for e in set(effects) | CALLERS}
+    effect = np.asarray(tables.move_effect)
+    for b in range(format_of(state).B):
+        if not _present(state, b) or int(actions[b]) >= MOVE_ACTIONS:
+            continue  # a switch or item action selects no move
+        move = int(selected_move(tables, state, b, int(actions[b]))[0])
+        if int(effect[move]) in wanted:
+            return True
+    return False
+
+
+# Build order of the D3 groups; each group deletes its own clause, and the tuple is empty after
+# D3-16 (tests/engine/test_coverage_four.py::OWED). Battlers 2 and 3 absent (0 HP, nothing left
+# in their parties) is the supported turn: the decomp's turn is then the two-battler turn
+# (``order.action_order`` puts them after battlers 0 and 1, where they never act).
+FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = ()  # D3-16 deleted the last clause
+
+
+def four_turn_refusals(tables: Tables, state: BattleState, actions) -> list[str]:
+    """The lines refusing a four-battler turn: ``[]`` at two battlers, else one line per
+    ``FOUR_TURN_CLAUSES`` entry the turn trips. Every four-battler caller of ``step`` runs it
+    first (the differential skips a draw that is refused)."""
+    if format_of(state).B == 2:
+        return []
+    actions = np.asarray(actions)
+    return [
+        f"{c.group}: {c.feature} (four-battler turn UNSUPPORTED)"
+        for c in FOUR_TURN_CLAUSES
+        if c.refuses(tables, state, actions)
+    ]
+
+
 # Trainer.start_condition (trainers.json) as a Weather.
 START_CONDITIONS = {
     "none": Weather.NONE,
@@ -489,24 +563,12 @@ def move_effect_line(
 
 # Decomp battle effects (generated/move_battle_effects.txt, line N is id N - 1), matched
 # against tables.move_ai_effect.
-ITEM_MOVING_EFFECTS = (
-    105,  # BATTLE_EFFECT_STEAL_HELD_ITEM (Thief, Covet): effect_script_0105.s, STEAL_ITEM
-    177,  # BATTLE_EFFECT_SWITCH_HELD_ITEMS (Trick, Switcheroo): effect_script_0177.s
-    188,  # BATTLE_EFFECT_REMOVE_HELD_ITEM (Knock Off): effect_script_0188.s, KNOCK_OFF
-    233,  # BATTLE_EFFECT_FLING: effect_script_0233.s, FLING
-)
 # BATTLE_EFFECT_POWER_BASED_ON_FRIENDSHIP (Return) and ..._LOW_FRIENDSHIP (Frustration):
 # effect_script_0121.s / 0123.s read the attacker's BATTLEMON_FRIENDSHIP.
 FRIENDSHIP_POWER_EFFECTS = (121, 123)
-# The hold effects the payout reads from the party item (engine.levelup): Macho Brace, Exp.
-# Share, Soothe Bell, Lucky Egg and the six Power items.
-EXP_ITEM_HOLD_EFFECTS = (
-    HOLD_EFFECT_EVS_UP_SPEED_DOWN,
-    HOLD_EFFECT_EXP_SHARE,
-    HOLD_EFFECT_FRIENDSHIP_UP,
-    HOLD_EFFECT_EXP_UP,
-    *POWER_ITEM_HOLD_EFFECTS,
-)
+# Ruling D9 (gone): the payout reads the party item (``levelup.party_item``), which every item
+# move but Knock Off copies from the battle item at once (BattleMon_CopyToParty); Knock Off's
+# kept party item is the state field ``knocked_item``. No item-moving move needs a refusal.
 MAX_EXP_BOOST = 170  # the largest exp_boost (battle_script.c:9757-9763)
 
 
@@ -625,10 +687,12 @@ def exp_refusals(
     ``levels_up``: ``reachable_level`` exceeds its level.
 
     * §4.3: below level 100 with ``exp_boost == 0`` (the OT and language test unresolved).
-    * §4.2 (ruling D9): it holds an exp item (``EXP_ITEM_HOLD_EFFECTS``) while an item-moving
-      move (``ITEM_MOVING_EFFECTS``) is in the fight. The payout reads the **party** item
-      (battle_script.c:2209, :9706, :10226; pokemon.c:2649), which a battle item change
-      leaves behind.
+    * §4.2 (ruling D9, gone): the payout reads the **party** item (battle_script.c:2210, :9709,
+      :10226; ``MON_DATA_HELD_ITEM``), which Trick, Switcheroo, Thief and Covet copy from the
+      battle item (UpdateMonData, :3078, :3407, through ``BattleMon_CopyToParty``,
+      battle_lib.c:1819, and ``BattleMon_CopyToParty``'s message, battle_io_command.c:589-591)
+      and Knock Off does not: its ``knockedOffItemsMask`` bit stops the copy (:590-592) and the
+      party keeps the item. The engines model both (``levelup.party_item``, ``knocked_item``).
     * §4.4 (ruling D6): its egg location is nonzero, it can level, and a friendship-power move
       (``FRIENDSHIP_POWER_EFFECTS``) is in the fight: the level-up adds 1 when the egg
       location is the battle map (pokemon.c:2668-2670), which the engine does not know
@@ -642,14 +706,6 @@ def exp_refusals(
         out.append(
             "exp multiplier unresolved (original trainer and language unknown: read the save "
             "with its trainer)"
-        )
-    hold = int(np.asarray(tables.item_hold_effect)[spec.item])
-    if hold in EXP_ITEM_HOLD_EFFECTS and (
-        moving := _effect_moves(tables, fight_moves, ITEM_MOVING_EFFECTS)
-    ):
-        out.append(
-            f"{names.item_names[spec.item]} is read from the party by the exp payout, and "
-            f"{names.move_names[moving[0]]} can move held items in battle"
         )
     if (
         levels_up

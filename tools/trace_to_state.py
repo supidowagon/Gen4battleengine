@@ -116,6 +116,10 @@ _NO_LEARNS = np.full(MAX_LEARNS, -1, np.int32)  # learn_array(()) on the host
 # (the per-turn fit, which replays no recorded answer; ``_fit_learns`` then fits them).
 AUTO_LEARN = -2
 _AUTO_LEARNS = np.asarray([AUTO_LEARN, *[-1] * (MAX_LEARNS - 1)], np.int32)
+# ``learn_choices[0] == STEP_ONLY``: the turn is ``step`` alone, no learnset scan before or after
+# it and no answer (``step_turn``; with slots below 0, no replacement either).
+STEP_ONLY = -3
+_STEP_ONLY = np.asarray([STEP_ONLY, *[-1] * (MAX_LEARNS - 1)], np.int32)
 MAX_PAUSES = 8  # learn pauses in one turn (the sites of ``engine.levelup.LEARN_*``, at most 7)
 _CHUNK = 16  # candidates replayed per jitted call (one compile)
 _I8, _I32 = jnp.int8, jnp.int32
@@ -472,9 +476,15 @@ def _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, choices)
     A learn prompt pauses the turn (E3-B2-21: ``step`` pays and prompts inside the turn); the
     answers are given in order and the turn resumes with the same outcome, up to
     ``MAX_PAUSES`` times, and stops at a prompt with no answer left. ``choices[0] ==
-    AUTO_LEARN``: every prompt is given up."""
+    AUTO_LEARN``: every prompt is given up. ``choices[0] == STEP_ONLY``: the state after the
+    loop is ``step``'s own (no ``_answer_prompts`` before or after it; ``cond`` stops after
+    one step, as ``STEP_ONLY`` is below 0)."""
     actions = jnp.asarray(actions, _I32)
     auto = choices[0] == AUTO_LEARN
+    plain = choices[0] == STEP_ONLY
+
+    def unless_plain(answered, s):
+        return jax.tree.map(lambda x, y: jnp.where(plain, y, x), answered, s)
 
     def cond(carry):
         s, k, _, n = carry
@@ -484,7 +494,8 @@ def _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, choices)
     def body(carry):
         s, k, asked, n = carry
         asked = asked | ((s.learn_site != 0) & (s.learn_level > 0))
-        s, k = _answer_prompts(tables, s, choices, k, auto)
+        answered, k = _answer_prompts(tables, s, choices, k, auto)
+        s = unless_plain(answered, s)
         resumed = step(tables, s, actions, outcome)
         s = jax.tree.map(lambda x, y: jnp.where(needs_learn(s) & (n > 0), x, y), s, resumed)
         return s, k, asked, n + 1
@@ -493,7 +504,8 @@ def _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, choices)
     s, k, asked, _ = jax.lax.while_loop(cond, body, (state, jnp.int32(0), asked0, jnp.int32(0)))
     need = needs_replacement(s) != 0
     asked = asked | (s.learn_level > 0)
-    s, k = _answer_prompts(tables, s, choices, k, auto)  # TurnEnd's prompts (unpaused)
+    answered, k = _answer_prompts(tables, s, choices, k, auto)  # TurnEnd's prompts (unpaused)
+    s = unless_plain(answered, s)
     learned = s
     for side, slot in ((0, player_slot), (1, opp_slot)):
         slot = jnp.asarray(slot, _I32)
@@ -562,6 +574,15 @@ def replay_turn(tables, state, actions, outcome, player_slot, opp_slot, learn_ch
         learn_choices,
     )
     return jax.tree.map(lambda x: x[0], out[0])
+
+
+def step_turn(tables, state, actions, outcome) -> BattleState:
+    """``step(tables, state, actions, outcome)``, computed as one ``_replay`` row with
+    ``STEP_ONLY`` (no learnset scan, no answer, no replacement), so a test that steps a trace
+    and converts it keeps the converter's one program resident instead of a ``jit(step)``
+    beside it (a second whole-turn program, which kept ``tests/test_trace_to_state.py`` above
+    conftest's memory-driven clear)."""
+    return replay_turn(tables, state, actions, outcome, -1, -1, jnp.asarray(_STEP_ONLY))
 
 
 def _holds_quick_claw(tables: Tables, state: BattleState, side: int, mon: int) -> bool:

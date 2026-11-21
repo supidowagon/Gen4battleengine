@@ -897,7 +897,7 @@ def move_type_of(tables: Tables, state: BattleState, side, move, gift=0) -> jnp.
 
 
 def fixed_damage(
-    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True
+    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True, def_side=None
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(is_fixed, damage)``: a ``LEVEL_DAMAGE`` move (Night Shade, Seismic Toss;
     ``effect_script_0087.s``) deals the attacker's level with ``SYSCTL_IGNORE_TYPE_CHECKS``:
@@ -915,10 +915,14 @@ def fixed_damage(
 
     Wonder Guard (``wonder_guarded``, where ``wonder_guard``) stops them like an immunity: they
     have table power 1, so ``ApplyTypeChart`` flags any that is not super effective (ruling
-    G-18)."""
+    G-18).
+
+    ``def_side``: the defender's battler, battleCtx->defender of the scripts (BTLSCR_DEFENDER,
+    effect_script_0040.s, _0189.s; ApplyTypeChart, battle_lib.c:7544-7552); default the
+    battler across."""
     fmt = format_of(state)
     atk_side = _i32(atk_side)
-    def_side = _foe(atk_side)
+    def_side = _foe(atk_side) if def_side is None else _i32(def_side)
     effect = tables.move_effect[_i32(move)]
     is_level = effect == EffectId.LEVEL_DAMAGE
     is_bide = effect == EffectId.BIDE
@@ -1433,8 +1437,9 @@ def beat_up_damage(
     Defense (DEFENDING_MON.species and formNum: the personal rows, ``species_form_row``) / 50 +
     2, x criticalMul (2, Sniper
     3: BattleSystem_CalcCriticalMulti, battle_lib.c:7139-7144, the user's ability), then
-    BattleSystem_CalcDamageVariance (:7081-7092: at least 1). Helping Hand (:6214) is a doubles
-    flag. No CalcDamage, so no stage, item, ability, status, screen or weather modifier, and
+    BattleSystem_CalcDamageVariance (:7081-7092: at least 1). Between them the attacker's
+    turnFlags.helpingHand multiplies by 15/10 (:6214-6216; ``ts_helping_hand``, B = 4 only). No
+    CalcDamage, so no stage, item, ability, status, screen or weather modifier, and
     SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips the type chart (bcp.c:2355): no STAB
     or effectiveness (B13-10)."""
     fmt = format_of(state)
@@ -1458,6 +1463,7 @@ def beat_up_damage(
     user_ability = _i32(battler_ability(state, atk_side))
     crit_mul = jnp.where(user_ability == AbilityId.SNIPER, SNIPER_CRIT_MUL, CRIT_MUL)
     damage = jnp.where(jnp.asarray(crit, jnp.bool_), damage * crit_mul, damage)
+    damage = jnp.where(state.ts_helping_hand[atk_side] != 0, damage * 15 // 10, damage)
     return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)
 
 
@@ -1610,12 +1616,18 @@ def _pre_random(
     )
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
     # :6690-6692 MOVE_EFFECT_CHARGE on the attacker doubles an Electric move's power (moveType as
-    # above; Normalize is unsupported), after powerMul and before Helping Hand (a doubles flag) and
-    # Technician; the hit does not consume it (E3-B2-8).
+    # above; Normalize is unsupported), after powerMul and before Helping Hand and Technician;
+    # the hit does not consume it (E3-B2-8).
     charged = (s.charged_turns[atk_side] != 0) & (move_type == Type.ELECTRIC)
     power = jnp.where(charged, power * 2, power)
-    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul and Charge,
-    # never Struggle (the self-hit's move).
+    # :6694-6696 Helping Hand: movePower * 15 / 10 while the attacker's turnFlags.helpingHand is
+    # set (``ts_helping_hand``; B = 4 only, 0 between turns). CalcMoveDamage reads it for every
+    # caller: the move's hit, the confusion self-hit, Future Sight's setup and the AI's
+    # estimates (whose turn-start states have it 0).
+    helped = s.ts_helping_hand[atk_side] != 0
+    power = jnp.where(helped, power * 15 // 10, power)
+    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul, Charge and
+    # Helping Hand, never Struggle (the self-hit's move).
     technician = (_i32(battler_ability(s, atk_side, a_slot)) == AbilityId.TECHNICIAN) & (
         power <= 60
     )
@@ -1928,7 +1940,7 @@ def damage_table(
         tables, state, atk_side, move, damage, move_type, category, power, rolls,
         wonder_guard=wonder_guard, def_side=def_side,
     )  # fmt: skip
-    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
+    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard, def_side)
     amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
     beat_up = beat_up_damage(tables, state, atk_side, def_side, move, hit, crit, rolls)
     table = jnp.where(tables.move_effect[_i32(move)] == EffectId.BEAT_UP, beat_up, table)
@@ -2006,7 +2018,7 @@ def damage_for_roll(
         tables, state, atk_side, move, damage, move_type, category, power, _i32(roll),
         wonder_guard=wonder_guard, def_side=def_side,
     )  # fmt: skip
-    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
+    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard, def_side)
     # The only place Present's heal path deals 0: ``_pre_random`` above still ran at the
     # table power (it ignores a ``present`` outside 0-2), so a caller that needs the heal's
     # damage must come through here, not ``_pre_random`` / ``calc_move_damage``.
@@ -2021,14 +2033,15 @@ def damage_for_roll(
 
 
 def calc_move_damage(
-    tables: Tables, state: BattleState, atk_side, move, power_mul=10
+    tables: Tables, state: BattleState, atk_side, move, power_mul=10, def_side=None
 ) -> jnp.ndarray:
     """``int32``: ``BattleSystem_CalcMoveDamage`` (battle_lib.c:6601) alone, with
     ``criticalMul`` 1: step 1 above, ending with the ``+ 2`` (so a power-0 move gives 2).
     No variance, STAB, type chart or Life Orb. ``power_mul`` is ``battleCtx->powerMul`` in
-    tenths."""
+    tenths. ``def_side``: the defender's battler (default the battler across)."""
+    def_side = _foe(_i32(atk_side)) if def_side is None else _i32(def_side)
     return _pre_random(
-        tables, state, atk_side, move, False, power_mul=power_mul, def_side=_foe(_i32(atk_side))
+        tables, state, atk_side, move, False, power_mul=power_mul, def_side=def_side
     )[0]
 
 

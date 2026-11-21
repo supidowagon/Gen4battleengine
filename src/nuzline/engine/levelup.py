@@ -58,8 +58,9 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.format import MULTI, format_of, party, side_of
 from nuzline.engine.ids import EffectId, Stat
-from nuzline.engine.state import MOVES, SLOTS, BattleState
+from nuzline.engine.state import MOVES, SLOTS, BattleState, party_held_item
 from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats_jnp
 
 _I32 = jnp.int32
@@ -115,7 +116,7 @@ def _friendship(f0, k, bonus, soothe):
     return jnp.minimum(MAX_FRIENDSHIP, f2 + (k - n0 - n1) * d2)
 
 
-def _effort_values(tables: Tables, after: BattleState, paid, foe_row, hold):
+def _effort_values(tables: Tables, after: BattleState, paid, foe_row, item, hold):
     """``int32[6, 6]``: the player's EVs after ``BattleScript_CalcEffortValues`` (bs.c:
     10214-10306) for the ``paid`` slots (bs.c:9776-9779, before any level-up check). Yields
     of the fainted Pokemon's form row (``SpeciesData_FromMonForm``, :10224); the receiver's
@@ -125,7 +126,7 @@ def _effort_values(tables: Tables, after: BattleState, paid, foe_row, hold):
     510 (:10294-10296), then the stat to 255 (:10299-10301)."""
     evs = after.evs[0].astype(_I32)
     yields = tables.species_ev_yield[foe_row].astype(_I32)
-    power = tables.item_hold_param[after.item[0]].astype(_I32)
+    power = tables.item_hold_param[item].astype(_I32)
     pokerus = after.pokerus != 0
     macho = hold == HOLD_EFFECT_EVS_UP_SPEED_DOWN
     total = jnp.sum(evs, axis=1)
@@ -142,16 +143,25 @@ def _effort_values(tables: Tables, after: BattleState, paid, foe_row, hold):
     return evs
 
 
-def pay_exp(tables: Tables, before: BattleState, after: BattleState) -> BattleState:
+def pay_exp(tables: Tables, before: BattleState, after: BattleState, battler=None) -> BattleState:
     """``after`` with the exp payout for an opponent faint between ``before`` and ``after``
-    (``after`` is the state after the hook's faint check); unchanged when nothing fainted."""
-    return pay_exp_leveled(tables, before, after)[0]
+    (``after`` is the state after the hook's faint check); unchanged when nothing fainted.
+    A level-up of battler 2's active reloads it into battler 2 (``expBattler = 2``,
+    battle_script.c:9716-9720, :9860-9864; D3-12). ``battler``: a static Python int, the payout
+    for that battler alone (see ``pay_exp_leveled``); ``None`` is the singles payout."""
+    return pay_exp_leveled(tables, before, after, battler)[0]
 
 
 def pay_exp_leveled(
-    tables: Tables, before: BattleState, after: BattleState
+    tables: Tables, before: BattleState, after: BattleState, battler=None
 ) -> tuple[BattleState, jnp.ndarray]:
     """``(pay_exp(...), bool[6])``: the state and the player slots that gained a level.
+
+    ``battler`` (D3-8): ``None`` is today's payout (the fainted slot of party 1, the lowest
+    when several). A static Python int is the payout of that battler alone: nothing for a
+    player battler (``CalcExpGain`` pays only a SOLO_ENEMY, script.c:2196); for an enemy
+    battler ``b`` the fainted Pokemon is party ``party(fmt, b)`` slot ``active[b]``
+    (script.c:2216-2217; ``AnyExpPayout`` pays one battler bit per call, bcp.c:4449-4469).
 
     Trigger (design §1.1): an opponent party slot ``j`` with ``before.hp > 0`` and
     ``after.hp == 0`` (the per-slot test of ``step._faint_check``): the payout is keyed on the
@@ -162,7 +172,8 @@ def pay_exp_leveled(
     ``CalcExpGain`` (bs.c:2196-2238; the engine plays only trainer singles, so every opponent
     faint pays): ``E = yield[species] * level / 7`` (yield by species, bs.c:2216-2217);
     ``n`` / ``s`` count the player's party Pokemon with a species and HP that are in
-    ``exp_mask`` / hold an Exp. Share (party item, bs.c:2201-2212). With ``s > 0``:
+    ``exp_mask`` (the entry of the fainted enemy battler, ``(battler >> 1) & 1``, at B = 4;
+    D3-8b) / hold an Exp. Share (party item, bs.c:2201-2212). With ``s > 0``:
     ``g = max(1, (E/2)/n)``, ``h = max(1, (E/2)/s)`` (:2219-2230); else ``g = max(1, E/n)``,
     ``h = 0`` (:2231-2238). ``n = 0`` divides safely and pays no ``g``: ``g`` reaches only
     mask slots with HP (ruling D4).
@@ -186,12 +197,20 @@ def pay_exp_leveled(
     does not level keeps its stats, even with new EVs. Party and battler share one row, which
     is ``BattleSystem_ReloadPokemon``'s copy for the active (battle_lib.c:169-194). A leveled
     slot without pending learnset work gets ``learn_level = L0 + 1``, ``learn_cursor = 0``."""
-    fainted = (before.hp[1] > 0) & (after.hp[1] == 0)
-    paying = jnp.any(fainted)
-    j = jnp.argmax(fainted)
-    foe_species = after.species[1, j].astype(_I32)  # a Transformed foe's copy, bs.c:2216
-    foe_row = tables.species_form_row[foe_species, after.form[1, j]]
-    exp_e = tables.species_exp_yield[foe_species].astype(_I32) * after.level[1, j].astype(_I32)
+    if battler is None:
+        fp = 1
+        fainted = (before.hp[1] > 0) & (after.hp[1] == 0)
+        paying = jnp.any(fainted)
+        j = jnp.argmax(fainted)
+    else:
+        if side_of(battler) == 0:
+            return after, jnp.zeros(SLOTS, dtype=bool)
+        fp = party(format_of(after), battler)
+        j = after.active[battler]
+        paying = (before.hp[fp, j] > 0) & (after.hp[fp, j] == 0)
+    foe_species = after.species[fp, j].astype(_I32)  # a Transformed foe's copy, bs.c:2216
+    foe_row = tables.species_form_row[foe_species, after.form[fp, j]]
+    exp_e = tables.species_exp_yield[foe_species].astype(_I32) * after.level[fp, j].astype(_I32)
     exp_e = exp_e // 7
 
     slots = jnp.arange(SLOTS)
@@ -199,8 +218,13 @@ def pay_exp_leveled(
     hp = after.hp[0].astype(_I32)
     level = after.level[0].astype(_I32)
     alive = (species != 0) & (hp > 0)
-    in_mask = (jnp.right_shift(after.exp_mask.astype(_I32), slots) & 1) == 1
-    hold = tables.item_hold_effect[after.item[0]]
+    # sideGetExpMask[(faintedMon >> 1) & 1] (bs.c:2205, :9700, :9709, :9741; D3-8b): one entry
+    # per enemy battler at B = 4, a scalar at B = 2.
+    entry = None if after.exp_mask.ndim == 0 else (battler >> 1) & 1
+    mask = after.exp_mask if entry is None else after.exp_mask[entry]
+    in_mask = (jnp.right_shift(mask.astype(_I32), slots) & 1) == 1
+    item = party_held_item(after, 0)  # the party row, read once (D3-8b)
+    hold = tables.item_hold_effect[item]
     share = hold == HOLD_EFFECT_EXP_SHARE
     n = jnp.sum((alive & in_mask).astype(_I32))
     s = jnp.sum((alive & share).astype(_I32))
@@ -220,7 +244,7 @@ def pay_exp_leveled(
     table = tables.exp_table[tables.species_exp_rate[species]]  # [6, 101], rate by species
     exp = after.exp.astype(_I32) + t
     exp = jnp.where(checked, jnp.minimum(exp, table[:, MAX_LEVEL]), exp)
-    evs = _effort_values(tables, after, paid, foe_row, hold)
+    evs = _effort_values(tables, after, paid, foe_row, item, hold)
 
     reached = jnp.sum((table[:, 1:] <= exp[:, None]).astype(_I32), axis=1)
     new_level = jnp.where(checked, jnp.maximum(level, reached), level)
@@ -239,6 +263,11 @@ def pay_exp_leveled(
     new_hp = jnp.where(species == SPECIES_SHEDINJA, 1, hp + new[:, Stat.HP] - old_max)
 
     marked = leveled & (after.learn_level == 0)
+    # BattleSystem_ReloadPokemon runs for the battler whose ``selectedPartySlot`` is the leveled
+    # slot: battler 2 first, in DOUBLES and TWO_TRAINERS (BATTLE_TYPE_AI excluded), else battler 0
+    # (battle_script.c:9716-9720, :9860-9864; D3-12 owed from D3-8b). ``reloaders`` are the
+    # player battlers of party 0 that can be that battler (MULTI's battler 2 draws from party 2).
+    reloaders = _reloaders(format_of(after))
 
     def put(field, side0):
         full = getattr(after, field)
@@ -249,31 +278,39 @@ def pay_exp_leveled(
         hp=put("hp", jnp.where(leveled, new_hp, hp)),
         max_hp=put("max_hp", jnp.where(leveled, new[:, Stat.HP], old_max)),
         stats=put("stats", jnp.where(leveled[:, None], new[:, Stat.ATK :], after.stats[0])),
-        # BattleSystem_ReloadPokemon (battle_lib.c:169-174) reloads the active battler's Attack
-        # and Defense unswapped and keeps MOVE_EFFECT_POWER_TRICK (B12-10).
-        power_trick_desync=after.power_trick_desync.at[0].set(
-            jnp.where(
-                leveled[after.active[0]], after.power_trick[0], after.power_trick_desync[0]
-            ).astype(after.power_trick_desync.dtype)
-        ),
-        # A Transformed active Pokemon: the reload gives the battler its own new stats (:169-174)
-        # and the party's shadow too.
-        shadow_stats=after.shadow_stats.at[0].set(
-            jnp.where(
-                (after.transformed[0] != 0) & leveled[after.active[0]],
-                new[after.active[0], Stat.ATK :],
-                after.shadow_stats[0],
-            ).astype(after.shadow_stats.dtype)
-        ),
         # The level-up's ReloadPokemon re-reads the party value into the battler (F-15).
         friendship=put("friendship", jnp.where(leveled, friendship, after.friendship[0])),
         party_friendship=put("party_friendship", friendship),
         evs=put("evs", evs),
         exp=exp.astype(after.exp.dtype),
-        exp_mask=jnp.where(paying, 0, after.exp_mask).astype(after.exp_mask.dtype),
+        exp_mask=(
+            jnp.where(paying, 0, after.exp_mask)
+            if entry is None
+            else after.exp_mask.at[entry].set(jnp.where(paying, 0, mask))  # bs.c:10191
+        ).astype(after.exp_mask.dtype),
         learn_level=jnp.where(marked, level + 1, after.learn_level).astype(after.learn_level.dtype),
         learn_cursor=jnp.where(marked, 0, after.learn_cursor).astype(after.learn_cursor.dtype),
     )
+    for p in reloaders:
+        reloaded = leveled[after.active[p]]
+        out = out._replace(
+            # BattleSystem_ReloadPokemon (battle_lib.c:169-174) reloads the active battler's
+            # Attack and Defense unswapped and keeps MOVE_EFFECT_POWER_TRICK (B12-10).
+            power_trick_desync=out.power_trick_desync.at[p].set(
+                jnp.where(reloaded, after.power_trick[p], after.power_trick_desync[p]).astype(
+                    after.power_trick_desync.dtype
+                )
+            ),
+            # A Transformed active Pokemon: the reload gives the battler its own new stats
+            # (:169-174) and the party's shadow too.
+            shadow_stats=out.shadow_stats.at[p].set(
+                jnp.where(
+                    (after.transformed[p] != 0) & reloaded,
+                    new[after.active[p], Stat.ATK :],
+                    after.shadow_stats[p],
+                ).astype(after.shadow_stats.dtype)
+            ),
+        )
     return out, leveled
 
 
@@ -314,11 +351,33 @@ def party_identity(state: BattleState) -> tuple[jnp.ndarray, jnp.ndarray, jnp.nd
     learnset and the Shedinja rule belong to the party Pokemon (``Pokemon_CalcStats``, the
     ``ReloadPokemon`` of battle_lib.c:169-194 copies its own stats back), G-69."""
     slots = jnp.arange(SLOTS)
-    swapped = (state.transformed[0] != 0) & (slots == state.active[0])
-    species = jnp.where(swapped, state.shadow_species[0], state.species[0])
-    form = jnp.where(swapped, state.shadow_form[0], state.form[0])
-    ivs = jnp.where(swapped[:, None], state.shadow_ivs[0][None, :], state.ivs[0])
+    species, form, ivs = state.species[0], state.form[0], state.ivs[0]
+    # At B = 4 the active slot of either party-0 battler (``_reloaders``; D3-12).
+    for p in _reloaders(format_of(state)):
+        swapped = (state.transformed[p] != 0) & (slots == state.active[p])
+        species = jnp.where(swapped, state.shadow_species[p], species)
+        form = jnp.where(swapped, state.shadow_form[p], form)
+        ivs = jnp.where(swapped[:, None], state.shadow_ivs[p][None, :], ivs)
     return species, form, ivs
+
+
+def _reloaders(fmt) -> tuple[int, ...]:
+    """The player battlers of party 0 that ``BattleSystem_ReloadPokemon`` can reload as
+    ``expBattler``: battler 2 when its ``selectedPartySlot`` is the slot, in a doubles battle
+    without ``BATTLE_TYPE_AI`` (DOUBLES, TWO_TRAINERS), else battler 0 (battle_script.c:9716-9720,
+    :9860-9864, :10173-10178; D3-12). MULTI's battler 2 draws from party 2."""
+    return (0, 2) if fmt.B == 4 and fmt != MULTI else (0,)
+
+
+def _exp_battler(state: BattleState, slot) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(active, battler)``: whether player party ``slot`` is the active Pokemon of a reloader
+    (``_reloaders``), and that battler (0 when it is none)."""
+    slot = jnp.asarray(slot)
+    on, battler = jnp.bool_(False), jnp.int32(0)
+    for p in _reloaders(format_of(state)):
+        here = slot == state.active[p]
+        on, battler = on | here, jnp.where(here, p, battler)
+    return on, battler
 
 
 def _masked(state: BattleState, slot) -> jnp.ndarray:
@@ -326,16 +385,18 @@ def _masked(state: BattleState, slot) -> jnp.ndarray:
     ``mimic_slots`` of the active Pokemon (G-68). The learn reads and writes the party Pokemon
     (``Pokemon_SetMoveSlot``, battle_script.c:10168-10176; ``BoxPokemon_AddMove``, pokemon.c:3852),
     and ``BattleSystem_ReloadPokemon`` reloads the unflagged slots from it (battle_lib.c:183-191)."""
-    bits = (state.mimic_slots[0].astype(_I32) >> jnp.arange(MOVES)) & 1
-    return (bits == 1) & (jnp.asarray(slot) == state.active[0])
+    on, p = _exp_battler(state, slot)
+    bits = (state.mimic_slots[p].astype(_I32) >> jnp.arange(MOVES)) & 1
+    return (bits == 1) & on
 
 
 def _party_moves(state: BattleState, slot) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(moves, pp)`` of player party ``slot`` as the party Pokemon holds them: the shadow of a
     flagged slot (``_masked``), else the slot's own."""
     masked = _masked(state, slot)
-    moves = jnp.where(masked, state.shadow_moves[0], state.moves[0, slot])
-    pp = jnp.where(masked, state.shadow_pp[0], state.pp[0, slot])
+    p = _exp_battler(state, slot)[1]
+    moves = jnp.where(masked, state.shadow_moves[p], state.moves[0, slot])
+    pp = jnp.where(masked, state.shadow_pp[p], state.pp[0, slot])
     return moves, pp
 
 
@@ -345,6 +406,7 @@ def _put_party(state: BattleState, slot, k, move, pp, apply) -> BattleState:
     then shows it)."""
     shadowed = _masked(state, slot)[k]
     live, shadow = apply & ~shadowed, apply & shadowed
+    p = _exp_battler(state, slot)[1]
 
     def put(arr, index, value, cond):
         return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
@@ -352,8 +414,8 @@ def _put_party(state: BattleState, slot, k, move, pp, apply) -> BattleState:
     return state._replace(
         moves=put(state.moves, (0, slot, k), move, live),
         pp=put(state.pp, (0, slot, k), pp, live),
-        shadow_moves=put(state.shadow_moves, (0, k), move, shadow),
-        shadow_pp=put(state.shadow_pp, (0, k), pp, shadow),
+        shadow_moves=put(state.shadow_moves, (p, k), move, shadow),
+        shadow_pp=put(state.shadow_pp, (p, k), pp, shadow),
     )
 
 

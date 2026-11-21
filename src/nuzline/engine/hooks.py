@@ -386,7 +386,7 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[row, mon] > 0)
     w = fcm.weather_bits(state)
     already = fcm.ability_bits(w, weather) == w
-    state = announce(state, "weather_announced", side, on)  # :3748-3786, even when already up
+    state = announce(state, "weather_announced", side, on)  # :3747, :3756, :3765, :3774, even when already up
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
     return fcm.weather_ability(state, weather, on)
 
@@ -1037,7 +1037,9 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     meets an active battler that announced its weather ability at its own entry. Two newcomers'
     weather abilities meet only at a double KO's replacements (``playout.replacement_pass``)
     and at the battle start (``battle_start``), ruling G-26."""
-    return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
+    return switch_in_effects(
+        tables, entry_hazards(tables, state, jnp.asarray(side, _I32))[0], side
+    )
 
 
 def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
