@@ -104,7 +104,7 @@ tests/engine/test_terrain_moves.py 15 s2m
 tests/engine/test_d2_action_encoding.py 14 slow-20261120-8c5cd83
 tests/engine/test_disable.py 14 slow-20261120-8c5cd83
 tests/engine/test_e1_trial.py 14 e2-d3g-e4fbd40
-tests/engine/test_e3_batch2.py 14 e2-d3g-e4fbd40
+tests/engine/test_e3_batch2.py 14 e2-d3g3-9732a71
 tests/engine/test_k3b_abilities.py 14 nightly-20261120-8c5cd83
 tests/engine/test_power_moves.py 14 e2-d3g-e4fbd40
 tests/engine/test_self_destruct.py 14 slow-20261120-8c5cd83
@@ -151,7 +151,7 @@ tests/engine/test_d2_follow_me.py 10 slow-20261120-8c5cd83
 tests/engine/test_d3_absent.py 10 e2-d3g-e4fbd40
 tests/engine/test_d3_end_of_turn.py 10 e2-d3q-d5e66d5
 tests/engine/test_d3_owed_redirect.py 10 e2-d3w-3d1dca0
-tests/engine/test_d3_starf_item_pass.py 10 e2-d3g-e4fbd40
+tests/engine/test_d3_starf_item_pass.py 10 e2-d3g4-0ee1df9
 tests/engine/test_damage_items.py 10 e2-d3g-e4fbd40
 tests/engine/test_e1_batch_a.py 10 e2-d3g-e4fbd40
 tests/engine/test_e1_batch_c.py 10 nightly-20261120-8c5cd83
@@ -235,7 +235,7 @@ tests/engine/test_targets.py 4 nightly-20261120-8c5cd83
 tests/kaizo/test_crosscheck.py 4 p2c
 tests/kaizo/test_extract_kaizo_docs.py 4 nightly-20261120-8c5cd83
 tests/kaizo/test_extract_pkcalc.py 4 p2c
-tests/kaizo/test_gauntlet_map.py 4 e3-b3e-9768eb0
+tests/kaizo/test_gauntlet_map.py 4 e3-b3h-a7ea2dd
 tests/kaizo/test_kaizo_tables.py 4 nightly-20261120-8c5cd83
 tests/kaizo/test_line_roark.py 4 slow-20261120-8c5cd83
 tests/kaizo/test_overrides.py 4 e1-g6-9d6a492
@@ -251,6 +251,7 @@ tests/kaizo/test_trainer_map.py 4 p2c
 tests/prep/test_caps.py 4 e3-b3e-9768eb0
 tests/prep/test_checkpoint.py 4 slow-20261120-8c5cd83
 tests/prep/test_exhaustive.py 4 g4
+tests/prep/test_gauntlet_carry.py 4 e3-b3h-a7ea2dd
 tests/prep/test_gauntlet_start.py 4 e3-b3e-9768eb0
 tests/prep/test_growth.py 4 e3-b3e-9768eb0
 tests/prep/test_leveling.py 4 nightly-20261120-8c5cd83
@@ -323,4 +324,8 @@ tests/tools/test_bw3_slow.py 4 bw3
 tests/tools/test_effect_map.py 4 p2c
 tests/tools/test_extract_decomp.py 4 nightly-20261120-8c5cd83
 tests/tools/test_extract_trainers.py 4 nightly-20261120-8c5cd83
+tests/tools/test_pod_gate.py 4 ops-rt2a-adb4453
+tests/tools/test_pod_weights.py 4 ops-rt2a-adb4453
 tests/tools/test_snap_compare.py 4 nightly-20261120-8c5cd83
+tests/tools/test_table_key.py 4 ops-rt2a-adb4453
+tests/tools/test_weights_from_agg.py 4 ops-rt2a-adb4453
