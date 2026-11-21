@@ -89,6 +89,9 @@ def test_accessors_read_absent_battlers_as_zero(tables, names):
     assert int(ai_record_ability(s, 0)) == 7 and int(ai_record_ability(s, jnp.int32(1))) == 9
     assert np.asarray(ai_record_moves(s, 0)).tolist() == [5, 6, 0, 0]
     assert int(ai_record_item(s, jnp.int32(0))) == 17
+    # No battler (-1, e.g. an absent partner) reads zeros too, not row 0 (manager gate note).
+    assert int(ai_record_ability(s, -1)) == 0 and int(ai_record_item(s, jnp.int32(-1))) == 0
+    assert not np.asarray(ai_record_moves(s, jnp.int32(-1))).any()
 
 
 def test_entry_clears_the_entering_battler_only(tables, names):

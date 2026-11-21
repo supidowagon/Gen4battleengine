@@ -53,6 +53,14 @@ def _singles(tables, names):
     return s._replace(last_move=s.last_move.at[0].set(names.move("Tackle")))
 
 
+def test_record_last_moves_rejects_a_battler_that_does_not_choose_by_ai(tables, names):
+    """Only ``format.ai_battlers`` decide by AI (as ``legal_opponent_actions``): battler 0 at
+    B = 2 is the player, whose row 1 no AI keeps (``ai_record_kept``)."""
+    s = _singles(tables, names)
+    with pytest.raises(ValueError):
+        record_last_moves(tables, s, jnp.asarray([0, 0], jnp.int32), (0,))
+
+
 def test_encored_enemy_records_nothing(tables, names):
     """D45-4a, bcp.c:442-454: battler 1 is Encored into a move it knows; the same state without
     the Encore records Tackle in row 0."""

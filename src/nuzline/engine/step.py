@@ -599,9 +599,15 @@ def record_last_moves(tables: Tables, state: BattleState, actions, deciders) -> 
     takes ``last_move[t]`` once when at least one decider whose targets include ``t`` records.
     MOVE_NONE matches the first empty entry and writes nothing (:2708-2710;
     ``state.record_seen_move``). Rows that exist: DOUBLES / TWO_TRAINERS rows 0 and 2; MULTI rows
-    0-3; B = 2 row 0."""
+    0-3; B = 2 row 0. A decider outside ``format.ai_battlers`` raises ValueError, as
+    ``actions.legal_opponent_actions`` does (its row may be one ``ai_record_kept`` drops)."""
     fmt = format_of(state)
     four = fmt.B == 4
+    for a in deciders:
+        if a not in ai_battlers(fmt):
+            raise ValueError(
+                f"battler {a} does not choose by AI in this format ({ai_battlers(fmt)})"
+            )
     on = [False] * fmt.B  # one traced bool per target row; Python False: never a target
     for a in deciders:
         _, struggling = selected_move(tables, state, a, actions[a])

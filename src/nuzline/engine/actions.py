@@ -264,7 +264,8 @@ def legal_opponent_actions(tables: Tables, state: BattleState, b: int = 1) -> jn
     state, b)``), then its bag slots (``usable_trainer_items``). ``b`` is a battler that chooses by
     AI (``format.ai_battlers``: 1; 1 and 3 at B = 4; and 2, the partner, in MULTI; sheet D45-6 R4);
     its bag is ``trainer_items[b]`` (bcp.c:4796-4813, ruling D1-5), empty for the MULTI partner and
-    for every MULTI battler (R1-R3)."""
+    for every MULTI battler (R1-R3). ``b`` must be a static Python int (it picks the bag row and
+    the legality rows at trace time), never a traced array."""
     fmt = format_of(state)
     if b not in ai_battlers(fmt):
         raise ValueError(f"battler {b} does not choose by AI in this format ({ai_battlers(fmt)})")

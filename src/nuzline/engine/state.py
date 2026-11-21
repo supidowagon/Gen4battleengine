@@ -796,7 +796,8 @@ def _record_row(rows, b):
     n = rows.shape[0]
     b = jnp.asarray(b, jnp.int32)
     row = rows[jnp.clip(b, 0, n - 1)]
-    return jnp.where(b < n, row, jnp.zeros_like(row))
+    # zeros for a battler the format lacks (b >= B) and for no battler (b < 0, e.g. -1)
+    return jnp.where((b >= 0) & (b < n), row, jnp.zeros_like(row))
 
 
 def ai_record_moves(state, b):
