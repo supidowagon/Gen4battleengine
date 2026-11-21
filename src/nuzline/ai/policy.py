@@ -5436,7 +5436,8 @@ def _score_context(
     """The ``AiContext`` after the policy's flag scripts (refusals not applied). ``inject``: -1,
     or the exact distribution's injected speed-compare schedule (``_slot_event_scorings``)."""
     _check_outcome(ai_outcome, layout)
-    ctx = c.new_context(tables, state, ai_outcome)
+    # B = 2: the AI battler 1 attacks the player's battler 0 (trainer_ai.c:264-265, :4193-4195)
+    ctx = c.new_context(tables, state, ai_outcome, attacker=1, defender=0)
     return _run_flags(ctx._replace(inject=jnp.asarray(inject, _I32)), layout)
 
 
@@ -6084,7 +6085,9 @@ def _loose_run(tables: Tables, state: BattleState, bits, layout: AiLayout):
         calc_draws=no_calc_draws(),  # not read: the loose oracle draws each digit
     )
     no_sites = jnp.zeros((MOVES, len(c.SITE_LINES)), _I32)  # not read
-    ctx = c.new_context(tables, state, outcome, no_sites, c.loose_draws(bits))
+    ctx = c.new_context(
+        tables, state, outcome, attacker=1, defender=0, sites=no_sites, loose=c.loose_draws(bits)
+    )
     ctx = _run_flags(ctx, layout)
     return ctx.scores, ctx.loose
 

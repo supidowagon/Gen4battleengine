@@ -779,13 +779,14 @@ def _slot_ctx(tables, s, slot: int = 0, rolls=(), reads: int = 8):
     return c.at_slot(c.new_context(tables, s, o), slot)
 
 
-def test_battler_args_are_the_decomps_and_resolve_by_xor_2():
+def test_battler_args_are_the_decomps_and_resolve_by_xor_2(tables, names):
     # include/constants/battle/trainer_ai.h:28-31; AIScript_Battler (trainer_ai.c:2765-2782).
     header = _decomp_text("include/constants/battle/trainer_ai.h")
     for name in ("DEFENDER", "ATTACKER", "DEFENDER_PARTNER", "ATTACKER_PARTNER"):
         assert f"AI_BATTLER_{name}" in header
     assert [int(b) for b in (_D, _A, _DP, _AP)] == [0, 1, 0 ^ 2, 1 ^ 2]
-    assert [c._side(b) for b in (_D, _A, _DP, _AP)] == [0, 1, 2, 3]
+    ctx = c.new_context(tables, versus(tables, names, GEODUDE), outcome())
+    assert [int(c._battler(ctx, b)) for b in (_D, _A, _DP, _AP)] == [0, 1, 2, 3]
 
 
 def test_cleared_battler_is_the_zeroed_battle_mon(tables, kaizo_tables):

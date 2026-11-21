@@ -1,0 +1,14042 @@
+{
+"busy/0/ability_ATTACKER": [
+0,
+0
+],
+"busy/0/ability_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/ability_DEFENDER": [
+0,
+0
+],
+"busy/0/ability_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/ability_flat_ATTACKER": [
+0,
+0
+],
+"busy/0/ability_flat_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/ability_flat_DEFENDER": [
+0,
+0
+],
+"busy/0/ability_flat_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/after_speed_compare": [
+true,
+0
+],
+"busy/0/alive_ATTACKER": [
+2,
+0
+],
+"busy/0/alive_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/0/alive_DEFENDER": [
+5,
+0
+],
+"busy/0/alive_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/0/check_ability0_ATTACKER": [
+2,
+0
+],
+"busy/0/check_ability0_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/0/check_ability0_DEFENDER": [
+2,
+0
+],
+"busy/0/check_ability0_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/0/check_ability_ATTACKER": [
+2,
+0
+],
+"busy/0/check_ability_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/0/check_ability_DEFENDER": [
+2,
+0
+],
+"busy/0/check_ability_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/0/context": [
+[
+0,
+100,
+0,
+0
+],
+[
+33,
+3,
+0,
+0
+],
+0,
+[
+0,
+0
+],
+false,
+[
+56,
+44
+],
+[
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+[
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+]
+],
+[
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+446
+],
+"busy/0/deals_more_ATTACKER": "AssertionError",
+"busy/0/deals_more_ATTACKER_PARTNER": "AssertionError",
+"busy/0/deals_more_DEFENDER": [
+0,
+0
+],
+"busy/0/deals_more_DEFENDER_PARTNER": "AssertionError",
+"busy/0/defender_move_class": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_1": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_111": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_17": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_176": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_31": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_4": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_43": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_PARTNER_1": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_PARTNER_111": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_PARTNER_17": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_PARTNER_176": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_PARTNER_31": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_PARTNER_4": [
+0,
+0
+],
+"busy/0/eff_known_ATTACKER_PARTNER_43": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_1": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_111": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_17": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_176": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_31": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_4": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_43": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_PARTNER_1": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_PARTNER_111": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_PARTNER_17": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_PARTNER_176": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_PARTNER_31": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_PARTNER_4": [
+0,
+0
+],
+"busy/0/eff_known_DEFENDER_PARTNER_43": [
+0,
+0
+],
+"busy/0/eff_notknown_ATTACKER_1": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_111": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_17": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_176": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_31": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_4": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_43": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_PARTNER_1": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_PARTNER_111": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_PARTNER_17": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_PARTNER_176": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_PARTNER_31": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_PARTNER_4": [
+0,
+1
+],
+"busy/0/eff_notknown_ATTACKER_PARTNER_43": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_1": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_111": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_17": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_176": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_31": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_4": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_43": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_PARTNER_1": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_PARTNER_111": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_PARTNER_17": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_PARTNER_176": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_PARTNER_31": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_PARTNER_4": [
+0,
+1
+],
+"busy/0/eff_notknown_DEFENDER_PARTNER_43": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_AQUA_RING": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_CAMOUFLAGE": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_EMBARGO": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_IMPRISON": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_IMPRISONED": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_INGRAIN": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_LEECH_SEED": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_LOCK_ON": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_MAGNET_RISE": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_MIRACLE_EYE": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_EMBARGO": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_IMPRISON": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_INGRAIN": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PARTNER_YAWN": [
+0,
+0
+],
+"busy/0/effect_ATTACKER_PERISH_SONG": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_POWER_TRICK": [
+0,
+1
+],
+"busy/0/effect_ATTACKER_YAWN": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_AQUA_RING": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_CAMOUFLAGE": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_EMBARGO": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_IMPRISON": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_IMPRISONED": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_INGRAIN": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_LEECH_SEED": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_LOCK_ON": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_MAGNET_RISE": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_MIRACLE_EYE": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_EMBARGO": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_IMPRISON": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_INGRAIN": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PARTNER_YAWN": [
+0,
+0
+],
+"busy/0/effect_DEFENDER_PERISH_SONG": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_POWER_TRICK": [
+0,
+1
+],
+"busy/0/effect_DEFENDER_YAWN": [
+0,
+1
+],
+"busy/0/effectiveness_BASE": [
+0,
+0
+],
+"busy/0/effectiveness_DOUBLE": [
+0,
+1
+],
+"busy/0/effectiveness_HALF": [
+0,
+0
+],
+"busy/0/effectiveness_IMMUNE": [
+0,
+0
+],
+"busy/0/effectiveness_QUADRUPLE": [
+0,
+0
+],
+"busy/0/effectiveness_QUARTER": [
+0,
+0
+],
+"busy/0/effectiveness_STAB": [
+0,
+0
+],
+"busy/0/effectiveness_class": [
+80,
+0
+],
+"busy/0/fainted_ATTACKER": "AssertionError",
+"busy/0/fainted_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/0/fainted_DEFENDER": "AssertionError",
+"busy/0/fainted_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/0/first_turn_ATTACKER": [
+1,
+0
+],
+"busy/0/first_turn_ATTACKER_PARTNER": [
+1,
+0
+],
+"busy/0/first_turn_DEFENDER": [
+1,
+0
+],
+"busy/0/first_turn_DEFENDER_PARTNER": [
+1,
+0
+],
+"busy/0/flag_damage": [
+0,
+0
+],
+"busy/0/flash_ATTACKER": [
+0,
+1
+],
+"busy/0/flash_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/flash_DEFENDER": [
+0,
+1
+],
+"busy/0/flash_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/fling_ATTACKER": [
+0,
+0
+],
+"busy/0/fling_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/fling_DEFENDER": [
+0,
+0
+],
+"busy/0/fling_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/gender_ATTACKER": [
+0,
+0
+],
+"busy/0/gender_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/gender_DEFENDER": [
+0,
+0
+],
+"busy/0/gender_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/held_effect_ATTACKER": [
+99,
+0
+],
+"busy/0/held_effect_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/held_effect_DEFENDER": [
+99,
+0
+],
+"busy/0/held_effect_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/held_eq0_ATTACKER": [
+0,
+0
+],
+"busy/0/held_eq0_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/0/held_eq0_DEFENDER": [
+0,
+0
+],
+"busy/0/held_eq0_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/0/held_eq_ATTACKER": [
+0,
+1
+],
+"busy/0/held_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/held_eq_DEFENDER": [
+0,
+1
+],
+"busy/0/held_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/held_item_ATTACKER": [
+271,
+0
+],
+"busy/0/held_item_ATTACKER_PARTNER": [
+271,
+0
+],
+"busy/0/held_item_DEFENDER": [
+111,
+0
+],
+"busy/0/held_item_DEFENDER_PARTNER": [
+271,
+0
+],
+"busy/0/hp_eq_ATTACKER": [
+0,
+0
+],
+"busy/0/hp_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/hp_eq_DEFENDER": [
+0,
+1
+],
+"busy/0/hp_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/hp_gt_ATTACKER": [
+0,
+1
+],
+"busy/0/hp_gt_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/hp_gt_DEFENDER": [
+0,
+1
+],
+"busy/0/hp_gt_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/hp_lt_ATTACKER": [
+0,
+0
+],
+"busy/0/hp_lt_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/0/hp_lt_DEFENDER": [
+0,
+0
+],
+"busy/0/hp_lt_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/0/hp_ne_ATTACKER": [
+0,
+1
+],
+"busy/0/hp_ne_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/0/hp_ne_DEFENDER": [
+0,
+0
+],
+"busy/0/hp_ne_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/0/is_type_ATTACKER": [
+0,
+0
+],
+"busy/0/is_type_ATTACKER_PARTNER": [
+1,
+0
+],
+"busy/0/is_type_DEFENDER": [
+1,
+0
+],
+"busy/0/is_type_DEFENDER_PARTNER": [
+1,
+0
+],
+"busy/0/is_type_rock_ATTACKER": [
+1,
+0
+],
+"busy/0/is_type_rock_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/is_type_rock_DEFENDER": [
+0,
+0
+],
+"busy/0/is_type_rock_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/kills_max": [
+0,
+0
+],
+"busy/0/known_ATTACKER_0": [
+0,
+1
+],
+"busy/0/known_ATTACKER_105": [
+0,
+0
+],
+"busy/0/known_ATTACKER_33": [
+0,
+0
+],
+"busy/0/known_ATTACKER_89": [
+0,
+0
+],
+"busy/0/known_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"busy/0/known_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"busy/0/known_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"busy/0/known_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"busy/0/known_DEFENDER_0": [
+0,
+1
+],
+"busy/0/known_DEFENDER_105": [
+0,
+0
+],
+"busy/0/known_DEFENDER_33": [
+0,
+1
+],
+"busy/0/known_DEFENDER_89": [
+0,
+0
+],
+"busy/0/known_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"busy/0/known_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"busy/0/known_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"busy/0/known_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"busy/0/last_resort_ATTACKER": [
+0,
+0
+],
+"busy/0/last_resort_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/last_resort_DEFENDER": [
+0,
+1
+],
+"busy/0/last_resort_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/layers_ATTACKER_PARTNER_SPIKES": [
+2,
+0
+],
+"busy/0/layers_ATTACKER_PARTNER_TOXIC_SPIKES": [
+1,
+0
+],
+"busy/0/layers_ATTACKER_SPIKES": [
+2,
+0
+],
+"busy/0/layers_ATTACKER_TOXIC_SPIKES": [
+1,
+0
+],
+"busy/0/layers_DEFENDER_PARTNER_SPIKES": [
+1,
+0
+],
+"busy/0/layers_DEFENDER_PARTNER_TOXIC_SPIKES": [
+2,
+0
+],
+"busy/0/layers_DEFENDER_SPIKES": [
+1,
+0
+],
+"busy/0/layers_DEFENDER_TOXIC_SPIKES": [
+2,
+0
+],
+"busy/0/level_0": [
+0,
+1
+],
+"busy/0/level_1": [
+0,
+0
+],
+"busy/0/level_2": [
+0,
+0
+],
+"busy/0/load_type_ATTACKER_PARTNER_TYPE_1": [
+5,
+0
+],
+"busy/0/load_type_ATTACKER_PARTNER_TYPE_2": [
+4,
+0
+],
+"busy/0/load_type_ATTACKER_TYPE_1": [
+5,
+0
+],
+"busy/0/load_type_ATTACKER_TYPE_2": [
+4,
+0
+],
+"busy/0/load_type_DEFENDER_TYPE_1": [
+0,
+0
+],
+"busy/0/load_type_DEFENDER_TYPE_2": [
+2,
+0
+],
+"busy/0/load_type_MOVE_TYPE": [
+5,
+0
+],
+"busy/0/move_pp": [
+20,
+0
+],
+"busy/0/no_damaging": [
+0,
+0
+],
+"busy/0/not_taunted": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_AQUA_RING": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_CAMOUFLAGE": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_EMBARGO": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_IMPRISON": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_IMPRISONED": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_INGRAIN": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_LEECH_SEED": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_LOCK_ON": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_MAGNET_RISE": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_MIRACLE_EYE": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_EMBARGO": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_IMPRISON": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_INGRAIN": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PARTNER_YAWN": [
+0,
+1
+],
+"busy/0/noteffect_ATTACKER_PERISH_SONG": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_POWER_TRICK": [
+0,
+0
+],
+"busy/0/noteffect_ATTACKER_YAWN": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_AQUA_RING": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_CAMOUFLAGE": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_EMBARGO": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_IMPRISON": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_IMPRISONED": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_INGRAIN": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_LEECH_SEED": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_LOCK_ON": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_MAGNET_RISE": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_MIRACLE_EYE": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_EMBARGO": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_IMPRISON": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_INGRAIN": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PARTNER_YAWN": [
+0,
+1
+],
+"busy/0/noteffect_DEFENDER_PERISH_SONG": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_POWER_TRICK": [
+0,
+0
+],
+"busy/0/noteffect_DEFENDER_YAWN": [
+0,
+0
+],
+"busy/0/notknown_ATTACKER_0": [
+0,
+0
+],
+"busy/0/notknown_ATTACKER_105": [
+0,
+1
+],
+"busy/0/notknown_ATTACKER_33": [
+0,
+1
+],
+"busy/0/notknown_ATTACKER_89": [
+0,
+1
+],
+"busy/0/notknown_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"busy/0/notknown_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"busy/0/notknown_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"busy/0/notknown_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"busy/0/notknown_DEFENDER_0": [
+0,
+0
+],
+"busy/0/notknown_DEFENDER_105": [
+0,
+1
+],
+"busy/0/notknown_DEFENDER_33": [
+0,
+0
+],
+"busy/0/notknown_DEFENDER_89": [
+0,
+1
+],
+"busy/0/notknown_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"busy/0/notknown_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"busy/0/notknown_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"busy/0/notknown_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"busy/0/notstatus_ATTACKER": [
+0,
+1
+],
+"busy/0/notstatus_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/0/notstatus_DEFENDER": [
+0,
+1
+],
+"busy/0/notstatus_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/0/notvolatile_ATTACKER_ATTRACT": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_CONFUSION": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_CURSE": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_FOCUS_ENERGY": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_FORESIGHT": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_MEAN_LOOK": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_NIGHTMARE": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_CURSE": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_PARTNER_TORMENT": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_SUBSTITUTE": [
+0,
+0
+],
+"busy/0/notvolatile_ATTACKER_TORMENT": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_ATTRACT": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_CONFUSION": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_CURSE": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_FOCUS_ENERGY": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_FORESIGHT": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_MEAN_LOOK": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_NIGHTMARE": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_CURSE": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_PARTNER_TORMENT": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_SUBSTITUTE": [
+0,
+0
+],
+"busy/0/notvolatile_DEFENDER_TORMENT": [
+0,
+0
+],
+"busy/0/party_more": [
+0,
+0
+],
+"busy/0/party_status_ATTACKER": [
+0,
+0
+],
+"busy/0/party_status_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/party_status_DEFENDER": [
+0,
+0
+],
+"busy/0/party_status_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/prev_move_ATTACKER": [
+1,
+0
+],
+"busy/0/prev_move_ATTACKER_PARTNER": [
+1,
+0
+],
+"busy/0/prev_move_DEFENDER": [
+3,
+0
+],
+"busy/0/prev_move_DEFENDER_PARTNER": [
+1,
+0
+],
+"busy/0/protect_ATTACKER": [
+2,
+0
+],
+"busy/0/protect_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/0/protect_DEFENDER": [
+1,
+0
+],
+"busy/0/protect_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/0/recycle_ATTACKER": [
+2,
+0
+],
+"busy/0/recycle_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/0/recycle_DEFENDER": [
+1,
+0
+],
+"busy/0/recycle_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/0/side_ATTACKER_FUTURE_SIGHT": [
+0,
+0
+],
+"busy/0/side_ATTACKER_LIGHT_SCREEN": [
+0,
+1
+],
+"busy/0/side_ATTACKER_LUCKY_CHANT": [
+0,
+0
+],
+"busy/0/side_ATTACKER_MIST": [
+0,
+1
+],
+"busy/0/side_ATTACKER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"busy/0/side_ATTACKER_PARTNER_LIGHT_SCREEN": [
+0,
+1
+],
+"busy/0/side_ATTACKER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"busy/0/side_ATTACKER_PARTNER_MIST": [
+0,
+1
+],
+"busy/0/side_ATTACKER_PARTNER_REFLECT": [
+0,
+1
+],
+"busy/0/side_ATTACKER_PARTNER_SAFEGUARD": [
+0,
+1
+],
+"busy/0/side_ATTACKER_PARTNER_SPIKES": [
+0,
+1
+],
+"busy/0/side_ATTACKER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"busy/0/side_ATTACKER_PARTNER_TAILWIND": [
+0,
+1
+],
+"busy/0/side_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+1
+],
+"busy/0/side_ATTACKER_REFLECT": [
+0,
+1
+],
+"busy/0/side_ATTACKER_SAFEGUARD": [
+0,
+1
+],
+"busy/0/side_ATTACKER_SPIKES": [
+0,
+1
+],
+"busy/0/side_ATTACKER_STEALTH_ROCK": [
+0,
+0
+],
+"busy/0/side_ATTACKER_TAILWIND": [
+0,
+1
+],
+"busy/0/side_ATTACKER_TOXIC_SPIKES": [
+0,
+1
+],
+"busy/0/side_DEFENDER_FUTURE_SIGHT": [
+0,
+0
+],
+"busy/0/side_DEFENDER_LIGHT_SCREEN": [
+0,
+1
+],
+"busy/0/side_DEFENDER_LUCKY_CHANT": [
+0,
+0
+],
+"busy/0/side_DEFENDER_MIST": [
+0,
+1
+],
+"busy/0/side_DEFENDER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"busy/0/side_DEFENDER_PARTNER_LIGHT_SCREEN": [
+0,
+1
+],
+"busy/0/side_DEFENDER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"busy/0/side_DEFENDER_PARTNER_MIST": [
+0,
+1
+],
+"busy/0/side_DEFENDER_PARTNER_REFLECT": [
+0,
+1
+],
+"busy/0/side_DEFENDER_PARTNER_SAFEGUARD": [
+0,
+1
+],
+"busy/0/side_DEFENDER_PARTNER_SPIKES": [
+0,
+1
+],
+"busy/0/side_DEFENDER_PARTNER_STEALTH_ROCK": [
+0,
+1
+],
+"busy/0/side_DEFENDER_PARTNER_TAILWIND": [
+0,
+1
+],
+"busy/0/side_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+1
+],
+"busy/0/side_DEFENDER_REFLECT": [
+0,
+1
+],
+"busy/0/side_DEFENDER_SAFEGUARD": [
+0,
+1
+],
+"busy/0/side_DEFENDER_SPIKES": [
+0,
+1
+],
+"busy/0/side_DEFENDER_STEALTH_ROCK": [
+0,
+1
+],
+"busy/0/side_DEFENDER_TAILWIND": [
+0,
+1
+],
+"busy/0/side_DEFENDER_TOXIC_SPIKES": [
+0,
+1
+],
+"busy/0/slower": [
+0,
+1
+],
+"busy/0/speed_rank_ATTACKER": [
+1,
+0
+],
+"busy/0/speed_rank_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/speed_rank_DEFENDER": [
+0,
+0
+],
+"busy/0/speed_rank_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/stage_diff_ATTACKER_ACC": [
+0,
+0
+],
+"busy/0/stage_diff_ATTACKER_ATK": [
+0,
+0
+],
+"busy/0/stage_diff_ATTACKER_PARTNER_ACC": [
+-6,
+0
+],
+"busy/0/stage_diff_ATTACKER_PARTNER_ATK": [
+-6,
+0
+],
+"busy/0/stage_diff_ATTACKER_PARTNER_SPE": [
+-6,
+0
+],
+"busy/0/stage_diff_ATTACKER_SPE": [
+0,
+0
+],
+"busy/0/stage_diff_DEFENDER_ACC": [
+2,
+0
+],
+"busy/0/stage_diff_DEFENDER_ATK": [
+-3,
+0
+],
+"busy/0/stage_diff_DEFENDER_PARTNER_ACC": [
+-6,
+0
+],
+"busy/0/stage_diff_DEFENDER_PARTNER_ATK": [
+-6,
+0
+],
+"busy/0/stage_diff_DEFENDER_PARTNER_SPE": [
+-6,
+0
+],
+"busy/0/stage_diff_DEFENDER_SPE": [
+1,
+0
+],
+"busy/0/stage_eq_ATTACKER_ACC": [
+0,
+1
+],
+"busy/0/stage_eq_ATTACKER_ATK": [
+0,
+1
+],
+"busy/0/stage_eq_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"busy/0/stage_eq_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"busy/0/stage_eq_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"busy/0/stage_eq_ATTACKER_SPE": [
+0,
+1
+],
+"busy/0/stage_eq_DEFENDER_ACC": [
+0,
+0
+],
+"busy/0/stage_eq_DEFENDER_ATK": [
+0,
+0
+],
+"busy/0/stage_eq_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"busy/0/stage_eq_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"busy/0/stage_eq_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"busy/0/stage_eq_DEFENDER_SPE": [
+0,
+0
+],
+"busy/0/stage_gt_ATTACKER_ACC": [
+0,
+0
+],
+"busy/0/stage_gt_ATTACKER_ATK": [
+0,
+0
+],
+"busy/0/stage_gt_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"busy/0/stage_gt_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"busy/0/stage_gt_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"busy/0/stage_gt_ATTACKER_SPE": [
+0,
+0
+],
+"busy/0/stage_gt_DEFENDER_ACC": [
+0,
+1
+],
+"busy/0/stage_gt_DEFENDER_ATK": [
+0,
+0
+],
+"busy/0/stage_gt_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"busy/0/stage_gt_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"busy/0/stage_gt_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"busy/0/stage_gt_DEFENDER_SPE": [
+0,
+1
+],
+"busy/0/stage_lt_ATTACKER_ACC": [
+0,
+0
+],
+"busy/0/stage_lt_ATTACKER_ATK": [
+0,
+0
+],
+"busy/0/stage_lt_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"busy/0/stage_lt_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"busy/0/stage_lt_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"busy/0/stage_lt_ATTACKER_SPE": [
+0,
+0
+],
+"busy/0/stage_lt_DEFENDER_ACC": [
+0,
+0
+],
+"busy/0/stage_lt_DEFENDER_ATK": [
+0,
+1
+],
+"busy/0/stage_lt_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"busy/0/stage_lt_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"busy/0/stage_lt_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"busy/0/stage_lt_DEFENDER_SPE": [
+0,
+0
+],
+"busy/0/stage_ne_ATTACKER_ACC": [
+0,
+0
+],
+"busy/0/stage_ne_ATTACKER_ATK": [
+0,
+0
+],
+"busy/0/stage_ne_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"busy/0/stage_ne_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"busy/0/stage_ne_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"busy/0/stage_ne_ATTACKER_SPE": [
+0,
+0
+],
+"busy/0/stage_ne_DEFENDER_ACC": [
+0,
+1
+],
+"busy/0/stage_ne_DEFENDER_ATK": [
+0,
+1
+],
+"busy/0/stage_ne_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"busy/0/stage_ne_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"busy/0/stage_ne_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"busy/0/stage_ne_DEFENDER_SPE": [
+0,
+1
+],
+"busy/0/status_ATTACKER": [
+0,
+0
+],
+"busy/0/status_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/0/status_DEFENDER": [
+0,
+1
+],
+"busy/0/status_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/0/sum_stages_ATTACKER": [
+2,
+0
+],
+"busy/0/sum_stages_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/0/sum_stages_DEFENDER": [
+6,
+0
+],
+"busy/0/sum_stages_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/0/super_effective": [
+0,
+1
+],
+"busy/0/target_is_partner": [
+0,
+0
+],
+"busy/0/turn_count_ATTACKER": [
+-3,
+0
+],
+"busy/0/turn_count_ATTACKER_PARTNER": [
+-3,
+0
+],
+"busy/0/turn_count_DEFENDER": [
+-2,
+0
+],
+"busy/0/turn_count_DEFENDER_PARTNER": [
+-3,
+0
+],
+"busy/0/under_disable_ATTACKER": [
+0,
+1
+],
+"busy/0/under_disable_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/0/under_disable_DEFENDER": [
+0,
+1
+],
+"busy/0/under_disable_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/0/under_encore_ATTACKER": [
+0,
+1
+],
+"busy/0/under_encore_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/0/under_encore_DEFENDER": [
+0,
+1
+],
+"busy/0/under_encore_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_ATTRACT": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_CONFUSION": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_CURSE": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_FOCUS_ENERGY": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_FORESIGHT": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_MEAN_LOOK": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_NIGHTMARE": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_CURSE": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_PARTNER_TORMENT": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_SUBSTITUTE": [
+0,
+1
+],
+"busy/0/volatile_ATTACKER_TORMENT": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_ATTRACT": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_CONFUSION": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_CURSE": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_FOCUS_ENERGY": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_FORESIGHT": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_MEAN_LOOK": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_NIGHTMARE": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_CURSE": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_PARTNER_TORMENT": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_SUBSTITUTE": [
+0,
+1
+],
+"busy/0/volatile_DEFENDER_TORMENT": [
+0,
+1
+],
+"busy/0/with_partner": [
+0,
+0
+],
+"busy/1/ability_ATTACKER": [
+0,
+0
+],
+"busy/1/ability_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/ability_DEFENDER": [
+0,
+0
+],
+"busy/1/ability_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/ability_flat_ATTACKER": [
+0,
+0
+],
+"busy/1/ability_flat_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/ability_flat_DEFENDER": [
+0,
+0
+],
+"busy/1/ability_flat_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/after_speed_compare": [
+true,
+0
+],
+"busy/1/alive_ATTACKER": [
+2,
+0
+],
+"busy/1/alive_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/1/alive_DEFENDER": [
+5,
+0
+],
+"busy/1/alive_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/1/check_ability0_ATTACKER": [
+2,
+0
+],
+"busy/1/check_ability0_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/1/check_ability0_DEFENDER": [
+2,
+0
+],
+"busy/1/check_ability0_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/1/check_ability_ATTACKER": [
+2,
+0
+],
+"busy/1/check_ability_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/1/check_ability_DEFENDER": [
+2,
+0
+],
+"busy/1/check_ability_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/1/context": [
+[
+0,
+100,
+0,
+0
+],
+[
+33,
+3,
+0,
+0
+],
+0,
+[
+0,
+0
+],
+false,
+[
+56,
+44
+],
+[
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+[
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+]
+],
+[
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54,
+54
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+88
+],
+"busy/1/deals_more_ATTACKER": "AssertionError",
+"busy/1/deals_more_ATTACKER_PARTNER": "AssertionError",
+"busy/1/deals_more_DEFENDER": [
+0,
+0
+],
+"busy/1/deals_more_DEFENDER_PARTNER": "AssertionError",
+"busy/1/defender_move_class": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_1": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_111": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_17": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_176": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_31": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_4": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_43": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_PARTNER_1": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_PARTNER_111": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_PARTNER_17": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_PARTNER_176": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_PARTNER_31": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_PARTNER_4": [
+0,
+0
+],
+"busy/1/eff_known_ATTACKER_PARTNER_43": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_1": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_111": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_17": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_176": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_31": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_4": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_43": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_PARTNER_1": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_PARTNER_111": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_PARTNER_17": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_PARTNER_176": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_PARTNER_31": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_PARTNER_4": [
+0,
+0
+],
+"busy/1/eff_known_DEFENDER_PARTNER_43": [
+0,
+0
+],
+"busy/1/eff_notknown_ATTACKER_1": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_111": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_17": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_176": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_31": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_4": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_43": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_PARTNER_1": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_PARTNER_111": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_PARTNER_17": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_PARTNER_176": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_PARTNER_31": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_PARTNER_4": [
+0,
+1
+],
+"busy/1/eff_notknown_ATTACKER_PARTNER_43": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_1": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_111": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_17": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_176": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_31": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_4": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_43": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_PARTNER_1": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_PARTNER_111": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_PARTNER_17": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_PARTNER_176": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_PARTNER_31": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_PARTNER_4": [
+0,
+1
+],
+"busy/1/eff_notknown_DEFENDER_PARTNER_43": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_AQUA_RING": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_CAMOUFLAGE": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_EMBARGO": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_IMPRISON": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_IMPRISONED": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_INGRAIN": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_LEECH_SEED": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_LOCK_ON": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_MAGNET_RISE": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_MIRACLE_EYE": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_EMBARGO": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_IMPRISON": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_INGRAIN": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PARTNER_YAWN": [
+0,
+0
+],
+"busy/1/effect_ATTACKER_PERISH_SONG": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_POWER_TRICK": [
+0,
+1
+],
+"busy/1/effect_ATTACKER_YAWN": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_AQUA_RING": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_CAMOUFLAGE": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_EMBARGO": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_IMPRISON": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_IMPRISONED": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_INGRAIN": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_LEECH_SEED": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_LOCK_ON": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_MAGNET_RISE": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_MIRACLE_EYE": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_EMBARGO": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_IMPRISON": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_INGRAIN": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PARTNER_YAWN": [
+0,
+0
+],
+"busy/1/effect_DEFENDER_PERISH_SONG": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_POWER_TRICK": [
+0,
+1
+],
+"busy/1/effect_DEFENDER_YAWN": [
+0,
+1
+],
+"busy/1/effectiveness_BASE": [
+0,
+0
+],
+"busy/1/effectiveness_DOUBLE": [
+0,
+1
+],
+"busy/1/effectiveness_HALF": [
+0,
+0
+],
+"busy/1/effectiveness_IMMUNE": [
+0,
+0
+],
+"busy/1/effectiveness_QUADRUPLE": [
+0,
+0
+],
+"busy/1/effectiveness_QUARTER": [
+0,
+0
+],
+"busy/1/effectiveness_STAB": [
+0,
+0
+],
+"busy/1/effectiveness_class": [
+80,
+0
+],
+"busy/1/fainted_ATTACKER": "AssertionError",
+"busy/1/fainted_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/1/fainted_DEFENDER": "AssertionError",
+"busy/1/fainted_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/1/first_turn_ATTACKER": [
+1,
+0
+],
+"busy/1/first_turn_ATTACKER_PARTNER": [
+1,
+0
+],
+"busy/1/first_turn_DEFENDER": [
+1,
+0
+],
+"busy/1/first_turn_DEFENDER_PARTNER": [
+1,
+0
+],
+"busy/1/flag_damage": [
+2,
+0
+],
+"busy/1/flash_ATTACKER": [
+0,
+1
+],
+"busy/1/flash_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/flash_DEFENDER": [
+0,
+1
+],
+"busy/1/flash_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/fling_ATTACKER": [
+0,
+0
+],
+"busy/1/fling_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/fling_DEFENDER": [
+0,
+0
+],
+"busy/1/fling_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/gender_ATTACKER": [
+0,
+0
+],
+"busy/1/gender_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/gender_DEFENDER": [
+0,
+0
+],
+"busy/1/gender_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/held_effect_ATTACKER": [
+99,
+0
+],
+"busy/1/held_effect_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/held_effect_DEFENDER": [
+99,
+0
+],
+"busy/1/held_effect_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/held_eq0_ATTACKER": [
+0,
+0
+],
+"busy/1/held_eq0_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/1/held_eq0_DEFENDER": [
+0,
+0
+],
+"busy/1/held_eq0_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/1/held_eq_ATTACKER": [
+0,
+1
+],
+"busy/1/held_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/held_eq_DEFENDER": [
+0,
+1
+],
+"busy/1/held_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/held_item_ATTACKER": [
+271,
+0
+],
+"busy/1/held_item_ATTACKER_PARTNER": [
+271,
+0
+],
+"busy/1/held_item_DEFENDER": [
+111,
+0
+],
+"busy/1/held_item_DEFENDER_PARTNER": [
+271,
+0
+],
+"busy/1/hp_eq_ATTACKER": [
+0,
+0
+],
+"busy/1/hp_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/hp_eq_DEFENDER": [
+0,
+1
+],
+"busy/1/hp_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/hp_gt_ATTACKER": [
+0,
+1
+],
+"busy/1/hp_gt_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/hp_gt_DEFENDER": [
+0,
+1
+],
+"busy/1/hp_gt_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/hp_lt_ATTACKER": [
+0,
+0
+],
+"busy/1/hp_lt_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/1/hp_lt_DEFENDER": [
+0,
+0
+],
+"busy/1/hp_lt_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/1/hp_ne_ATTACKER": [
+0,
+1
+],
+"busy/1/hp_ne_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/1/hp_ne_DEFENDER": [
+0,
+0
+],
+"busy/1/hp_ne_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/1/is_type_ATTACKER": [
+0,
+0
+],
+"busy/1/is_type_ATTACKER_PARTNER": [
+1,
+0
+],
+"busy/1/is_type_DEFENDER": [
+1,
+0
+],
+"busy/1/is_type_DEFENDER_PARTNER": [
+1,
+0
+],
+"busy/1/is_type_rock_ATTACKER": [
+1,
+0
+],
+"busy/1/is_type_rock_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/is_type_rock_DEFENDER": [
+0,
+0
+],
+"busy/1/is_type_rock_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/kills_max": [
+0,
+1
+],
+"busy/1/known_ATTACKER_0": [
+0,
+1
+],
+"busy/1/known_ATTACKER_105": [
+0,
+0
+],
+"busy/1/known_ATTACKER_33": [
+0,
+0
+],
+"busy/1/known_ATTACKER_89": [
+0,
+0
+],
+"busy/1/known_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"busy/1/known_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"busy/1/known_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"busy/1/known_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"busy/1/known_DEFENDER_0": [
+0,
+1
+],
+"busy/1/known_DEFENDER_105": [
+0,
+0
+],
+"busy/1/known_DEFENDER_33": [
+0,
+1
+],
+"busy/1/known_DEFENDER_89": [
+0,
+0
+],
+"busy/1/known_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"busy/1/known_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"busy/1/known_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"busy/1/known_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"busy/1/last_resort_ATTACKER": [
+0,
+0
+],
+"busy/1/last_resort_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/last_resort_DEFENDER": [
+0,
+1
+],
+"busy/1/last_resort_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/layers_ATTACKER_PARTNER_SPIKES": [
+2,
+0
+],
+"busy/1/layers_ATTACKER_PARTNER_TOXIC_SPIKES": [
+1,
+0
+],
+"busy/1/layers_ATTACKER_SPIKES": [
+2,
+0
+],
+"busy/1/layers_ATTACKER_TOXIC_SPIKES": [
+1,
+0
+],
+"busy/1/layers_DEFENDER_PARTNER_SPIKES": [
+1,
+0
+],
+"busy/1/layers_DEFENDER_PARTNER_TOXIC_SPIKES": [
+2,
+0
+],
+"busy/1/layers_DEFENDER_SPIKES": [
+1,
+0
+],
+"busy/1/layers_DEFENDER_TOXIC_SPIKES": [
+2,
+0
+],
+"busy/1/level_0": [
+0,
+1
+],
+"busy/1/level_1": [
+0,
+0
+],
+"busy/1/level_2": [
+0,
+0
+],
+"busy/1/load_type_ATTACKER_PARTNER_TYPE_1": [
+5,
+0
+],
+"busy/1/load_type_ATTACKER_PARTNER_TYPE_2": [
+4,
+0
+],
+"busy/1/load_type_ATTACKER_TYPE_1": [
+5,
+0
+],
+"busy/1/load_type_ATTACKER_TYPE_2": [
+4,
+0
+],
+"busy/1/load_type_DEFENDER_TYPE_1": [
+0,
+0
+],
+"busy/1/load_type_DEFENDER_TYPE_2": [
+2,
+0
+],
+"busy/1/load_type_MOVE_TYPE": [
+5,
+0
+],
+"busy/1/move_pp": [
+15,
+0
+],
+"busy/1/no_damaging": [
+0,
+0
+],
+"busy/1/not_taunted": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_AQUA_RING": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_CAMOUFLAGE": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_EMBARGO": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_IMPRISON": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_IMPRISONED": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_INGRAIN": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_LEECH_SEED": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_LOCK_ON": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_MAGNET_RISE": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_MIRACLE_EYE": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_EMBARGO": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_IMPRISON": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_INGRAIN": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PARTNER_YAWN": [
+0,
+1
+],
+"busy/1/noteffect_ATTACKER_PERISH_SONG": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_POWER_TRICK": [
+0,
+0
+],
+"busy/1/noteffect_ATTACKER_YAWN": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_AQUA_RING": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_CAMOUFLAGE": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_EMBARGO": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_IMPRISON": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_IMPRISONED": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_INGRAIN": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_LEECH_SEED": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_LOCK_ON": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_MAGNET_RISE": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_MIRACLE_EYE": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_EMBARGO": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_IMPRISON": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_INGRAIN": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PARTNER_YAWN": [
+0,
+1
+],
+"busy/1/noteffect_DEFENDER_PERISH_SONG": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_POWER_TRICK": [
+0,
+0
+],
+"busy/1/noteffect_DEFENDER_YAWN": [
+0,
+0
+],
+"busy/1/notknown_ATTACKER_0": [
+0,
+0
+],
+"busy/1/notknown_ATTACKER_105": [
+0,
+1
+],
+"busy/1/notknown_ATTACKER_33": [
+0,
+1
+],
+"busy/1/notknown_ATTACKER_89": [
+0,
+1
+],
+"busy/1/notknown_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"busy/1/notknown_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"busy/1/notknown_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"busy/1/notknown_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"busy/1/notknown_DEFENDER_0": [
+0,
+0
+],
+"busy/1/notknown_DEFENDER_105": [
+0,
+1
+],
+"busy/1/notknown_DEFENDER_33": [
+0,
+0
+],
+"busy/1/notknown_DEFENDER_89": [
+0,
+1
+],
+"busy/1/notknown_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"busy/1/notknown_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"busy/1/notknown_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"busy/1/notknown_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"busy/1/notstatus_ATTACKER": [
+0,
+1
+],
+"busy/1/notstatus_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/1/notstatus_DEFENDER": [
+0,
+1
+],
+"busy/1/notstatus_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/1/notvolatile_ATTACKER_ATTRACT": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_CONFUSION": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_CURSE": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_FOCUS_ENERGY": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_FORESIGHT": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_MEAN_LOOK": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_NIGHTMARE": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_CURSE": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_PARTNER_TORMENT": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_SUBSTITUTE": [
+0,
+0
+],
+"busy/1/notvolatile_ATTACKER_TORMENT": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_ATTRACT": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_CONFUSION": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_CURSE": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_FOCUS_ENERGY": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_FORESIGHT": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_MEAN_LOOK": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_NIGHTMARE": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_CURSE": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_PARTNER_TORMENT": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_SUBSTITUTE": [
+0,
+0
+],
+"busy/1/notvolatile_DEFENDER_TORMENT": [
+0,
+0
+],
+"busy/1/party_more": [
+0,
+0
+],
+"busy/1/party_status_ATTACKER": [
+0,
+0
+],
+"busy/1/party_status_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/party_status_DEFENDER": [
+0,
+0
+],
+"busy/1/party_status_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/prev_move_ATTACKER": [
+1,
+0
+],
+"busy/1/prev_move_ATTACKER_PARTNER": [
+1,
+0
+],
+"busy/1/prev_move_DEFENDER": [
+3,
+0
+],
+"busy/1/prev_move_DEFENDER_PARTNER": [
+1,
+0
+],
+"busy/1/protect_ATTACKER": [
+2,
+0
+],
+"busy/1/protect_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/1/protect_DEFENDER": [
+1,
+0
+],
+"busy/1/protect_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/1/recycle_ATTACKER": [
+2,
+0
+],
+"busy/1/recycle_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/1/recycle_DEFENDER": [
+1,
+0
+],
+"busy/1/recycle_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/1/side_ATTACKER_FUTURE_SIGHT": [
+0,
+0
+],
+"busy/1/side_ATTACKER_LIGHT_SCREEN": [
+0,
+1
+],
+"busy/1/side_ATTACKER_LUCKY_CHANT": [
+0,
+0
+],
+"busy/1/side_ATTACKER_MIST": [
+0,
+1
+],
+"busy/1/side_ATTACKER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"busy/1/side_ATTACKER_PARTNER_LIGHT_SCREEN": [
+0,
+1
+],
+"busy/1/side_ATTACKER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"busy/1/side_ATTACKER_PARTNER_MIST": [
+0,
+1
+],
+"busy/1/side_ATTACKER_PARTNER_REFLECT": [
+0,
+1
+],
+"busy/1/side_ATTACKER_PARTNER_SAFEGUARD": [
+0,
+1
+],
+"busy/1/side_ATTACKER_PARTNER_SPIKES": [
+0,
+1
+],
+"busy/1/side_ATTACKER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"busy/1/side_ATTACKER_PARTNER_TAILWIND": [
+0,
+1
+],
+"busy/1/side_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+1
+],
+"busy/1/side_ATTACKER_REFLECT": [
+0,
+1
+],
+"busy/1/side_ATTACKER_SAFEGUARD": [
+0,
+1
+],
+"busy/1/side_ATTACKER_SPIKES": [
+0,
+1
+],
+"busy/1/side_ATTACKER_STEALTH_ROCK": [
+0,
+0
+],
+"busy/1/side_ATTACKER_TAILWIND": [
+0,
+1
+],
+"busy/1/side_ATTACKER_TOXIC_SPIKES": [
+0,
+1
+],
+"busy/1/side_DEFENDER_FUTURE_SIGHT": [
+0,
+0
+],
+"busy/1/side_DEFENDER_LIGHT_SCREEN": [
+0,
+1
+],
+"busy/1/side_DEFENDER_LUCKY_CHANT": [
+0,
+0
+],
+"busy/1/side_DEFENDER_MIST": [
+0,
+1
+],
+"busy/1/side_DEFENDER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"busy/1/side_DEFENDER_PARTNER_LIGHT_SCREEN": [
+0,
+1
+],
+"busy/1/side_DEFENDER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"busy/1/side_DEFENDER_PARTNER_MIST": [
+0,
+1
+],
+"busy/1/side_DEFENDER_PARTNER_REFLECT": [
+0,
+1
+],
+"busy/1/side_DEFENDER_PARTNER_SAFEGUARD": [
+0,
+1
+],
+"busy/1/side_DEFENDER_PARTNER_SPIKES": [
+0,
+1
+],
+"busy/1/side_DEFENDER_PARTNER_STEALTH_ROCK": [
+0,
+1
+],
+"busy/1/side_DEFENDER_PARTNER_TAILWIND": [
+0,
+1
+],
+"busy/1/side_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+1
+],
+"busy/1/side_DEFENDER_REFLECT": [
+0,
+1
+],
+"busy/1/side_DEFENDER_SAFEGUARD": [
+0,
+1
+],
+"busy/1/side_DEFENDER_SPIKES": [
+0,
+1
+],
+"busy/1/side_DEFENDER_STEALTH_ROCK": [
+0,
+1
+],
+"busy/1/side_DEFENDER_TAILWIND": [
+0,
+1
+],
+"busy/1/side_DEFENDER_TOXIC_SPIKES": [
+0,
+1
+],
+"busy/1/slower": [
+0,
+1
+],
+"busy/1/speed_rank_ATTACKER": [
+1,
+0
+],
+"busy/1/speed_rank_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/speed_rank_DEFENDER": [
+0,
+0
+],
+"busy/1/speed_rank_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/stage_diff_ATTACKER_ACC": [
+0,
+0
+],
+"busy/1/stage_diff_ATTACKER_ATK": [
+0,
+0
+],
+"busy/1/stage_diff_ATTACKER_PARTNER_ACC": [
+-6,
+0
+],
+"busy/1/stage_diff_ATTACKER_PARTNER_ATK": [
+-6,
+0
+],
+"busy/1/stage_diff_ATTACKER_PARTNER_SPE": [
+-6,
+0
+],
+"busy/1/stage_diff_ATTACKER_SPE": [
+0,
+0
+],
+"busy/1/stage_diff_DEFENDER_ACC": [
+2,
+0
+],
+"busy/1/stage_diff_DEFENDER_ATK": [
+-3,
+0
+],
+"busy/1/stage_diff_DEFENDER_PARTNER_ACC": [
+-6,
+0
+],
+"busy/1/stage_diff_DEFENDER_PARTNER_ATK": [
+-6,
+0
+],
+"busy/1/stage_diff_DEFENDER_PARTNER_SPE": [
+-6,
+0
+],
+"busy/1/stage_diff_DEFENDER_SPE": [
+1,
+0
+],
+"busy/1/stage_eq_ATTACKER_ACC": [
+0,
+1
+],
+"busy/1/stage_eq_ATTACKER_ATK": [
+0,
+1
+],
+"busy/1/stage_eq_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"busy/1/stage_eq_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"busy/1/stage_eq_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"busy/1/stage_eq_ATTACKER_SPE": [
+0,
+1
+],
+"busy/1/stage_eq_DEFENDER_ACC": [
+0,
+0
+],
+"busy/1/stage_eq_DEFENDER_ATK": [
+0,
+0
+],
+"busy/1/stage_eq_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"busy/1/stage_eq_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"busy/1/stage_eq_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"busy/1/stage_eq_DEFENDER_SPE": [
+0,
+0
+],
+"busy/1/stage_gt_ATTACKER_ACC": [
+0,
+0
+],
+"busy/1/stage_gt_ATTACKER_ATK": [
+0,
+0
+],
+"busy/1/stage_gt_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"busy/1/stage_gt_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"busy/1/stage_gt_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"busy/1/stage_gt_ATTACKER_SPE": [
+0,
+0
+],
+"busy/1/stage_gt_DEFENDER_ACC": [
+0,
+1
+],
+"busy/1/stage_gt_DEFENDER_ATK": [
+0,
+0
+],
+"busy/1/stage_gt_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"busy/1/stage_gt_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"busy/1/stage_gt_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"busy/1/stage_gt_DEFENDER_SPE": [
+0,
+1
+],
+"busy/1/stage_lt_ATTACKER_ACC": [
+0,
+0
+],
+"busy/1/stage_lt_ATTACKER_ATK": [
+0,
+0
+],
+"busy/1/stage_lt_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"busy/1/stage_lt_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"busy/1/stage_lt_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"busy/1/stage_lt_ATTACKER_SPE": [
+0,
+0
+],
+"busy/1/stage_lt_DEFENDER_ACC": [
+0,
+0
+],
+"busy/1/stage_lt_DEFENDER_ATK": [
+0,
+1
+],
+"busy/1/stage_lt_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"busy/1/stage_lt_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"busy/1/stage_lt_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"busy/1/stage_lt_DEFENDER_SPE": [
+0,
+0
+],
+"busy/1/stage_ne_ATTACKER_ACC": [
+0,
+0
+],
+"busy/1/stage_ne_ATTACKER_ATK": [
+0,
+0
+],
+"busy/1/stage_ne_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"busy/1/stage_ne_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"busy/1/stage_ne_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"busy/1/stage_ne_ATTACKER_SPE": [
+0,
+0
+],
+"busy/1/stage_ne_DEFENDER_ACC": [
+0,
+1
+],
+"busy/1/stage_ne_DEFENDER_ATK": [
+0,
+1
+],
+"busy/1/stage_ne_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"busy/1/stage_ne_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"busy/1/stage_ne_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"busy/1/stage_ne_DEFENDER_SPE": [
+0,
+1
+],
+"busy/1/status_ATTACKER": [
+0,
+0
+],
+"busy/1/status_ATTACKER_PARTNER": [
+0,
+0
+],
+"busy/1/status_DEFENDER": [
+0,
+1
+],
+"busy/1/status_DEFENDER_PARTNER": [
+0,
+0
+],
+"busy/1/sum_stages_ATTACKER": [
+2,
+0
+],
+"busy/1/sum_stages_ATTACKER_PARTNER": [
+2,
+0
+],
+"busy/1/sum_stages_DEFENDER": [
+6,
+0
+],
+"busy/1/sum_stages_DEFENDER_PARTNER": [
+2,
+0
+],
+"busy/1/super_effective": [
+0,
+1
+],
+"busy/1/target_is_partner": [
+0,
+0
+],
+"busy/1/turn_count_ATTACKER": [
+-3,
+0
+],
+"busy/1/turn_count_ATTACKER_PARTNER": [
+-3,
+0
+],
+"busy/1/turn_count_DEFENDER": [
+-2,
+0
+],
+"busy/1/turn_count_DEFENDER_PARTNER": [
+-3,
+0
+],
+"busy/1/under_disable_ATTACKER": [
+0,
+1
+],
+"busy/1/under_disable_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/1/under_disable_DEFENDER": [
+0,
+1
+],
+"busy/1/under_disable_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/1/under_encore_ATTACKER": [
+0,
+1
+],
+"busy/1/under_encore_ATTACKER_PARTNER": [
+0,
+1
+],
+"busy/1/under_encore_DEFENDER": [
+0,
+1
+],
+"busy/1/under_encore_DEFENDER_PARTNER": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_ATTRACT": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_CONFUSION": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_CURSE": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_FOCUS_ENERGY": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_FORESIGHT": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_MEAN_LOOK": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_NIGHTMARE": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_CURSE": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_PARTNER_TORMENT": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_SUBSTITUTE": [
+0,
+1
+],
+"busy/1/volatile_ATTACKER_TORMENT": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_ATTRACT": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_CONFUSION": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_CURSE": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_FOCUS_ENERGY": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_FORESIGHT": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_MEAN_LOOK": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_NIGHTMARE": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_CURSE": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_PARTNER_TORMENT": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_SUBSTITUTE": [
+0,
+1
+],
+"busy/1/volatile_DEFENDER_TORMENT": [
+0,
+1
+],
+"busy/1/with_partner": [
+2,
+0
+],
+"cranidos/0/ability_ATTACKER": [
+104,
+0
+],
+"cranidos/0/ability_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/ability_DEFENDER": [
+51,
+0
+],
+"cranidos/0/ability_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/ability_flat_ATTACKER": [
+104,
+0
+],
+"cranidos/0/ability_flat_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/ability_flat_DEFENDER": [
+51,
+0
+],
+"cranidos/0/ability_flat_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/after_speed_compare": [
+true,
+0
+],
+"cranidos/0/alive_ATTACKER": [
+2,
+0
+],
+"cranidos/0/alive_ATTACKER_PARTNER": [
+2,
+0
+],
+"cranidos/0/alive_DEFENDER": [
+5,
+0
+],
+"cranidos/0/alive_DEFENDER_PARTNER": [
+2,
+0
+],
+"cranidos/0/check_ability0_ATTACKER": [
+0,
+0
+],
+"cranidos/0/check_ability0_ATTACKER_PARTNER": [
+2,
+0
+],
+"cranidos/0/check_ability0_DEFENDER": [
+0,
+0
+],
+"cranidos/0/check_ability0_DEFENDER_PARTNER": [
+2,
+0
+],
+"cranidos/0/check_ability_ATTACKER": [
+0,
+0
+],
+"cranidos/0/check_ability_ATTACKER_PARTNER": [
+2,
+0
+],
+"cranidos/0/check_ability_DEFENDER": [
+0,
+0
+],
+"cranidos/0/check_ability_DEFENDER_PARTNER": [
+2,
+0
+],
+"cranidos/0/context": [
+[
+100,
+100,
+100,
+0
+],
+[
+89,
+0,
+0,
+0
+],
+51,
+[
+51,
+51
+],
+false,
+[
+19,
+24
+],
+[
+[
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32
+],
+[
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+[
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+]
+],
+[
+[
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32
+],
+[
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+29
+],
+"cranidos/0/deals_more_ATTACKER": "AssertionError",
+"cranidos/0/deals_more_ATTACKER_PARTNER": "AssertionError",
+"cranidos/0/deals_more_DEFENDER": [
+0,
+0
+],
+"cranidos/0/deals_more_DEFENDER_PARTNER": "AssertionError",
+"cranidos/0/defender_move_class": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_1": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_111": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_17": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_176": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_31": [
+0,
+1
+],
+"cranidos/0/eff_known_ATTACKER_4": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_43": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_PARTNER_1": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_PARTNER_111": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_PARTNER_17": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_PARTNER_176": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_PARTNER_31": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_PARTNER_4": [
+0,
+0
+],
+"cranidos/0/eff_known_ATTACKER_PARTNER_43": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_1": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_111": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_17": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_176": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_31": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_4": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_43": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_PARTNER_1": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_PARTNER_111": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_PARTNER_17": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_PARTNER_176": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_PARTNER_31": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_PARTNER_4": [
+0,
+0
+],
+"cranidos/0/eff_known_DEFENDER_PARTNER_43": [
+0,
+0
+],
+"cranidos/0/eff_notknown_ATTACKER_1": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_111": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_17": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_176": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_31": [
+0,
+0
+],
+"cranidos/0/eff_notknown_ATTACKER_4": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_43": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_PARTNER_1": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_PARTNER_111": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_PARTNER_17": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_PARTNER_176": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_PARTNER_31": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_PARTNER_4": [
+0,
+1
+],
+"cranidos/0/eff_notknown_ATTACKER_PARTNER_43": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_1": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_111": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_17": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_176": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_31": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_4": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_43": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_PARTNER_1": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_PARTNER_111": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_PARTNER_17": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_PARTNER_176": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_PARTNER_31": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_PARTNER_4": [
+0,
+1
+],
+"cranidos/0/eff_notknown_DEFENDER_PARTNER_43": [
+0,
+1
+],
+"cranidos/0/effect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_AQUA_RING": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_CAMOUFLAGE": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_EMBARGO": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_IMPRISON": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_IMPRISONED": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_INGRAIN": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_LEECH_SEED": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_LOCK_ON": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_MAGNET_RISE": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_MIRACLE_EYE": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_EMBARGO": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_IMPRISON": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_INGRAIN": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PARTNER_YAWN": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_PERISH_SONG": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_POWER_TRICK": [
+0,
+0
+],
+"cranidos/0/effect_ATTACKER_YAWN": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_AQUA_RING": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_CAMOUFLAGE": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_EMBARGO": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_IMPRISON": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_IMPRISONED": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_INGRAIN": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_LEECH_SEED": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_LOCK_ON": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_MAGNET_RISE": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_MIRACLE_EYE": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_EMBARGO": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_IMPRISON": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_INGRAIN": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PARTNER_YAWN": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_PERISH_SONG": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_POWER_TRICK": [
+0,
+0
+],
+"cranidos/0/effect_DEFENDER_YAWN": [
+0,
+0
+],
+"cranidos/0/effectiveness_BASE": [
+0,
+1
+],
+"cranidos/0/effectiveness_DOUBLE": [
+0,
+0
+],
+"cranidos/0/effectiveness_HALF": [
+0,
+0
+],
+"cranidos/0/effectiveness_IMMUNE": [
+0,
+0
+],
+"cranidos/0/effectiveness_QUADRUPLE": [
+0,
+0
+],
+"cranidos/0/effectiveness_QUARTER": [
+0,
+0
+],
+"cranidos/0/effectiveness_STAB": [
+0,
+0
+],
+"cranidos/0/effectiveness_class": [
+40,
+0
+],
+"cranidos/0/fainted_ATTACKER": "AssertionError",
+"cranidos/0/fainted_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/0/fainted_DEFENDER": "AssertionError",
+"cranidos/0/fainted_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/0/first_turn_ATTACKER": [
+0,
+0
+],
+"cranidos/0/first_turn_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/first_turn_DEFENDER": [
+0,
+0
+],
+"cranidos/0/first_turn_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/flag_damage": [
+2,
+0
+],
+"cranidos/0/flash_ATTACKER": [
+0,
+0
+],
+"cranidos/0/flash_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/flash_DEFENDER": [
+0,
+0
+],
+"cranidos/0/flash_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/fling_ATTACKER": [
+0,
+0
+],
+"cranidos/0/fling_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/fling_DEFENDER": [
+10,
+0
+],
+"cranidos/0/fling_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/gender_ATTACKER": [
+0,
+0
+],
+"cranidos/0/gender_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/gender_DEFENDER": [
+0,
+0
+],
+"cranidos/0/gender_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/held_effect_ATTACKER": [
+0,
+0
+],
+"cranidos/0/held_effect_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/held_effect_DEFENDER": [
+0,
+0
+],
+"cranidos/0/held_effect_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/held_eq0_ATTACKER": [
+0,
+1
+],
+"cranidos/0/held_eq0_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/0/held_eq0_DEFENDER": [
+0,
+1
+],
+"cranidos/0/held_eq0_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/0/held_eq_ATTACKER": [
+0,
+0
+],
+"cranidos/0/held_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/held_eq_DEFENDER": [
+0,
+0
+],
+"cranidos/0/held_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/held_item_ATTACKER": [
+0,
+0
+],
+"cranidos/0/held_item_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/held_item_DEFENDER": [
+155,
+0
+],
+"cranidos/0/held_item_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/hp_eq_ATTACKER": [
+0,
+0
+],
+"cranidos/0/hp_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/hp_eq_DEFENDER": [
+0,
+0
+],
+"cranidos/0/hp_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/hp_gt_ATTACKER": [
+0,
+1
+],
+"cranidos/0/hp_gt_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/hp_gt_DEFENDER": [
+0,
+0
+],
+"cranidos/0/hp_gt_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/hp_lt_ATTACKER": [
+0,
+0
+],
+"cranidos/0/hp_lt_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/0/hp_lt_DEFENDER": [
+0,
+1
+],
+"cranidos/0/hp_lt_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/0/hp_ne_ATTACKER": [
+0,
+1
+],
+"cranidos/0/hp_ne_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/0/hp_ne_DEFENDER": [
+0,
+1
+],
+"cranidos/0/hp_ne_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/0/is_type_ATTACKER": [
+0,
+0
+],
+"cranidos/0/is_type_ATTACKER_PARTNER": [
+1,
+0
+],
+"cranidos/0/is_type_DEFENDER": [
+1,
+0
+],
+"cranidos/0/is_type_DEFENDER_PARTNER": [
+1,
+0
+],
+"cranidos/0/is_type_rock_ATTACKER": [
+1,
+0
+],
+"cranidos/0/is_type_rock_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/is_type_rock_DEFENDER": [
+0,
+0
+],
+"cranidos/0/is_type_rock_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/kills_max": [
+0,
+1
+],
+"cranidos/0/known_ATTACKER_0": [
+0,
+1
+],
+"cranidos/0/known_ATTACKER_105": [
+0,
+0
+],
+"cranidos/0/known_ATTACKER_33": [
+0,
+0
+],
+"cranidos/0/known_ATTACKER_89": [
+0,
+0
+],
+"cranidos/0/known_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"cranidos/0/known_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"cranidos/0/known_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"cranidos/0/known_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"cranidos/0/known_DEFENDER_0": [
+0,
+1
+],
+"cranidos/0/known_DEFENDER_105": [
+0,
+0
+],
+"cranidos/0/known_DEFENDER_33": [
+0,
+0
+],
+"cranidos/0/known_DEFENDER_89": [
+0,
+1
+],
+"cranidos/0/known_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"cranidos/0/known_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"cranidos/0/known_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"cranidos/0/known_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"cranidos/0/last_resort_ATTACKER": [
+0,
+0
+],
+"cranidos/0/last_resort_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/last_resort_DEFENDER": [
+0,
+0
+],
+"cranidos/0/last_resort_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/layers_ATTACKER_PARTNER_SPIKES": [
+0,
+0
+],
+"cranidos/0/layers_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/0/layers_ATTACKER_SPIKES": [
+0,
+0
+],
+"cranidos/0/layers_ATTACKER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/0/layers_DEFENDER_PARTNER_SPIKES": [
+0,
+0
+],
+"cranidos/0/layers_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/0/layers_DEFENDER_SPIKES": [
+0,
+0
+],
+"cranidos/0/layers_DEFENDER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/0/level_0": [
+0,
+1
+],
+"cranidos/0/level_1": [
+0,
+0
+],
+"cranidos/0/level_2": [
+0,
+0
+],
+"cranidos/0/load_type_ATTACKER_PARTNER_TYPE_1": [
+5,
+0
+],
+"cranidos/0/load_type_ATTACKER_PARTNER_TYPE_2": [
+5,
+0
+],
+"cranidos/0/load_type_ATTACKER_TYPE_1": [
+5,
+0
+],
+"cranidos/0/load_type_ATTACKER_TYPE_2": [
+5,
+0
+],
+"cranidos/0/load_type_DEFENDER_TYPE_1": [
+0,
+0
+],
+"cranidos/0/load_type_DEFENDER_TYPE_2": [
+2,
+0
+],
+"cranidos/0/load_type_MOVE_TYPE": [
+0,
+0
+],
+"cranidos/0/move_pp": [
+15,
+0
+],
+"cranidos/0/no_damaging": [
+0,
+0
+],
+"cranidos/0/not_taunted": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_AQUA_RING": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_CAMOUFLAGE": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_EMBARGO": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_IMPRISON": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_IMPRISONED": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_INGRAIN": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_LEECH_SEED": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_LOCK_ON": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_MAGNET_RISE": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_MIRACLE_EYE": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_EMBARGO": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_IMPRISON": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_INGRAIN": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PARTNER_YAWN": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_PERISH_SONG": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_POWER_TRICK": [
+0,
+1
+],
+"cranidos/0/noteffect_ATTACKER_YAWN": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_AQUA_RING": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_CAMOUFLAGE": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_EMBARGO": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_IMPRISON": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_IMPRISONED": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_INGRAIN": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_LEECH_SEED": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_LOCK_ON": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_MAGNET_RISE": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_MIRACLE_EYE": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_EMBARGO": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_IMPRISON": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_INGRAIN": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PARTNER_YAWN": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_PERISH_SONG": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_POWER_TRICK": [
+0,
+1
+],
+"cranidos/0/noteffect_DEFENDER_YAWN": [
+0,
+1
+],
+"cranidos/0/notknown_ATTACKER_0": [
+0,
+0
+],
+"cranidos/0/notknown_ATTACKER_105": [
+0,
+1
+],
+"cranidos/0/notknown_ATTACKER_33": [
+0,
+1
+],
+"cranidos/0/notknown_ATTACKER_89": [
+0,
+1
+],
+"cranidos/0/notknown_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"cranidos/0/notknown_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"cranidos/0/notknown_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"cranidos/0/notknown_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"cranidos/0/notknown_DEFENDER_0": [
+0,
+0
+],
+"cranidos/0/notknown_DEFENDER_105": [
+0,
+1
+],
+"cranidos/0/notknown_DEFENDER_33": [
+0,
+1
+],
+"cranidos/0/notknown_DEFENDER_89": [
+0,
+0
+],
+"cranidos/0/notknown_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"cranidos/0/notknown_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"cranidos/0/notknown_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"cranidos/0/notknown_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"cranidos/0/notstatus_ATTACKER": [
+0,
+1
+],
+"cranidos/0/notstatus_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/0/notstatus_DEFENDER": [
+0,
+1
+],
+"cranidos/0/notstatus_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_ATTRACT": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_CONFUSION": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_CURSE": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_FOCUS_ENERGY": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_FORESIGHT": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_MEAN_LOOK": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_NIGHTMARE": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_CURSE": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_PARTNER_TORMENT": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_SUBSTITUTE": [
+0,
+1
+],
+"cranidos/0/notvolatile_ATTACKER_TORMENT": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_ATTRACT": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_CONFUSION": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_CURSE": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_FOCUS_ENERGY": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_FORESIGHT": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_MEAN_LOOK": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_NIGHTMARE": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_CURSE": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_PARTNER_TORMENT": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_SUBSTITUTE": [
+0,
+1
+],
+"cranidos/0/notvolatile_DEFENDER_TORMENT": [
+0,
+1
+],
+"cranidos/0/party_more": [
+0,
+1
+],
+"cranidos/0/party_status_ATTACKER": [
+0,
+0
+],
+"cranidos/0/party_status_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/party_status_DEFENDER": [
+0,
+0
+],
+"cranidos/0/party_status_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/prev_move_ATTACKER": [
+33,
+0
+],
+"cranidos/0/prev_move_ATTACKER_PARTNER": [
+33,
+0
+],
+"cranidos/0/prev_move_DEFENDER": [
+89,
+0
+],
+"cranidos/0/prev_move_DEFENDER_PARTNER": [
+33,
+0
+],
+"cranidos/0/protect_ATTACKER": [
+0,
+0
+],
+"cranidos/0/protect_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/protect_DEFENDER": [
+0,
+0
+],
+"cranidos/0/protect_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/recycle_ATTACKER": [
+0,
+0
+],
+"cranidos/0/recycle_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/recycle_DEFENDER": [
+0,
+0
+],
+"cranidos/0/recycle_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_FUTURE_SIGHT": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_LIGHT_SCREEN": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_LUCKY_CHANT": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_MIST": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_LIGHT_SCREEN": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_MIST": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_REFLECT": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_SAFEGUARD": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_SPIKES": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_TAILWIND": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_REFLECT": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_SAFEGUARD": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_SPIKES": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_STEALTH_ROCK": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_TAILWIND": [
+0,
+0
+],
+"cranidos/0/side_ATTACKER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_FUTURE_SIGHT": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_LIGHT_SCREEN": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_LUCKY_CHANT": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_MIST": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_LIGHT_SCREEN": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_MIST": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_REFLECT": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_SAFEGUARD": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_SPIKES": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_TAILWIND": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_REFLECT": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_SAFEGUARD": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_SPIKES": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_STEALTH_ROCK": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_TAILWIND": [
+0,
+0
+],
+"cranidos/0/side_DEFENDER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/0/slower": [
+0,
+0
+],
+"cranidos/0/speed_rank_ATTACKER": [
+0,
+0
+],
+"cranidos/0/speed_rank_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/speed_rank_DEFENDER": [
+1,
+0
+],
+"cranidos/0/speed_rank_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/stage_diff_ATTACKER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_diff_ATTACKER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_diff_ATTACKER_PARTNER_ACC": [
+-6,
+0
+],
+"cranidos/0/stage_diff_ATTACKER_PARTNER_ATK": [
+-6,
+0
+],
+"cranidos/0/stage_diff_ATTACKER_PARTNER_SPE": [
+-6,
+0
+],
+"cranidos/0/stage_diff_ATTACKER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_diff_DEFENDER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_diff_DEFENDER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_diff_DEFENDER_PARTNER_ACC": [
+-6,
+0
+],
+"cranidos/0/stage_diff_DEFENDER_PARTNER_ATK": [
+-6,
+0
+],
+"cranidos/0/stage_diff_DEFENDER_PARTNER_SPE": [
+-6,
+0
+],
+"cranidos/0/stage_diff_DEFENDER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_eq_ATTACKER_ACC": [
+0,
+1
+],
+"cranidos/0/stage_eq_ATTACKER_ATK": [
+0,
+1
+],
+"cranidos/0/stage_eq_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_eq_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_eq_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_eq_ATTACKER_SPE": [
+0,
+1
+],
+"cranidos/0/stage_eq_DEFENDER_ACC": [
+0,
+1
+],
+"cranidos/0/stage_eq_DEFENDER_ATK": [
+0,
+1
+],
+"cranidos/0/stage_eq_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_eq_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_eq_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_eq_DEFENDER_SPE": [
+0,
+1
+],
+"cranidos/0/stage_gt_ATTACKER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_gt_ATTACKER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_gt_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_gt_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_gt_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_gt_ATTACKER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_gt_DEFENDER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_gt_DEFENDER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_gt_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_gt_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_gt_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_gt_DEFENDER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_lt_ATTACKER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_lt_ATTACKER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_lt_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"cranidos/0/stage_lt_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"cranidos/0/stage_lt_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"cranidos/0/stage_lt_ATTACKER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_lt_DEFENDER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_lt_DEFENDER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_lt_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"cranidos/0/stage_lt_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"cranidos/0/stage_lt_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"cranidos/0/stage_lt_DEFENDER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_ne_ATTACKER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_ne_ATTACKER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_ne_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"cranidos/0/stage_ne_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"cranidos/0/stage_ne_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"cranidos/0/stage_ne_ATTACKER_SPE": [
+0,
+0
+],
+"cranidos/0/stage_ne_DEFENDER_ACC": [
+0,
+0
+],
+"cranidos/0/stage_ne_DEFENDER_ATK": [
+0,
+0
+],
+"cranidos/0/stage_ne_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"cranidos/0/stage_ne_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"cranidos/0/stage_ne_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"cranidos/0/stage_ne_DEFENDER_SPE": [
+0,
+0
+],
+"cranidos/0/status_ATTACKER": [
+0,
+0
+],
+"cranidos/0/status_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/status_DEFENDER": [
+0,
+0
+],
+"cranidos/0/status_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/sum_stages_ATTACKER": [
+0,
+0
+],
+"cranidos/0/sum_stages_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/sum_stages_DEFENDER": [
+0,
+0
+],
+"cranidos/0/sum_stages_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/super_effective": [
+0,
+0
+],
+"cranidos/0/target_is_partner": [
+0,
+0
+],
+"cranidos/0/turn_count_ATTACKER": [
+3,
+0
+],
+"cranidos/0/turn_count_ATTACKER_PARTNER": [
+3,
+0
+],
+"cranidos/0/turn_count_DEFENDER": [
+3,
+0
+],
+"cranidos/0/turn_count_DEFENDER_PARTNER": [
+3,
+0
+],
+"cranidos/0/under_disable_ATTACKER": [
+0,
+0
+],
+"cranidos/0/under_disable_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/under_disable_DEFENDER": [
+0,
+0
+],
+"cranidos/0/under_disable_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/under_encore_ATTACKER": [
+0,
+0
+],
+"cranidos/0/under_encore_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/0/under_encore_DEFENDER": [
+0,
+0
+],
+"cranidos/0/under_encore_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_ATTRACT": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_CONFUSION": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_CURSE": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_FOCUS_ENERGY": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_FORESIGHT": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_MEAN_LOOK": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_NIGHTMARE": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_CURSE": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_PARTNER_TORMENT": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_SUBSTITUTE": [
+0,
+0
+],
+"cranidos/0/volatile_ATTACKER_TORMENT": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_ATTRACT": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_CONFUSION": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_CURSE": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_FOCUS_ENERGY": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_FORESIGHT": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_MEAN_LOOK": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_NIGHTMARE": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_CURSE": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_PARTNER_TORMENT": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_SUBSTITUTE": [
+0,
+0
+],
+"cranidos/0/volatile_DEFENDER_TORMENT": [
+0,
+0
+],
+"cranidos/0/with_partner": [
+2,
+0
+],
+"cranidos/1/ability_ATTACKER": [
+104,
+0
+],
+"cranidos/1/ability_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/ability_DEFENDER": [
+51,
+0
+],
+"cranidos/1/ability_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/ability_flat_ATTACKER": [
+104,
+0
+],
+"cranidos/1/ability_flat_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/ability_flat_DEFENDER": [
+51,
+0
+],
+"cranidos/1/ability_flat_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/after_speed_compare": [
+true,
+0
+],
+"cranidos/1/alive_ATTACKER": [
+2,
+0
+],
+"cranidos/1/alive_ATTACKER_PARTNER": [
+2,
+0
+],
+"cranidos/1/alive_DEFENDER": [
+5,
+0
+],
+"cranidos/1/alive_DEFENDER_PARTNER": [
+2,
+0
+],
+"cranidos/1/check_ability0_ATTACKER": [
+0,
+0
+],
+"cranidos/1/check_ability0_ATTACKER_PARTNER": [
+2,
+0
+],
+"cranidos/1/check_ability0_DEFENDER": [
+0,
+0
+],
+"cranidos/1/check_ability0_DEFENDER_PARTNER": [
+2,
+0
+],
+"cranidos/1/check_ability_ATTACKER": [
+0,
+0
+],
+"cranidos/1/check_ability_ATTACKER_PARTNER": [
+2,
+0
+],
+"cranidos/1/check_ability_DEFENDER": [
+0,
+0
+],
+"cranidos/1/check_ability_DEFENDER_PARTNER": [
+2,
+0
+],
+"cranidos/1/context": [
+[
+100,
+100,
+100,
+0
+],
+[
+89,
+0,
+0,
+0
+],
+51,
+[
+51,
+51
+],
+false,
+[
+19,
+24
+],
+[
+[
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32
+],
+[
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+[
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+]
+],
+[
+[
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32,
+32
+],
+[
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19,
+19
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+228
+],
+"cranidos/1/deals_more_ATTACKER": "AssertionError",
+"cranidos/1/deals_more_ATTACKER_PARTNER": "AssertionError",
+"cranidos/1/deals_more_DEFENDER": [
+0,
+0
+],
+"cranidos/1/deals_more_DEFENDER_PARTNER": "AssertionError",
+"cranidos/1/defender_move_class": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_1": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_111": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_17": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_176": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_31": [
+0,
+1
+],
+"cranidos/1/eff_known_ATTACKER_4": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_43": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_PARTNER_1": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_PARTNER_111": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_PARTNER_17": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_PARTNER_176": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_PARTNER_31": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_PARTNER_4": [
+0,
+0
+],
+"cranidos/1/eff_known_ATTACKER_PARTNER_43": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_1": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_111": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_17": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_176": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_31": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_4": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_43": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_PARTNER_1": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_PARTNER_111": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_PARTNER_17": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_PARTNER_176": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_PARTNER_31": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_PARTNER_4": [
+0,
+0
+],
+"cranidos/1/eff_known_DEFENDER_PARTNER_43": [
+0,
+0
+],
+"cranidos/1/eff_notknown_ATTACKER_1": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_111": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_17": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_176": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_31": [
+0,
+0
+],
+"cranidos/1/eff_notknown_ATTACKER_4": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_43": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_PARTNER_1": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_PARTNER_111": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_PARTNER_17": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_PARTNER_176": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_PARTNER_31": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_PARTNER_4": [
+0,
+1
+],
+"cranidos/1/eff_notknown_ATTACKER_PARTNER_43": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_1": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_111": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_17": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_176": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_31": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_4": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_43": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_PARTNER_1": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_PARTNER_111": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_PARTNER_17": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_PARTNER_176": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_PARTNER_31": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_PARTNER_4": [
+0,
+1
+],
+"cranidos/1/eff_notknown_DEFENDER_PARTNER_43": [
+0,
+1
+],
+"cranidos/1/effect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_AQUA_RING": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_CAMOUFLAGE": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_EMBARGO": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_IMPRISON": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_IMPRISONED": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_INGRAIN": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_LEECH_SEED": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_LOCK_ON": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_MAGNET_RISE": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_MIRACLE_EYE": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_EMBARGO": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_IMPRISON": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_INGRAIN": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PARTNER_YAWN": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_PERISH_SONG": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_POWER_TRICK": [
+0,
+0
+],
+"cranidos/1/effect_ATTACKER_YAWN": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_AQUA_RING": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_CAMOUFLAGE": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_EMBARGO": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_IMPRISON": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_IMPRISONED": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_INGRAIN": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_LEECH_SEED": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_LOCK_ON": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_MAGNET_RISE": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_MIRACLE_EYE": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_EMBARGO": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_IMPRISON": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_INGRAIN": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PARTNER_YAWN": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_PERISH_SONG": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_POWER_TRICK": [
+0,
+0
+],
+"cranidos/1/effect_DEFENDER_YAWN": [
+0,
+0
+],
+"cranidos/1/effectiveness_BASE": [
+0,
+1
+],
+"cranidos/1/effectiveness_DOUBLE": [
+0,
+0
+],
+"cranidos/1/effectiveness_HALF": [
+0,
+0
+],
+"cranidos/1/effectiveness_IMMUNE": [
+0,
+0
+],
+"cranidos/1/effectiveness_QUADRUPLE": [
+0,
+0
+],
+"cranidos/1/effectiveness_QUARTER": [
+0,
+0
+],
+"cranidos/1/effectiveness_STAB": [
+0,
+0
+],
+"cranidos/1/effectiveness_class": [
+40,
+0
+],
+"cranidos/1/fainted_ATTACKER": "AssertionError",
+"cranidos/1/fainted_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/1/fainted_DEFENDER": "AssertionError",
+"cranidos/1/fainted_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/1/first_turn_ATTACKER": [
+0,
+0
+],
+"cranidos/1/first_turn_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/first_turn_DEFENDER": [
+0,
+0
+],
+"cranidos/1/first_turn_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/flag_damage": [
+1,
+0
+],
+"cranidos/1/flash_ATTACKER": [
+0,
+0
+],
+"cranidos/1/flash_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/flash_DEFENDER": [
+0,
+0
+],
+"cranidos/1/flash_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/fling_ATTACKER": [
+0,
+0
+],
+"cranidos/1/fling_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/fling_DEFENDER": [
+10,
+0
+],
+"cranidos/1/fling_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/gender_ATTACKER": [
+0,
+0
+],
+"cranidos/1/gender_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/gender_DEFENDER": [
+0,
+0
+],
+"cranidos/1/gender_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/held_effect_ATTACKER": [
+0,
+0
+],
+"cranidos/1/held_effect_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/held_effect_DEFENDER": [
+0,
+0
+],
+"cranidos/1/held_effect_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/held_eq0_ATTACKER": [
+0,
+1
+],
+"cranidos/1/held_eq0_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/1/held_eq0_DEFENDER": [
+0,
+1
+],
+"cranidos/1/held_eq0_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/1/held_eq_ATTACKER": [
+0,
+0
+],
+"cranidos/1/held_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/held_eq_DEFENDER": [
+0,
+0
+],
+"cranidos/1/held_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/held_item_ATTACKER": [
+0,
+0
+],
+"cranidos/1/held_item_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/held_item_DEFENDER": [
+155,
+0
+],
+"cranidos/1/held_item_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/hp_eq_ATTACKER": [
+0,
+0
+],
+"cranidos/1/hp_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/hp_eq_DEFENDER": [
+0,
+0
+],
+"cranidos/1/hp_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/hp_gt_ATTACKER": [
+0,
+1
+],
+"cranidos/1/hp_gt_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/hp_gt_DEFENDER": [
+0,
+0
+],
+"cranidos/1/hp_gt_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/hp_lt_ATTACKER": [
+0,
+0
+],
+"cranidos/1/hp_lt_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/1/hp_lt_DEFENDER": [
+0,
+1
+],
+"cranidos/1/hp_lt_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/1/hp_ne_ATTACKER": [
+0,
+1
+],
+"cranidos/1/hp_ne_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/1/hp_ne_DEFENDER": [
+0,
+1
+],
+"cranidos/1/hp_ne_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/1/is_type_ATTACKER": [
+0,
+0
+],
+"cranidos/1/is_type_ATTACKER_PARTNER": [
+1,
+0
+],
+"cranidos/1/is_type_DEFENDER": [
+1,
+0
+],
+"cranidos/1/is_type_DEFENDER_PARTNER": [
+1,
+0
+],
+"cranidos/1/is_type_rock_ATTACKER": [
+1,
+0
+],
+"cranidos/1/is_type_rock_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/is_type_rock_DEFENDER": [
+0,
+0
+],
+"cranidos/1/is_type_rock_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/kills_max": [
+0,
+1
+],
+"cranidos/1/known_ATTACKER_0": [
+0,
+1
+],
+"cranidos/1/known_ATTACKER_105": [
+0,
+0
+],
+"cranidos/1/known_ATTACKER_33": [
+0,
+0
+],
+"cranidos/1/known_ATTACKER_89": [
+0,
+0
+],
+"cranidos/1/known_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"cranidos/1/known_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"cranidos/1/known_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"cranidos/1/known_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"cranidos/1/known_DEFENDER_0": [
+0,
+1
+],
+"cranidos/1/known_DEFENDER_105": [
+0,
+0
+],
+"cranidos/1/known_DEFENDER_33": [
+0,
+0
+],
+"cranidos/1/known_DEFENDER_89": [
+0,
+1
+],
+"cranidos/1/known_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"cranidos/1/known_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"cranidos/1/known_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"cranidos/1/known_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"cranidos/1/last_resort_ATTACKER": [
+0,
+0
+],
+"cranidos/1/last_resort_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/last_resort_DEFENDER": [
+0,
+0
+],
+"cranidos/1/last_resort_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/layers_ATTACKER_PARTNER_SPIKES": [
+0,
+0
+],
+"cranidos/1/layers_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/1/layers_ATTACKER_SPIKES": [
+0,
+0
+],
+"cranidos/1/layers_ATTACKER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/1/layers_DEFENDER_PARTNER_SPIKES": [
+0,
+0
+],
+"cranidos/1/layers_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/1/layers_DEFENDER_SPIKES": [
+0,
+0
+],
+"cranidos/1/layers_DEFENDER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/1/level_0": [
+0,
+1
+],
+"cranidos/1/level_1": [
+0,
+0
+],
+"cranidos/1/level_2": [
+0,
+0
+],
+"cranidos/1/load_type_ATTACKER_PARTNER_TYPE_1": [
+5,
+0
+],
+"cranidos/1/load_type_ATTACKER_PARTNER_TYPE_2": [
+5,
+0
+],
+"cranidos/1/load_type_ATTACKER_TYPE_1": [
+5,
+0
+],
+"cranidos/1/load_type_ATTACKER_TYPE_2": [
+5,
+0
+],
+"cranidos/1/load_type_DEFENDER_TYPE_1": [
+0,
+0
+],
+"cranidos/1/load_type_DEFENDER_TYPE_2": [
+2,
+0
+],
+"cranidos/1/load_type_MOVE_TYPE": [
+17,
+0
+],
+"cranidos/1/move_pp": [
+20,
+0
+],
+"cranidos/1/no_damaging": [
+0,
+0
+],
+"cranidos/1/not_taunted": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_AQUA_RING": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_CAMOUFLAGE": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_EMBARGO": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_IMPRISON": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_IMPRISONED": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_INGRAIN": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_LEECH_SEED": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_LOCK_ON": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_MAGNET_RISE": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_MIRACLE_EYE": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_EMBARGO": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_IMPRISON": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_INGRAIN": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PARTNER_YAWN": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_PERISH_SONG": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_POWER_TRICK": [
+0,
+1
+],
+"cranidos/1/noteffect_ATTACKER_YAWN": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_AQUA_RING": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_CAMOUFLAGE": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_EMBARGO": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_IMPRISON": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_IMPRISONED": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_INGRAIN": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_LEECH_SEED": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_LOCK_ON": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_MAGNET_RISE": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_MIRACLE_EYE": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_EMBARGO": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_IMPRISON": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_INGRAIN": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PARTNER_YAWN": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_PERISH_SONG": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_POWER_TRICK": [
+0,
+1
+],
+"cranidos/1/noteffect_DEFENDER_YAWN": [
+0,
+1
+],
+"cranidos/1/notknown_ATTACKER_0": [
+0,
+0
+],
+"cranidos/1/notknown_ATTACKER_105": [
+0,
+1
+],
+"cranidos/1/notknown_ATTACKER_33": [
+0,
+1
+],
+"cranidos/1/notknown_ATTACKER_89": [
+0,
+1
+],
+"cranidos/1/notknown_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"cranidos/1/notknown_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"cranidos/1/notknown_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"cranidos/1/notknown_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"cranidos/1/notknown_DEFENDER_0": [
+0,
+0
+],
+"cranidos/1/notknown_DEFENDER_105": [
+0,
+1
+],
+"cranidos/1/notknown_DEFENDER_33": [
+0,
+1
+],
+"cranidos/1/notknown_DEFENDER_89": [
+0,
+0
+],
+"cranidos/1/notknown_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"cranidos/1/notknown_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"cranidos/1/notknown_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"cranidos/1/notknown_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"cranidos/1/notstatus_ATTACKER": [
+0,
+1
+],
+"cranidos/1/notstatus_ATTACKER_PARTNER": [
+0,
+1
+],
+"cranidos/1/notstatus_DEFENDER": [
+0,
+1
+],
+"cranidos/1/notstatus_DEFENDER_PARTNER": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_ATTRACT": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_CONFUSION": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_CURSE": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_FOCUS_ENERGY": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_FORESIGHT": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_MEAN_LOOK": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_NIGHTMARE": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_CURSE": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_PARTNER_TORMENT": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_SUBSTITUTE": [
+0,
+1
+],
+"cranidos/1/notvolatile_ATTACKER_TORMENT": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_ATTRACT": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_CONFUSION": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_CURSE": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_FOCUS_ENERGY": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_FORESIGHT": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_MEAN_LOOK": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_NIGHTMARE": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_CURSE": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_PARTNER_TORMENT": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_SUBSTITUTE": [
+0,
+1
+],
+"cranidos/1/notvolatile_DEFENDER_TORMENT": [
+0,
+1
+],
+"cranidos/1/party_more": [
+0,
+1
+],
+"cranidos/1/party_status_ATTACKER": [
+0,
+0
+],
+"cranidos/1/party_status_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/party_status_DEFENDER": [
+0,
+0
+],
+"cranidos/1/party_status_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/prev_move_ATTACKER": [
+33,
+0
+],
+"cranidos/1/prev_move_ATTACKER_PARTNER": [
+33,
+0
+],
+"cranidos/1/prev_move_DEFENDER": [
+89,
+0
+],
+"cranidos/1/prev_move_DEFENDER_PARTNER": [
+33,
+0
+],
+"cranidos/1/protect_ATTACKER": [
+0,
+0
+],
+"cranidos/1/protect_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/protect_DEFENDER": [
+0,
+0
+],
+"cranidos/1/protect_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/recycle_ATTACKER": [
+0,
+0
+],
+"cranidos/1/recycle_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/recycle_DEFENDER": [
+0,
+0
+],
+"cranidos/1/recycle_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_FUTURE_SIGHT": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_LIGHT_SCREEN": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_LUCKY_CHANT": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_MIST": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_LIGHT_SCREEN": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_MIST": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_REFLECT": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_SAFEGUARD": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_SPIKES": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_TAILWIND": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_REFLECT": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_SAFEGUARD": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_SPIKES": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_STEALTH_ROCK": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_TAILWIND": [
+0,
+0
+],
+"cranidos/1/side_ATTACKER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_FUTURE_SIGHT": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_LIGHT_SCREEN": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_LUCKY_CHANT": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_MIST": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_LIGHT_SCREEN": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_MIST": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_REFLECT": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_SAFEGUARD": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_SPIKES": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_TAILWIND": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_REFLECT": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_SAFEGUARD": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_SPIKES": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_STEALTH_ROCK": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_TAILWIND": [
+0,
+0
+],
+"cranidos/1/side_DEFENDER_TOXIC_SPIKES": [
+0,
+0
+],
+"cranidos/1/slower": [
+0,
+0
+],
+"cranidos/1/speed_rank_ATTACKER": [
+0,
+0
+],
+"cranidos/1/speed_rank_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/speed_rank_DEFENDER": [
+1,
+0
+],
+"cranidos/1/speed_rank_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/stage_diff_ATTACKER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_diff_ATTACKER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_diff_ATTACKER_PARTNER_ACC": [
+-6,
+0
+],
+"cranidos/1/stage_diff_ATTACKER_PARTNER_ATK": [
+-6,
+0
+],
+"cranidos/1/stage_diff_ATTACKER_PARTNER_SPE": [
+-6,
+0
+],
+"cranidos/1/stage_diff_ATTACKER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_diff_DEFENDER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_diff_DEFENDER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_diff_DEFENDER_PARTNER_ACC": [
+-6,
+0
+],
+"cranidos/1/stage_diff_DEFENDER_PARTNER_ATK": [
+-6,
+0
+],
+"cranidos/1/stage_diff_DEFENDER_PARTNER_SPE": [
+-6,
+0
+],
+"cranidos/1/stage_diff_DEFENDER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_eq_ATTACKER_ACC": [
+0,
+1
+],
+"cranidos/1/stage_eq_ATTACKER_ATK": [
+0,
+1
+],
+"cranidos/1/stage_eq_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_eq_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_eq_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_eq_ATTACKER_SPE": [
+0,
+1
+],
+"cranidos/1/stage_eq_DEFENDER_ACC": [
+0,
+1
+],
+"cranidos/1/stage_eq_DEFENDER_ATK": [
+0,
+1
+],
+"cranidos/1/stage_eq_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_eq_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_eq_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_eq_DEFENDER_SPE": [
+0,
+1
+],
+"cranidos/1/stage_gt_ATTACKER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_gt_ATTACKER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_gt_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_gt_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_gt_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_gt_ATTACKER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_gt_DEFENDER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_gt_DEFENDER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_gt_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_gt_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_gt_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_gt_DEFENDER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_lt_ATTACKER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_lt_ATTACKER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_lt_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"cranidos/1/stage_lt_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"cranidos/1/stage_lt_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"cranidos/1/stage_lt_ATTACKER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_lt_DEFENDER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_lt_DEFENDER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_lt_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"cranidos/1/stage_lt_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"cranidos/1/stage_lt_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"cranidos/1/stage_lt_DEFENDER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_ne_ATTACKER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_ne_ATTACKER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_ne_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"cranidos/1/stage_ne_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"cranidos/1/stage_ne_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"cranidos/1/stage_ne_ATTACKER_SPE": [
+0,
+0
+],
+"cranidos/1/stage_ne_DEFENDER_ACC": [
+0,
+0
+],
+"cranidos/1/stage_ne_DEFENDER_ATK": [
+0,
+0
+],
+"cranidos/1/stage_ne_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"cranidos/1/stage_ne_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"cranidos/1/stage_ne_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"cranidos/1/stage_ne_DEFENDER_SPE": [
+0,
+0
+],
+"cranidos/1/status_ATTACKER": [
+0,
+0
+],
+"cranidos/1/status_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/status_DEFENDER": [
+0,
+0
+],
+"cranidos/1/status_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/sum_stages_ATTACKER": [
+0,
+0
+],
+"cranidos/1/sum_stages_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/sum_stages_DEFENDER": [
+0,
+0
+],
+"cranidos/1/sum_stages_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/super_effective": [
+0,
+0
+],
+"cranidos/1/target_is_partner": [
+0,
+0
+],
+"cranidos/1/turn_count_ATTACKER": [
+3,
+0
+],
+"cranidos/1/turn_count_ATTACKER_PARTNER": [
+3,
+0
+],
+"cranidos/1/turn_count_DEFENDER": [
+3,
+0
+],
+"cranidos/1/turn_count_DEFENDER_PARTNER": [
+3,
+0
+],
+"cranidos/1/under_disable_ATTACKER": [
+0,
+0
+],
+"cranidos/1/under_disable_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/under_disable_DEFENDER": [
+0,
+0
+],
+"cranidos/1/under_disable_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/under_encore_ATTACKER": [
+0,
+0
+],
+"cranidos/1/under_encore_ATTACKER_PARTNER": [
+0,
+0
+],
+"cranidos/1/under_encore_DEFENDER": [
+0,
+0
+],
+"cranidos/1/under_encore_DEFENDER_PARTNER": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_ATTRACT": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_CONFUSION": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_CURSE": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_FOCUS_ENERGY": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_FORESIGHT": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_MEAN_LOOK": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_NIGHTMARE": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_CURSE": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_PARTNER_TORMENT": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_SUBSTITUTE": [
+0,
+0
+],
+"cranidos/1/volatile_ATTACKER_TORMENT": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_ATTRACT": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_CONFUSION": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_CURSE": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_FOCUS_ENERGY": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_FORESIGHT": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_MEAN_LOOK": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_NIGHTMARE": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_CURSE": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_PARTNER_TORMENT": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_SUBSTITUTE": [
+0,
+0
+],
+"cranidos/1/volatile_DEFENDER_TORMENT": [
+0,
+0
+],
+"cranidos/1/with_partner": [
+1,
+0
+],
+"plain/0/ability_ATTACKER": [
+69,
+0
+],
+"plain/0/ability_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/ability_DEFENDER": [
+66,
+0
+],
+"plain/0/ability_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/ability_flat_ATTACKER": [
+69,
+0
+],
+"plain/0/ability_flat_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/ability_flat_DEFENDER": [
+66,
+0
+],
+"plain/0/ability_flat_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/after_speed_compare": [
+true,
+0
+],
+"plain/0/alive_ATTACKER": [
+2,
+0
+],
+"plain/0/alive_ATTACKER_PARTNER": [
+2,
+0
+],
+"plain/0/alive_DEFENDER": [
+5,
+0
+],
+"plain/0/alive_DEFENDER_PARTNER": [
+2,
+0
+],
+"plain/0/check_ability0_ATTACKER": [
+0,
+0
+],
+"plain/0/check_ability0_ATTACKER_PARTNER": [
+2,
+0
+],
+"plain/0/check_ability0_DEFENDER": [
+0,
+0
+],
+"plain/0/check_ability0_DEFENDER_PARTNER": [
+2,
+0
+],
+"plain/0/check_ability_ATTACKER": [
+0,
+0
+],
+"plain/0/check_ability_ATTACKER_PARTNER": [
+2,
+0
+],
+"plain/0/check_ability_DEFENDER": [
+0,
+0
+],
+"plain/0/check_ability_DEFENDER_PARTNER": [
+2,
+0
+],
+"plain/0/context": [
+[
+100,
+100,
+0,
+0
+],
+[
+0,
+0,
+0,
+0
+],
+66,
+[
+66,
+66
+],
+false,
+[
+30,
+10
+],
+[
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+[
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+]
+],
+[
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+446
+],
+"plain/0/deals_more_ATTACKER": "AssertionError",
+"plain/0/deals_more_ATTACKER_PARTNER": "AssertionError",
+"plain/0/deals_more_DEFENDER": [
+0,
+0
+],
+"plain/0/deals_more_DEFENDER_PARTNER": "AssertionError",
+"plain/0/defender_move_class": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_1": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_111": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_17": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_176": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_31": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_4": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_43": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_PARTNER_1": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_PARTNER_111": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_PARTNER_17": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_PARTNER_176": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_PARTNER_31": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_PARTNER_4": [
+0,
+0
+],
+"plain/0/eff_known_ATTACKER_PARTNER_43": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_1": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_111": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_17": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_176": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_31": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_4": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_43": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_PARTNER_1": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_PARTNER_111": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_PARTNER_17": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_PARTNER_176": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_PARTNER_31": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_PARTNER_4": [
+0,
+0
+],
+"plain/0/eff_known_DEFENDER_PARTNER_43": [
+0,
+0
+],
+"plain/0/eff_notknown_ATTACKER_1": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_111": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_17": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_176": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_31": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_4": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_43": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_PARTNER_1": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_PARTNER_111": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_PARTNER_17": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_PARTNER_176": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_PARTNER_31": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_PARTNER_4": [
+0,
+1
+],
+"plain/0/eff_notknown_ATTACKER_PARTNER_43": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_1": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_111": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_17": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_176": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_31": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_4": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_43": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_PARTNER_1": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_PARTNER_111": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_PARTNER_17": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_PARTNER_176": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_PARTNER_31": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_PARTNER_4": [
+0,
+1
+],
+"plain/0/eff_notknown_DEFENDER_PARTNER_43": [
+0,
+1
+],
+"plain/0/effect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_AQUA_RING": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_CAMOUFLAGE": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_EMBARGO": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_IMPRISON": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_IMPRISONED": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_INGRAIN": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_LEECH_SEED": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_LOCK_ON": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_MAGNET_RISE": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_MIRACLE_EYE": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_EMBARGO": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_IMPRISON": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_INGRAIN": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PARTNER_YAWN": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_PERISH_SONG": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_POWER_TRICK": [
+0,
+0
+],
+"plain/0/effect_ATTACKER_YAWN": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_AQUA_RING": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_CAMOUFLAGE": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_EMBARGO": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_IMPRISON": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_IMPRISONED": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_INGRAIN": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_LEECH_SEED": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_LOCK_ON": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_MAGNET_RISE": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_MIRACLE_EYE": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_EMBARGO": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_IMPRISON": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_INGRAIN": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PARTNER_YAWN": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_PERISH_SONG": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_POWER_TRICK": [
+0,
+0
+],
+"plain/0/effect_DEFENDER_YAWN": [
+0,
+0
+],
+"plain/0/effectiveness_BASE": [
+0,
+0
+],
+"plain/0/effectiveness_DOUBLE": [
+0,
+0
+],
+"plain/0/effectiveness_HALF": [
+0,
+0
+],
+"plain/0/effectiveness_IMMUNE": [
+0,
+0
+],
+"plain/0/effectiveness_QUADRUPLE": [
+0,
+0
+],
+"plain/0/effectiveness_QUARTER": [
+0,
+0
+],
+"plain/0/effectiveness_STAB": [
+0,
+1
+],
+"plain/0/effectiveness_class": [
+60,
+0
+],
+"plain/0/fainted_ATTACKER": "AssertionError",
+"plain/0/fainted_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/0/fainted_DEFENDER": "AssertionError",
+"plain/0/fainted_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/0/first_turn_ATTACKER": [
+1,
+0
+],
+"plain/0/first_turn_ATTACKER_PARTNER": [
+1,
+0
+],
+"plain/0/first_turn_DEFENDER": [
+1,
+0
+],
+"plain/0/first_turn_DEFENDER_PARTNER": [
+1,
+0
+],
+"plain/0/flag_damage": [
+0,
+0
+],
+"plain/0/flash_ATTACKER": [
+0,
+0
+],
+"plain/0/flash_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/flash_DEFENDER": [
+0,
+0
+],
+"plain/0/flash_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/fling_ATTACKER": [
+0,
+0
+],
+"plain/0/fling_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/fling_DEFENDER": [
+0,
+0
+],
+"plain/0/fling_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/gender_ATTACKER": [
+0,
+0
+],
+"plain/0/gender_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/gender_DEFENDER": [
+0,
+0
+],
+"plain/0/gender_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/held_effect_ATTACKER": [
+0,
+0
+],
+"plain/0/held_effect_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/held_effect_DEFENDER": [
+0,
+0
+],
+"plain/0/held_effect_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/held_eq0_ATTACKER": [
+0,
+1
+],
+"plain/0/held_eq0_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/0/held_eq0_DEFENDER": [
+0,
+1
+],
+"plain/0/held_eq0_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/0/held_eq_ATTACKER": [
+0,
+0
+],
+"plain/0/held_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/held_eq_DEFENDER": [
+0,
+0
+],
+"plain/0/held_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/held_item_ATTACKER": [
+0,
+0
+],
+"plain/0/held_item_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/held_item_DEFENDER": [
+0,
+0
+],
+"plain/0/held_item_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/hp_eq_ATTACKER": [
+0,
+1
+],
+"plain/0/hp_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/hp_eq_DEFENDER": [
+0,
+1
+],
+"plain/0/hp_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/hp_gt_ATTACKER": [
+0,
+1
+],
+"plain/0/hp_gt_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/hp_gt_DEFENDER": [
+0,
+1
+],
+"plain/0/hp_gt_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/hp_lt_ATTACKER": [
+0,
+0
+],
+"plain/0/hp_lt_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/0/hp_lt_DEFENDER": [
+0,
+0
+],
+"plain/0/hp_lt_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/0/hp_ne_ATTACKER": [
+0,
+0
+],
+"plain/0/hp_ne_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/0/hp_ne_DEFENDER": [
+0,
+0
+],
+"plain/0/hp_ne_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/0/is_type_ATTACKER": [
+0,
+0
+],
+"plain/0/is_type_ATTACKER_PARTNER": [
+1,
+0
+],
+"plain/0/is_type_DEFENDER": [
+0,
+0
+],
+"plain/0/is_type_DEFENDER_PARTNER": [
+1,
+0
+],
+"plain/0/is_type_rock_ATTACKER": [
+1,
+0
+],
+"plain/0/is_type_rock_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/is_type_rock_DEFENDER": [
+0,
+0
+],
+"plain/0/is_type_rock_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/kills_max": [
+0,
+0
+],
+"plain/0/known_ATTACKER_0": [
+0,
+1
+],
+"plain/0/known_ATTACKER_105": [
+0,
+0
+],
+"plain/0/known_ATTACKER_33": [
+0,
+0
+],
+"plain/0/known_ATTACKER_89": [
+0,
+0
+],
+"plain/0/known_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"plain/0/known_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"plain/0/known_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"plain/0/known_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"plain/0/known_DEFENDER_0": [
+0,
+1
+],
+"plain/0/known_DEFENDER_105": [
+0,
+0
+],
+"plain/0/known_DEFENDER_33": [
+0,
+0
+],
+"plain/0/known_DEFENDER_89": [
+0,
+0
+],
+"plain/0/known_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"plain/0/known_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"plain/0/known_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"plain/0/known_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"plain/0/last_resort_ATTACKER": [
+0,
+0
+],
+"plain/0/last_resort_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/last_resort_DEFENDER": [
+0,
+0
+],
+"plain/0/last_resort_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/layers_ATTACKER_PARTNER_SPIKES": [
+0,
+0
+],
+"plain/0/layers_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/0/layers_ATTACKER_SPIKES": [
+0,
+0
+],
+"plain/0/layers_ATTACKER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/0/layers_DEFENDER_PARTNER_SPIKES": [
+0,
+0
+],
+"plain/0/layers_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/0/layers_DEFENDER_SPIKES": [
+0,
+0
+],
+"plain/0/layers_DEFENDER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/0/level_0": [
+0,
+0
+],
+"plain/0/level_1": [
+0,
+1
+],
+"plain/0/level_2": [
+0,
+0
+],
+"plain/0/load_type_ATTACKER_PARTNER_TYPE_1": [
+5,
+0
+],
+"plain/0/load_type_ATTACKER_PARTNER_TYPE_2": [
+4,
+0
+],
+"plain/0/load_type_ATTACKER_TYPE_1": [
+5,
+0
+],
+"plain/0/load_type_ATTACKER_TYPE_2": [
+4,
+0
+],
+"plain/0/load_type_DEFENDER_TYPE_1": [
+10,
+0
+],
+"plain/0/load_type_DEFENDER_TYPE_2": [
+1,
+0
+],
+"plain/0/load_type_MOVE_TYPE": [
+5,
+0
+],
+"plain/0/move_pp": [
+20,
+0
+],
+"plain/0/no_damaging": [
+0,
+0
+],
+"plain/0/not_taunted": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_AQUA_RING": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_CAMOUFLAGE": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_EMBARGO": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_IMPRISON": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_IMPRISONED": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_INGRAIN": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_LEECH_SEED": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_LOCK_ON": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_MAGNET_RISE": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_MIRACLE_EYE": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_EMBARGO": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_IMPRISON": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_INGRAIN": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PARTNER_YAWN": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_PERISH_SONG": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_POWER_TRICK": [
+0,
+1
+],
+"plain/0/noteffect_ATTACKER_YAWN": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_AQUA_RING": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_CAMOUFLAGE": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_EMBARGO": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_IMPRISON": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_IMPRISONED": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_INGRAIN": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_LEECH_SEED": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_LOCK_ON": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_MAGNET_RISE": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_MIRACLE_EYE": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_EMBARGO": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_IMPRISON": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_INGRAIN": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PARTNER_YAWN": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_PERISH_SONG": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_POWER_TRICK": [
+0,
+1
+],
+"plain/0/noteffect_DEFENDER_YAWN": [
+0,
+1
+],
+"plain/0/notknown_ATTACKER_0": [
+0,
+0
+],
+"plain/0/notknown_ATTACKER_105": [
+0,
+1
+],
+"plain/0/notknown_ATTACKER_33": [
+0,
+1
+],
+"plain/0/notknown_ATTACKER_89": [
+0,
+1
+],
+"plain/0/notknown_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"plain/0/notknown_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"plain/0/notknown_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"plain/0/notknown_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"plain/0/notknown_DEFENDER_0": [
+0,
+0
+],
+"plain/0/notknown_DEFENDER_105": [
+0,
+1
+],
+"plain/0/notknown_DEFENDER_33": [
+0,
+1
+],
+"plain/0/notknown_DEFENDER_89": [
+0,
+1
+],
+"plain/0/notknown_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"plain/0/notknown_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"plain/0/notknown_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"plain/0/notknown_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"plain/0/notstatus_ATTACKER": [
+0,
+1
+],
+"plain/0/notstatus_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/0/notstatus_DEFENDER": [
+0,
+1
+],
+"plain/0/notstatus_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_ATTRACT": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_CONFUSION": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_CURSE": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_FOCUS_ENERGY": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_FORESIGHT": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_MEAN_LOOK": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_NIGHTMARE": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_CURSE": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_PARTNER_TORMENT": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_SUBSTITUTE": [
+0,
+1
+],
+"plain/0/notvolatile_ATTACKER_TORMENT": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_ATTRACT": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_CONFUSION": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_CURSE": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_FOCUS_ENERGY": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_FORESIGHT": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_MEAN_LOOK": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_NIGHTMARE": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_CURSE": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_PARTNER_TORMENT": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_SUBSTITUTE": [
+0,
+1
+],
+"plain/0/notvolatile_DEFENDER_TORMENT": [
+0,
+1
+],
+"plain/0/party_more": [
+0,
+0
+],
+"plain/0/party_status_ATTACKER": [
+0,
+0
+],
+"plain/0/party_status_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/party_status_DEFENDER": [
+0,
+0
+],
+"plain/0/party_status_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/prev_move_ATTACKER": [
+0,
+0
+],
+"plain/0/prev_move_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/prev_move_DEFENDER": [
+0,
+0
+],
+"plain/0/prev_move_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/protect_ATTACKER": [
+0,
+0
+],
+"plain/0/protect_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/protect_DEFENDER": [
+0,
+0
+],
+"plain/0/protect_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/recycle_ATTACKER": [
+0,
+0
+],
+"plain/0/recycle_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/recycle_DEFENDER": [
+0,
+0
+],
+"plain/0/recycle_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/side_ATTACKER_FUTURE_SIGHT": [
+0,
+0
+],
+"plain/0/side_ATTACKER_LIGHT_SCREEN": [
+0,
+0
+],
+"plain/0/side_ATTACKER_LUCKY_CHANT": [
+0,
+0
+],
+"plain/0/side_ATTACKER_MIST": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_LIGHT_SCREEN": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_MIST": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_REFLECT": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_SAFEGUARD": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_SPIKES": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_TAILWIND": [
+0,
+0
+],
+"plain/0/side_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/0/side_ATTACKER_REFLECT": [
+0,
+0
+],
+"plain/0/side_ATTACKER_SAFEGUARD": [
+0,
+0
+],
+"plain/0/side_ATTACKER_SPIKES": [
+0,
+0
+],
+"plain/0/side_ATTACKER_STEALTH_ROCK": [
+0,
+0
+],
+"plain/0/side_ATTACKER_TAILWIND": [
+0,
+0
+],
+"plain/0/side_ATTACKER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/0/side_DEFENDER_FUTURE_SIGHT": [
+0,
+0
+],
+"plain/0/side_DEFENDER_LIGHT_SCREEN": [
+0,
+0
+],
+"plain/0/side_DEFENDER_LUCKY_CHANT": [
+0,
+0
+],
+"plain/0/side_DEFENDER_MIST": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_LIGHT_SCREEN": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_MIST": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_REFLECT": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_SAFEGUARD": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_SPIKES": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_TAILWIND": [
+0,
+0
+],
+"plain/0/side_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/0/side_DEFENDER_REFLECT": [
+0,
+0
+],
+"plain/0/side_DEFENDER_SAFEGUARD": [
+0,
+0
+],
+"plain/0/side_DEFENDER_SPIKES": [
+0,
+0
+],
+"plain/0/side_DEFENDER_STEALTH_ROCK": [
+0,
+0
+],
+"plain/0/side_DEFENDER_TAILWIND": [
+0,
+0
+],
+"plain/0/side_DEFENDER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/0/slower": [
+0,
+1
+],
+"plain/0/speed_rank_ATTACKER": [
+1,
+0
+],
+"plain/0/speed_rank_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/speed_rank_DEFENDER": [
+0,
+0
+],
+"plain/0/speed_rank_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/stage_diff_ATTACKER_ACC": [
+0,
+0
+],
+"plain/0/stage_diff_ATTACKER_ATK": [
+0,
+0
+],
+"plain/0/stage_diff_ATTACKER_PARTNER_ACC": [
+-6,
+0
+],
+"plain/0/stage_diff_ATTACKER_PARTNER_ATK": [
+-6,
+0
+],
+"plain/0/stage_diff_ATTACKER_PARTNER_SPE": [
+-6,
+0
+],
+"plain/0/stage_diff_ATTACKER_SPE": [
+0,
+0
+],
+"plain/0/stage_diff_DEFENDER_ACC": [
+0,
+0
+],
+"plain/0/stage_diff_DEFENDER_ATK": [
+0,
+0
+],
+"plain/0/stage_diff_DEFENDER_PARTNER_ACC": [
+-6,
+0
+],
+"plain/0/stage_diff_DEFENDER_PARTNER_ATK": [
+-6,
+0
+],
+"plain/0/stage_diff_DEFENDER_PARTNER_SPE": [
+-6,
+0
+],
+"plain/0/stage_diff_DEFENDER_SPE": [
+0,
+0
+],
+"plain/0/stage_eq_ATTACKER_ACC": [
+0,
+1
+],
+"plain/0/stage_eq_ATTACKER_ATK": [
+0,
+1
+],
+"plain/0/stage_eq_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"plain/0/stage_eq_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"plain/0/stage_eq_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"plain/0/stage_eq_ATTACKER_SPE": [
+0,
+1
+],
+"plain/0/stage_eq_DEFENDER_ACC": [
+0,
+1
+],
+"plain/0/stage_eq_DEFENDER_ATK": [
+0,
+1
+],
+"plain/0/stage_eq_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"plain/0/stage_eq_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"plain/0/stage_eq_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"plain/0/stage_eq_DEFENDER_SPE": [
+0,
+1
+],
+"plain/0/stage_gt_ATTACKER_ACC": [
+0,
+0
+],
+"plain/0/stage_gt_ATTACKER_ATK": [
+0,
+0
+],
+"plain/0/stage_gt_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"plain/0/stage_gt_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"plain/0/stage_gt_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"plain/0/stage_gt_ATTACKER_SPE": [
+0,
+0
+],
+"plain/0/stage_gt_DEFENDER_ACC": [
+0,
+0
+],
+"plain/0/stage_gt_DEFENDER_ATK": [
+0,
+0
+],
+"plain/0/stage_gt_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"plain/0/stage_gt_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"plain/0/stage_gt_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"plain/0/stage_gt_DEFENDER_SPE": [
+0,
+0
+],
+"plain/0/stage_lt_ATTACKER_ACC": [
+0,
+0
+],
+"plain/0/stage_lt_ATTACKER_ATK": [
+0,
+0
+],
+"plain/0/stage_lt_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"plain/0/stage_lt_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"plain/0/stage_lt_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"plain/0/stage_lt_ATTACKER_SPE": [
+0,
+0
+],
+"plain/0/stage_lt_DEFENDER_ACC": [
+0,
+0
+],
+"plain/0/stage_lt_DEFENDER_ATK": [
+0,
+0
+],
+"plain/0/stage_lt_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"plain/0/stage_lt_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"plain/0/stage_lt_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"plain/0/stage_lt_DEFENDER_SPE": [
+0,
+0
+],
+"plain/0/stage_ne_ATTACKER_ACC": [
+0,
+0
+],
+"plain/0/stage_ne_ATTACKER_ATK": [
+0,
+0
+],
+"plain/0/stage_ne_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"plain/0/stage_ne_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"plain/0/stage_ne_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"plain/0/stage_ne_ATTACKER_SPE": [
+0,
+0
+],
+"plain/0/stage_ne_DEFENDER_ACC": [
+0,
+0
+],
+"plain/0/stage_ne_DEFENDER_ATK": [
+0,
+0
+],
+"plain/0/stage_ne_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"plain/0/stage_ne_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"plain/0/stage_ne_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"plain/0/stage_ne_DEFENDER_SPE": [
+0,
+0
+],
+"plain/0/status_ATTACKER": [
+0,
+0
+],
+"plain/0/status_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/status_DEFENDER": [
+0,
+0
+],
+"plain/0/status_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/sum_stages_ATTACKER": [
+0,
+0
+],
+"plain/0/sum_stages_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/sum_stages_DEFENDER": [
+0,
+0
+],
+"plain/0/sum_stages_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/super_effective": [
+0,
+0
+],
+"plain/0/target_is_partner": [
+0,
+0
+],
+"plain/0/turn_count_ATTACKER": [
+0,
+0
+],
+"plain/0/turn_count_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/turn_count_DEFENDER": [
+0,
+0
+],
+"plain/0/turn_count_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/under_disable_ATTACKER": [
+0,
+0
+],
+"plain/0/under_disable_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/under_disable_DEFENDER": [
+0,
+0
+],
+"plain/0/under_disable_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/under_encore_ATTACKER": [
+0,
+0
+],
+"plain/0/under_encore_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/0/under_encore_DEFENDER": [
+0,
+0
+],
+"plain/0/under_encore_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_ATTRACT": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_CONFUSION": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_CURSE": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_FOCUS_ENERGY": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_FORESIGHT": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_MEAN_LOOK": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_NIGHTMARE": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_CURSE": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_PARTNER_TORMENT": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_SUBSTITUTE": [
+0,
+0
+],
+"plain/0/volatile_ATTACKER_TORMENT": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_ATTRACT": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_CONFUSION": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_CURSE": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_FOCUS_ENERGY": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_FORESIGHT": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_MEAN_LOOK": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_NIGHTMARE": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_CURSE": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_PARTNER_TORMENT": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_SUBSTITUTE": [
+0,
+0
+],
+"plain/0/volatile_DEFENDER_TORMENT": [
+0,
+0
+],
+"plain/0/with_partner": [
+0,
+0
+],
+"plain/1/ability_ATTACKER": [
+69,
+0
+],
+"plain/1/ability_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/ability_DEFENDER": [
+66,
+0
+],
+"plain/1/ability_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/ability_flat_ATTACKER": [
+69,
+0
+],
+"plain/1/ability_flat_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/ability_flat_DEFENDER": [
+66,
+0
+],
+"plain/1/ability_flat_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/after_speed_compare": [
+true,
+0
+],
+"plain/1/alive_ATTACKER": [
+2,
+0
+],
+"plain/1/alive_ATTACKER_PARTNER": [
+2,
+0
+],
+"plain/1/alive_DEFENDER": [
+5,
+0
+],
+"plain/1/alive_DEFENDER_PARTNER": [
+2,
+0
+],
+"plain/1/check_ability0_ATTACKER": [
+0,
+0
+],
+"plain/1/check_ability0_ATTACKER_PARTNER": [
+2,
+0
+],
+"plain/1/check_ability0_DEFENDER": [
+0,
+0
+],
+"plain/1/check_ability0_DEFENDER_PARTNER": [
+2,
+0
+],
+"plain/1/check_ability_ATTACKER": [
+0,
+0
+],
+"plain/1/check_ability_ATTACKER_PARTNER": [
+2,
+0
+],
+"plain/1/check_ability_DEFENDER": [
+0,
+0
+],
+"plain/1/check_ability_DEFENDER_PARTNER": [
+2,
+0
+],
+"plain/1/context": [
+[
+100,
+100,
+0,
+0
+],
+[
+0,
+0,
+0,
+0
+],
+66,
+[
+66,
+66
+],
+false,
+[
+30,
+10
+],
+[
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+[
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+],
+[
+1.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0,
+0.0
+]
+],
+[
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12,
+12
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+],
+[
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0,
+0
+]
+],
+88
+],
+"plain/1/deals_more_ATTACKER": "AssertionError",
+"plain/1/deals_more_ATTACKER_PARTNER": "AssertionError",
+"plain/1/deals_more_DEFENDER": [
+0,
+0
+],
+"plain/1/deals_more_DEFENDER_PARTNER": "AssertionError",
+"plain/1/defender_move_class": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_1": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_111": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_17": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_176": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_31": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_4": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_43": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_PARTNER_1": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_PARTNER_111": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_PARTNER_17": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_PARTNER_176": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_PARTNER_31": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_PARTNER_4": [
+0,
+0
+],
+"plain/1/eff_known_ATTACKER_PARTNER_43": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_1": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_111": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_17": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_176": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_31": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_4": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_43": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_PARTNER_1": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_PARTNER_111": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_PARTNER_17": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_PARTNER_176": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_PARTNER_31": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_PARTNER_4": [
+0,
+0
+],
+"plain/1/eff_known_DEFENDER_PARTNER_43": [
+0,
+0
+],
+"plain/1/eff_notknown_ATTACKER_1": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_111": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_17": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_176": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_31": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_4": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_43": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_PARTNER_1": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_PARTNER_111": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_PARTNER_17": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_PARTNER_176": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_PARTNER_31": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_PARTNER_4": [
+0,
+1
+],
+"plain/1/eff_notknown_ATTACKER_PARTNER_43": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_1": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_111": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_17": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_176": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_31": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_4": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_43": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_PARTNER_1": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_PARTNER_111": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_PARTNER_17": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_PARTNER_176": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_PARTNER_31": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_PARTNER_4": [
+0,
+1
+],
+"plain/1/eff_notknown_DEFENDER_PARTNER_43": [
+0,
+1
+],
+"plain/1/effect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_AQUA_RING": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_CAMOUFLAGE": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_EMBARGO": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_IMPRISON": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_IMPRISONED": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_INGRAIN": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_LEECH_SEED": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_LOCK_ON": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_MAGNET_RISE": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_MIRACLE_EYE": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_EMBARGO": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_IMPRISON": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_INGRAIN": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PARTNER_YAWN": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_PERISH_SONG": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_POWER_TRICK": [
+0,
+0
+],
+"plain/1/effect_ATTACKER_YAWN": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_AQUA_RING": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_CAMOUFLAGE": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_EMBARGO": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_IMPRISON": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_IMPRISONED": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_INGRAIN": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_LEECH_SEED": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_LOCK_ON": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_MAGNET_RISE": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_MIRACLE_EYE": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_EMBARGO": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_IMPRISON": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_INGRAIN": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PARTNER_YAWN": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_PERISH_SONG": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_POWER_TRICK": [
+0,
+0
+],
+"plain/1/effect_DEFENDER_YAWN": [
+0,
+0
+],
+"plain/1/effectiveness_BASE": [
+0,
+0
+],
+"plain/1/effectiveness_DOUBLE": [
+0,
+0
+],
+"plain/1/effectiveness_HALF": [
+0,
+0
+],
+"plain/1/effectiveness_IMMUNE": [
+0,
+0
+],
+"plain/1/effectiveness_QUADRUPLE": [
+0,
+0
+],
+"plain/1/effectiveness_QUARTER": [
+0,
+0
+],
+"plain/1/effectiveness_STAB": [
+0,
+1
+],
+"plain/1/effectiveness_class": [
+60,
+0
+],
+"plain/1/fainted_ATTACKER": "AssertionError",
+"plain/1/fainted_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/1/fainted_DEFENDER": "AssertionError",
+"plain/1/fainted_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/1/first_turn_ATTACKER": [
+1,
+0
+],
+"plain/1/first_turn_ATTACKER_PARTNER": [
+1,
+0
+],
+"plain/1/first_turn_DEFENDER": [
+1,
+0
+],
+"plain/1/first_turn_DEFENDER_PARTNER": [
+1,
+0
+],
+"plain/1/flag_damage": [
+2,
+0
+],
+"plain/1/flash_ATTACKER": [
+0,
+0
+],
+"plain/1/flash_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/flash_DEFENDER": [
+0,
+0
+],
+"plain/1/flash_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/fling_ATTACKER": [
+0,
+0
+],
+"plain/1/fling_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/fling_DEFENDER": [
+0,
+0
+],
+"plain/1/fling_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/gender_ATTACKER": [
+0,
+0
+],
+"plain/1/gender_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/gender_DEFENDER": [
+0,
+0
+],
+"plain/1/gender_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/held_effect_ATTACKER": [
+0,
+0
+],
+"plain/1/held_effect_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/held_effect_DEFENDER": [
+0,
+0
+],
+"plain/1/held_effect_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/held_eq0_ATTACKER": [
+0,
+1
+],
+"plain/1/held_eq0_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/1/held_eq0_DEFENDER": [
+0,
+1
+],
+"plain/1/held_eq0_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/1/held_eq_ATTACKER": [
+0,
+0
+],
+"plain/1/held_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/held_eq_DEFENDER": [
+0,
+0
+],
+"plain/1/held_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/held_item_ATTACKER": [
+0,
+0
+],
+"plain/1/held_item_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/held_item_DEFENDER": [
+0,
+0
+],
+"plain/1/held_item_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/hp_eq_ATTACKER": [
+0,
+1
+],
+"plain/1/hp_eq_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/hp_eq_DEFENDER": [
+0,
+1
+],
+"plain/1/hp_eq_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/hp_gt_ATTACKER": [
+0,
+1
+],
+"plain/1/hp_gt_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/hp_gt_DEFENDER": [
+0,
+1
+],
+"plain/1/hp_gt_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/hp_lt_ATTACKER": [
+0,
+0
+],
+"plain/1/hp_lt_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/1/hp_lt_DEFENDER": [
+0,
+0
+],
+"plain/1/hp_lt_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/1/hp_ne_ATTACKER": [
+0,
+0
+],
+"plain/1/hp_ne_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/1/hp_ne_DEFENDER": [
+0,
+0
+],
+"plain/1/hp_ne_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/1/is_type_ATTACKER": [
+0,
+0
+],
+"plain/1/is_type_ATTACKER_PARTNER": [
+1,
+0
+],
+"plain/1/is_type_DEFENDER": [
+0,
+0
+],
+"plain/1/is_type_DEFENDER_PARTNER": [
+1,
+0
+],
+"plain/1/is_type_rock_ATTACKER": [
+1,
+0
+],
+"plain/1/is_type_rock_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/is_type_rock_DEFENDER": [
+0,
+0
+],
+"plain/1/is_type_rock_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/kills_max": [
+0,
+0
+],
+"plain/1/known_ATTACKER_0": [
+0,
+1
+],
+"plain/1/known_ATTACKER_105": [
+0,
+0
+],
+"plain/1/known_ATTACKER_33": [
+0,
+0
+],
+"plain/1/known_ATTACKER_89": [
+0,
+0
+],
+"plain/1/known_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"plain/1/known_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"plain/1/known_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"plain/1/known_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"plain/1/known_DEFENDER_0": [
+0,
+1
+],
+"plain/1/known_DEFENDER_105": [
+0,
+0
+],
+"plain/1/known_DEFENDER_33": [
+0,
+0
+],
+"plain/1/known_DEFENDER_89": [
+0,
+0
+],
+"plain/1/known_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"plain/1/known_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"plain/1/known_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"plain/1/known_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"plain/1/last_resort_ATTACKER": [
+0,
+0
+],
+"plain/1/last_resort_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/last_resort_DEFENDER": [
+0,
+0
+],
+"plain/1/last_resort_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/layers_ATTACKER_PARTNER_SPIKES": [
+0,
+0
+],
+"plain/1/layers_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/1/layers_ATTACKER_SPIKES": [
+0,
+0
+],
+"plain/1/layers_ATTACKER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/1/layers_DEFENDER_PARTNER_SPIKES": [
+0,
+0
+],
+"plain/1/layers_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/1/layers_DEFENDER_SPIKES": [
+0,
+0
+],
+"plain/1/layers_DEFENDER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/1/level_0": [
+0,
+0
+],
+"plain/1/level_1": [
+0,
+1
+],
+"plain/1/level_2": [
+0,
+0
+],
+"plain/1/load_type_ATTACKER_PARTNER_TYPE_1": [
+5,
+0
+],
+"plain/1/load_type_ATTACKER_PARTNER_TYPE_2": [
+4,
+0
+],
+"plain/1/load_type_ATTACKER_TYPE_1": [
+5,
+0
+],
+"plain/1/load_type_ATTACKER_TYPE_2": [
+4,
+0
+],
+"plain/1/load_type_DEFENDER_TYPE_1": [
+10,
+0
+],
+"plain/1/load_type_DEFENDER_TYPE_2": [
+1,
+0
+],
+"plain/1/load_type_MOVE_TYPE": [
+5,
+0
+],
+"plain/1/move_pp": [
+15,
+0
+],
+"plain/1/no_damaging": [
+0,
+0
+],
+"plain/1/not_taunted": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_AQUA_RING": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_CAMOUFLAGE": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_EMBARGO": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_IMPRISON": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_IMPRISONED": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_INGRAIN": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_LEECH_SEED": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_LOCK_ON": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_MAGNET_RISE": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_MIRACLE_EYE": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_EMBARGO": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_IMPRISON": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_INGRAIN": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PARTNER_YAWN": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_PERISH_SONG": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_POWER_TRICK": [
+0,
+1
+],
+"plain/1/noteffect_ATTACKER_YAWN": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_AQUA_RING": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_CAMOUFLAGE": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_EMBARGO": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_IMPRISON": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_IMPRISONED": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_INGRAIN": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_LEECH_SEED": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_LOCK_ON": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_MAGNET_RISE": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_MIRACLE_EYE": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_ABILITY_SUPPRESSED": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_AQUA_RING": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_CAMOUFLAGE": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_EMBARGO": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_IMPRISON": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_IMPRISONED": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_INGRAIN": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_LEECH_SEED": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_LOCK_ON": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_MAGNET_RISE": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_MIRACLE_EYE": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_PERISH_SONG": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_POWER_TRICK": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PARTNER_YAWN": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_PERISH_SONG": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_POWER_TRICK": [
+0,
+1
+],
+"plain/1/noteffect_DEFENDER_YAWN": [
+0,
+1
+],
+"plain/1/notknown_ATTACKER_0": [
+0,
+0
+],
+"plain/1/notknown_ATTACKER_105": [
+0,
+1
+],
+"plain/1/notknown_ATTACKER_33": [
+0,
+1
+],
+"plain/1/notknown_ATTACKER_89": [
+0,
+1
+],
+"plain/1/notknown_ATTACKER_PARTNER_0": [
+0,
+0
+],
+"plain/1/notknown_ATTACKER_PARTNER_105": [
+0,
+0
+],
+"plain/1/notknown_ATTACKER_PARTNER_33": [
+0,
+0
+],
+"plain/1/notknown_ATTACKER_PARTNER_89": [
+0,
+0
+],
+"plain/1/notknown_DEFENDER_0": [
+0,
+0
+],
+"plain/1/notknown_DEFENDER_105": [
+0,
+1
+],
+"plain/1/notknown_DEFENDER_33": [
+0,
+1
+],
+"plain/1/notknown_DEFENDER_89": [
+0,
+1
+],
+"plain/1/notknown_DEFENDER_PARTNER_0": [
+0,
+0
+],
+"plain/1/notknown_DEFENDER_PARTNER_105": [
+0,
+0
+],
+"plain/1/notknown_DEFENDER_PARTNER_33": [
+0,
+0
+],
+"plain/1/notknown_DEFENDER_PARTNER_89": [
+0,
+0
+],
+"plain/1/notstatus_ATTACKER": [
+0,
+1
+],
+"plain/1/notstatus_ATTACKER_PARTNER": [
+0,
+1
+],
+"plain/1/notstatus_DEFENDER": [
+0,
+1
+],
+"plain/1/notstatus_DEFENDER_PARTNER": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_ATTRACT": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_CONFUSION": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_CURSE": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_FOCUS_ENERGY": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_FORESIGHT": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_MEAN_LOOK": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_NIGHTMARE": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_CURSE": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_PARTNER_TORMENT": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_SUBSTITUTE": [
+0,
+1
+],
+"plain/1/notvolatile_ATTACKER_TORMENT": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_ATTRACT": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_CONFUSION": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_CURSE": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_FOCUS_ENERGY": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_FORESIGHT": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_MEAN_LOOK": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_NIGHTMARE": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_CURSE": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_PARTNER_TORMENT": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_SUBSTITUTE": [
+0,
+1
+],
+"plain/1/notvolatile_DEFENDER_TORMENT": [
+0,
+1
+],
+"plain/1/party_more": [
+0,
+0
+],
+"plain/1/party_status_ATTACKER": [
+0,
+0
+],
+"plain/1/party_status_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/party_status_DEFENDER": [
+0,
+0
+],
+"plain/1/party_status_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/prev_move_ATTACKER": [
+0,
+0
+],
+"plain/1/prev_move_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/prev_move_DEFENDER": [
+0,
+0
+],
+"plain/1/prev_move_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/protect_ATTACKER": [
+0,
+0
+],
+"plain/1/protect_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/protect_DEFENDER": [
+0,
+0
+],
+"plain/1/protect_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/recycle_ATTACKER": [
+0,
+0
+],
+"plain/1/recycle_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/recycle_DEFENDER": [
+0,
+0
+],
+"plain/1/recycle_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/side_ATTACKER_FUTURE_SIGHT": [
+0,
+0
+],
+"plain/1/side_ATTACKER_LIGHT_SCREEN": [
+0,
+0
+],
+"plain/1/side_ATTACKER_LUCKY_CHANT": [
+0,
+0
+],
+"plain/1/side_ATTACKER_MIST": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_LIGHT_SCREEN": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_MIST": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_REFLECT": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_SAFEGUARD": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_SPIKES": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_TAILWIND": [
+0,
+0
+],
+"plain/1/side_ATTACKER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/1/side_ATTACKER_REFLECT": [
+0,
+0
+],
+"plain/1/side_ATTACKER_SAFEGUARD": [
+0,
+0
+],
+"plain/1/side_ATTACKER_SPIKES": [
+0,
+0
+],
+"plain/1/side_ATTACKER_STEALTH_ROCK": [
+0,
+0
+],
+"plain/1/side_ATTACKER_TAILWIND": [
+0,
+0
+],
+"plain/1/side_ATTACKER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/1/side_DEFENDER_FUTURE_SIGHT": [
+0,
+0
+],
+"plain/1/side_DEFENDER_LIGHT_SCREEN": [
+0,
+0
+],
+"plain/1/side_DEFENDER_LUCKY_CHANT": [
+0,
+0
+],
+"plain/1/side_DEFENDER_MIST": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_FUTURE_SIGHT": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_LIGHT_SCREEN": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_LUCKY_CHANT": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_MIST": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_REFLECT": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_SAFEGUARD": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_SPIKES": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_STEALTH_ROCK": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_TAILWIND": [
+0,
+0
+],
+"plain/1/side_DEFENDER_PARTNER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/1/side_DEFENDER_REFLECT": [
+0,
+0
+],
+"plain/1/side_DEFENDER_SAFEGUARD": [
+0,
+0
+],
+"plain/1/side_DEFENDER_SPIKES": [
+0,
+0
+],
+"plain/1/side_DEFENDER_STEALTH_ROCK": [
+0,
+0
+],
+"plain/1/side_DEFENDER_TAILWIND": [
+0,
+0
+],
+"plain/1/side_DEFENDER_TOXIC_SPIKES": [
+0,
+0
+],
+"plain/1/slower": [
+0,
+1
+],
+"plain/1/speed_rank_ATTACKER": [
+1,
+0
+],
+"plain/1/speed_rank_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/speed_rank_DEFENDER": [
+0,
+0
+],
+"plain/1/speed_rank_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/stage_diff_ATTACKER_ACC": [
+0,
+0
+],
+"plain/1/stage_diff_ATTACKER_ATK": [
+0,
+0
+],
+"plain/1/stage_diff_ATTACKER_PARTNER_ACC": [
+-6,
+0
+],
+"plain/1/stage_diff_ATTACKER_PARTNER_ATK": [
+-6,
+0
+],
+"plain/1/stage_diff_ATTACKER_PARTNER_SPE": [
+-6,
+0
+],
+"plain/1/stage_diff_ATTACKER_SPE": [
+0,
+0
+],
+"plain/1/stage_diff_DEFENDER_ACC": [
+0,
+0
+],
+"plain/1/stage_diff_DEFENDER_ATK": [
+0,
+0
+],
+"plain/1/stage_diff_DEFENDER_PARTNER_ACC": [
+-6,
+0
+],
+"plain/1/stage_diff_DEFENDER_PARTNER_ATK": [
+-6,
+0
+],
+"plain/1/stage_diff_DEFENDER_PARTNER_SPE": [
+-6,
+0
+],
+"plain/1/stage_diff_DEFENDER_SPE": [
+0,
+0
+],
+"plain/1/stage_eq_ATTACKER_ACC": [
+0,
+1
+],
+"plain/1/stage_eq_ATTACKER_ATK": [
+0,
+1
+],
+"plain/1/stage_eq_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"plain/1/stage_eq_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"plain/1/stage_eq_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"plain/1/stage_eq_ATTACKER_SPE": [
+0,
+1
+],
+"plain/1/stage_eq_DEFENDER_ACC": [
+0,
+1
+],
+"plain/1/stage_eq_DEFENDER_ATK": [
+0,
+1
+],
+"plain/1/stage_eq_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"plain/1/stage_eq_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"plain/1/stage_eq_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"plain/1/stage_eq_DEFENDER_SPE": [
+0,
+1
+],
+"plain/1/stage_gt_ATTACKER_ACC": [
+0,
+0
+],
+"plain/1/stage_gt_ATTACKER_ATK": [
+0,
+0
+],
+"plain/1/stage_gt_ATTACKER_PARTNER_ACC": [
+0,
+0
+],
+"plain/1/stage_gt_ATTACKER_PARTNER_ATK": [
+0,
+0
+],
+"plain/1/stage_gt_ATTACKER_PARTNER_SPE": [
+0,
+0
+],
+"plain/1/stage_gt_ATTACKER_SPE": [
+0,
+0
+],
+"plain/1/stage_gt_DEFENDER_ACC": [
+0,
+0
+],
+"plain/1/stage_gt_DEFENDER_ATK": [
+0,
+0
+],
+"plain/1/stage_gt_DEFENDER_PARTNER_ACC": [
+0,
+0
+],
+"plain/1/stage_gt_DEFENDER_PARTNER_ATK": [
+0,
+0
+],
+"plain/1/stage_gt_DEFENDER_PARTNER_SPE": [
+0,
+0
+],
+"plain/1/stage_gt_DEFENDER_SPE": [
+0,
+0
+],
+"plain/1/stage_lt_ATTACKER_ACC": [
+0,
+0
+],
+"plain/1/stage_lt_ATTACKER_ATK": [
+0,
+0
+],
+"plain/1/stage_lt_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"plain/1/stage_lt_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"plain/1/stage_lt_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"plain/1/stage_lt_ATTACKER_SPE": [
+0,
+0
+],
+"plain/1/stage_lt_DEFENDER_ACC": [
+0,
+0
+],
+"plain/1/stage_lt_DEFENDER_ATK": [
+0,
+0
+],
+"plain/1/stage_lt_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"plain/1/stage_lt_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"plain/1/stage_lt_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"plain/1/stage_lt_DEFENDER_SPE": [
+0,
+0
+],
+"plain/1/stage_ne_ATTACKER_ACC": [
+0,
+0
+],
+"plain/1/stage_ne_ATTACKER_ATK": [
+0,
+0
+],
+"plain/1/stage_ne_ATTACKER_PARTNER_ACC": [
+0,
+1
+],
+"plain/1/stage_ne_ATTACKER_PARTNER_ATK": [
+0,
+1
+],
+"plain/1/stage_ne_ATTACKER_PARTNER_SPE": [
+0,
+1
+],
+"plain/1/stage_ne_ATTACKER_SPE": [
+0,
+0
+],
+"plain/1/stage_ne_DEFENDER_ACC": [
+0,
+0
+],
+"plain/1/stage_ne_DEFENDER_ATK": [
+0,
+0
+],
+"plain/1/stage_ne_DEFENDER_PARTNER_ACC": [
+0,
+1
+],
+"plain/1/stage_ne_DEFENDER_PARTNER_ATK": [
+0,
+1
+],
+"plain/1/stage_ne_DEFENDER_PARTNER_SPE": [
+0,
+1
+],
+"plain/1/stage_ne_DEFENDER_SPE": [
+0,
+0
+],
+"plain/1/status_ATTACKER": [
+0,
+0
+],
+"plain/1/status_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/status_DEFENDER": [
+0,
+0
+],
+"plain/1/status_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/sum_stages_ATTACKER": [
+0,
+0
+],
+"plain/1/sum_stages_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/sum_stages_DEFENDER": [
+0,
+0
+],
+"plain/1/sum_stages_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/super_effective": [
+0,
+0
+],
+"plain/1/target_is_partner": [
+0,
+0
+],
+"plain/1/turn_count_ATTACKER": [
+0,
+0
+],
+"plain/1/turn_count_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/turn_count_DEFENDER": [
+0,
+0
+],
+"plain/1/turn_count_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/under_disable_ATTACKER": [
+0,
+0
+],
+"plain/1/under_disable_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/under_disable_DEFENDER": [
+0,
+0
+],
+"plain/1/under_disable_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/under_encore_ATTACKER": [
+0,
+0
+],
+"plain/1/under_encore_ATTACKER_PARTNER": [
+0,
+0
+],
+"plain/1/under_encore_DEFENDER": [
+0,
+0
+],
+"plain/1/under_encore_DEFENDER_PARTNER": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_ATTRACT": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_CONFUSION": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_CURSE": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_FOCUS_ENERGY": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_FORESIGHT": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_MEAN_LOOK": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_NIGHTMARE": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_ATTRACT": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_CONFUSION": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_CURSE": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_PARTNER_TORMENT": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_SUBSTITUTE": [
+0,
+0
+],
+"plain/1/volatile_ATTACKER_TORMENT": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_ATTRACT": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_CONFUSION": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_CURSE": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_FOCUS_ENERGY": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_FORESIGHT": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_MEAN_LOOK": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_NIGHTMARE": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_ATTRACT": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_CONFUSION": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_CURSE": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_FOCUS_ENERGY": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_FORESIGHT": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_MEAN_LOOK": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_NIGHTMARE": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_SUBSTITUTE": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_PARTNER_TORMENT": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_SUBSTITUTE": [
+0,
+0
+],
+"plain/1/volatile_DEFENDER_TORMENT": [
+0,
+0
+],
+"plain/1/with_partner": [
+2,
+0
+]
+}
