@@ -171,8 +171,11 @@ per day is the rate used for estimates.
   on the pod (Test pod above: 88 GB and 10, or 176 GB and 20). With no other live chunk on
   the pod a chunk starts when memory is under `GATE_GB` and memory plus its expected peak is
   under `KILL_GB`; one whose expected peak alone reaches `KILL_GB` starts alone at once, and
-  one kept out only by memory no chunk holds starts after `IDLE_WAIT_S` (300 s). Heavy tests
-  need no hand placement: list them with their weights and the runner keeps them apart.
+  one kept out only by memory no chunk holds starts after `IDLE_WAIT_S` (300 s). A head
+  chunk that does not fit lets the first later chunk of its run that fits start; after
+  `CLAIM_S` (120 s) it claims the pod, and no other run starts a chunk until it has started.
+  Heavy tests need no hand placement: list them with their weights and the runner keeps them
+  apart. Old-script runners ignore claims: never send a run to a pod they keep full.
   Near `KILL_GB` (118 or 236 GB) kill this run's newest chunk and queue it again, at most
   twice per chunk; a third kill counts as a failure. Never signal PID 1.
 - **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed
