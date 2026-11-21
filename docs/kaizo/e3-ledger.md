@@ -799,10 +799,10 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Rulings. (1) A copied Slow Start (:16-21) cannot arise: unsupported ability, coverage refuses its
   holders (as Skill Swap). (2) Skill Swap's failure paths (subscript_exchange_abilities.s:5-14) show the
   attack message like Role Play's (subscript_missed.s:5) and skip AfterMoveEffects (review b2 #1, #2:
-  `effects.skill_swap_fails` beside Role Play's in `primary_effect_fails`; reference `_skill_swap_fails` in `full`). (3) Doubles: the target is the chosen
+  `effects.skill_swap_fails` beside Role Play's in `primary_effect_fails`; reference `_skill_swap_fails` in `full`). On this path the skip has no item-visible effect: every AfterMoveEffects item state (bcp.c:3672, :3684, :3691, :3730) is repeated by MoveEnd's TriggerEffectOnSwitch (bcp.c:3973, battle_lib.c:4151-4165), and a failed status move changes no HP. (3) Doubles: the target is the chosen
   `h.target`; `role_play_fails` reads `state.active[target_side]`.
   Tests: tests/engine/test_e3_batch2.py (`test_role_play_*`, `test_the_copy_ends_with_the_battler`,
-  `test_a_failed_skill_swap_skips_after_move_effects`),
+  `test_a_failed_skill_swap_leaves_both_abilities`),
   tests/ai/test_kaizo_policy.py (`test_role_play_shares_the_change_user_ability_block`, the exact-equals-loose
   list), tests/engine/test_accuracy_classes.py (`_FOLLOWED`); `fullset`-free.
 

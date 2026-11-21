@@ -1184,36 +1184,34 @@ def test_role_play_fails_on_its_listed_conditions_and_still_shows_the_attack_mes
     assert _rpgo(t, n, gone).ability[:, 0].tolist() == base.ability[:, 0].tolist()
 
 
-def test_a_failed_skill_swap_skips_after_move_effects(tables, names):
+def test_a_failed_skill_swap_leaves_both_abilities(tables, names):
     """Review b2 #2: subscript_exchange_abilities.s:12-13 (both abilities ABILITY_NONE) jumps to
-    :156 (MOVE_STATUS_FAILED); CheckMoveFailure sends it to subscript_missed.s with commandNext
-    LOOP_FAINTED (bcp.c:3324-3327), so AfterMoveEffects' ATTACKER_ITEM check (bcp.c:3684-3689)
-    does not run. A faster Monferno at 1 HP holding a Sitrus Berry: after a swap it eats the
-    berry at once, then the Geodude's Pain Split averages the HP. After a failed swap it still
-    eats it before the Pain Split: every move reaches MoveEnd (bcp.c:3959), whose
-    TriggerEffectOnSwitch (bcp.c:3973) runs SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS over every
-    battler (battle_lib.c:4151-4165; HOLD_EFFECT_HP_PCT_RESTORE at curHP <= maxHP / 2, :4982-4983;
-    D3-15). Both engines agree on both runs."""
+    :156 (MOVE_STATUS_FAILED): the swap writes nothing, so both stay ABILITY_NONE; with real
+    abilities the same Skill Swap exchanges them. CheckMoveFailure sends the failure to
+    subscript_missed.s with commandNext LOOP_FAINTED (bcp.c:3324-3327), skipping AfterMoveEffects;
+    that skip has no item-visible effect on this path: every item state there (bcp.c:3672, :3684,
+    :3691, :3730) is repeated by MoveEnd's TriggerEffectOnSwitch (bcp.c:3973, battle_lib.c:
+    4151-4165), and a failed status move changes no HP. The board is reachable: both at full HP,
+    the Monferno faster."""
     t, n = tables, names
-    sitrus = n.item("Sitrus Berry")
     s = make_state(
         t,
         [_spec(n, "Monferno", 20, ("Skill Swap",), "Sitrus Berry")],
-        [_spec(n, "Geodude", 40, ("Pain Split",))],
+        [_spec(n, "Geodude", 40, ("Defense Curl",))],
     )
     s = s._replace(
         stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1),
-        hp=s.hp.at[0, 0].set(1),
         ability=s.ability.at[0, 0].set(AbilityId.BLAZE).at[1, 0].set(AbilityId.ROCK_HEAD),
     )
-    acts = A("Skill Swap", "Pain Split", s, n)
+    acts = A("Skill Swap", "Defense Curl", s, n)
     worked = assert_matches_reference(t, s, acts, _hits())
-    assert int(worked.ability[0, 0]) == AbilityId.ROCK_HEAD
-    assert int(worked.item[0, 0]) == 0 and int(worked.item_consumed[0, 0]) == sitrus
+    assert [int(a) for a in worked.ability[:, 0]] == [AbilityId.ROCK_HEAD, AbilityId.BLAZE]
     none = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
     failed = assert_matches_reference(t, none, acts, _hits())
     assert failed.ability[:, 0].tolist() == [AbilityId.NONE] * 2
-    assert int(failed.item[0, 0]) == 0 and int(failed.item_consumed[0, 0]) == sitrus
+    for out in (worked, failed):  # full HP: the Sitrus Berry stays held
+        assert int(out.item[0, 0]) == n.item("Sitrus Berry")
+        assert int(out.hp[0, 0]) == int(out.max_hp[0, 0])
 
 
 def test_role_play_reads_the_raw_ability_through_gastro_acid(tables, names):
