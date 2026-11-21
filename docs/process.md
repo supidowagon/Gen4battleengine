@@ -108,8 +108,8 @@ per day is the rate used for estimates.
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
   - 256 GB (the memory-optimized 32 vCPU type): `GATE_GB` 200, `MAXP` 18 (more than about
     18 units on one pod stalls it), `KILL_GB` 236, and `SNAP_GATE_GB` 176 for `snap.sh`.
-  - `RESERVE_TOP` 2 and `RESERVE_FULL_GB` 40 on both shapes: the runner's defaults; pass
-    neither.
+  - `RESERVE_TOP` 2, `RESERVE_FULL_GB` 40 and `RESERVE_PCT` 75 on both shapes: the runner's
+    defaults; pass none of them.
   - Every run gets the `MAXP` of the live runs on its pod: the shape's value, or the lowered
     one while the pod is throttled (MAXP rule, Chunking below).
   - `SPACING` (s between two chunk starts of one runner) is 4 on both shapes. It is the
@@ -180,8 +180,8 @@ per day is the rate used for estimates.
   median 7 GB, 90th percentile 12 GB, 99th 24 GB, largest 92 GB. Every chunk has an expected peak: its heaviest id in
   `tools/ops/day/pod/weights.txt` (every file any run measured, at its largest chunk and
   at least 4 GB, plus hand-kept per-test lines, each citing its run; `UNMEASURED_FILE_GB` 20 GB for a
-  file never measured; a test whose smallest passed chunk peaked at least 4 GB under its
-  file's line has its own line), raised to the list line's `<GB>G` field when that is larger. A
+  file never measured; a test that passed alone in a 1-id chunk at least 4 GB under its
+  file's line has its own line; a multi-id chunk weighs the max over its ids), raised to the list line's `<GB>G` field when that is larger. A
   live chunk of a run packed before weights (no `out/<unit>.w`) counts `DEFAULT_WEIGHT_GB`
   12 GB: the 90th percentile of 7183 measured chunks, as those runs are mostly fast-tier
   chunks of measured files. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`, on cgroup v1
@@ -189,10 +189,11 @@ per day is the rate used for estimates.
   peak stays under `GATE_GB`, and run at most `MAXP` chunks at once across all runs on the
   pod (Test pod above: 88 GB and 10, or 200 GB and 18). A live chunk's gap is its expected
   peak minus its current RSS, where positive; the reserve is every gap of a chunk weighing
-  `RESERVE_FULL_GB` (40 GB) or more, plus the `RESERVE_TOP` (2) largest gaps of the lighter
-  chunks, over every live chunk on the pod (all runs). Light chunks do not peak together
-  (18 mixed chunks under a memory-only gate peaked at 185-229 GB, 0.6-0.73 times their
-  weight sum); `KILL_GB` catches the rest. With no other live chunk on
+  `RESERVE_FULL_GB` (40 GB) or more, plus the light reserve, over every live chunk on the
+  pod (all runs): the larger of the `RESERVE_TOP` (2) largest gaps of the lighter chunks and
+  `RESERVE_PCT` (75) % of their weight sum minus their RSS sum. The top gaps cover a few light
+  chunks peaking at once; the floor covers many growing together (chunks of one file grow in
+  step; 18 mixed chunks peaked at 0.6-0.73 times their weight sum). `KILL_GB` is the last line. With no other live chunk on
   the pod a chunk starts when memory is under `GATE_GB` and memory plus its expected peak is
   under `KILL_GB`; one whose expected peak alone reaches `KILL_GB` starts alone at once, and
   one kept out only by memory no chunk holds starts after `IDLE_WAIT_S` (300 s). A head
