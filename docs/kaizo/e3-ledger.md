@@ -1642,3 +1642,24 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   `ai_action_distribution` on the VANILLA layout (per_slot_sites False, ai/layout.py:184-186): no speed tracking;
   the roark parts use Kaizo Roark (trainer 246), whose six members hold no Gyro Ball (move 360) and four moves
   each: no speed tracking and no skipped slot. No snapshot part records AiContext fields.
+- E3-B2-31 The slow tier's red test_damage_classes_equal_bruteforce_generated on 8c5cd83e (branch claude/e3-slowfix):
+  a pause (MoveEnd learn, bcp.c:3968; LEARN_FIELD / LEARN_MON; an E2 party list) stored every side's raw speedRand
+  bit in `ts_qc`. The brute force draws `quick_claw` for every side when any Quick Claw exists; the exact law only for
+  a side with a living holder in its party (enumerate.py `quick_claw`), so a foe with no holder split the brute
+  force's paused children by an unread bit (E1's repro state: children differ in `ts_qc` alone). Rule: the draw is
+  made once per turn (bcp.c:853-857); every reader is BattleSystem_CompareBattlerSpeed: BranchActions' sort after
+  each action (bcp.c:888; the turn end's monSpeedOrder), the Trick Room re-sort after MoveEnd (bcp.c:3990-3992,
+  SortMonActionOrder battle_lib.c:7275-7302), the next turn's readers (`step.qc_kept`). It reads speedRand only for
+  a battler holding HOLD_EFFECT_SOMETIMES_PRIORITY (battle_lib.c:1278-1279, :1345), a fainted one only against
+  another fainted one (:1205-1211). No battler gains a held item in the modelled engine (Thief / Covet, Trick /
+  Switcheroo, effects 105 / 177, have no EffectId: unsupported; Knock Off and Fling only remove), so a pause keeps
+  side b's bit only when b's party has a living Quick Claw holder or b's active holds one, fainted or not (as
+  order.quick_claw_active reads it; raw item, as qc_kept), else 0. Both were living holders at the turn's start,
+  where the exact law draws the bit. `step.qc_readable` at both JAX stops (`_execute_actions`, `step_events`),
+  `reference._qc_readable` in `_write_scratch`; generic over B.
+  Test: tests/engine/test_e3_batch2.py::test_a_learn_pause_stores_only_the_readable_speed_rand_bits.
+  Snapshot compare against the main capture: no layout change, no UPGRADES row, `--allow-new` empty. Expected
+  divergence: `ts_qc` of an output state at a pause (pivot_battler or learn_site != 0), 1 -> 0 at a side with no
+  living Quick Claw holder in its party and none on its active (step, jitstep, the reference output), and
+  enumerate_turn's children of such a pausing turn, which merge (fewer children, summed probabilities). A saved
+  paused input's unread bit changes no output: nothing reads it.

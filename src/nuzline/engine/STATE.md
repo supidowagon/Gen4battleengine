@@ -512,7 +512,8 @@ three structs has a row.
     the turn scratch (`ts_ran`: the MoveEnd `clear`; `ts_move_cur`: each battler's `moveCur`;
     `ts_eot`: the turn end's order, fixed at the last `BranchActions`, :888-891; `ts_qc`: the
     turn's speedRand draw, :853-857, which every stop, a party list's included, keeps for the
-    resume's re-sorts and turn end, `step._turn_outcome`) hold the turn, and the answered state resumes it through the
+    resume's re-sorts and turn end, `step._turn_outcome`; only a side with a living Quick Claw
+    holder in its party keeps its bit, else 0, `step.qc_readable`, E3-B2-31) hold the turn, and the answered state resumes it through the
     same `step` (`levelup.learn_prompt`, `levelup.learn`). A pending action re-reads its move
     slot (`FightCommand`, :1889-1895), so the learner's replaced slot runs the new move. The
     answer is a request `(state, option)` of `search.expand.expand`; a playout gives the

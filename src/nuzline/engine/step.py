@@ -3925,7 +3925,8 @@ def _execute_actions(
         "ts_ran": lran,
         "ts_move_cur": jnp.where(pivot_stopped, 0, read["move_cur"]),
         "ts_eot": jnp.zeros((fmt.B,), _I32),
-        "ts_qc": jnp.asarray(outcome.quick_claw) != 0,
+        # Only the bits the rest of the turn can read (qc_readable, E3-B2-31).
+        "ts_qc": (jnp.asarray(outcome.quick_claw) != 0) & qc_readable(tables, state),
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")
@@ -5052,7 +5053,7 @@ def step_events(
         "ts_trace_fires": jnp.zeros_like(scratch["ts_trace_fires"]),
         "ts_cursor": jnp.where(f_prompt, 2, c_pos),
         "ts_eot": sides,
-        "ts_qc": jnp.asarray(outcome.quick_claw) != 0,
+        "ts_qc": (jnp.asarray(outcome.quick_claw) != 0) & qc_readable(tables, paused),
     }
     paused = paused._replace(
         **{
@@ -5160,6 +5161,29 @@ def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     active = jnp.any(holds & alive & on_field, axis=1)
     bench = jnp.any(holds & alive & ~on_field, axis=1)
     return (state.over == 0) & (active | ((needs_replacement(state) != 0) & bench))
+
+
+def qc_readable(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the side's ``speedRand`` bit can still be read in the rest of a paused turn
+    or by the next turn (E3-B2-31), so a pause stores it in ``ts_qc``. Every reader is
+    ``BattleSystem_CompareBattlerSpeed``: the BranchActions sort after each action
+    (bcp.c:888, the turn end's ``monSpeedOrder``), the Trick Room re-sort after a MoveEnd
+    (bcp.c:3990-3992, ``SortMonActionOrder`` battle_lib.c:7275-7302), then ``qc_kept``'s readers.
+    It reads ``speedRand`` only for a battler holding ``HOLD_EFFECT_SOMETIMES_PRIORITY``
+    (:1278-1279, :1345), and a fainted battler only against another fainted one (:1205-1211).
+    In the modelled engine no battler gains a held item (Thief / Covet and Trick / Switcheroo,
+    effects 105 and 177, have no ``EffectId``: unsupported, ``coverage.IMPLEMENTED_EFFECTS``;
+    Knock Off and Fling only remove one), so the bit is read only when the side's party has
+    a living Quick Claw holder or its active holds one (fainted or not, as
+    ``order.quick_claw_active`` reads it); the raw item, as ``qc_kept``. Both were living
+    holders at the turn's start, where ``enumerate``'s ``quick_claw`` law draws the bit. Else it
+    is 0, an unread value, so paused states that differ only in it are one state."""
+    fmt = format_of(state)
+    rows = party(fmt, jnp.arange(fmt.B))  # each battler's party
+    holds = tables.item_effect[state.item[rows]] == ItemId.QUICK_CLAW
+    alive = (state.species[rows] != 0) & (state.hp[rows] > 0)
+    on_field = jnp.arange(state.hp.shape[1])[None, :] == state.active[:, None]
+    return jnp.any(holds & (alive | on_field), axis=1)
 
 
 def _keep_quick_claw(tables: Tables, state: BattleState, qc) -> BattleState:

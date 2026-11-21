@@ -8405,8 +8405,14 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
         upto = turn.position
     _put(s, "ts_acted", [int(b in turn.order[:upto]) for b in range(_fmt(s).B)])
     _put(s, "ts_order", turn.order)
-    # The turn's speedRand draw, read by the resume (engine.step._turn_outcome).
-    _put(s, "ts_qc", [int(bool(f)) for f in turn.outcome.quick_claw])
+    # The turn's speedRand draw, read by the resume (engine.step._turn_outcome); only the bits
+    # the rest of the turn can read (step.qc_readable, E3-B2-31).
+    readable = _qc_readable(turn.tables, s)
+    _put(
+        s,
+        "ts_qc",
+        [int(bool(f) and r) for f, r in zip(turn.outcome.quick_claw, readable, strict=True)],
+    )
     _put(s, "ts_actions", turn.actions)
     _put(s, "ts_move", [c[0] for c in turn.choices])
     _put(s, "ts_struggling", [int(c[1]) for c in turn.choices])
@@ -8700,6 +8706,23 @@ def _qc_kept(tables, s: RefState) -> list[bool]:
         bench = [m for i, m in enumerate(mons) if i != sd.active]
         pending = active.hp == 0 and any(m.species and m.hp for m in bench)
         out.append(not s.over and (bool(claw(active)) or (pending and any(claw(m) for m in bench))))
+    return out
+
+
+def _qc_readable(tables, s: RefState) -> list[bool]:
+    """``step.qc_readable``: the side's party has a living Quick Claw holder or its active holds
+    one, fainted or not (the raw item)."""
+    out = []
+    for b, sd in enumerate(s.battlers):
+        mons = _party_of(s, b).mons
+        out.append(
+            any(
+                m.species
+                and (m.hp or i == sd.active)
+                and _item_effect(tables, m, None) == ItemId.QUICK_CLAW
+                for i, m in enumerate(mons)
+            )
+        )
     return out
 
 

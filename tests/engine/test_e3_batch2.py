@@ -3590,6 +3590,34 @@ def test_a_party_list_resume_keeps_the_turns_speed_rand_draw(tables, names):
     assert np.asarray(done.ts_qc).tolist() == [0, 0]
 
 
+@pytest.mark.parametrize("holder", ["bench", "fainted bench", "fainted foe"])
+def test_a_learn_pause_stores_only_the_readable_speed_rand_bits(tables, names, holder):
+    # E3-B2-31: every reader of speedRand is CompareBattlerSpeed, which reads it only for a Quick
+    # Claw holder (battle_lib.c:1278-1279), a fainted one only against another fainted one
+    # (:1205-1211); no battler gains an item. Prinplup's Bubble KOs Geodude and the MoveEnd pause
+    # (bcp.c:3968) keeps a side's bit only with a living holder in its party (Machop on the bench)
+    # or a holder on its field (the fainted Geodude): paused states that differ only in an unread
+    # bit are one state, so the exact enumeration equals the brute force.
+    from nuzline.engine.levelup import LEARN_MOVE_END
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+    from tests.engine.test_levelup import _mon
+
+    claw = {"item": names.item("Quick Claw")}
+    machop = _mon(names, "Machop", 20, **(claw if holder != "fainted foe" else {}))
+    opp = [_mon(names, "Geodude", 12, **(claw if holder == "fainted foe" else {}))]
+    s = make_state(tables, [_prinplup(tables, names), machop], [*opp, _mon(names, "Bonsly", 15)])
+    s = s.replace_hp(1, 0, 1)
+    if holder == "fainted bench":
+        s = s.replace_hp(0, 1, 0)
+    acts = A("Bubble", "Tackle", s, names)
+    both = empty_outcome()._replace(quick_claw=jnp.ones(2, jnp.int8))
+    paused = assert_matches_reference(tables, s, acts, both)
+    assert int(paused.learn_site) == LEARN_MOVE_END and int(paused.hp[1, 0]) == 0
+    want = {"bench": [1, 0], "fainted bench": [0, 0], "fainted foe": [0, 1]}[holder]
+    assert np.asarray(paused.ts_qc).tolist() == want
+    assert_equals_bruteforce(tables, s, jnp.asarray(acts, jnp.int32))
+
+
 _COUNTED = ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant")
 
 
