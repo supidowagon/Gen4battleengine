@@ -2621,7 +2621,9 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
     - At equal speed every branch gives FASTER, or TIE on the tie's ``RandNext() & 1``, never
       SLOWER (:1401-1447). So ``== SLOWER`` does not depend on the tie, and the exact layout
       does not draw it (plan K3c Ruling 3; ``order.battler_slower`` with ``tie_roll = 0``); the
-      decomp still consumes the draw (K3d), an independent draw that changes nothing here.
+      decomp still consumes the draw (K3d) when both battlers have HP, an independent draw that
+      changes nothing here; with one of them fainted the short-circuit (:1204-1211) returns
+      before it and no tie bit is drawn.
       ``== FASTER`` does depend on it (E1 Ruling R8): where the compare would read the tie
       (``compare_speed`` gives TIE for a set bit), it is the slot's next random read
       (``_slot_read``), TIE when the draw's low bit is set (READ_DRAWS[1] = 1), probability

@@ -281,6 +281,29 @@ def test_quick_claw_beats_lagging_tail(tables, names):
     assert bool(player_second(tables, s2, 0, jnp.asarray([0, 0]))) is False
 
 
+def test_a_fainted_battler_sorts_last_whatever_its_claw(tables, names):
+    # BattleSystem_CompareBattlerSpeed's dead-battler short-circuit (battle_lib.c:1204-1211)
+    # comes before Quick Claw and speed: the sort after the last action (SortMonSpeedOrder,
+    # :3364-3381) puts a fainted battler last. e1-h1w (93a8141): a fainted player lead with an
+    # activated claw sorted first, and a LEARN_MON pause kept the wrong ts_eot / ts_cursor.
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.outcome import outcome_to_py
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _speed_order
+
+    s = _state(tables, names, holders=(0, 1))  # Geodude faster
+    for side, claws, want in (
+        (0, (1, 0), [1, 0]),  # the fainted player's activated claw: still last
+        (1, (0, 1), [0, 1]),  # the fainted foe's activated claw: still last
+        (1, (0, 0), [0, 1]),  # the fainted foe is the faster one: still last
+    ):
+        dead = s.replace_hp(side, 0, 0)
+        o = _o(claws)
+        assert end_of_turn_order(tables, dead, o).tolist() == want, (side, claws)
+        ref = _speed_order(to_numpy(tables), to_ref(dead), outcome_to_py(o))
+        assert ref == want, (side, claws)
+
+
 def test_two_switches_are_ordered_by_the_outgoing_holder(tables, names):
     s = _state(tables, names, qc=(1, 0))
     acts = jnp.asarray([SWITCH, SWITCH], jnp.int32)

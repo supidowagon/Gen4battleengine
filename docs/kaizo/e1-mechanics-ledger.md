@@ -2259,6 +2259,20 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   reachable terrain move are refused by coverage.terrain_refusal. The state is drawn only by
   tests.strategies._draw_terrain, which batch H's first commit fixes: no TERRAIN_UNKNOWN when Nature Power, Secret
   Power or Camouflage is reachable, directly or through a call move.
+- MF-1 (claude/e1-main-fix 65aebee5) `order.compare_speed` takes BattleSystem_CompareBattlerSpeed's dead-battler
+  short-circuit (battle_lib.c:1204-1211): a battler with no HP against one with HP is SLOWER, before Quick Claw,
+  Lagging Tail, Trick Room and speed. The reference had it (`_player_second`), and so had `hooks.order_swaps`
+  (the enumerator's sort law, G-26). Readers: `action_order` and the trainer AI's IfSpeedCompare* see two living
+  actives (unchanged); `step.end_of_turn_order`, the sort after the last action (SortMonSpeedOrder,
+  :3364-3381), sees a fainted active and now puts it last. The fainted battler's turn-end blocks do nothing, so
+  a finished turn is unchanged. Expected snapshot divergence: only a state paused at a learn prompt in that
+  turn's end (E3-B2-21: after the last action, LEARN_FIELD or LEARN_MON) with exactly one active fainted that
+  would have sorted first: `ts_eot` (and `ts_cursor` at LEARN_MON) take the decomp's order. No new field:
+  the `--allow-new` list is empty. Found by e1-h1w-93a8141 (`test_step_payouts_match_reference`); test
+  `test_quick_claw.py::test_a_fainted_battler_sorts_last_whatever_its_claw`. In the enumeration some
+  `end_speed_tie` / `quick_claw` branches of such a turn now lead to identical child states and may merge (the
+  decomp draws no tie bit there). Owed (cleanup): `hooks.order_swaps`' own dead-battler line (hooks.py:412-413)
+  is now redundant with `player_second`; drop it in a later cleanup.
 
 ## Stream state (restart point, 2026-11-19)
 
