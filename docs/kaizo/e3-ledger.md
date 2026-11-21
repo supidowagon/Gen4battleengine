@@ -1616,3 +1616,19 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/engine/test_e3_batch2.py (powerMul after a learn resume, the kept Quick Claw draw, each turn-end counter
   drops once over a pause at each learn site). Snapshot: states captured at a pause carry `ts_qc` and the turn-end
   countdowns; no other class.
+- E3-B2-30 Main's red tiers on 8c5cd83e (branch claude/e3-slowfix):
+  (a) 6c3063e0, tests only: test_trace_to_state's oracle resumes a MoveEnd learn pause (bcp.c:3968) with the same
+  actions and outcome, as trace_to_state._apply_turn; test_stage_b_learn's paused root asserts `learn_site`
+  LEARN_MOVE_END (step scans and pauses); test_player_learn skips the no-prompt check on an ended run (D8).
+  (b) 3d6b5fb5, tests only: Tackle's flags carry MIRROR_MOVE (res/moves/tackle/data.json:21-27, E3-B2-2).
+  (c) 5639b245, src/nuzline/ai: `AiContext.flag`, `first_cmp`, `inject` hold the script's flag bit (thinkingBitShift,
+  trainer_ai.c:306), not its index in the layout's list, so ALLIN keeps the fight's own context (test_allin); the
+  bits rise in run order, so every schedule compare keeps its order and no score changes. The exact pick of
+  `_slot_move_distribution` weighs a skipped slot (moves[i] == 0, trainer_ai.c:322; it runs no command, :499-501)
+  by its histogram's mass, not 1: unchanged on marginal histograms (mass 1), corrected on the event histograms of a
+  speed-tracking layout (`_tracks_speed`: per-slot sites with POWER_BASED_ON_LOW_SPEED transcribed), where the
+  exact sum was above 1 (test_gyro_ball_exact_equals_loose).
+  Snapshot compare against the main capture: no part expected to diverge (`--allow-new` empty). The "ai" group runs
+  `ai_action_distribution` on the VANILLA layout (per_slot_sites False, ai/layout.py:184-186): no speed tracking;
+  the roark parts use Kaizo Roark (trainer 246), whose six members hold no Gyro Ball (move 360) and four moves
+  each: no speed tracking and no skipped slot. No snapshot part records AiContext fields.
