@@ -3909,11 +3909,11 @@ def reveal_item(state: BattleState, side, mon, cond) -> BattleState:
     ``BattleAI_SetHeldItem`` (:12119-12122) for an item tag of ``BTLSCR_ATTACKER``,
     ``BTLSCR_DEFENDER`` or ``BTLSCR_MSG_BATTLER_TEMP`` (not ``BTLSCR_MSG_TEMP``, which names
     ``msgItemTemp``), so ``ai_item_known[side]`` (the row of battler ``side``, written while it holds ``mon``)
-    becomes the item. Only a party-0 battler's
-    (ruling D3-1a) is kept: ``AICmd_IfHeldItemEqualTo`` and ``AICmd_LoadHeldItemEffect``
-    (trainer_ai.c:1901-1934) read ``battlerHeldItems`` for the other side's battlers only."""
+    becomes the item. Kept where ``ai_record_kept`` (sheet D45-3 rule 4); read by
+    ``AICmd_LoadHeldItemEffect`` for every battler but the attacker and by
+    ``AICmd_IfHeldItemEqualTo`` for the other side (trainer_ai.c:1908, :1925-1929)."""
     fmt = format_of(state)
-    on = jnp.asarray(cond) & (party(fmt, jnp.asarray(side, _I32)) == 0)
+    on = jnp.asarray(cond) & ai_record_kept(fmt, side)
     return ai_record_write(state, "ai_item_known", side, mon, state.item[party(fmt, side), mon], on)
 
 
@@ -3922,10 +3922,9 @@ def forget_item(state: BattleState, side, mon, cond) -> BattleState:
     path (``BtlCmd_RemoveItem``, battle_script.c:8979-8981; ``UpdateMonData`` setting
     ``BATTLEMON_HELD_ITEM``, :3077-3078, as subscript_transfer_sticky_barb.s:7 does) runs
     ``BattleMon_CopyToParty``, which clears the AI's record of a battler holding nothing
-    (``BattleAI_ClearKnownItem``, battle_lib.c:1819-1823, :7735-7738). A party-0 battler
-    only (ruling D3-1a, as ``reveal_item``)."""
-    on = jnp.asarray(cond) & (party(format_of(state), jnp.asarray(side, _I32)) == 0)
-    return ai_record_write(state, "ai_item_known", side, mon, 0, on)
+    (``BattleAI_ClearKnownItem``, battle_lib.c:1819-1823, :7735-7738). Any battler, ungated
+    (clearing a row the engine never wrote is a no-op; sheet D45-3 rule 4)."""
+    return ai_record_write(state, "ai_item_known", side, mon, 0, jnp.asarray(cond))
 
 
 def apply_move_effect(

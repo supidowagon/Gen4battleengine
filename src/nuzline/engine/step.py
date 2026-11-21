@@ -4930,8 +4930,7 @@ def _stale_known_item(before: BattleState, after: BattleState, fought) -> Battle
     AI, which reads the record only at its next choice. ``before``: the segment's start; the slot
     must have been knocked off by then (the knock-off's own hit updates the HP first). ``fought``
     (``bool[B]``): each battler made a FIGHT attempt in the segment. Every battler is checked
-    (doubles design section 5 rule 4); ``forget_item`` keeps the record of the player's only (the
-    AI's own items are not in it)."""
+    (doubles design section 5 rule 4); ``forget_item`` clears every battler's record (sheet D45-3)."""
     fmt = format_of(before)
     fought = jnp.broadcast_to(jnp.asarray(fought, bool), (fmt.B,))
     for side in range(fmt.B):

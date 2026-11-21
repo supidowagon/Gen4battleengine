@@ -58,14 +58,14 @@ def test_ability_tag_battler_2_multi_records_row_2(tables, names):
 
 
 def test_item_record_battler_2(tables, names):
-    for fmt, kept in ((DOUBLES, True), (MULTI, False)):
+    for fmt in (DOUBLES, MULTI):
         s = _with_item(four(tables, names, fmt), 2, ITEM)
         slot = int(s.active[2])
         out = reveal_item(s, 2, slot, True)
         r = to_ref(s)
         ref._reveal_item(r, 2)
         assert np.asarray(out.ai_item_known).tolist() == r.ai_item_known
-        assert (int(out.ai_item_known[2]) == ITEM) == kept
+        assert int(out.ai_item_known[2]) == ITEM  # D45-3: kept at B = 4 in MULTI too
         # forget clears it again (and touches nothing it did not write)
         gone = forget_item(out, 2, slot, True)
         ref._forget_item(r, 2)

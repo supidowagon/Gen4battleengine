@@ -518,17 +518,18 @@ def _side_ability_count(s: RefState, side: int, ability: int) -> int:
 def _reveal_item(s: RefState, side: int) -> None:
     """A message names ``side``'s active Pokemon's held item through an item tag of the
     attacker, defender or ``msgBattlerTemp`` (``BattleMessage_ItemTag``, script.c:11726-11745):
-    ``BattleAI_SetHeldItem`` (:12119-12122). The AI reads the other side's only, so only the
-    party-0 battler's is kept (ruling D3-1a)."""
-    if _party(_fmt(s), side) == 0:
+    ``BattleAI_SetHeldItem`` (:12119-12122). Kept where ``_record_kept`` (sheet D45-3 rule 4);
+    read by LoadHeldItemEffect for every battler but the attacker and by IfHeldItemEqualTo for
+    the other side (trainer_ai.c:1908, :1925-1929)."""
+    if _record_kept(s, side):
         s.ai_item_known[side] = _active(s, side).item  # row of battler ``side`` (D45-1)
 
 
 def _forget_item(s: RefState, side: int) -> None:
     """``side``'s active Pokemon lost its item: the removal's ``BattleMon_CopyToParty``
-    clears the AI's record (``BattleAI_ClearKnownItem``, lib.c:1819-1823)."""
-    if _party(_fmt(s), side) == 0:
-        s.ai_item_known[side] = 0
+    clears the AI's record (``BattleAI_ClearKnownItem``, lib.c:1819-1823). Any battler, ungated
+    (sheet D45-3 rule 4)."""
+    s.ai_item_known[side] = 0
 
 
 def _remove_item(s: RefState, side: int) -> None:
@@ -9197,14 +9198,13 @@ def _move_end_tail(turn: _Turn, s: RefState, clear: bool) -> None:
 
 
 def _stale_snapshot(s: RefState) -> list[tuple[int, int, bool, int]]:
-    """``(battler, active slot, knocked off then, its HP)`` for each party-0 battler at a
-    segment's start (B10-6, ruling D3-1a)."""
+    """``(battler, active slot, knocked off then, its HP)`` for each battler at a segment's start
+    (B10-6; every battler's record is cleared, sheet D45-3 rule 3)."""
     snaps = []
     for b in range(_fmt(s).B):
-        if _party(_fmt(s), b) == 0:
-            slot = s.battlers[b].active
-            mon = s.parties[0].mons[slot]
-            snaps.append((b, slot, _knocked_off(s, b, slot), mon.hp))
+        slot = s.battlers[b].active
+        mon = _party_of(s, b).mons[slot]
+        snaps.append((b, slot, _knocked_off(s, b, slot), mon.hp))
     return snaps
 
 
@@ -9214,7 +9214,7 @@ def _stale_known_item(s: RefState, snaps: list[tuple[int, int, bool, int]], foug
     AI's record of its item cleared (its CopyToParty: battle_script.c:1720, bcp.c:2748;
     lib.c:1819-1823)."""
     for b, slot, knocked, hp in snaps:
-        mon = s.parties[0].mons[slot]
+        mon = _party_of(s, b).mons[slot]
         # row b is the Pokemon now in b (D45-1 rule 7)
         if (
             knocked

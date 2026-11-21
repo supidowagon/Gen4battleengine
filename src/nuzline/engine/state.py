@@ -119,8 +119,10 @@ Encodings:
   ``effects.reveal_item``), 0 when none. It is cleared when the Pokemon loses its item (every
   removal runs ``BattleMon_CopyToParty``, battle_lib.c:1819-1823; ``effects.forget_item``) and
   when it enters (``BattleSystem_UpdateAfterSwitch``, :2153) or faints
-  (``BattleSystem_CleanupFaintedMon``, :2223-2225; ``step._forget``). The AI reads it for the
-  other side's battlers only (trainer_ai.c:1901-1934), so at B = 2 the opponent's is not kept.
+  (``BattleSystem_CleanupFaintedMon``, :2223-2225; ``step._forget``). The AI reads it for any
+  battler but the attacker (``LoadHeldItemEffect``, trainer_ai.c:1908: the ally's too) and the
+  other side's (``IfHeldItemEqualTo``, :1925-1929); at B = 2 the opponent's is not read, so not
+  kept.
 * E2 batch 7, the state the trainer AI reads (rulings B7-n). ``ingrain`` is the active battler's
   ``MOVE_EFFECT_INGRAIN`` (moves.h:18), 0/1. ``mean_look`` is its ``VOLATILE_CONDITION_MEAN_LOOK``
   (condition.h:58), 0/1, and ``mean_look_target`` its ``MoveEffectsData.meanLookTarget``
