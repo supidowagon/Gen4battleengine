@@ -108,7 +108,13 @@ per day is the rate used for estimates.
   up; when its run ends the nightly
   agent deletes `ci-day-big` if no other run is active on it. Otherwise it rents `ci-nightly`:
   at most $6 per run; the nightly agent itself deletes it within 4.5 hours of creation.
-  A tip that equals the last nightly's tip does not run again.
+  A tip that equals the last nightly's tip does not run again. A `ci-nightly` rented in the
+  network volume's data center mounts the volume (Network volume below).
+- **Scheduled tasks, not session timers.** The nightly dispatch (22:07) and the 30-minute
+  stall check run as scheduled tasks, which survive a restart or clear of the managing
+  session; they are not session timers (owner, 21 Nov 2026, `docs/decisions.md`). Until they
+  are set up, at the next restart of the managing session, the session prompts of section 7
+  stand in for them and are re-created after every restart.
 - **Test pod (`ci-day-big`):** 32 vCPU CPU, no daily limit, for every stream test run, in one
   of two shapes, each with its limits passed in the exec-pod body's `env`:
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
@@ -140,14 +146,43 @@ per day is the rate used for estimates.
   (`MAP_COUNT_LOW` in `times.txt`). Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
-- **Pod runs.** Streams have no pod tool: a stream sends the managing session its commit
-  and test-file list; the managing session dispatches one fresh agent per run (Sonnet for a
+- **Network volume.** One 30 GB STANDARD network volume (owner, 21 Nov 2026,
+  `docs/decisions.md`; a standing charge of about $2.10 a month, billed until it is deleted,
+  attached or not) holds two things only: XLA programs compiled on the pods (the compile
+  cache) and the complete snapshot captures of `main` tips. Nothing else goes on it: no
+  tables, no ROM, saves, calc or docs-sheet data, nothing from the PC (only pods write to it).
+  Its id is in `_scratch/rent/VOLUME_ID` (never committed); its data center is fixed at
+  creation and every test pod and the capture pod is created there with the volume mounted at
+  `/vol` (DAYBOX.md, Bring-up step 2); a volume cannot be attached to a running pod. With no
+  stock there a pod is created elsewhere without it and runs as before the volume (cold compile
+  cache, no capture store). JAX keeps writing the pod's own cache; `tools/ops/day/pod/cache_sync.sh`
+  seeds it from the volume at a run's setup and publishes new entries after the run
+  (temp name then rename, each entry checked to decompress first), and is run once more before
+  a pod is deleted. Pruning on every publish: unused jax versions after 7 days, the cache
+  capped at 20 GiB, the 10 newest captures kept. The volume is never deleted, shrunk or grown
+  without the owner. Steps: DAYBOX.md, "Network volume".
+- **Pod runs.** Streams have no pod tool: a stream sends the run dispatcher session (below)
+  its commit and test-file list; the dispatcher (or, for the nightly and the managing
+  session's own merged-tip runs, the managing session) dispatches one fresh agent per run (Sonnet for a
   day run; `tools/ops/nightly_brief.md` for the nightly) that packs and starts the run with
   the scripts (`pack.sh`, then its exec-pod body), makes one blocking `wait.sh` call in the
   background, and reports once: the final result with counts, time and peak memory per
   file, or the first failure when the brief asked for `--until first-failure`. No polling
   turns: the agent does not call `status.sh` while `wait.sh` runs. Only committed code runs
   on the pod.
+- **Run dispatcher session.** A standing Sonnet session (name `dispatch`, state file
+  `_scratch/handoff/DISPATCH.md`; owner, 21 Nov 2026) handles the streams' run requests in
+  place of the managing session: it takes each request (commit and test list), checks the
+  list against the run rules of this section (one in-work run per stream, the short and full
+  lists, chunking, marks), builds the tables, sends the run (pod check, `pack.sh`, exec-pod
+  body), waits (`wait.sh`), collects, and reports to the requesting stream; it copies
+  merge-candidate and `fullset` results to the managing session. It never creates pods, never
+  pushes and never merges. Between 22:00 and 08:00 it may delete an idle test pod: one of ours,
+  with nothing running or queued on it (checked on the pod: DAYBOX.md, Delete, the volume
+  publish included), every run on it collected, and never the nightly's pod before or during
+  the nightly; it verifies the delete with a pod listing, renames the pod's id file to
+  `.deleted`, logs it in `DISPATCH.md` and sends the managing session one line. In working
+  hours it only reports idle pods. Creating pods stays with the managing session.
 - **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
   sends no new tip while that run is going, unless the run has already failed (a first-failure
   report counts). The managing session holds any other request until the run is back.
@@ -173,8 +208,12 @@ per day is the rate used for estimates.
 - **Snapshot capture of `main`.** After every push of `main` the managing session starts
   one capture of the new tip on the capture pod, in `/work/snapmain-<short sha>` (seeds 0-199;
   commands: `tools/ops/day/snap.sh`, DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
-  delete an older one only when no compare reads it. A capture is never sent back to a pod:
-  one lost with a pod is re-made on the next pod.
+  delete an older one only when no compare reads it. A capture is never sent back to a pod
+  from the PC. On pods with the network volume a passed capture of a `main` tip is stored on
+  the volume, keyed by its full sha and the table key of its tables, and is never overwritten;
+  a capture of a key the volume holds, and a compare whose capture is not on its pod, fetch it
+  from there instead of re-capturing (owner, 21 Nov 2026). Only a capture lost with a pod
+  without the volume, or one the volume does not hold, is re-made on the next pod.
 - **Capture pod.** Snapshot captures and compares run on the capture pod only. No pack run
   is sent to it while a capture or compare is going there. A job runs its parts in parallel
   (`SNAP_WORKERS`, default 16, each part its own process; `tools/snap_compare.py`, Workers):
@@ -270,7 +309,11 @@ per day is the rate used for estimates.
 - **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed
   equals its collected count. A file whose totals differ, a file that failed to collect, a
   chunk that crashed and a chunk killed three times count as failures.
-- Only the managing session rents, uses and deletes pods. Use generic names. Verify every
+- Only the managing session rents pods, and only it creates or deletes the network volume
+  (with the owner). Pods are used by the managing session and the run dispatcher's run
+  agents, and deleted by the managing session, the nightly agent (`ci-nightly`, and
+  `ci-day-big` as above) and the run dispatcher (idle pods between 22:00 and 08:00, as
+  above). Use generic names. Verify every
   delete with a pod listing. Each spending cap is the user's explicit approval; anything
   larger or longer needs a new approval.
 - Transfer files with `runpodctl send` / `receive`; run commands on the pod through the
@@ -304,7 +347,10 @@ per day is the rate used for estimates.
 ## 7. Scheduled prompts in the managing session
 
 They live only in the session and expire after 7 days. Re-create them after every restart
-or clear. Times are local cron expressions; the scheduler adds jitter.
+or clear. Times are local cron expressions; the scheduler adds jitter. The nightly row and
+the 30-minute stall check move to scheduled tasks that survive a restart (section 5,
+"Scheduled tasks, not session timers"); once those exist, the session keeps only the other
+rows.
 
 | Cron | What |
 |---|---|
