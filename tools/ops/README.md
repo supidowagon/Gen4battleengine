@@ -21,7 +21,7 @@ Parameters, lock path and the stream list's format: `docs/process.md` section 6.
 
 ## Off-site copy (Git Bash on the PC)
 
-- `offsite.sh [--dry-run]`: pushes every local branch to the private remote `offsite` and mirrors the allow-listed state files under `_scratch/` into `_scratch/offsite/state/` (branch `scratch-state`), re-checked against the hard exclusions before each commit. `--list` prints the selection, `--check <dir>` checks a folder. What it holds and how to restore: `docs/process.md` section 12, Off-site copy.
+- `offsite.sh [--dry-run]`: pushes every local branch to the private remote `offsite` and mirrors the allow-listed state files under `_scratch/` into `_scratch/offsite/state/` (branch `scratch-state`), re-checked against the hard exclusions before each commit. `--list` prints the selection, `--check <dir>` checks a folder. Refuses (exit 2) a push URL that names `origin`, a repo `gh` does not report private, a mirror setting; exit 4 on a rejected branch or failed push. What it holds, the refusals and how to restore: `docs/process.md` section 12, Off-site copy.
 
 ## Test pod and nightly (Git Bash on the PC, bash on the pod)
 
