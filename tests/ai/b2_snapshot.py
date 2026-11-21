@@ -258,7 +258,7 @@ def snapshot(tables, names) -> dict[str, object]:
             for name, fn in calls.items():
                 out[f"{key}/{name}"] = _run(fn)
             out[f"{key}/after_speed_compare"] = [
-                bool(c.if_speed_compare_equal_to(ctx, 1).written),
+                bool(c.if_speed_compare_equal_to(ctx, 1).written.any()),
                 int(c.if_speed_compare_equal_to(ctx, 1).first_cmp[slot]),
             ]
     return out

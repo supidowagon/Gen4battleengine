@@ -110,9 +110,10 @@ from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.bag import bag_item_category
 from nuzline.engine.damage import AI_GYRO_BALL, ai_weather_ball_typed, decomp_abilities
+from nuzline.engine.effects import ghost_user
 from nuzline.engine.enumerate import WIDTH_CAP
-from nuzline.engine.format import format_of
-from nuzline.engine.ids import ItemAiCategory, Stat
+from nuzline.engine.format import MULTI, format_of, party, side_of
+from nuzline.engine.ids import MOVE_CURSE, ItemAiCategory, MoveTarget, Stat
 from nuzline.engine.order import COMPARE_SPEED_SLOWER
 from nuzline.engine.state import BAG_SLOTS, MOVES, BattleState
 
@@ -5492,18 +5493,31 @@ def maybe_switch(
     return switch_action(tables, state, ai_outcome.switch_stop, layout.switch_sites)
 
 
-def _use_item(tables: Tables, state: BattleState) -> jnp.ndarray:
-    # TrainerAI_ShouldUseItem (trainer_ai.c:4056; roark.md 12). Embargo is not built (its
-    # move is refused by coverage), so the :4076 test never stops it.
-    alive = jnp.sum(((state.species[1] > 0) & (state.hp[1] > 0)).astype(_I32))
+def _use_item(tables: Tables, state: BattleState, b: int = 1) -> jnp.ndarray:
+    """``TrainerAI_ShouldUseItem(b)`` (trainer_ai.c:4056-4199; roark.md 12; E4-A sheet A-12) for
+    the AI battler ``b`` (``format.ai_battlers``): the item action ``FIRST_ITEM_ACTION + k`` of the
+    first bag slot it uses, or ``NO_ITEM``. Its bag is the decomp's ``trainerItems[b >> 1]``, the
+    state's ``trainer_items[b]`` (battler 1 and 3, ruling D1-5); the alive count is over its own
+    party (``party(fmt, b)``: DOUBLES' shared party counts both actives). MULTI's partner
+    (battler 2) uses none (:4069-4073): its call has already zeroed ``usedItemCondition[b >> 1]``
+    (:4066), which is battler 3's slot, but MULTI loads no bag (E4-A decision 14), so that write
+    reaches nothing, and the engine keeps no ``usedItemCondition`` (the item's category is
+    recomputed from the state at use, ``bag_item_category``). An Embargoed battler uses none
+    (:4076-4078). ``b = 1`` is every B = 2 caller's. Not called with ``b != 1`` yet: E4-A W4 wires
+    it into the policy."""
+    fmt = format_of(state)
+    if fmt == MULTI and b == 2:
+        return jnp.asarray(NO_ITEM, _I32)
+    row = party(fmt, b)
+    alive = jnp.sum(((state.species[row] > 0) & (state.hp[row] > 0)).astype(_I32))
     slot = jnp.arange(BAG_SLOTS)
-    count = state.trainer_item_count[1].astype(_I32)
+    count = state.trainer_item_count[b].astype(_I32)
     considered = (slot == 0) | (alive <= count - slot + 1)  # :4092
-    items = state.trainer_items[1].astype(_I32)
+    items = state.trainer_items[b].astype(_I32)
     # Each considered slot's branch over its item's party params (bag.bag_item_category,
     # E1 ruling G-43); a bag mixes no items (coverage), so the used item is the first one.
-    used = jnp.stack([bag_item_category(tables, state, 1, items[k]) for k in range(BAG_SLOTS)])
-    use = considered & (items != 0) & (used != ItemAiCategory.NONE)
+    used = jnp.stack([bag_item_category(tables, state, b, items[k]) for k in range(BAG_SLOTS)])
+    use = considered & (items != 0) & (used != ItemAiCategory.NONE) & (state.embargo[b] == 0)
     return jnp.where(jnp.any(use), FIRST_ITEM_ACTION + jnp.argmax(use), NO_ITEM).astype(_I32)
 
 
@@ -5516,20 +5530,156 @@ def maybe_use_item(
     return _use_item(tables, state)
 
 
-def _pick(tables: Tables, state: BattleState, scores, tiebreak) -> jnp.ndarray:
-    """``TrainerAI_MainSingles``'s pick (trainer_ai.c:315-338; roark.md 10): slot 0 and
-    every slot with a move are candidates, the top score wins, ties go to
+def _pick(tables: Tables, state: BattleState, scores, tiebreak, b: int = 1) -> jnp.ndarray:
+    """``TrainerAI_MainSingles``'s pick (trainer_ai.c:315-338; roark.md 10) for the AI battler
+    ``b``: slot 0 and every slot with a move are candidates, the top score wins, ties go to
     ``list[RandNext % n]`` with ``tiebreak % n``. A usable move always outscores an
     invalid one (at most 3 against at least 86 for Roark), so the pick is legal; with no
-    usable move the battle uses Struggle (battle_controller_player.c:433), action 0."""
-    has = (state.moves[1, state.active[1]] != 0).at[0].set(True)
+    usable move the battle uses Struggle (battle_controller_player.c:433), action 0. ``b = 1`` is
+    the singles AI's; the doubles per-target pick (:417-428) is this one on each target's scores
+    (E4-A W3 wires it)."""
+    has = (state.moves[party(format_of(state), b), state.active[b]] != 0).at[0].set(True)
     top = jnp.max(jnp.where(has, scores, -1))
     tied = has & (scores == top)
     n = jnp.sum(tied.astype(_I32))
     index = jnp.asarray(tiebreak, _I32) % n
     order = jnp.cumsum(tied.astype(_I32)) - 1
     pick = jnp.argmax(tied & (order == index)).astype(_I32)
-    return jnp.where(jnp.any(usable_moves(tables, state, 1)), pick, 0)
+    return jnp.where(jnp.any(usable_moves(tables, state, b)), pick, 0)
+
+
+# --- The doubles target choice (E4-A sheets A-3 and A-15): pure functions of score vectors and
+# --- ids, not wired into the policy yet (W3 builds the per-target loop that calls them).
+
+
+def _ally_rule(best, a: int) -> jnp.ndarray:
+    """``int32[B]``: the per-target best scores ``best`` (``maxScoreForBattler``, -1 for a target
+    that is not evaluated) after the ally rule (trainer_ai.c:431-436): the AI battler ``a``'s ally
+    ``a ^ 2`` with a best score below 100 becomes -1, so it stays a candidate only with a best of
+    at least 100. Not wired into the policy yet (W3)."""
+    best = jnp.asarray(best, _I32)
+    ally = jnp.arange(best.shape[0]) == (a ^ 2)
+    return jnp.where(ally & (best < 100), -1, best)
+
+
+def _target_list(best) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(listed bool[B], count)``: the targets of the best-target list (trainer_ai.c:440-453):
+    start with target 0, append a later target that ties the max, restart with one above it; so
+    the targets whose score equals the maximum, in battler order (a -1 entry is in it only when
+    every target is -1). ``best``: ``int32[B]``."""
+    best = jnp.asarray(best, _I32)
+    listed = best == jnp.max(best)
+    return listed, jnp.sum(listed.astype(_I32))
+
+
+def _target_law(best) -> jnp.ndarray:
+    """``float32[B]``: the exact law of ``selectedTarget`` over the best-target list (:457,
+    ``list[RandNext() % count]``): the list's i-th target has probability ``P(RandNext() % count
+    == i)``, ``_TIE_SHARE[count, i]`` (through ``TIEBREAK_P``: count 3 is 21846 / 21845 / 21845
+    over 65536), the draw made also for a count of 1. Not wired into the policy yet (W3)."""
+    listed, count = _target_list(best)
+    rank = jnp.clip(jnp.cumsum(listed.astype(_I32)) - 1, 0, MOVES - 1)
+    return jnp.where(listed, jnp.asarray(_TIE_SHARE)[count, rank], 0.0)
+
+
+def _pick_target(best, tiebreak) -> jnp.ndarray:
+    """``int32``: the sampled form of ``_target_law``: ``list[tiebreak % count]`` (:457), with the
+    target field's ``RandNext() % 12`` value ``tiebreak`` (exact for a count of 1 to 4)."""
+    listed, count = _target_list(best)
+    index = jnp.asarray(tiebreak, _I32) % count
+    order = jnp.cumsum(listed.astype(_I32)) - 1
+    return jnp.argmax(listed & (order == index)).astype(_I32)
+
+
+def _override_target(tables: Tables, state: BattleState, a: int, move, t) -> jnp.ndarray:
+    """``int32``: the target ``selectedTarget[a]`` ends as (trainer_ai.c:461-469) when the AI
+    battler ``a`` picked ``move`` against ``t``: ``a`` itself for a RANGE_USER_OR_ALLY move whose
+    ``t`` is on side 0 (the player's side, literally: an enemy AI sends one aimed at a player
+    battler to itself, MULTI's partner 2 one aimed at battler 0 or 2, and keeps one aimed at an
+    enemy), and for Curse (the move id) of a user that is not a Ghost (``Move_IsGhostCurse``,
+    battle_lib.c:3048-3051). Not wired into the policy yet (W3)."""
+    move, t = jnp.asarray(move, _I32), jnp.asarray(t, _I32)
+    user_or_ally = (tables.move_target[move] == MoveTarget.RANGE_USER_OR_ALLY) & (side_of(t) == 0)
+    curse = (move == MOVE_CURSE) & ~ghost_user(state, a)
+    return jnp.where(user_or_ally | curse, a, t).astype(_I32)
+
+
+def _value_pick_law(hist, has) -> jnp.ndarray:
+    """``float32[MOVES, V]``: the joint law of (picked slot m, its score v) for one target's
+    scoring, from ``hist[m, v]`` (the per-slot histograms, slots independent): slot m with value v
+    wins when every other candidate ties at v or is below it, and over each subset of the ties it
+    gets ``_TIE_SHARE`` (``% n`` over the tied slots, trainer_ai.c:428). The unsummed form of the
+    pick in ``_slot_move_distribution`` (``has``: its candidates)."""
+    equal = jnp.where(has[:, None], hist, 0.0)
+    mass = jnp.sum(hist, axis=1, keepdims=True)
+    below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, mass)
+    out = []
+    for slot in range(MOVES):
+        others = [j for j in range(MOVES) if j != slot]
+        win = jnp.zeros(hist.shape[1], jnp.float32)
+        for subset in range(2 ** len(others)):
+            tied = [j for k, j in enumerate(others) if subset >> k & 1]
+            term = jnp.ones(hist.shape[1], jnp.float32)
+            for j in others:
+                term = term * (equal[j] if j in tied else below[j])
+            win = win + term * _TIE_SHARE[len(tied) + 1, sum(j < slot for j in tied)]
+        out.append(equal[slot] * win)
+    return jnp.stack(out)
+
+
+def _target_slot_law(hist, evaluated, a: int, has) -> jnp.ndarray:
+    """``float32[B, MOVES]``: the exact joint law of (selected target t, picked slot m) of one AI
+    battler ``a`` at B = 4 (A-15 sheet section 2; trainer_ai.c:362-457), combining the per-target
+    laws. ``hist[t, m, v]``: P(slot m scores v) in target t's scoring (t != a; its row for a
+    target not evaluated is ignored); ``evaluated[t]``: ``t != a`` and ``curHP[t] != 0``
+    (:362-367); ``has``: the pick's candidate slots (``moves[0]`` and every nonempty slot).
+
+    The scorings of different targets read disjoint draws, so given the carry they are
+    independent: per target the slot pick gives P(m_t = m, v_t = v) (``_value_pick_law``, the
+    ``% n`` of :428 through ``TIEBREAK_P``); the ally ``a ^ 2`` moves its mass at v < 100 to -1
+    (``_ally_rule``'s law); a target that is not evaluated holds -1; and the target pick is the
+    same subset formula over the four targets in battler order, a tie of c targets giving the
+    i-th the share ``P(RandNext() % c == i)`` (:457; ``_TIE_SHARE`` through ``TIEBREAK_P``, exact
+    for c of 1 to 4). Sums to 1 when some target is evaluated. Not wired into the policy yet
+    (W3)."""
+    hist = jnp.asarray(hist, jnp.float32)
+    evaluated = jnp.asarray(evaluated, bool)
+    n = hist.shape[0]
+    values = hist.shape[2] + 1  # index 0 is the score -1, index v + 1 the score v
+    picked = jax.vmap(lambda h: _value_pick_law(h, has))(hist)  # [B, MOVES, V]
+    joint = jnp.concatenate([jnp.zeros((n, MOVES, 1), jnp.float32), picked], axis=2)
+    low = jnp.sum(picked[:, :, :100], axis=2)  # the ally's score below 100
+    ally_joint = joint.at[:, :, 1:101].set(0.0).at[:, :, 0].set(low)
+    joint = jnp.where((jnp.arange(n) == (a ^ 2))[:, None, None], ally_joint, joint)
+    joint = jnp.where(evaluated[:, None, None], joint, 0.0)
+    skipped = jax.nn.one_hot(0, values, dtype=jnp.float32)
+    marginal = jnp.where(evaluated[:, None], jnp.sum(joint, axis=1), skipped)  # [B, V + 1]
+    below = jnp.cumsum(marginal, axis=1) - marginal
+    wins = []
+    for t in range(n):
+        others = [j for j in range(n) if j != t]
+        win = jnp.zeros(values, jnp.float32)
+        for subset in range(2 ** len(others)):
+            tied = [j for k, j in enumerate(others) if subset >> k & 1]
+            term = jnp.ones(values, jnp.float32)
+            for j in others:
+                term = term * (marginal[j] if j in tied else below[j])
+            win = win + term * _TIE_SHARE[len(tied) + 1, sum(j < t for j in tied)]
+        wins.append(win)
+    return jnp.einsum("tmi,ti->tm", joint, jnp.stack(wins))
+
+
+def _written_target_law(tables: Tables, state: BattleState, a: int, law) -> jnp.ndarray:
+    """``float32[B, MOVES]``: ``_target_slot_law``'s ``law[t, m]`` (selected target t, slot m) as
+    the law of (the target ``selectedTarget[a]`` ends as, slot m), after the overrides
+    (``_override_target``; the slot is the one chosen for t, :458-459). Not wired into the policy
+    yet (W3)."""
+    moves = state.moves[party(format_of(state), a), state.active[a]].astype(_I32)
+    n = law.shape[0]
+    written = jax.vmap(
+        lambda t: jax.vmap(lambda m: _override_target(tables, state, a, m, t))(moves)
+    )(jnp.arange(n))  # [B, MOVES]
+    return jnp.einsum("tm,tmw->wm", law, jax.nn.one_hot(written, n, dtype=jnp.float32))
 
 
 def _policy(

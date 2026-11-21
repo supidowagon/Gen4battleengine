@@ -6431,7 +6431,7 @@ def test_new_context_holds_both_estimates_of_a_gyro_slot(
     assert [int(x) for x in s.speed_rec] == cur  # the battle start's sort wrote the speeds
     s = _record(s, [cur[0] * 4, cur[1]])
     ctx = c.new_context(t, s, _outcome(t, s))
-    assert [int(x) for x in ctx.speeds] == cur and not bool(ctx.written)
+    assert [int(x) for x in ctx.speeds] == cur and not bool(ctx.written.any())
     assert int(ctx.inject) == -1 and set(np.asarray(ctx.first_cmp).tolist()) == {c.NO_COMPARE}
     gyro, other = 0, 1  # Gyro Ball and Accelerock
     est, est_w = ctx.damage.value[:, 0], ctx.damage_w.value[:, 0]
@@ -6441,7 +6441,7 @@ def test_new_context_holds_both_estimates_of_a_gyro_slot(
     assert int(est[gyro]) > int(est_w[gyro])
     assert int(c.seen_damage(ctx).value[gyro, 0]) == int(est[gyro])
     assert [int(x) for x in c.seen_state(ctx).speed_rec] == [cur[0] * 4, cur[1]]
-    on = ctx._replace(written=jnp.asarray(True))
+    on = ctx._replace(written=jnp.ones(2, bool))
     assert int(c.seen_damage(on).value[gyro, 0]) == int(est_w[gyro])
     assert [int(x) for x in c.seen_state(on).speed_rec] == cur
 
@@ -6457,16 +6457,16 @@ def test_a_speed_compare_writes_monspeedvalues_where_it_is_live(
     s = _gyro(t, n, kaizo_roark_party)
     ctx = c.at_slot(c.new_context(t, s, _outcome(t, s)), 1)
     off = c.if_speed_compare_equal_to(ctx._replace(live=jnp.asarray(False)), COMPARE_SPEED_SLOWER)
-    assert not bool(off.written) and int(off.first_cmp[1]) == c.NO_COMPARE
+    assert not bool(off.written.any()) and int(off.first_cmp[1]) == c.NO_COMPARE
     ran = c.if_speed_compare_equal_to(c.start_run(ctx, 2), COMPARE_SPEED_SLOWER)
-    assert bool(ran.written) and int(ran.first_cmp[1]) == 2
+    assert bool(ran.written.all()) and int(ran.first_cmp[1]) == 2
     assert int(ran.first_cmp[0]) == c.NO_COMPARE
     again = c.if_speed_compare_equal_to(c.start_run(ran, 3), COMPARE_SPEED_SLOWER)
-    assert int(again.first_cmp[1]) == 2 and bool(again.written)
-    assert bool(c.start_run(ran, 4).written)  # nothing resets it
+    assert int(again.first_cmp[1]) == 2 and bool(again.written.all())
+    assert bool(c.start_run(ran, 4).written.all())  # nothing resets it
     for inject, flag, expected in ((5, 4, False), (4, 4, True), (0, 4, True), (3, 2, False)):
         run = c.start_run(ran._replace(inject=jnp.asarray(inject, jnp.int32)), flag)
-        assert bool(run.written) == expected, (inject, flag)
+        assert bool(run.written.all()) == expected, (inject, flag)
 
 
 def test_a_bench_gyro_ball_reads_the_record_as_the_actives_does(
@@ -6485,7 +6485,7 @@ def test_a_bench_gyro_ball_reads_the_record_as_the_actives_does(
         at = _record(s, rec)
         ctx = c.at_slot(c.new_context(t, at, _outcome(t, at)), 0)
         for written, speeds in ((False, rec), (True, cur)):
-            seen = ctx._replace(written=jnp.asarray(written))
+            seen = ctx._replace(written=jnp.full(2, written))
             out = c.if_party_member_deals_more_damage(seen, c.USE_MAX_DAMAGE)
             expected = _estimate(t, _record(at, speeds), GYRO_BALL) > tackle
             assert bool(out.jump) == expected, (rec, written)
@@ -6567,7 +6567,7 @@ def test_the_natural_run_is_the_injected_schedule_of_the_first_compare(
     assert [int(x) for x in first[:3]] == [
         0 if m == tr else c.NO_COMPARE for m in range(3)
     ]  # BASIC's Trick Room compare is the only one on the path
-    assert bool(written)
+    assert bool(written.all())
     never, _, _ = _inject_run(t, s, o, c.NO_COMPARE, layout)  # no run starts written
     always, _, _ = _inject_run(t, s, o, 0, layout)  # every run does
     after_flag0, _, _ = _inject_run(t, s, o, 1, layout)  # the runs of flags 1.. do

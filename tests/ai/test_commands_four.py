@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 
@@ -13,9 +14,13 @@ import pytest
 from nuzline.ai import commands as c
 from nuzline.ai.commands import AI_HAVE, AI_NOT_HAVE, AI_UNKNOWN, Battler, LoadType
 from nuzline.ai.outcome import READ_DRAWS, no_calc_draws
+from nuzline.data.tables import BATTLE_TYPES
 from nuzline.engine.damage import ai_damage_for_roll, decomp_abilities
+from nuzline.engine.field import with_trick_room
 from nuzline.engine.format import DOUBLES, MULTI, format_of
 from nuzline.engine.ids import Stat, Status, Type
+from nuzline.engine.order import sort_mon_speed
+from nuzline.engine.state import MOVES
 from tests.ai.b2_snapshot import snapshot
 from tests.ai.fixtures import outcome
 from tests.engine.d2_states import four, with_hp, with_moves
@@ -346,3 +351,514 @@ def test_battler_deals_more_damage(world, tables, a, d):
     # a defender that last used nothing deals the chart's +2 at most: never more
     quiet = ctx._replace(state=s._replace(last_move=s.last_move.at[d].set(0)))
     assert not bool(c.if_battler_deals_more_damage(quiet, Battler.DEFENDER, c.USE_MAX_DAMAGE).jump)
+
+
+# --- E4-A-W1 step 3: the party commands (A-6) ----------------------------------------------
+
+
+def _tables4(tables, fmt):
+    """``tables`` with the fight's ``battleType``: every B = 4 type has the DOUBLES bit (encounter.c:
+    724-740, ``data.tables.BATTLE_TYPES``)."""
+    kind = {DOUBLES: "double", MULTI: "multi"}[fmt]
+    return tables._replace(battle_type=BATTLE_TYPES[kind])
+
+
+def _party_ctx(tables, s, a=1, d=0):
+    return c.at_slot(c.new_context(tables, s, _slot_outcome(), attacker=a, defender=d), 0)
+
+
+def _put(s, p, slot, **fields):
+    for name, value in fields.items():
+        s = s._replace(**{name: getattr(s, name).at[p, slot].set(value)})
+    return s
+
+
+def _count(ctx, arg):
+    return int(c.count_alive_party_battlers(ctx, arg).calc_temp)
+
+
+def test_count_doubles_shared(tables, names):
+    # DOUBLES: battlers 1 and 3 on slots 0 and 1 of the shared party 1 (trainer_ai.c:1138-1143):
+    # both actives are excluded, whichever of the two asks; the player's side the same.
+    t = _tables4(tables, DOUBLES)
+    s = four(t, names, DOUBLES)
+    assert s.active.tolist() == [0, 0, 1, 1]
+    for a, d in ((1, 0), (3, 0), (1, 2)):
+        ctx = _party_ctx(t, s, a, d)
+        assert [_count(ctx, arg) for arg in ARGS] == [4, 4, 4, 4]
+    # a fainted bench member does not count; a fainted partner's active is excluded anyway
+    s2 = with_hp(_put(s, 1, 4, hp=0), 3, 0)
+    ctx = _party_ctx(t, s2, 1, 0)
+    assert _count(ctx, Battler.ATTACKER) == 3 and _count(ctx, Battler.ATTACKER_PARTNER) == 3
+    # without the DOUBLES bit one slot is excluded (the singles rule, :1138-1143): the bit decides
+    single = _party_ctx(tables, s, 1, 0)
+    assert _count(single, Battler.ATTACKER) == 5
+
+
+def test_count_multi_cross_party(tables, names):
+    # MULTI: battler 1 (party 1) on slot 0, battler 3 (party 3) on slot 2. The decomp excludes
+    # sel[partner] from battler 1's own party too (a quirk, A-6): party-1 slots 0 and 2.
+    t = _tables4(tables, MULTI)
+    s = four(t, names, MULTI)
+    s = s._replace(active=s.active.at[3].set(2))
+    ctx = _party_ctx(t, s, 1, 0)
+    assert _count(ctx, Battler.ATTACKER) == 4
+    # party 3's own count skips its slot 2 and battler 1's slot 0 (sel[partner] of battler 3)
+    assert _count(ctx, Battler.ATTACKER_PARTNER) == 4
+    assert (
+        _count(_party_ctx(t, _put(s, 1, 2, hp=0), 1, 0), Battler.ATTACKER) == 4
+    )  # excluded anyway
+    assert _count(_party_ctx(t, _put(s, 1, 1, hp=0), 1, 0), Battler.ATTACKER) == 3
+
+
+def test_count_partner_absent(tables, names):
+    # A partner with no replacement is absent: selectedPartySlot = 6 (bcp.c:4109-4111), so its
+    # (fainted) slot excludes nothing from the other party (MULTI: battler 3 on slot 2).
+    t = _tables4(tables, MULTI)
+    s = four(t, names, MULTI)
+    s = s._replace(active=s.active.at[3].set(2), hp=s.hp.at[3].set(0))
+    assert bool(c.absent_now(s, 3)) and not bool(c.absent_now(s, 1))
+    assert _count(_party_ctx(t, s, 1, 0), Battler.ATTACKER) == 5  # only battler 1's own slot
+    # the same partner fainted with a living bench is not absent: slot 2 is excluded again
+    s = s._replace(hp=s.hp.at[3, 4].set(30))
+    assert not bool(c.absent_now(s, 3))
+    assert _count(_party_ctx(t, s, 1, 0), Battler.ATTACKER) == 4
+
+
+@pytest.mark.parametrize("fmt", [DOUBLES, MULTI])
+def test_status_skips_the_actives(tables, names, fmt):
+    # IfPartyMemberStatus / NotStatus (:1348-1412): the same two slots are skipped as in the
+    # count; a poisoned active (own or the partner's) never jumps, a poisoned bench member does.
+    t = _tables4(tables, fmt)
+    s = four(t, names, fmt)
+    s = s._replace(active=s.active.at[3].set(1 if fmt == DOUBLES else 2))
+    skipped = (0, 1) if fmt == DOUBLES else (0, 2)  # slots of party 1 the command excludes
+    poison, burn = int(Status.POISON), c.MonCondition.POISON
+    on_actives = s
+    for slot in skipped:
+        on_actives = _put(on_actives, 1, slot, status=poison)
+    ctx = _party_ctx(t, on_actives, 1, 0)
+    assert not bool(c.if_party_member_status(ctx, Battler.ATTACKER, burn).jump)
+    assert bool(c.if_party_member_not_status(ctx, Battler.ATTACKER, burn).jump)
+    bench = _put(s, 1, 4, status=poison)
+    ctx = _party_ctx(t, bench, 1, 0)
+    assert bool(c.if_party_member_status(ctx, Battler.ATTACKER, burn).jump)
+    assert not bool(c.if_party_member_status(ctx, Battler.ATTACKER, c.MonCondition.BURN).jump)
+    # a fainted poisoned bench member has no HP: never counted
+    ctx = _party_ctx(t, _put(bench, 1, 4, hp=0), 1, 0)
+    assert not bool(c.if_party_member_status(ctx, Battler.ATTACKER, burn).jump)
+    # NotStatus is False when every considered member has the status
+    everyone = s
+    for slot in range(6):
+        everyone = _put(everyone, 1, slot, status=poison)
+    ctx = _party_ctx(t, everyone, 1, 0)
+    assert not bool(c.if_party_member_not_status(ctx, Battler.ATTACKER, burn).jump)
+    assert bool(c.if_party_member_status(ctx, Battler.ATTACKER, burn).jump)
+
+
+def test_wounded_and_used_pp_by_battler(tables, names):
+    # IsWounded / UsedPP (:1968-2012): own active skipped only; the partner's wounded active of a
+    # shared party jumps, a fainted bench member jumps IsWounded; DEFENDER reads the player's party.
+    t = _tables4(tables, DOUBLES)
+    s = four(t, names, DOUBLES)
+    ctx = _party_ctx(t, s, 1, 0)
+    for arg in ARGS:
+        assert not bool(c.if_any_party_member_is_wounded(ctx, arg).jump)
+        assert not bool(c.if_any_party_member_used_pp(ctx, arg).jump)
+    ctx = _party_ctx(t, _put(s, 1, 1, hp=5), 1, 0)  # battler 3's active, a wounded partner
+    assert bool(c.if_any_party_member_is_wounded(ctx, Battler.ATTACKER).jump)
+    assert not bool(c.if_any_party_member_is_wounded(ctx, Battler.DEFENDER).jump)
+    ctx = _party_ctx(t, _put(s, 1, 0, hp=5), 1, 0)  # battler 1's own active is skipped
+    assert not bool(c.if_any_party_member_is_wounded(ctx, Battler.ATTACKER).jump)
+    assert bool(c.if_any_party_member_is_wounded(ctx, Battler.ATTACKER_PARTNER).jump)  # battler 3
+    ctx = _party_ctx(t, _put(s, 1, 5, hp=0), 1, 0)  # a fainted bench member
+    assert bool(c.if_any_party_member_is_wounded(ctx, Battler.ATTACKER).jump)
+    used = _put(s, 1, 1, pp=s.pp[1, 1].at[2].add(-1))  # the partner's active used a PP
+    ctx = _party_ctx(t, used, 1, 0)
+    assert bool(c.if_any_party_member_used_pp(ctx, Battler.ATTACKER).jump)
+    assert not bool(c.if_any_party_member_used_pp(ctx, Battler.DEFENDER).jump)
+    # PP Ups raise the maximum (MoveTable_CalcMaxPP): a slot at its base PP with 3 ups has used some
+    ups = _put(s, 1, 4, pp_ups=jnp.asarray([3, 0, 0, 0], s.pp_ups.dtype))
+    assert bool(c.if_any_party_member_used_pp(_party_ctx(t, ups, 1, 0), Battler.ATTACKER).jump)
+    # an absent battler skips no slot (selectedPartySlot 6): its own fainted slot is "wounded"
+    dead = s._replace(hp=s.hp.at[1].set(0))
+    assert bool(c.absent_now(dead, 1))
+    ctx = _party_ctx(t, dead, 3, 0)
+    assert bool(c.if_any_party_member_is_wounded(ctx, Battler.ATTACKER_PARTNER).jump)
+
+
+def test_party_commands_b2_values(tables, names):
+    # B = 2: the singles rule, one slot excluded (the byte-identity snapshot covers the rest)
+    from tests.ai.fixtures import versus
+
+    s = versus(tables, names, 0)
+    ctx = c.at_slot(c.new_context(tables, s, _slot_outcome()), 0)
+    alive = int(((s.species[1] > 0) & (s.hp[1] > 0)).sum()) - 1
+    assert _count(ctx, Battler.ATTACKER) == alive
+    sick = _put(s, 1, 1, status=int(Status.BURN))
+    ctx = c.at_slot(c.new_context(tables, sick, _slot_outcome()), 0)
+    assert bool(c.if_party_member_status(ctx, Battler.ATTACKER, c.MonCondition.BURN).jump)
+    assert not bool(c.if_party_member_status(ctx, Battler.DEFENDER, c.MonCondition.BURN).jump)
+
+
+# --- E4-A-W1 step 4: FlagBattlerIsType, IfActivatedFlashFire, IfBattlerFainted at B = 4 ------
+
+
+@pytest.mark.parametrize("a, d", PAIRS)
+@pytest.mark.parametrize("arg", ARGS)
+def test_flag_battler_is_type_b4(world, tables, a, d, arg):
+    # FlagBattlerIsType (:991-1004): MON_HAS_TYPE of the resolved battler, type 1 or type 2, no
+    # HP test (a fainted battler's types still read).
+    s = world["s"]
+    b = _resolve(arg, a, d)
+    ctx = _ctx(world, tables, a, d)
+    for t in range(4):
+        for type_ in TYPES[t]:
+            want = int(type_) in (int(TYPES[b][0]), int(TYPES[b][1]))
+            assert int(c.flag_battler_is_type(ctx, arg, int(type_)).calc_temp) == int(want)
+    down = c.new_context(tables, with_hp(s, b, 0), _slot_outcome(), attacker=a, defender=d)
+    assert int(c.flag_battler_is_type(down, arg, int(TYPES[b][1])).calc_temp) == 1
+
+
+@pytest.mark.parametrize("a, d", PAIRS)
+@pytest.mark.parametrize("arg", ARGS)
+def test_flash_fire_partner_b4(world, tables, a, d, arg):
+    # IfActivatedFlashFire (:2641-2652): the resolved battler's moveEffectsData.flashFire.
+    s = world["s"]
+    b = _resolve(arg, a, d)
+    assert not bool(c.if_activated_flash_fire(_ctx(world, tables, a, d), arg).jump)
+    for owner in range(4):
+        lit = s._replace(flash_fire=s.flash_fire.at[owner].set(1))
+        out = c.new_context(tables, lit, _slot_outcome(), attacker=a, defender=d)
+        assert bool(c.if_activated_flash_fire(out, arg).jump) == (owner == b)
+
+
+@pytest.mark.parametrize("fmt", [DOUBLES, MULTI])
+def test_battler_fainted_b4(tables, names, fmt):
+    # IfBattlerFainted (:2438-2452): battlersSwitchingMask, i.e. actions.absent_now, not HP: a
+    # fainted partner with a living bench is not absent and does not jump (partner args only).
+    t = _tables4(tables, fmt)
+    s = four(t, names, fmt)
+    ctx = _party_ctx(t, s, 1, 0)
+    assert not bool(c.if_battler_fainted(ctx, Battler.ATTACKER_PARTNER).jump)
+    assert not bool(c.if_battler_fainted(ctx, Battler.DEFENDER_PARTNER).jump)
+    p3 = format_of(s).party_of[3]
+    down = with_hp(s, 3, 0)  # battler 3 fainted with a bench
+    assert not bool(c.absent_now(down, 3))
+    assert not bool(c.if_battler_fainted(_party_ctx(t, down, 1, 0), Battler.ATTACKER_PARTNER).jump)
+    gone = down._replace(hp=down.hp.at[p3].set(0))  # its whole party down: absent
+    if fmt == DOUBLES:  # the shared party 1 also holds battler 1: keep it alive
+        gone = gone._replace(hp=gone.hp.at[1, 0].set(50))
+    assert bool(c.absent_now(gone, 3))
+    assert bool(c.if_battler_fainted(_party_ctx(t, gone, 1, 0), Battler.ATTACKER_PARTNER).jump)
+    # DEFENDER_PARTNER of the target 1 is battler 3; of the target 0 it is battler 2 (alive)
+    assert bool(c.if_battler_fainted(_party_ctx(t, gone, 0, 1), Battler.DEFENDER_PARTNER).jump)
+    assert not bool(c.if_battler_fainted(_party_ctx(t, gone, 1, 0), Battler.DEFENDER_PARTNER).jump)
+
+
+# --- LoadBattlerSpeedRank at B = 4 (decision 6, the manager's ruling): the one-read law -------
+
+FASTER, SLOWER, TIE = c.COMPARE_SPEED_FASTER, c.COMPARE_SPEED_SLOWER, c.COMPARE_SPEED_TIE
+ORDER_PAIRS = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))  # the decomp's i < j loop
+
+
+def _speed_state(tables, names, speeds, fmt=DOUBLES, alive=(1, 1, 1, 1), trick_room=False):
+    """A four-battler state whose battlers have the Speed stat ``speeds`` (all else equal) and HP
+    only where ``alive``."""
+    s = four(tables, names, fmt)
+    for b in range(4):
+        p = format_of(s).party_of[b]
+        slot = int(s.active[b])
+        s = _put(s, p, slot, stats=s.stats[p, slot].at[Stat.SPE - 1].set(speeds[b]))
+        if not alive[b]:
+            s = with_hp(s, b, 0)
+    return with_trick_room(s, 3) if trick_room else s
+
+
+def _py_compare(speed, alive, trick, b1, b2):
+    """``BattleSystem_CompareBattlerSpeed(b1, b2, TRUE)`` (battle_lib.c:1204-1211, :1401-1447) for
+    plain battlers: ``(result, draws)``, ``result`` a function of the tie bit, ``draws`` whether the
+    compare reaches ``RandNext() & 1`` (equal speeds, both alive or both dead)."""
+    if alive[b1] != alive[b2]:
+        return (lambda bit: FASTER if alive[b1] else SLOWER), False
+    s1, s2 = speed[b1], speed[b2]
+    if s1 == s2:
+        return (lambda bit: TIE if bit else FASTER), True
+    slower = s1 > s2 if trick else s1 < s2
+    return (lambda bit: SLOWER if slower else FASTER), False
+
+
+def _py_rank_laws(speed, alive, trick=False):
+    """Brute force over the decomp's own draw process: the sort of ``AICmd_LoadBattlerSpeedRank``
+    (trainer_ai.c:2056-2094) with a fresh ``RandNext() & 1`` at each compare that reaches the tie
+    test, a branch tree of probability 1/2 per draw. ``{battler: [P(rank 0..3)]}`` (Fractions)."""
+    from fractions import Fraction
+
+    law = {b: [Fraction(0)] * 4 for b in range(4)}
+
+    def go(order, pairs, weight):
+        if not pairs:
+            for pos, b in enumerate(order):
+                law[b][pos] += weight
+            return
+        (i, j), rest = pairs[0], pairs[1:]
+        result, draws = _py_compare(speed, alive, trick, order[i], order[j])
+        for bit in (0, 1) if draws else (0,):
+            o = list(order)
+            if result(bit) != FASTER:
+                o[i], o[j] = o[j], o[i]
+            go(o, rest, weight / (2 if draws else 1))
+
+    go([0, 1, 2, 3], list(ORDER_PAIRS), Fraction(1))
+    return law
+
+
+SPEED_CASES = [
+    ((10, 20, 30, 40), (1, 1, 1, 1), False),  # distinct: no read
+    ((30, 30, 10, 20), (1, 1, 1, 1), False),  # a two-way tie
+    ((30, 10, 30, 10), (1, 1, 1, 1), False),  # two tied pairs
+    ((50, 50, 50, 40), (1, 1, 1, 1), False),  # a three-way tie
+    ((50, 50, 50, 50), (1, 1, 1, 1), False),  # a four-way tie
+    ((50, 50, 50, 50), (1, 1, 1, 1), True),  # the same under Trick Room
+    ((50, 50, 20, 20), (1, 1, 1, 1), True),
+    ((50, 50, 50, 50), (1, 0, 1, 1), False),  # a dead battler: last, no draw with it
+    ((50, 50, 50, 50), (0, 1, 1, 1), False),
+    ((50, 50, 50, 50), (1, 0, 0, 1), False),  # two dead battlers tied: their order is drawn
+    ((50, 50, 50, 50), (0, 0, 0, 1), False),
+    ((50, 40, 50, 40), (1, 0, 1, 0), True),
+]
+
+_law = jax.jit(c.speed_rank_law)
+
+
+@pytest.mark.parametrize("speeds, alive, trick", SPEED_CASES)
+def test_speed_rank_law_equals_the_brute_force(tables, names, speeds, alive, trick):
+    # speed_rank_law (the mean of the sort over the 2**6 assignments of the pair bits) equals the
+    # decomp's draw process enumerated as a tree (a bit only at a compare that reaches the tie
+    # test), for every battler: the joint law of every tie bit of the call, exactly.
+    t = _tables4(tables, DOUBLES)
+    s = _speed_state(t, names, speeds, alive=alive, trick_room=trick)
+    want = _py_rank_laws(speeds, alive, trick)
+    total = np.zeros(4)
+    for b in range(4):
+        got = np.asarray(_law(t, s, b), np.float64)
+        np.testing.assert_allclose(got, [float(x) for x in want[b]], atol=0, rtol=0)
+        assert all(float(x * 64).is_integer() for x in got)  # every probability a multiple of 1/64
+        assert abs(got.sum() - 1.0) < 1e-12
+        total += got
+    # the four battlers fill every position exactly once in each outcome
+    np.testing.assert_allclose(total, 1.0)
+
+
+def test_speed_rank_law_known_values(tables, names):
+    t = _tables4(tables, DOUBLES)
+
+    def law(s, b):
+        return [float(x) for x in _law(t, s, b)]
+
+    distinct = _speed_state(t, names, (10, 20, 30, 40))
+    assert [law(distinct, b).index(1.0) for b in range(4)] == [3, 2, 1, 0]  # the fastest first
+    tie2 = _speed_state(t, names, (30, 30, 10, 20))
+    assert law(tie2, 0) == [0.5, 0.5, 0.0, 0.0] and law(tie2, 1) == [0.5, 0.5, 0.0, 0.0]
+    assert law(tie2, 2) == [0.0, 0.0, 0.0, 1.0] and law(tie2, 3) == [0.0, 0.0, 1.0, 0.0]
+    dead = _speed_state(t, names, (50, 50, 50, 50), alive=(1, 0, 1, 1))
+    assert law(dead, 1) == [0.0, 0.0, 0.0, 1.0]  # a dead battler is last
+    two_dead = _speed_state(t, names, (50, 50, 50, 50), alive=(1, 0, 0, 1))
+    assert law(two_dead, 1) == [0.0, 0.0, 0.5, 0.5]  # their order is drawn
+    trick = _speed_state(t, names, (10, 20, 30, 40), trick_room=True)
+    assert [law(trick, b).index(1.0) for b in range(4)] == [0, 1, 2, 3]
+    # Quick Claw from qc_roll (ignoreQuickClaw only skips the write): a lone activated holder is first
+    p, slot = _at(distinct, 0)
+    held = distinct._replace(item=distinct.item.at[p, slot].set(names.item("Quick Claw")))
+    assert law(held, 0).index(1.0) == 3  # not activated: its own speed, last
+    assert law(held._replace(qc_roll=held.qc_roll.at[0].set(1)), 0).index(1.0) == 0
+
+
+def test_sort_four_matches_the_engine_sort_and_the_decomp(tables, names):
+    # The loose oracle's sort (_sort_four, the loop of AICmd_LoadBattlerSpeedRank) equals the
+    # engine's order.sort_mon_speed for every assignment of the pair bits, and the written set does
+    # not depend on the bits, for every alive pattern (decision 6: the writes are not a read).
+    t = _tables4(tables, DOUBLES)
+    all_bits = jnp.asarray(list(itertools.product((0, 1), repeat=6)))
+
+    @jax.jit
+    def both(t, s):
+        mine = jax.vmap(lambda bits: c._sort_four(t, s, lambda p, reads: bits[p]))(all_bits)
+        theirs = jax.vmap(lambda bits: sort_mon_speed(t, s, s.qc_roll, bits)[0])(all_bits)
+        return mine, theirs
+
+    for speeds in ((50, 50, 50, 50), (50, 40, 50, 40), (10, 20, 30, 40)):
+        for alive in itertools.product((1, 0), repeat=4):
+            (order, written), want = both(t, _speed_state(t, names, speeds, alive=alive))
+            assert np.asarray(order).tolist() == np.asarray(want).tolist(), (speeds, alive)
+            sets = {tuple(bool(x) for x in row) for row in np.asarray(written)}
+            # a battler is stored when some compare pairs it with one of its own class (alive or
+            # dead); a lone member of its class is never paired past the short-circuit (:1204-1211)
+            lone = {x for x in range(4) if sum(a == alive[x] for a in alive) == 1}
+            assert sets == {tuple(b not in lone for b in range(4))}, (speeds, alive, sets)
+
+
+def _rank_ctx(tables, s, a, d, rolls=(), loose_bits=None):
+    loose = None if loose_bits is None else c.loose_draws(loose_bits)
+    ctx = c.new_context(tables, s, _slot_outcome(rolls), attacker=a, defender=d, loose=loose)
+    return c.at_slot(ctx, 0)
+
+
+ONE_READ_CASES = [
+    ((50, 50, 50, 50), (1, 1, 1, 1)),
+    ((50, 50, 30, 20), (1, 1, 1, 1)),
+    ((50, 50, 50, 50), (1, 0, 0, 1)),
+]
+RANK_ARGS = (Battler.ATTACKER, Battler.ATTACKER_PARTNER, Battler.DEFENDER, Battler.DEFENDER_PARTNER)
+
+
+@pytest.mark.parametrize("speeds, alive", ONE_READ_CASES)
+def test_speed_rank_one_read_law(tables, names, speeds, alive):
+    # The exact layout: ONE read per call whose class of the RandNext() % 256 draw is the rank:
+    # over the 256 draws the ranks have exactly speed_rank_law's frequencies, the read's weight is
+    # the rank's probability (a certain rank is no read), and the call writes the battlers some
+    # compare of the sort stored (a lone member of its alive-or-dead class is not).
+    t = _tables4(tables, DOUBLES)
+    s = _speed_state(t, names, speeds, alive=alive)
+    base = _rank_ctx(t, s, 1, 0)
+    for arg in RANK_ARGS:
+        b = _resolve(arg, 1, 0)
+        law = np.asarray(_law(t, s, b), np.float64)
+
+        @jax.jit
+        def sweep(base, arg=arg):
+            def one(r):
+                o = base.outcome._replace(
+                    script_rolls=base.outcome.script_rolls.at[0, 0].set(r.astype(jnp.uint8))
+                )
+                return c.load_battler_speed_rank(base._replace(outcome=o), arg)
+
+            return jax.vmap(one)(jnp.arange(256))
+
+        out = sweep(base)
+        ranks = np.asarray(out.calc_temp)
+        np.testing.assert_allclose(np.bincount(ranks, minlength=4) / 256, law, atol=0, rtol=0)
+        reads = int(law.max() < 1.0)
+        assert np.asarray(out.reads[:, 0]).tolist() == [reads] * 256
+        weight = np.asarray(out.weight[:, 0], np.float64)
+        np.testing.assert_allclose(weight, law[ranks] if reads else 1.0, rtol=1e-6)
+    classes = [sum(a == alive[x] for a in alive) for x in range(4)]
+    written = c.load_battler_speed_rank(base, Battler.ATTACKER).written
+    assert written.tolist() == [n > 1 for n in classes]
+
+
+@pytest.mark.parametrize("speeds, alive", ONE_READ_CASES)
+def test_speed_rank_loose_law_equals_the_one_read(tables, names, speeds, alive):
+    # The loose oracle draws each pair that reads its tie bit as its own read (SPEED_TIE_DRAWN,
+    # up to six); over every pattern, each live read weighing 1/2, it gives the same law as the
+    # exact layout's one read: the brute-force check of the ruling on the real command.
+    t = _tables4(tables, DOUBLES)
+    s = _speed_state(t, names, speeds, alive=alive)
+    all_bits = np.zeros((64, MOVES, c.LOOSE_READS), np.int8)
+    all_bits[:, 0, :6] = list(itertools.product((0, 1), repeat=6))
+    for arg in (Battler.ATTACKER, Battler.DEFENDER, Battler.DEFENDER_PARTNER):
+        b = _resolve(arg, 1, 0)
+        base = _rank_ctx(t, s, 1, 0, loose_bits=all_bits[0])
+
+        @jax.jit
+        def sweep(bits, base=base, arg=arg):
+            def one(grid):
+                return c.load_battler_speed_rank(
+                    base._replace(loose=base.loose._replace(bits=grid)), arg
+                )
+
+            return jax.vmap(one)(bits)
+
+        out = sweep(jnp.asarray(all_bits))
+        assert np.asarray(out.loose.count[:, 0]).tolist() == [6] * 64
+        kinds = set(np.asarray(out.loose.kind[:, 0, :6]).ravel().tolist())
+        assert kinds == {int(c.ReadKind.SPEED_TIE_DRAWN)}
+        live = np.asarray(out.loose.live[:, 0, :6])
+        bits = all_bits[:, 0, :6].astype(bool)
+        canonical = ~np.any(bits & ~live, axis=1)  # a bit past the live reads repeats a shorter one
+        law = np.zeros(4)
+        for rank, ok, n in zip(np.asarray(out.calc_temp), canonical, live.sum(axis=1)):
+            if ok:
+                law[rank] += 0.5 ** int(n)
+        np.testing.assert_allclose(law, np.asarray(_law(t, s, b), np.float64), atol=1e-12)
+
+
+def test_speed_rank_certain_and_masked(tables, names):
+    t = _tables4(tables, DOUBLES)
+    # distinct speeds: no read, every battler written, calcTemp the position
+    s = _speed_state(t, names, (10, 20, 30, 40))
+    out = c.load_battler_speed_rank(_rank_ctx(t, s, 1, 0), Battler.ATTACKER)
+    assert int(out.calc_temp) == 2 and int(out.reads[0]) == 0 and float(out.weight[0]) == 1.0
+    assert out.written.tolist() == [True] * 4 and int(out.first_cmp[0]) == int(out.flag)
+    # a dead battler: its compares with the living are short-circuited, so it is not stored
+    dead = _speed_state(t, names, (10, 20, 30, 40), alive=(1, 1, 0, 1))
+    out = c.load_battler_speed_rank(_rank_ctx(t, dead, 1, 0), Battler.ATTACKER_PARTNER)
+    assert out.written.tolist() == [True, True, False, True] and int(out.calc_temp) == 0
+    out = c.load_battler_speed_rank(_rank_ctx(t, dead, 1, 2), Battler.DEFENDER)
+    assert int(out.calc_temp) == 3  # the dead battler 2 is last
+    # a masked call (not live) writes nothing
+    off = _rank_ctx(t, s, 1, 0)._replace(live=jnp.asarray(False))
+    out = c.load_battler_speed_rank(off, Battler.ATTACKER)
+    assert not bool(out.written.any()) and int(out.first_cmp[0]) == c.NO_COMPARE
+
+
+def test_speed_compare_record_gate_b4(tables, names):
+    # IfSpeedCompare* writes the two compared battlers only when both or neither have HP
+    # (battle_lib.c:1204-1211 return first; :1372-1373 store): a fainted unreplaced battler as the
+    # defender writes nothing, and a Gyro Ball estimate that follows still reads the old speed_rec.
+    t = _tables4(tables, DOUBLES)
+    speeds = (50, 40, 30, 60)
+    s = _speed_state(t, names, speeds)
+    s = with_moves(s, names, 1, ("Gyro Ball", "Tackle", "Earthquake", "Curse"))
+    s = s._replace(speed_rec=jnp.asarray([5, 7, 9, 11], s.speed_rec.dtype))  # not the speeds
+    assert [int(x) for x in c.current_speeds(t, s)] == list(speeds)
+    gyro = 0
+
+    def estimate(rec, d):
+        state = s._replace(speed_rec=jnp.asarray(rec, s.speed_rec.dtype))
+        return int(
+            c.estimate(t, state, c.AI_GYRO_BALL, c.SIM_ROLL_MAX, atk_side=1, def_side=d).value[0]
+        )
+
+    # alive defender: both entries written, Gyro Ball reads the current speeds
+    ctx = _rank_ctx(t, s, 1, 0)
+    out = c.if_speed_compare_equal_to(ctx, SLOWER)
+    assert out.written.tolist() == [True, True, False, False]
+    assert int(out.first_cmp[0]) == int(out.flag)
+    assert int(c.seen_damage(out).value[gyro, 0]) == estimate([50, 40, 9, 11], 0)
+    assert int(c.seen_damage(ctx).value[gyro, 0]) == estimate([5, 7, 9, 11], 0)
+    assert estimate([50, 40, 9, 11], 0) != estimate([5, 7, 9, 11], 0)
+    # the mixed patterns: only the attacker's entry (1) or only the target's (3) written
+    for written in ([False, True, False, False], [False, False, False, True]):
+        part = _rank_ctx(t, s, 1, 3)._replace(written=jnp.asarray(written))
+        rec = [5, 40 if written[1] else 7, 9, 60 if written[3] else 11]
+        assert int(c.seen_damage(part).value[gyro, 0]) == estimate(rec, 3), written
+    # a fainted, unreplaced partner (battler 3: its whole party is down) as the compared battler
+    gone = s._replace(hp=s.hp.at[1].set(0).at[1, 0].set(int(s.hp[1, 0])))
+    gone = with_hp(gone, 3, 0)
+    assert bool(c.absent_now(gone, 3))
+    ctx = _rank_ctx(t, gone, 1, 3)
+    out = c.if_speed_compare_equal_to(ctx, SLOWER)
+    assert not bool(out.written.any()) and int(out.first_cmp[0]) == c.NO_COMPARE
+    assert int(c.seen_damage(out).value[gyro, 0]) == int(ctx.damage.value[gyro, 0])
+    assert int(c.seen_damage(out).value[gyro, 0]) == estimate([5, 7, 9, 11], 3)
+    # the compare with a living battler still writes (control)
+    ok = c.if_speed_compare_equal_to(_rank_ctx(t, gone, 1, 2), SLOWER)
+    assert ok.written.tolist() == [False, True, True, False]
+
+
+def test_speed_compare_b4_results(tables, names):
+    # IfSpeedCompareEqualTo at B = 4 by (attacker, defender): SLOWER never reads the tie; FASTER
+    # and TIE at equal speed are one read of probability 1/2
+    t = _tables4(tables, DOUBLES)
+    s = _speed_state(t, names, (50, 40, 30, 40))
+    for a, d, slower in ((1, 0, True), (1, 2, False), (3, 0, True), (1, 3, False)):
+        out = c.if_speed_compare_equal_to(_rank_ctx(t, s, a, d), SLOWER)
+        assert bool(out.jump) == slower, (a, d)
+        assert int(out.reads[0]) == 0
+    for a, d in ((1, 3), (3, 1)):
+        for r, tie in ((READ_DRAWS[1], True), (READ_DRAWS[0], False)):
+            ctx = _rank_ctx(t, s, a, d, rolls=(r,))
+            assert bool(c.if_speed_compare_equal_to(ctx, TIE).jump) == tie
+            assert bool(c.if_speed_compare_equal_to(ctx, FASTER).jump) == (not tie)
+            assert float(c.if_speed_compare_equal_to(ctx, TIE).weight[0]) == 0.5

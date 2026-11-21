@@ -975,7 +975,7 @@ def test_load_battler_speed_rank_b2(tables, names):
         assert int(out.reads[0]) == 0 and float(out.weight[0]) == 1.0
         assert _rank(_slot_ctx(tables, fast), _D)[1] == 1 - attacker_rank
         # the compare wrote both speeds to monSpeedValues (battle_lib.c:1372-1373)
-        assert bool(out.written) and int(out.first_cmp[0]) == int(out.flag)
+        assert bool(out.written.all()) and int(out.first_cmp[0]) == int(out.flag)
 
 
 def test_load_battler_speed_rank_tie_draw_law_b2(tables, names):
@@ -996,7 +996,7 @@ def test_load_battler_speed_rank_partner_arg_leaves_calc_temp(tables, names):
         out, rank = _rank(_slot_ctx(tables, s), p)
         assert rank == 77  # not in the order (:2088-2093)
         assert int(out.reads[0]) == 0  # its result goes unused: no read of the exact layout
-        assert bool(out.written)  # the compare still wrote monSpeedValues
+        assert bool(out.written.all())  # the compare still wrote monSpeedValues
 
 
 def test_load_battler_speed_rank_dead_battler_b2(tables, names):
@@ -1004,10 +1004,10 @@ def test_load_battler_speed_rank_dead_battler_b2(tables, names):
     s = _speeds(versus(tables, names, GEODUDE), 60, 60)
     dead = s.replace_hp(0, 0, 0)
     out, rank = _rank(_slot_ctx(tables, dead))
-    assert rank == 0 and int(out.reads[0]) == 0 and not bool(out.written)
+    assert rank == 0 and int(out.reads[0]) == 0 and not bool(out.written.any())
     dead = s.replace_hp(1, GEODUDE, 0)
     out, rank = _rank(_slot_ctx(tables, dead))
-    assert rank == 1 and int(out.reads[0]) == 0 and not bool(out.written)
+    assert rank == 1 and int(out.reads[0]) == 0 and not bool(out.written.any())
 
 
 def test_load_battler_speed_rank_trick_room_and_quick_claw(tables, names):
