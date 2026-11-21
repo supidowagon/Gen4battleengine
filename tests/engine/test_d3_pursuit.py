@@ -142,7 +142,7 @@ def test_both_foes_pursue_and_the_lower_battler_hits_first(tables, names):
     assert int(shown["pursuit"]) == 1
     for b in (1, 3):
         assert int(shown["act_kind"][b]) == ACT_MOVE and int(shown["hits"][b]) == 1
-    assert int(out.acid_rain) == 0
+    assert int(out.field_mask) == int(s.field_mask)  # no Acid Rain (subscript_pursuit.s:115)
 
 
 def test_the_second_pursuer_meets_the_switchers_ability_not_its_partners(tables, names):

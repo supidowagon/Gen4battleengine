@@ -23,6 +23,7 @@ from hypothesis import strategies as st
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import absent_now
+from nuzline.engine.field import with_weather
 from nuzline.engine.format import SINGLES
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import PAIRS, player_second
@@ -238,7 +239,7 @@ def test_uproar_wakes_battlers_1_and_3(tables, names):
 
 def test_weather_chips_all_four_battlers(tables, names):
     """The weather loop runs over every battler of the order."""
-    s = base(tables, names)._replace(weather=jnp.int8(Weather.SANDSTORM))
+    s = with_weather(base(tables, names), Weather.SANDSTORM)
     s = speeds(s, (100, 300, 200, 250))
     out = both(tables, s)
     for b in range(4):

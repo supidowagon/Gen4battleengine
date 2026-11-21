@@ -207,13 +207,23 @@ def leveling(tables, names, fmt=DOUBLES):
     return s, s._replace(hp=s.hp.at[1, 0].set(0))
 
 
-def test_battler_2s_level_up_reloads_battler_2(tables, names):
+def reloading(tables, names):
+    """``leveling`` with Power Trick on battlers 0 and 2 and battler 2 Transformed: its
+    ``shadow_*`` hold party slot 1's own species, form and IVs (G-69, ``party_identity``)."""
     s, after = leveling(tables, names)
     s = s._replace(
         power_trick=s.power_trick.at[0].set(1).at[2].set(1),
         transformed=s.transformed.at[2].set(1),
+        shadow_species=s.shadow_species.at[2].set(s.species[0, 1]),
+        shadow_form=s.shadow_form.at[2].set(s.form[0, 1]),
+        shadow_ivs=s.shadow_ivs.at[2].set(s.ivs[0, 1]),
     )
-    after = after._replace(power_trick=s.power_trick, transformed=s.transformed)
+    keep = ("power_trick", "transformed", "shadow_species", "shadow_form", "shadow_ivs")
+    return s, after._replace(**{k: getattr(s, k) for k in keep})
+
+
+def test_battler_2s_level_up_reloads_battler_2(tables, names):
+    s, after = reloading(tables, names)
     out = pay_exp(tables, s, after, battler=1)
     assert int(out.level[0, 0]) == 51 and int(out.level[0, 1]) == 51
     # ReloadPokemon for expBattler 2 (battle_script.c:9716-9720, :9860-9864): the Attack / Defense

@@ -21,6 +21,7 @@ from nuzline.engine.order import PAIRS
 from nuzline.engine.step import replace_round, root_belief, sample_root
 from nuzline.engine.switch_in import run_states, show_battle_mon4
 from tests.engine.d2_states import four, party_of, with_ability
+from tests.engine.helpers import weather_of, weather_timer_of
 from tests.engine.test_d3_action_loop import play
 from tests.engine.test_d3_pause import ATK, ORDER, pivoting, resume
 
@@ -84,7 +85,7 @@ def test_the_slowest_holders_weather_stays_and_every_lead_is_done(tables, names,
     for rank, b in enumerate(fastest_first):
         values[b] = 400 - 40 * rank
     out = show(tables, speeds(s, values))
-    assert int(out.weather) == last_weather(fastest_first) and int(out.weather_timer) == 0
+    assert int(weather_of(out)) == last_weather(fastest_first) and int(weather_timer_of(out)) == 0
     assert np.asarray(out.entry_pending).tolist() == [0, 0, 0, 0]
     assert np.asarray(out.weather_announced).tolist() == [1, 1, 1, 1]
     # The player's two leads reveal their ability while the weather up is not their own (:3749).
@@ -96,7 +97,7 @@ def test_equal_speeds_follow_the_tie_bits_over_all_64_rows(tables, names):
     s = weather_leads(tables, names)
     for ties in itertools.product((0, 1), repeat=6):
         out = show(tables, s, np.asarray(ties, np.int32))
-        assert int(out.weather) == last_weather(transcribed_order(ties)), ties
+        assert int(weather_of(out)) == last_weather(transcribed_order(ties)), ties
 
 
 def test_the_sort_reads_the_quick_claw_draw(tables, names):
@@ -108,9 +109,9 @@ def test_the_sort_reads_the_quick_claw_draw(tables, names):
     s = speeds(s, [200, 100, 400, 300])
     p, slot = party_of(s, 1), int(s.active[1])
     s = s._replace(item=s.item.at[p, slot].set(names.item("Quick Claw")))
-    assert int(show(tables, s).weather) == Weather.SUN
+    assert int(weather_of(show(tables, s))) == Weather.SUN
     drawn = s._replace(qc_roll=s.qc_roll.at[1].set(1))
-    assert int(show(tables, drawn).weather) == Weather.RAIN
+    assert int(weather_of(show(tables, drawn))) == Weather.RAIN
 
 
 # ---------------------------------------------------------------- Intimidate across a pause
@@ -172,10 +173,10 @@ def test_two_trainers_replacements_run_their_states_at_the_next_show(
     )
     waiting = replace_round(tables, s, np.asarray([-1, 1, -1, 1], np.int8))
     assert np.asarray(waiting.entry_pending).tolist() == [0, 1, 0, 1]
-    assert int(waiting.weather) == Weather.NONE  # subscript_show_party_list.s runs no state
+    assert int(weather_of(waiting)) == Weather.NONE  # subscript_show_party_list.s runs no state
     out = show(tables, waiting)
     # The slower newcomer's weather stays: battler 3's sun when battler 1 is faster.
-    assert int(out.weather) == (Weather.SUN if newcomer_1_faster else Weather.RAIN)
+    assert int(weather_of(out)) == (Weather.SUN if newcomer_1_faster else Weather.RAIN)
     assert np.asarray(out.entry_pending).tolist() == [0, 0, 0, 0]
 
 
@@ -187,7 +188,7 @@ def test_sample_root_runs_the_start_states_once(tables, names):
     run = jax.jit(sample_root)
     out = run(jax.random.PRNGKey(0), tables, s)
     assert np.asarray(out.entry_pending).tolist() == [0, 0, 0, 0]
-    assert int(out.weather) in {int(w) for _, w in HOLDERS}
+    assert int(weather_of(out)) in {int(w) for _, w in HOLDERS}
     assert int(out.war_swaps) == 0
     assert np.asarray(out.weather_announced).tolist() == [1, 1, 1, 1]
 
@@ -203,7 +204,7 @@ def test_root_belief_splits_a_weather_war_into_its_visible_results(tables, names
     got: dict[int, float] = {}
     for st, p in belief:
         assert np.asarray(st.entry_pending).tolist() == [0, 0, 0, 0]
-        got[int(st.weather)] = got.get(int(st.weather), 0.0) + p
+        got[int(weather_of(st))] = got.get(int(weather_of(st)), 0.0) + p
     assert set(got) == set(expected) and len(expected) > 1
     for w, n in expected.items():
         assert got[w] == pytest.approx(n / 64)

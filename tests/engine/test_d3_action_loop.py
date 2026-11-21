@@ -19,9 +19,9 @@ import numpy as np
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import chosen_targets
 from nuzline.engine.format import DOUBLES, SINGLES
-from nuzline.engine.ids import AbilityId, Stat, Status, Type
+from nuzline.engine.ids import STARF_QUEUE, AbilityId, Stat, Status, Type
 from nuzline.engine.order import action_order
-from nuzline.engine.outcome import STARF_QUEUE, empty_outcome, outcome_to_py
+from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
 from nuzline.engine.step import (
     ACT_MOVE,

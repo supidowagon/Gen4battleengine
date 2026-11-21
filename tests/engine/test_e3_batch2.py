@@ -1189,8 +1189,11 @@ def test_a_failed_skill_swap_skips_after_move_effects(tables, names):
     :156 (MOVE_STATUS_FAILED); CheckMoveFailure sends it to subscript_missed.s with commandNext
     LOOP_FAINTED (bcp.c:3324-3327), so AfterMoveEffects' ATTACKER_ITEM check (bcp.c:3684-3689)
     does not run. A faster Monferno at 1 HP holding a Sitrus Berry: after a swap it eats the
-    berry at once, then the Geodude's Pain Split averages the HP; after a failed swap the Pain
-    Split lifts it above half first, so the berry is never eaten this turn."""
+    berry at once, then the Geodude's Pain Split averages the HP. After a failed swap it still
+    eats it before the Pain Split: every move reaches MoveEnd (bcp.c:3959), whose
+    TriggerEffectOnSwitch (bcp.c:3973) runs SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS over every
+    battler (battle_lib.c:4151-4165; HOLD_EFFECT_HP_PCT_RESTORE at curHP <= maxHP / 2, :4982-4983;
+    D3-15). Both engines agree on both runs."""
     t, n = tables, names
     sitrus = n.item("Sitrus Berry")
     s = make_state(
@@ -1210,8 +1213,7 @@ def test_a_failed_skill_swap_skips_after_move_effects(tables, names):
     none = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
     failed = assert_matches_reference(t, none, acts, _hits())
     assert failed.ability[:, 0].tolist() == [AbilityId.NONE] * 2
-    assert int(failed.item[0, 0]) == sitrus
-    assert 2 * int(failed.hp[0, 0]) > int(failed.max_hp[0, 0])
+    assert int(failed.item[0, 0]) == 0 and int(failed.item_consumed[0, 0]) == sitrus
 
 
 def test_role_play_reads_the_raw_ability_through_gastro_acid(tables, names):
@@ -2858,14 +2860,15 @@ def test_feint_enumeration_matches_the_brute_force(tables, names):
 
 def test_feint_takes_the_targets_flag_as_an_input(tables, names):
     """Doubles-ready (docs/doubles-state-design.md section 5, rules 1 and 5): ``_use_move`` takes
-    ``foe_protecting``, the named target's flag, as an argument (``step._execute_actions`` reads
-    ``read["protect_ok"][foe]`` and zeroes that entry after a Feint hit, never the mover's): with
-    the flag given and no Protect in the turn the Feint hits; withdrawn, it fails."""
+    ``protecting`` (``bool[B]``, every battler's flag; D3) as an argument and reads its defender's
+    (``turnFlags[defender].protecting``, bcp.c:3007); a Feint hit zeroes the target's entry, never
+    the mover's: with the flag given and no Protect in the turn the Feint hits; withdrawn, it
+    fails."""
     import inspect
 
     from nuzline.engine import step as step_module
 
-    assert "foe_protecting" in inspect.signature(step_module._use_move).parameters
+    assert "protecting" in inspect.signature(step_module._use_move).parameters
     t, n = tables, names
     s = _fe(t, n)
     out = _fego(t, n, s)

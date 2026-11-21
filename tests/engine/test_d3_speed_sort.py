@@ -19,6 +19,7 @@ import numpy as np
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from nuzline.engine.field import with_trick_room
 from nuzline.engine.format import DOUBLES, SINGLES
 from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.order import PAIRS, effective_speed, sort_mon_speed
@@ -151,7 +152,7 @@ def test_quick_claw_holder_goes_first_without_trick_room(tables, names):
     orders, _ = run(tables, s, qc=[0, 0, 0, 0])  # not drawn: plain speed
     assert (orders == [0, 3, 1, 2]).all()
     # under Trick Room too (lib.c:1408-1411 sits above the reversal)
-    orders, _ = run(tables, s._replace(trick_room=jnp.int8(3)), qc=[0, 0, 1, 0])
+    orders, _ = run(tables, with_trick_room(s, 3), qc=[0, 0, 1, 0])
     assert (orders[:, 0] == 2).all()
 
 
@@ -174,7 +175,7 @@ def test_lagging_tail_holder_goes_last(tables, names):
 
 
 def test_trick_room_reverses_the_sort(tables, names):
-    s = speeds(base(tables, names), (100, 300, 200, 250))._replace(trick_room=jnp.int8(3))
+    s = with_trick_room(speeds(base(tables, names), (100, 300, 200, 250)), 3)
     orders, _ = check_model(tables, s, trick_room=True)
     assert (orders == [0, 2, 3, 1]).all()
 

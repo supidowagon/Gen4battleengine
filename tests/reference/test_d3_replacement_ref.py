@@ -14,7 +14,7 @@ from nuzline.engine.step import replace_round
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_grant_exp, ref_replace_round
 from tests.engine.d2_states import four
-from tests.engine.test_d3_replacement import cell, down, leveling, picks
+from tests.engine.test_d3_replacement import cell, down, picks, reloading
 
 
 def assert_same(want, got):
@@ -66,12 +66,7 @@ def test_ref_hazard_faint(tables, names):
 
 
 def test_ref_battler_2_reload_equals_the_engine(tables, names):
-    s, after = leveling(tables, names)
-    s = s._replace(
-        power_trick=s.power_trick.at[0].set(1).at[2].set(1),
-        transformed=s.transformed.at[2].set(1),
-    )
-    after = after._replace(power_trick=s.power_trick, transformed=s.transformed)
+    s, after = reloading(tables, names)
     want = pay_exp(tables, s, after, battler=1)
     ref = ref_grant_exp(to_numpy(tables), to_ref(after), int(after.active[1]), battler=1)
     got = from_ref(ref)

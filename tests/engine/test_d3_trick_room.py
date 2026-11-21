@@ -25,6 +25,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from nuzline.data.tables import to_numpy
+from nuzline.engine.field import with_trick_room
 from nuzline.engine.format import DOUBLES, SINGLES
 from nuzline.engine.ids import TRICK_ROOM_TURNS, AbilityId, Stat, Type
 from nuzline.engine.order import effective_speed, metronome_candidates, resort_action_order
@@ -33,7 +34,7 @@ from nuzline.engine.step import step, turn_events
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
 from tests.engine.d2_states import four, party_of, with_ability, with_hp, with_moves
-from tests.engine.helpers import assert_matches_reference
+from tests.engine.helpers import assert_matches_reference, trick_room_of
 from tests.engine.test_d3_action_loop import hp, play, speed_ordered
 from tests.engine.test_d3_pause import resume, same_state
 from tests.engine.test_d3_turn_order import ALL_BITS, item_of, speeds
@@ -106,12 +107,12 @@ def test_a_called_trick_room_restarts_the_walk_in_the_new_order(tables, names):
     Each of 1, 2 and 3 acted once. With Splash the order stays 0, 1, 2, 3."""
     s = lineup(tables, names, STATUS_MOVES)
     out, _ = play(tables, s, FIGHTS, None, outcome=trick_call(tables, names, s))
-    assert int(out.trick_room) == TRICK_ROOM_TURNS
+    assert int(trick_room_of(out)) == TRICK_ROOM_TURNS
     assert [int(out.stages[b, DEF]) for b in (1, 2, 3)] == [1, 1, 1]
     assert int(out.move_prev) == names.move("Harden")  # battler 1 acted last
     calm = lineup(tables, names, [["Splash"], *STATUS_MOVES[1:]])
     out, _ = play(tables, calm, FIGHTS, None)
-    assert int(out.trick_room) == 0
+    assert int(trick_room_of(out)) == 0
     assert int(out.move_prev) == names.move("Withdraw")  # battler 3 acted last
 
 
@@ -124,7 +125,7 @@ def test_a_second_activation_re_sorts_again_with_its_own_row(tables, names):
     s = lineup(tables, names, [["Metronome"], ["Harden"], ["Trick Room"], ["Trick Room"]])
     base = trick_call(tables, names, s)
     out, _ = play(tables, s, FIGHTS, None, outcome=base)
-    assert int(out.trick_room) == TRICK_ROOM_TURNS  # the last toggle left it on
+    assert int(trick_room_of(out)) == TRICK_ROOM_TURNS  # the last toggle left it on
     assert int(out.stages[1, DEF]) == 1
     assert int(out.move_prev) == names.move("Trick Room")
     flipped = base._replace(resort_tie=base.resort_tie.at[2].set(1))
@@ -201,7 +202,7 @@ def model_resort(order, bits, alive, speed, trick_room):
 
 
 def _check_resort(tables, state, start, trick_room):
-    s = state._replace(trick_room=jnp.asarray(5 if trick_room else 0, state.trick_room.dtype))
+    s = with_trick_room(state, 5 if trick_room else 0)
     orders, cs, us, reads = _resorts(
         tables,
         s,
@@ -366,12 +367,12 @@ def test_the_kaizo_re_arm_runs_no_move_end_and_no_re_sort(tables, names, kaizo_t
     counts the new field down by one like any Trick Room (bcp.c:1823-1824): the re-arm runs only
     at 0 (:1825-1826)."""
     s = lineup(kaizo_tables, kaizo_names, [["Swords Dance"]] * 4)
-    s = s._replace(trick_room=jnp.asarray(1, s.trick_room.dtype))
+    s = with_trick_room(s, 1)
     out = full_step(kaizo_tables, s, FIGHTS, empty_outcome(DOUBLES))
-    assert int(out.trick_room) == TRICK_ROOM_TURNS
+    assert int(trick_room_of(out)) == TRICK_ROOM_TURNS
     assert [int(out.stages[b, Stat.ATK]) for b in range(4)] == [2, 2, 2, 2]
     again = full_step(kaizo_tables, out, FIGHTS, empty_outcome(DOUBLES))
-    assert int(again.trick_room) == TRICK_ROOM_TURNS - 1
+    assert int(trick_room_of(again)) == TRICK_ROOM_TURNS - 1
 
 
 # --- B = 2 ----------------------------------------------------------------------------------

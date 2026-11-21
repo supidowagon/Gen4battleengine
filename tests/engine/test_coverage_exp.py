@@ -240,7 +240,8 @@ def test_every_exp_sensitive_move_meets_its_exp_line(request, game, names):
         for move in moves.tolist():
             lines = exp_refusals(tables, names, spec, [move], [move], levels)
             assert any(phrase in line for line in lines), (int(move), lines)
-    assert met
+    # Vanilla has Return and Frustration; Kaizo's family is empty (above).
+    assert (met == 0) == (game == "kaizo_tables"), met
 
 
 def test_an_unresolved_exp_boost_is_refused_below_level_100(tables, names):

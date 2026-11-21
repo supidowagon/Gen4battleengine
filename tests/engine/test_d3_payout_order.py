@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import to_numpy
+from nuzline.engine.field import with_weather
 from nuzline.engine.format import DOUBLES, SINGLES, TWO_TRAINERS
 from nuzline.engine.ids import Stat, Weather
 from nuzline.engine.levelup import BOOST_PERCENT, pay_exp
@@ -45,15 +46,14 @@ def sandstorm_double_faint(tables, names):
     species = s.species.at[1, 1].set(species_yielding(tables, Stat.ATK))
     species = species.at[1, 0].set(species_yielding(tables, Stat.SPE))
     evs = s.evs.at[0, HOLDER].set(jnp.asarray([100, 100, 100, 100, 100, 9], s.evs.dtype))
-    return s._replace(
+    s = s._replace(
         species=species,
         hp=s.hp.at[1, 0].set(1).at[1, 1].set(1),
         item=s.item.at[0, HOLDER].set(names.item("Exp. Share")),
         evs=evs,
         exp_mask=jnp.zeros_like(s.exp_mask),
-        weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype),
-        weather_timer=jnp.asarray(5, s.weather_timer.dtype),
     )
+    return with_weather(s, Weather.SANDSTORM, 5)
 
 
 def test_doubles_sandstorm_double_faint_pays_battler_1_first(tables, names):

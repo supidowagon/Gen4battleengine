@@ -3,9 +3,8 @@ through ``ref_step`` (the action phase of both engines, the whole state field by
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-
 from nuzline.data.tables import to_numpy
+from nuzline.engine.field import with_trick_room
 from nuzline.engine.ids import AbilityId
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import _speed_sort
@@ -36,7 +35,7 @@ def test_sort_matches_the_engine_over_all_64_rows(tables, names):
     _agree(tables, with_hp(custap, 1, 10))
     lag = item_of(speeds(s, (300, 200, 100, 250)), 0, names.item("Lagging Tail"))
     _agree(tables, lag)
-    _agree(tables, speeds(s, (100, 300, 200, 250))._replace(trick_room=jnp.int8(3)))
+    _agree(tables, with_trick_room(speeds(s, (100, 300, 200, 250)), 3))
 
 
 def test_rock_slide_after_scary_face_matches_the_reference(tables, names):

@@ -2707,12 +2707,11 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
         bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
         a["trainer_items"][b] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
         a["trainer_item_count"][b] = count
-    weather = a["weather"][()] if a["weather"][()] else draw(st.sampled_from(list(Weather)))
-    a["weather"][...] = weather
+    weather = _drawn_weather(a) or draw(st.sampled_from(list(Weather)))
     timed = weather not in (Weather.NONE, Weather.FOG)
-    a["weather_timer"][...] = draw(st.integers(0, 8)) if timed else 0
-    a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
-    a["gravity"][...] = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
+    timer = draw(st.integers(0, 8)) if timed else 0
+    trick_room = draw(st.integers(0, _TIMER_MAX))
+    gravity = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
     draw_seen_moves(draw, a)
     flags = draw(st.lists(st.integers(0, 1), min_size=SLOTS, max_size=SLOTS))
     a["ai_ability_known"][...] = np.reshape(flags, a["ai_ability_known"].shape)
@@ -2726,6 +2725,9 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
     a["replace_mul"][...] = 0
     _draw_exp(draw, tables, a)
+    # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
+    a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
+    a["weather_turns"][...] = timer
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 
