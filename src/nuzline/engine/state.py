@@ -1473,7 +1473,9 @@ def initial_arrays(
     ``trainer_item_count[1]``; the player's battlers' bags stay empty (only ``battler &
     BATTLER_THEM`` is filled, :4803). With four battlers, battler 3's bag is ``opp2_items``
     (``trainers[3]``), which every four-battler fight must give (``ValueError`` otherwise):
-    ``TWO_TRAINERS`` / ``MULTI`` the second opposing trainer's bag; a plain ``DOUBLES`` either
+    ``TWO_TRAINERS`` the second opposing trainer's bag; ``MULTI`` loads neither bag (``opp_items``
+    and ``opp2_items`` are accepted and dropped: ``BATTLE_TYPE_NO_AI_ITEMS``, bcp.c:4801,
+    battle.h:46-51, encounter.c:732-735; sheet D45-6); a plain ``DOUBLES`` either
     ``opp_items`` again, when both trainer ids are the trainer's (a scripted
     ``StartTrainerBattle t, t`` or the spotted pair, scripts_battles.s:156-173 with
     trainer_encounter.c:356-371; encounter.c:736, :751-752), or ``()`` when the player talks
@@ -1526,11 +1528,17 @@ def initial_arrays(
     # D2-1 rule 8: the game's zero is never read (every battler selects on turn 1); b ^ 1 keeps
     # a hand-built state's lock on today's defender.
     a["chosen_target"][...] = np.arange(fmt.B) ^ 1
-    bags = {1: opp_items}
+    # D45-6 initial_arrays: InitAI loads the enemy bags unless the battle type has
+    # BATTLE_TYPE_NO_AI_ITEMS (bcp.c:4801; constants/battle.h:51): MULTI is TRAINER_WITH_AI_PARTNER,
+    # which has BATTLE_TYPE_AI (encounter.c:732-735; battle.h:46-47), so no battler has a bag
+    # (sheet D45-6 R1-R2).
+    bags = {} if fmt == MULTI else {1: opp_items}
     if fmt.B == 4:
         if opp2_items is None:
             raise ValueError("a four-battler fight needs battler 3's bag (opp2_items; D1-5)")
-        bags[3] = opp2_items
+        if fmt != MULTI:
+            bags[3] = opp2_items
+    # end D45-6 initial_arrays
     for b, items in bags.items():
         bag = [item for item in items if item]
         if len(bag) > BAG_SLOTS:

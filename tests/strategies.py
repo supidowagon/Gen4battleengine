@@ -2685,7 +2685,8 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     battler's lead on its own slot (no two battlers of a party share one), random PP, status
     counters, stages, confusion, Taunt, ``last_move``, Disable, ``fake_out_turn``, the sides'
     screens, Tailwind and Stealth Rock, weather and its timer, Trick Room, Gravity, the turn,
-    the enemy battlers' bags (``trainer_items[b]``, ruling D1-5; the player's are empty), the
+    the enemy battlers' bags (``trainer_items[b]``, ruling D1-5; none in MULTI, D45-6; the player's
+    are empty), the
     AI's knowledge of the player and the player's experience block, as ``supported_state``
     draws them. Per side, one battler is absent (0 HP, D3-1 rule 3) with probability 1/4 for
     battler ``side``, 1/4 for battler ``side + 2``, and none with probability 1/2: only a
@@ -2751,7 +2752,8 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
             a["status_counter"][p, slot] = _status_counter(draw, int(a["status"][p, slot]))
     for b in range(fmt.B):
         _draw_battler(draw, tables, a, fmt, b)
-    for b in (1, 3):  # the enemy battlers' bags (the player's stay empty)
+    # D45-6 strategies: MULTI loads no AI bag (sheet D45-6 R2)
+    for b in () if fmt == MULTI else (1, 3):  # the enemy battlers' bags (the player's stay empty)
         count = draw(st.integers(0, BAG_SLOTS))
         bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
         a["trainer_items"][b] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
