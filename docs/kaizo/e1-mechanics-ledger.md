@@ -928,6 +928,11 @@ of them, :2107-2115).
   (`enumerate.outcome_laws`). `damage.metronome_boost`, `effects.metronome_update` /
   `metronome_verify`, `step._use_move`; reference `_move_damage`, `_metronome_update`,
   `_metronome_verify`.
+  Ruling (manager, 2026-11-20): the status-check disruption decrement (NO_MORE_WORK sheet row C3:
+  CheckStatusDisruption sets MOVE_STATUS_NO_MORE_WORK, bcp.c:2750-2753, so VerifyMetronomeCount,
+  battle_lib.c:6184-6192, decrements a disrupted holder's count; the engine's `no_effects` needs
+  `succeeded` and never does) is E1's, built inside the NO_MORE_WORK group after D3 is in main and
+  merged into batch H.
 - G-61 (a reference fix found by the Batch D differential) The invokers (Metronome, Sleep Talk,
   Copycat, Assist) have `RANGE_SINGLE_TARGET_SPECIAL` (res/moves/*/data.json), whose
   `BattleSystem_Defender` is the user (battle_lib.c:1665-1669), so BeforeMove's HasNoTarget never
