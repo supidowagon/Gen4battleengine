@@ -190,3 +190,68 @@ def test_refusal_reason_asks_the_replacement_on_the_resolved_turn(tables, names,
     key = jax.random.PRNGKey(0)
     assert refusal_reason(tables, s, int(actions[0]), key, 1) == "recorded"
     assert _moves(names, seen[0], 2) == ["Splash", "Tackle", "", ""]
+
+
+def hazard_settle_root(tables, names):
+    """A root after a turn that fainted Geodude: Prinplup L18 (one short of L19, BubbleBeam,
+    move slot 3 empty) and the foe's replacement pending into Stealth Rock. The settle sends
+    Bonsly L40 (1 HP), which the rocks faint: ``replace`` pays Prinplup to L19 and marks the
+    work, no scan (step.py, ``replace``); Geodude follows and the battle goes on."""
+    prinplup = _mon(
+        names,
+        "Prinplup",
+        18,
+        moves=("Bubble", "Roar", "Tackle"),
+        ivs=(3,) * 6,
+        exp=_base(tables, names, "Prinplup", 19) - 1,
+    )
+    opp = [
+        _mon(names, "Geodude", 12),
+        _mon(names, "Bonsly", 40, current_hp=1),
+        _mon(names, "Geodude", 12),
+    ]
+    s = make_state(tables, [prinplup, _mon(names, "Machop", 20)], opp).replace_hp(1, 0, 0)
+    return s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
+
+
+HAZARD_SETTLED_MOVES = ["Bubble", "Roar", "Tackle", "BubbleBeam"]
+
+
+def perish_root(tables, names):
+    """Bulbasaur L12 (one short of L13: PoisonPowder and Sleep Powder, three move slots empty)
+    against a lone Geodude whose Perish Song count is 0: Geodude faints at the turn end
+    (``step._perish_song_check``, bcp.c:1791-1820) and the battle ends. Its payout is TurnEnd's
+    (bcp.c:1846, ``step._future_sight``'s last ``pay_exp``), which ``step`` leaves unscanned."""
+    bulbasaur = _mon(names, "Bulbasaur", 12, moves=("Growl",))
+    s = make_state(tables, [bulbasaur], [_mon(names, "Geodude", 12, moves=("Tackle",))])
+    s = _mask(_with(s, exp={0: _base(tables, names, "Bulbasaur", 13) - 1}), 0)
+    return s._replace(
+        perish_song=s.perish_song.at[1].set(1),
+        perish_song_turns=s.perish_song_turns.at[1].set(0),
+    )
+
+
+def test_the_root_settle_answers_a_hazard_faints_learn_work(tables, names):
+    # playout._resolve_pending: the settle's send pays for the newcomer the rocks faint, and the
+    # resolve after the passes runs its scan before the first turn (TurnEnd, bcp.c:1844-1850):
+    # BubbleBeam fills the empty slot, which the first turn's policy reads.
+    s = hazard_settle_root(tables, names)
+    out, first, refused = _resolve_pending(tables, s, jnp.int32(-1))
+    assert not bool(refused) and int(first) == -1 and int(out.over) == 0
+    assert int(out.hp[1, 1]) == 0 and int(out.level[0, 0]) == 19
+    assert np.asarray(out.learn_level).tolist() == [0] * 6
+    assert _moves(names, out, 0) == HAZARD_SETTLED_MOVES
+
+
+def test_a_battle_ending_turn_end_payout_keeps_its_unscanned_work(tables, names):
+    # step leaves the Perish Song faint's payout unscanned at the finished battle (no
+    # learn_prompt after _future_sight); finish_turn's first resolve keeps it (ruling D8): no
+    # auto-learn into the empty slots, learn_level still 13.
+    s = perish_root(tables, names)
+    played = _step(tables, s, A("Growl", "Tackle", s, names), empty_outcome())
+    assert int(played.over) == 1 and int(played.hp[1, 0]) == 0
+    assert int(played.level[0, 0]) == 13 and int(played.learn_level[0]) == 13
+    assert _moves(names, played, 0) == ["Growl", "", "", ""]
+    out, refused = finish_turn(tables, played, False, 10)
+    assert not bool(refused)
+    assert int(out.learn_level[0]) == 13 and _moves(names, out, 0) == ["Growl", "", "", ""]

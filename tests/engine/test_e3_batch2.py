@@ -3615,6 +3615,121 @@ def test_a_party_list_resume_keeps_the_turns_speed_rand_draw(tables, names):
     assert np.asarray(done.ts_qc).tolist() == [0, 0]
 
 
+_QC_CASES = [
+    "bench",
+    "fainted bench",
+    "fainted foe",
+    "foe bench",
+    "foe bench, Thief known",
+    "foe bench, flung claw",
+]
+
+
+def _qc_pause_state(tables, names, holder):
+    from tests.engine.test_levelup import _mon
+
+    claw = {"item": names.item("Quick Claw")}
+    mine = claw if holder in ("bench", "fainted bench") else {}
+    thief = ("Tackle", "Thief") if holder.endswith("Thief known") else ("Tackle",)
+    machop = _mon(names, "Machop", 20, moves=thief, **mine)
+    geodude = _mon(names, "Geodude", 12, **(claw if holder == "fainted foe" else {}))
+    bonsly = _mon(names, "Bonsly", 15, **(claw if holder.startswith("foe bench") else {}))
+    s = make_state(tables, [_prinplup(tables, names), machop], [geodude, bonsly])
+    s = s.replace_hp(1, 0, 1)
+    if holder == "fainted bench":
+        s = s.replace_hp(0, 1, 0)
+    if holder.endswith("flung claw"):  # a Fling's RemoveItem left it in recycleItem (:8978)
+        s = s._replace(recycle_item=s.recycle_item.at[0].set(claw["item"]))
+    return s, A("Bubble", "Tackle", s, names)
+
+
+@pytest.mark.parametrize("holder", _QC_CASES)
+def test_a_learn_pause_stores_only_the_readable_speed_rand_bits(tables, names, holder):
+    # E3-B2-31: every reader of speedRand is CompareBattlerSpeed, which reads it only for a Quick
+    # Claw holder (battle_lib.c:1278-1279), a fainted one only against another fainted one
+    # (:1205-1211). Prinplup's Bubble KOs Geodude and the MoveEnd pause (bcp.c:3968) keeps a
+    # side's bit with a living holder in its party (Machop on the bench), a holder on its field
+    # (the fainted Geodude), or, while an item-transfer move is known (Machop's Thief,
+    # order.qc_transfer), a living holder in the opposing party that Thief can still take
+    # (Bonsly, which the foe's replacement can send in), or a Quick Claw in the player's
+    # recycleItem (a flung one, which Recycle gives back, battle_script.c:9000-9012,
+    # order.qc_recycle). Paused states that differ only in an unread bit are one state (the
+    # brute force check is the slow test below; Bonsly's claw draws its bits there, so the
+    # recycleItem-only law is checked by test_quick_claw's Recycle brute force).
+    from nuzline.engine.levelup import LEARN_MOVE_END
+
+    s, acts = _qc_pause_state(tables, names, holder)
+    both = empty_outcome()._replace(quick_claw=jnp.ones(2, jnp.int8))
+    paused = assert_matches_reference(tables, s, acts, both)
+    assert int(paused.learn_site) == LEARN_MOVE_END and int(paused.hp[1, 0]) == 0
+    want = {
+        "bench": [1, 0],
+        "fainted bench": [0, 0],
+        "fainted foe": [0, 1],
+        "foe bench": [0, 1],
+        "foe bench, Thief known": [1, 1],
+        "foe bench, flung claw": [1, 1],
+    }[holder]
+    assert np.asarray(paused.ts_qc).tolist() == want
+
+
+# Slow: the brute force of a learn-pausing turn compiles its own programs (over 60 s a case).
+@pytest.mark.slow
+@pytest.mark.parametrize("holder", _QC_CASES)
+def test_a_learn_pause_quick_claw_law_equals_the_bruteforce(tables, names, holder):
+    # E3-B2-31: the exact law draws a battler's bit by qc_readable's rule at the turn's start, so
+    # the paused children merge alike in the exact enumeration and the brute force.
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    s, acts = _qc_pause_state(tables, names, holder)
+    assert_equals_bruteforce(tables, s, jnp.asarray(acts, jnp.int32))
+
+
+@pytest.mark.parametrize("site", ["field", "mon"])
+def test_a_turn_end_learn_pause_stores_only_the_readable_speed_rand_bits(tables, names, site):
+    # step_events' pause (LEARN_FIELD after hail's payout, bcp.c:941; LEARN_MON after burn's
+    # block, :1296) stores ts_qc by qc_readable on the paused state, in both engines: the
+    # fainted Geodude's Quick Claw keeps the foe's bit (its active holds it), and the player,
+    # with no holder and no item-transfer move known, keeps none.
+    from nuzline.engine.levelup import LEARN_FIELD, LEARN_MON
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Geodude", 12, item=names.item("Quick Claw")), _mon(names, "Bonsly", 15)]
+    start = Weather.HAIL if site == "field" else Weather.NONE
+    s = _learn_state(tables, names, opp, start_condition=start).replace_hp(1, 0, 1)
+    if site == "mon":
+        s = s._replace(status=s.status.at[1, 0].set(int(Status.BURN)))
+    miss = empty_outcome()._replace(
+        hit=jnp.zeros((2, MAX_HITS), jnp.int8), quick_claw=jnp.ones(2, jnp.int8)
+    )
+    paused = assert_matches_reference(tables, s, A("Tackle", "Tackle", s, names), miss)
+    assert int(paused.learn_site) == {"field": LEARN_FIELD, "mon": LEARN_MON}[site]
+    assert int(paused.hp[1, 0]) == 0
+    assert np.asarray(paused.ts_qc).tolist() == [0, 1]
+
+
+@pytest.mark.parametrize("thief", [False, True])
+def test_a_party_list_pause_keeps_the_bit_of_a_side_that_can_take_the_foes_quick_claw(
+    tables, names, thief
+):
+    # Scyther (no holder) U-turns and stops at its party list with the foe's Tangela, a living
+    # Quick Claw holder, on the field. Thief can move that claw onto the player's battler later
+    # in the turn (BtlCmd_TryStealItem, battle_script.c:5093-5126), so with Thief known (the
+    # bench Geodude's, order.qc_transfer) the pause keeps the player's bit too.
+    from tests.engine.test_levelup import _mon
+
+    bench = ("Tackle", "Thief") if thief else ("Tackle",)
+    s = make_state(
+        tables,
+        [_mon(names, "Scyther", 50, moves=("U-turn",)), _mon(names, "Geodude", 30, moves=bench)],
+        [_mon(names, "Tangela", 70, item=names.item("Quick Claw"))],
+    )
+    draw = empty_outcome()._replace(quick_claw=jnp.ones(2, jnp.int8))
+    paused = assert_matches_reference(tables, s, (0, 0), draw)
+    assert int(paused.pivot_battler) == 1
+    assert np.asarray(paused.ts_qc).tolist() == ([1, 1] if thief else [0, 1])
+
+
 _COUNTED = ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant")
 
 

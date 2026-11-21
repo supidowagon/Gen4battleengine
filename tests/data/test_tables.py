@@ -154,7 +154,10 @@ def test_move_flags(tables, names):
     def flags(m):
         return int(t.move_flags[n.move(m)])
 
-    assert flags("Tackle") == MoveFlag.CONTACT | MoveFlag.PROTECT | MoveFlag.KINGS_ROCK
+    # res/moves/tackle/data.json:21-27 (HIDES_HP_GAUGES is not mapped).
+    assert flags("Tackle") == (
+        MoveFlag.CONTACT | MoveFlag.PROTECT | MoveFlag.MIRROR_MOVE | MoveFlag.KINGS_ROCK
+    )
     assert not flags("Growl") & MoveFlag.KINGS_ROCK  # MOVE_FLAG_TRIGGERS_KINGS_ROCK
     assert flags("Mach Punch") & MoveFlag.PUNCH and flags("Hammer Arm") & MoveFlag.PUNCH
     assert flags("Growl") & MoveFlag.SOUND and flags("Supersonic") & MoveFlag.SOUND

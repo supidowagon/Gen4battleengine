@@ -1628,6 +1628,136 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/engine/test_e3_batch2.py (powerMul after a learn resume, the kept Quick Claw draw, each turn-end counter
   drops once over a pause at each learn site). Snapshot: states captured at a pause carry `ts_qc` and the turn-end
   countdowns; no other class.
+- E3-B2-30 Main's red tiers on 8c5cd83e (branch claude/e3-slowfix):
+  (a) 6c3063e0, tests only: test_trace_to_state's oracle resumes a MoveEnd learn pause (bcp.c:3968) with the same
+  actions and outcome, as trace_to_state._apply_turn; test_stage_b_learn's paused root asserts `learn_site`
+  LEARN_MOVE_END (step scans and pauses). test_player_learn (reviews of 8c5cd83e..5639b245, ..609693aa and
+  ..184489c6): each unrefused GREEDY run's final state equals the host replay `player._replay` to its turn count field
+  by field, and every root has such a run; a run that did not end holds no learn work; work at a finished battle is
+  the final turn's: the replay one turn shorter holds none. Roots added: test_learn.py's `_window_c` (a hazard faint
+  in the passes, the battle goes on: the resolve after the passes) and the Bonsly-last state (the hazard faint ends
+  the battle: the work stays). `_replay` leaves that work at a finished battle as the loop does; its callers:
+  `refusal_reason` (reads only the reason; cli.py), tests/search/test_player.py (compares its whole end state with
+  the loop) and test_player_learn.
+  (b) 3d6b5fb5, tests only: Tackle's flags carry MIRROR_MOVE (res/moves/tackle/data.json:21-27, E3-B2-2).
+  (c) 5639b245, src/nuzline/ai: `AiContext.flag`, `first_cmp`, `inject` hold the script's flag bit (thinkingBitShift,
+  trainer_ai.c:307, read at :488; loop :297-309), not its index in the layout's list, so ALLIN keeps the fight's own context (test_allin); the
+  bits rise in run order, so every schedule compare keeps its order and no score changes. The exact pick of
+  `_slot_move_distribution` weighs a skipped slot (moves[i] == 0, trainer_ai.c:322; it runs no command, :500-505)
+  by its histogram's mass, not 1: unchanged on marginal histograms (mass 1), corrected on the event histograms of a
+  speed-tracking layout (`_tracks_speed`: per-slot sites with POWER_BASED_ON_LOW_SPEED transcribed), where the
+  exact sum was above 1 (test_gyro_ball_exact_equals_loose). Kaizo fights it corrects (a Gyro Ball member and a
+  member with an empty move slot, data/intermediate_kaizo/trainers.json): Robert (trainer 39, Fantina split; Gyro
+  Ball on 208, species 95 with three moves) and Iapetus (trainer 397, Candice split; Gyro Ball on 205, species 91,
+  211, 101 with empty slots). Their prep values change; no snapshot part reads them. Iapetus is a multi battle
+  (format multi, partner 610, second opponent 400): its values change only once prep runs that format.
+  Snapshot compare against the main capture: no part expected to diverge (`--allow-new` empty). The "ai" group runs
+  `ai_action_distribution` on the VANILLA layout (per_slot_sites False, ai/layout.py:184-186): no speed tracking;
+  the roark parts use Kaizo Roark (trainer 246), whose six members hold no Gyro Ball (move 360) and four moves
+  each: no speed tracking and no skipped slot. No snapshot part records AiContext fields.
+  (d) src/nuzline/search (review of ..184489c6), D8 made uniform: learn work survives only at a finished battle, from
+  the turn itself, from a newcomer's hazard faint in `send_replacements` or the passes, or from the root's settle send
+  and passes; the resolve before the replacements now keeps it there too (player.py, `playout.finish_turn`,
+  `_replay`), as the one after them did, for the growth plan (gauntlet-design.md G1, step 0). The game answers every
+  payout's prompt inside GetExpTask (battle_script.c:10003-10197, `taskData` NULL at :10197), which WaitGetExpTask
+  waits for (:2340-2348; subscript_grant_exp.s StartGetExpTask/WaitGetExpTask) before CheckBattleOver
+  (bcp.c:1845-1847). The root's hazard-faint work (`step.replace` marks it, no scan) is now resolved after the root's
+  settle and passes (`player._player_run`, `playout._resolve_pending`, both replays): TurnEnd answers it before the
+  next turn (bcp.c:1844-1856); left, turn 1's policy read the unscanned move list and its first MoveEnd `learn_prompt`
+  (step.py:3792) scanned it mid-turn.
+  Snapshot: `resolve_learns` runs `advance_learns`, which also auto-learns into an empty move slot at the move's base
+  PP (`_advance_once`, levelup.py:383-392). (1) Work kept at a finished battle: the final `learn_level` / `learn_cursor` (formerly given
+  up) and, where the kept scan would have filled an empty slot, the final `moves` / `pp` and the result's `pp_left`
+  (`playout._resources_left`, playout.py:186-193); `observe` reads `learn_*` as 0 once `over` is set (observe.py:347-348). (2) The root's
+  hazard-faint work resolved before turn 1: turn 1's policy reads the filled slot, so every result field (`won`,
+  `turns`, `hp_left`, `pp_left`, `deaths`, ...) of a playout or player run from such a root can differ.
+  (e) Review of 8bbcf05c..40c318aa, tests pinning (d): test_learn.py `hazard_settle_root` (the root's settle sends
+  Bonsly into Stealth Rock, Prinplup L19 with an empty slot: `_resolve_pending`, the player loop at 0 turns and
+  `_replay` at 0 turns all hold no learn work and BubbleBeam in slot 3) and `perish_root` (turn 1's Perish Song faint,
+  bcp.c:1791-1820, ends the battle at TurnEnd's payout, bcp.c:1846, which `step` leaves unscanned: `_future_sight`
+  ends in `pay_exp`, step.py:4878, and `step_events` runs no `learn_prompt` after it; `finish_turn`, the loop at
+  TURNS and `_replay` keep learn_level 13 and no auto-learn). So the guard at the first resolve after a turn
+  (player.py:174, playout.py:456, `_replay`) is reached and kept: the other payouts inside `step` scan
+  (`learn_prompt`, step.py:3793, :4691, :4761), TurnEnd's does not, and D8 keeps a finished battle's work
+  uniformly. Both tests assert fixed values; reverting either resolve change fails one of them.
+  Keeping learn work at a finished battle is the project's ruling D8 (the growth plan reads it), not a decomp rule:
+  the game answers every prompt inside GetExpTask before CheckBattleOver, so no learn work outlives its battle there.
+- E3-B2-31 The slow tier's red test_damage_classes_equal_bruteforce_generated on 8c5cd83e (branch claude/e3-slowfix):
+  a pause (MoveEnd learn, bcp.c:3968; LEARN_FIELD / LEARN_MON; an E2 party list) stored every side's raw speedRand
+  bit in `ts_qc`. The brute force draws `quick_claw` for every side when any Quick Claw exists; the exact law only for
+  a side with a living holder in its party (enumerate.py `quick_claw`), so a foe with no holder split the brute
+  force's paused children by an unread bit (E1's repro state: children differ in `ts_qc` alone). Rule: the draw is
+  made once per turn (bcp.c:853-857); every reader is BattleSystem_CompareBattlerSpeed: BranchActions' sort after
+  each action (bcp.c:888; the turn end's monSpeedOrder), the Trick Room re-sort after MoveEnd (bcp.c:3990-3992,
+  SortMonActionOrder battle_lib.c:7275-7302), the next turn's readers (`step.qc_kept`). It reads speedRand only for
+  a battler holding HOLD_EFFECT_SOMETIMES_PRIORITY (battle_lib.c:1278-1279, :1345), a fainted one only against
+  another fainted one (:1205-1211). A battler gains a held item in a turn only by Thief / Covet (BtlCmd_TryStealItem, battle_script.c:5093-5126)
+  and Trick / Switcheroo (BtlCmd_TrySwapItems, :6336-6360), between the attacker and the defender on the field;
+  Knock Off removes (:6620-6628), RemoveItem consumes the own item (:8972-8979), Recycle restores the attacker's own
+  (:9000-9012), Pickup runs after the battle (:7781). Metronome and Assist never call them (sCannotMetronomeMoves,
+  battle_lib.c:7152-7179; Move_CanBeMetronomed :7194-7210, read at battle_script.c:4554 and :6430); every other
+  caller takes a move a party Pokemon knows. So a pause keeps battler b's bit when b's party has a living Quick
+  Claw holder, b's active holds one, fainted or not (as order.quick_claw_active reads it; raw item, as qc_kept), or
+  a Pokemon of the battle knows an ITEM_TRANSFER_EFFECTS move (`order.qc_transfer`, decomp effects 105 / 177 by
+  `move_ai_effect`) and an opposing party has a living holder (a bench holder can still enter by a pivot's party
+  list before the Thief); an AI attacker's steal or swap fails (battle_script.c:5102-5104, :6345-6346), kept anyway
+  (over-keeping only splits states). Else 0. The exact law (`enumerate`'s `quick_claw`) draws b's bit by the same
+  rule at the turn's start, where every such holder was living; the pause rule is within it, so the exact
+  enumeration still equals the brute force. `step.qc_readable` at both JAX stops (`_execute_actions`,
+  `step_events`), `reference._qc_readable` in `_write_scratch`; generic over B (`side_of`). Today coverage refuses
+  effects 105 / 177 (no EffectId), so `qc_transfer` is false in every accepted state.
+  Tests: tests/engine/test_e3_batch2.py::test_a_learn_pause_stores_only_the_readable_speed_rand_bits (five cases,
+  the foe's bench holder with and without Thief known), its brute force twin (slow)
+  ::test_a_learn_pause_quick_claw_law_equals_the_bruteforce,
+  ::test_a_turn_end_learn_pause_stores_only_the_readable_speed_rand_bits (LEARN_FIELD, LEARN_MON, both engines),
+  ::test_a_party_list_pause_keeps_the_bit_of_a_side_that_can_take_the_foes_quick_claw (the foe's living active
+  holder, with and without Thief known).
+  Snapshot compare against the main capture: no layout change, no UPGRADES row, `--allow-new` empty. Expected
+  divergence: `ts_qc` of an output state at a pause (pivot_battler or learn_site != 0), 1 -> 0 at a side with no
+  living Quick Claw holder in its party and none on its active (step, jitstep, the reference output), and
+  enumerate_turn's children of such a pausing turn, which merge (fewer children, summed probabilities). A saved
+  paused input's unread bit changes no output: nothing reads it.
+  (b) Review of d9c68dfb. (1) Recycle: Fling ends in `RemoveItem BTLSCR_ATTACKER` (effect_script_0233.s:18), which
+  stores the flung item, a Quick Claw included (flingPower 80, res/items/data/quick_claw.json:20), in
+  `recycleItem[battler]` (battle_script.c:8978); `BtlCmd_TryRecycle` gives it back (:9000-9012, effect_script_0184.s:
+  5-7; step.py `recycle`, the reference's Recycle block, reference/engine.py:6071-6077), so a Recycle on a later turn puts a Quick Claw on the battler before
+  that turn's end sort, which reads that turn's bit. `recycleItem` is written only there (grep: battle_script.c:8978,
+  :9007), so it outlives a switch, and Recycle needs no moveset: it is not in sCannotMetronomeMoves (battle_lib.c:
+  7152-7179), so Metronome calls it, as Assist, Sleep Talk, Mimic, Sketch, Copycat and Mirror Move can. Rule: b's bit
+  is also kept and drawn when b's `recycle_item` is a Quick Claw (`order.qc_recycle`, no move test), in
+  `step.qc_readable`, `reference._qc_readable` and enumerate's `quick_claw`. A Fling of this turn sets it from the
+  Quick Claw b held at the turn's start, so the law (read there) already drew it. Every other path that puts or
+  takes a held item, checked: Thief / Covet (`BtlCmd_TryStealItem` :5093-5126, subscript_steal_item.s:14-16) and
+  Trick / Switcheroo (`BtlCmd_TrySwapItems` :6336-6360, subscript_exchange_items.s:19-22) can give a Quick Claw
+  mid-turn (`qc_transfer`); Recycle can (above); Sticky Barb moves only itself (HOLD_EFFECT_DMG_USER_CONTACT_XFR,
+  battle_lib.c:5385-5396, :7377-7384), no; Knock Off removes (:6620-6628), no; Bug Bite / Pluck eat the defender's
+  berry (subscript_pluck_check.s:6, RemoveItem), Natural Gift (effect_script_0222.s:8) and the eaten berries consume
+  the own item, no; Pickup runs after the battle (`BtlCmd_GenerateEndOfBattleItem` :7781-7797), no. (2) Tag battles:
+  only a side-1 attacker's steal or swap is blocked (:5102-5104, :6345-6346), so a side-0 battler can Thief or Trick
+  its ally, another party in a tag battle. `elsewhere` (step, reference) and `other_claw` (enumerate) now count a
+  living holder in any party but b's own; singles is unchanged (the other party is the foe's). (3) Doubles item,
+  owner: the multi-battler milestone (split-by-split roadmap): a partner that learns Thief, Covet, Trick or
+  Switcheroo at a MoveEnd pause re-reads its slot for its pending action (STATE.md, mid-turn learn prompts;
+  FightCommand :1889-1895), but the turn's law and the pause read the moves of the turn's start, so its bit can be
+  dropped. Unreachable today: coverage refuses every format but singles and refuses a learnable move whose effect is
+  UNSUPPORTED (`learnable_moves` through `move_effect_line`, coverage.py), which Thief, Covet, Trick and Switcheroo
+  are (move_effect UNSUPPORTED, move_ai_effect 105 / 177). The exact fix (the law and the pause also count the
+  moves learnable this turn) belongs with doubles exp. (4) Coverage: any Pokemon of the fight (either party) that
+  knows or can learn Thief, Covet, Trick or Switcheroo is refused (`_check_party` grades every move, coverage.py
+  `move_effect_line`; EffectId UNSUPPORTED), so `qc_transfer` is false in every accepted state and the tag-battle
+  change diverges nothing. Recycle (EffectId.RECYCLE) and Fling (EffectId.FLING) are accepted.
+  Tests: test_e3_batch2.py::test_a_learn_pause_stores_only_the_readable_speed_rand_bits[foe bench, flung claw]
+  (the pause, both engines; its brute force twin, slow, gains the case), test_quick_claw.py
+  ::test_a_flung_quick_claw_keeps_the_bit_recycle_can_read (slow: a real Fling, then the law draws the bit and
+  Recycle restores the claw, both engines), ::test_a_tag_battle_ally_holder_keeps_the_bit_when_thief_is_known
+  (MULTI, ally holder in party 2, step and reference).
+  Expected snapshot divergence beyond the above: only states whose `recycle_item` is a Quick Claw (a flung Quick
+  Claw, no held one left in the party): `ts_qc` at a pause there 0 -> the drawn bit, and enumerate_turn's children
+  of their turns split by `quick_claw` (twice as many, probabilities 1/5 and 4/5). None if no snapshot part flings a
+  Quick Claw.
+  (c) Review of 7c07c614: the brute force (`outcome_laws(loose=True)`) also draws every bit when any battler's
+  `recycle_item` is a Quick Claw (`order.qc_recycle`), so it stays a superset of the exact law with no holder left
+  (test_quick_claw.py::test_a_flung_quick_claw_recycle_turn_equals_the_bruteforce, slow, failed before the fix).
 
 - E3-B2-34 Lone enemies on walking-partner maps are singles (sheet partnerfix/sheet.md; decomp 579d2d5c6; no move, no
   table array). Rule: every field-script battle goes through `ScrCmd_StartTrainerBattle`, which passes

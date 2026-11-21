@@ -256,11 +256,12 @@ def test_stage_b_branches_into_the_learn_options(tables, names):
 
 @pytest.mark.slow
 def test_a_root_with_a_pending_learn(tables, names):
-    # The raw state after the KO, before the scan: solve scans it (advance_learns) and the
-    # root is the PoisonPowder prompt.
+    # The state paused at the KO's MoveEnd payout (E3-B2-21: step scans and pauses at the
+    # prompt, bcp.c:3968): the root is the PoisonPowder prompt.
     s = _vs(tables, names, [_geodude_1hp(names), _mon(names, "Bonsly", 15)])
     played = jax.jit(step)(tables, s, A("Tackle", "Tackle", s, names), empty_outcome())
-    assert int(played.learn_level[0]) == 13 and int(played.learn_cursor[0]) == 0
+    assert int(played.learn_level[0]) == 13 and int(played.learn_site) == LEARN_MOVE_END
+    assert bool(needs_learn(played))
     result = solve(tables, names, played, KEY, SETTINGS, leaf_fn=_sleep_powder_leaf(names))
     assert result.plan.decision == "learn"
     pp = _move(names, "PoisonPowder")

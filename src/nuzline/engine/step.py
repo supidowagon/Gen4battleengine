@@ -278,6 +278,8 @@ from nuzline.engine.order import (
     is_switch,
     me_first_copy,
     player_second,
+    qc_recycle,
+    qc_transfer,
     record_speeds,
     resort_action_order,
     resort_claw_flags,
@@ -4425,7 +4427,8 @@ def _execute_actions(
         "ts_ran": lran,
         "ts_move_cur": jnp.where(pivot_stopped, 0, read["move_cur"]),
         "ts_eot": jnp.zeros((fmt.B,), _I32),
-        "ts_qc": jnp.asarray(outcome.quick_claw) != 0,
+        # Only the bits the rest of the turn can read (qc_readable, E3-B2-31).
+        "ts_qc": (jnp.asarray(outcome.quick_claw) != 0) & qc_readable(tables, state),
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")
@@ -5586,7 +5589,7 @@ def step_events(
         "ts_speed_order": jnp.zeros_like(scratch["ts_speed_order"]),
         "ts_cursor": jnp.where(f_prompt, format_of(state).B, c_pos),
         "ts_eot": sides,
-        "ts_qc": jnp.asarray(outcome.quick_claw) != 0,
+        "ts_qc": (jnp.asarray(outcome.quick_claw) != 0) & qc_readable(tables, paused),
     }
     paused = paused._replace(
         **{
@@ -5699,6 +5702,40 @@ def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     down = state.hp[rows, state.active] == 0
     bench = jnp.stack([jnp.any(holds[b] & replacement_bench(state, b)) for b in range(fmt.B)])
     return (state.over == 0) & (active | (down & bench))
+
+
+def qc_readable(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the battler's ``speedRand`` bit can still be read in the rest of a paused
+    turn or by the next turn (E3-B2-31), so a pause stores it in ``ts_qc``. Every reader is
+    ``BattleSystem_CompareBattlerSpeed``: the BranchActions sort after each action
+    (bcp.c:888, the turn end's ``monSpeedOrder``), the Trick Room re-sort after a MoveEnd
+    (bcp.c:3990-3992, ``SortMonActionOrder`` battle_lib.c:7275-7302), then ``qc_kept``'s readers.
+    It reads ``speedRand`` only for a battler holding ``HOLD_EFFECT_SOMETIMES_PRIORITY``
+    (:1278-1279, :1345), and a fainted battler only against another fainted one (:1205-1211).
+    So the bit is read when the battler's party has a living Quick Claw holder or its active
+    holds one (fainted or not, as ``order.quick_claw_active`` reads it), when its
+    ``recycleItem`` is a Quick Claw (``qc_recycle``: Recycle gives it back), or when it can
+    still take one (``qc_transfer``): a battle knowing an item-transfer move and a living holder
+    in any party but the battler's own (the defender of Thief, or the attacker of a Trick that
+    gives it away; the foe's, or a tag-battle ally's, whose attacker is not blocked: only side 1
+    is, battle_script.c:5102-5104, :6345-6346; a bench holder can still enter by a pivot's party
+    list before a later action). An AI attacker's steal or swap fails outside the Frontier
+    (same lines); the rule keeps the bit for both sides (over-keeping only splits states). The
+    raw item, as ``qc_kept``. Every such holder was living, and every ``recycleItem`` set, at
+    the turn's start, where ``enumerate``'s ``quick_claw`` law draws the bit under the same rule
+    (a Fling this turn stores the Quick Claw its battler held then). Else it is 0, an unread
+    value, so paused states that differ only in it are one state."""
+    fmt = format_of(state)
+    battlers = jnp.arange(fmt.B)
+    rows = party(fmt, battlers)  # each battler's party
+    holds = tables.item_effect[state.item] == ItemId.QUICK_CLAW  # [P, 6]
+    alive = (state.species != 0) & (state.hp > 0)
+    on_field = jnp.arange(state.hp.shape[1])[None, :] == state.active[:, None]
+    own = jnp.any((holds & alive)[rows] | (holds[rows] & on_field), axis=1)
+    living = jnp.any(holds & alive, axis=1)  # per party
+    others = jnp.arange(state.hp.shape[0])[None, :] != rows[:, None]  # [B, P]
+    elsewhere = jnp.any(others & living[None, :], axis=1)
+    return own | qc_recycle(tables, state) | (qc_transfer(tables, state) & elsewhere)
 
 
 def _keep_quick_claw(tables: Tables, state: BattleState, qc) -> BattleState:

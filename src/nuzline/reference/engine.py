@@ -64,6 +64,7 @@ from nuzline.engine.ids import (
     ITEM_ABILITY_IDS,
     ITEM_FULL_RESTORE,
     ITEM_GRISEOUS_ORB,
+    ITEM_TRANSFER_EFFECTS,
     MAGNET_RISE_TURNS,
     ME_FIRST_BANNED_MOVES,
     METRONOME_DRAW,
@@ -9009,8 +9010,14 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
     else:
         _put(s, "ts_acted", [int(b in turn.order[:upto]) for b in range(_fmt(s).B)])
     _put(s, "ts_order", turn.order)
-    # The turn's speedRand draw, read by the resume (engine.step._turn_outcome).
-    _put(s, "ts_qc", [int(bool(f)) for f in turn.outcome.quick_claw])
+    # The turn's speedRand draw, read by the resume (engine.step._turn_outcome); only the bits
+    # the rest of the turn can read (step.qc_readable, E3-B2-31).
+    readable = _qc_readable(turn.tables, s)
+    _put(
+        s,
+        "ts_qc",
+        [int(bool(f) and r) for f, r in zip(turn.outcome.quick_claw, readable, strict=True)],
+    )
     _put(s, "ts_actions", turn.actions)
     _put(s, "ts_move", [c[0] for c in turn.choices])
     _put(s, "ts_struggling", [int(c[1]) for c in turn.choices])
@@ -9364,6 +9371,42 @@ def _qc_kept(tables, s: RefState) -> list[bool]:
         bench = [m for m, ok in zip(mons, _replacement_bench(s, b), strict=True) if ok]
         down = active.hp == 0
         out.append(not s.over and (bool(claw(active)) or (down and any(claw(m) for m in bench))))
+    return out
+
+
+def _qc_transfer(tables, s: RefState) -> bool:
+    """``order.qc_transfer``: a Pokemon of the battle knows an item-transfer move."""
+    return any(
+        move and _t(tables, "move_ai_effect", move) in ITEM_TRANSFER_EFFECTS
+        for b in range(_fmt(s).B)
+        for m in _party_of(s, b).mons
+        if m.species
+        for move in m.moves
+    )
+
+
+def _qc_readable(tables, s: RefState) -> list[bool]:
+    """``step.qc_readable``: the battler's party has a living Quick Claw holder or its active
+    holds one, fainted or not (the raw item), its ``recycleItem`` is a Quick Claw
+    (``order.qc_recycle``), or an item-transfer move is known and a party other than its own
+    (the foe's, a tag-battle ally's) has a living holder."""
+
+    def claw(m):
+        return m.species and _item_effect(tables, m, None) == ItemId.QUICK_CLAW
+
+    transfer = _qc_transfer(tables, s)
+    out = []
+    for b, sd in enumerate(s.battlers):
+        mons = _party_of(s, b).mons
+        own = any(claw(m) and (m.hp or i == sd.active) for i, m in enumerate(mons))
+        recycle = _t(tables, "item_effect", sd.recycle_item) == ItemId.QUICK_CLAW
+        elsewhere = any(
+            claw(m) and m.hp
+            for p, party in enumerate(s.parties)
+            if p != _party(_fmt(s), b)
+            for m in party.mons
+        )
+        out.append(bool(own or recycle or (transfer and elsewhere)))
     return out
 
 
