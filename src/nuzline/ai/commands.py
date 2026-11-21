@@ -1383,9 +1383,10 @@ class AiContext(NamedTuple):
     written: jnp.ndarray | None = None  # bool
     # ``damage`` with ``speeds`` in the record (``seen_damage``): only a Gyro Ball slot differs
     damage_w: CalcEstimate | None = None
-    # int32: the flag bit of the script running, AI_CONTEXT.thinkingBitShift (trainer_ai.c:306;
-    # ``start_run``): the bit, not an index in the layout's list, so a layout that runs more
-    # scripts and masks some (``layout.ALLIN``) keeps the fight's own values (E1 Ruling R4)
+    # int32: the flag bit of the script running, AI_CONTEXT.thinkingBitShift (trainer_ai.c:307
+    # increments it, :488 reads it; ``start_run``): the bit, not an index in the layout's list,
+    # so a layout that runs more scripts and masks some (``layout.ALLIN``) keeps the fight's own
+    # values (E1 Ruling R4)
     flag: jnp.ndarray | None = None
     # int32: -1, or the exact distribution's injected schedule (``policy._slot_histograms``): a
     # script run of flag bit b starts with ``written`` = b >= inject, whatever ran before
@@ -1424,8 +1425,8 @@ def seen_damage(ctx: AiContext) -> CalcEstimate:
 
 def start_run(ctx: AiContext, flag: int) -> AiContext:
     """The start of one flag script's run over the current slot (``TrainerAI_EvalMoves``,
-    trainer_ai.c:483-525): ``flag`` is its flag bit (thinkingBitShift, :306). An injected
-    schedule (``AiContext.inject`` not -1) overrides what the earlier runs wrote."""
+    trainer_ai.c:483-525): ``flag`` is its flag bit (thinkingBitShift, :307, read at :488). An
+    injected schedule (``AiContext.inject`` not -1) overrides what the earlier runs wrote."""
     flag = jnp.asarray(flag, _I32)
     written = jnp.where(ctx.inject >= 0, flag >= ctx.inject, ctx.written)
     return ctx._replace(flag=flag, written=written)

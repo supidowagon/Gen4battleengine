@@ -18,6 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.ai.layout import VANILLA
 from nuzline.engine.ids import Stat
 from nuzline.engine.levelup import needs_learn
 from nuzline.engine.state import make_state
@@ -112,21 +113,32 @@ def roots(tables, names):
 
 
 def test_greedy_equals_playout_through_learns(tables, roots):
-    # The GREEDY run's final state carries no learn prompt unless the battle ended (D8): the loop
-    # resolves each turn's
-    # learns (player.py, resolve_learns before send_replacements) and the root's pending one.
-    # The result fields alone cannot see a skipped resolve: every move is given up anyway.
+    # The GREEDY run resolves each turn's learns (player.py, resolve_learns before
+    # send_replacements) and the root's pending one, so its final state carries no learn prompt,
+    # except one raised by the final turn's battle-ending payout (D8: levelup.learn_prompt tests
+    # over == 0). Such a prompt passes only if the run's state before its final turn holds none:
+    # the host replay of the same run (player._replay, the same key splits) stopped one turn
+    # earlier. The result fields alone cannot see a skipped resolve: every move is given up anyway.
     # The pending roots also pin the root's opponent replacement and its carried powerMul
     # (Cranidos at 0, Onix at 20): a run settling them otherwise plays a different battle.
+    checked = 0
     for root, s, k, want in roots:
         got, out = _run(tables, s, GREEDY, (), k, TURNS)
         _same(got, want, root)
         if root.startswith(_window_c_root.__name__):
             # E3-B2-21: no window (c) any more; the settle refuses nothing.
             assert int(got.refused) == 0 and int(want.refused) == 0, root
-        # A battle-ending payout leaves its prompt (D8: levelup.learn_prompt tests over == 0).
-        if not int(got.refused) and not int(got.ended):
-            assert not bool(needs_learn(out)), f"{root}: a learn prompt was left pending"
+        if int(got.refused) or not bool(needs_learn(out)):
+            checked += not int(got.refused)
+            continue
+        assert int(got.ended), f"{root}: a learn prompt was left pending"
+        turns = int(got.turns)
+        if turns:  # 0: the root's settle ended the battle, its own final step
+            reason, before, n = player_module._replay(tables, s, GREEDY, (), k, turns - 1, VANILLA)
+            assert reason is None and n == turns - 1 and int(before.over) == 0, root
+            assert not bool(needs_learn(before)), f"{root}: a prompt left before the final turn"
+        checked += 1
+    assert checked > 0, "no run reached the no-pending-prompt check"
 
 
 @pytest.mark.fullset

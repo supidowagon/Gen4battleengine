@@ -4499,7 +4499,8 @@ def _flags(layout: AiLayout) -> tuple:
 
 def _flag_bits(layout: AiLayout) -> tuple:
     """The flag bits of ``_flags(layout)`` in run order (AI_CONTEXT.thinkingBitShift,
-    trainer_ai.c:306): ``AiContext.flag``, ``first_cmp`` and ``inject`` count in bits."""
+    trainer_ai.c:307, read at :488): ``AiContext.flag``, ``first_cmp`` and ``inject`` count in
+    bits."""
     return tuple(bit for bit, _ in _flag_scripts(layout))
 
 
@@ -4944,7 +4945,7 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
     ctx = ctx._replace(slot=jnp.asarray(0, _I32))
     pairs = _flag_scripts(layout) if flags is None else tuple((None, f) for f in flags)
     run_bits = _flag_bits(layout)  # ``flags`` is a prefix of ``_flags(layout)``: same bits
-    for index, (bit, flag) in enumerate(pairs):  # trainer_ai.c:297-310
+    for index, (bit, flag) in enumerate(pairs):  # trainer_ai.c:297-309
         # The slots in a loop, not unrolled: one copy of each flag script in the program.
 
         def eval_slot(slot, ctx, flag=flag, run_bit=run_bits[index]):  # EvalMoves (:483-525)
