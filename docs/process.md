@@ -108,7 +108,8 @@ per day is the rate used for estimates.
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
   - 256 GB (the memory-optimized 32 vCPU type): `GATE_GB` 176, `MAXP` 18 (more than about
     18 units on one pod stalls it), `KILL_GB` 236, and `SNAP_GATE_GB` 176 for `snap.sh`.
-  - Every run on one pod gets the shape's `MAXP` (MAXP rule, Chunking below).
+  - Every run gets the `MAXP` of the live runs on its pod: the shape's value, or the lowered
+    one while the pod is throttled (MAXP rule, Chunking below).
   - `SPACING` (s between two chunk starts of one runner) is 4 on both shapes. It is the
     runner's default; pass `"SPACING":"4"` in every exec-pod body's `env` anyway, so a run
     packed with older pod scripts (another default) gets it too. This is the one SPACING
@@ -194,12 +195,15 @@ per day is the rate used for estimates.
   (`tools/ops/day/pod/gate.sh` `admit`, `hold-maxp`; `RUNMAXP` caps this run's own chunks,
   `runner.sh` main loop). A run sent with a lower `MAXP` than another live run: its head
   chunk holds, after `CLAIM_S` it claims the pod, every runner then starts nothing until the
-  count is below the low `MAXP`, the low run starts one chunk and drops the claim, and the
+  count is below the low `MAXP`, the low run starts at least one chunk and drops the claim, and the
   others refill to their own `MAXP`; this repeats for every head chunk. A lower `MAXP`
-  reserves no slots: it stalls the other runs once per chunk. So every run on one pod gets
-  the same `MAXP`, the shape's value (Test pod above). To throttle a pod, restart every live
-  runner with the lower value (DAYBOX.md Housekeeping step 4); to give a run a smaller share,
-  use another pod or wait.
+  reserves no slots: it stalls the other runs once per chunk. So every run gets the `MAXP` of
+  the live runs on its pod: the shape's value (Test pod above), or the lowered one while the
+  pod is throttled. To throttle a pod, restart every live runner with the lower value
+  (DAYBOX.md Housekeeping step 4); to end the throttle, restart every live runner with the
+  shape's value. To give one run a smaller share, send it with `RUNMAXP` below `MAXP`: a
+  runner at its `RUNMAXP` live chunks skips the gate (`runner.sh` main loop, the
+  `nrun -lt RUNMAXP` test), so it writes no claim and stalls no other run.
   Heavy tests need no hand placement: list them with their weights and the runner keeps them
   apart. A claim lasts while its runner lives: a dead runner's claim is dropped at once, a
   claim whose pid was reused by another process after `CLAIM_MAX_S` (3600 s); a live
