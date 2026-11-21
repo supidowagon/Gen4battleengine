@@ -20,7 +20,8 @@
 # in line (lost.txt); after two requeues (kills and losses together) it gets rc 98 (overkilled.txt).
 # Signals only process groups this runner started and that are alive; never PID 1.
 # Knobs (env of the exec-pod body that starts setup.sh): GATE_GB (default 88), MAXP (10),
-# RUNMAXP (MAXP), SPACING s between starts (15), KILL_GB (118), DEFAULT_WEIGHT_GB (12), WARMUP,
+# RUNMAXP (MAXP), SPACING s between starts (4: the expected-peak reserve covers a unit's growth
+# after its start, which a longer spacing used to wait out), KILL_GB (118), DEFAULT_WEIGHT_GB (12), WARMUP,
 # WARMUP_S (900).
 # Warm-up: when queue.txt has a tests/engine unit, one pytest process over the node id WARMUP
 # (default tests/engine/test_step_basic.py::test_miss_deals_no_damage, which compiles step; none
@@ -31,7 +32,7 @@
 # (about 17 s) and its tests, cheaper than deciding whether every program it compiles is cached.
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
-GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; RUNMAXP="${RUNMAXP:-$MAXP}"; SPACING="${SPACING:-15}"; KILL_GB="${KILL_GB:-118}"
+GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; RUNMAXP="${RUNMAXP:-$MAXP}"; SPACING="${SPACING:-4}"; KILL_GB="${KILL_GB:-118}"
 DEFW="${DEFAULT_WEIGHT_GB:-12}"
 cd "$O"; mkdir -p run
 memgb() { echo $(( $(cat /sys/fs/cgroup/memory.current) / 1000000000 )); }
