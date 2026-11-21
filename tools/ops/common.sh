@@ -30,3 +30,13 @@ check_run_name() {
 
 # Windows path quoted for PowerShell.
 psq() { printf "'%s'" "$(cygpath -w "$1" | sed "s/'/''/g")"; }
+
+# pod_bin <checkout> <commit> <dir>: tools/ops/day/pod's *.sh, weights.py and weights.txt as
+# committed at <commit> of <checkout>, LF, into <dir> (the payload's bin/).
+pod_bin() { local s; s=$(mktemp -d "$RENT/podsrc.XXXXXX") || return 1; mkdir -p "$3"
+  git -C "$1" -c core.autocrlf=false archive --format=tar "$2" tools/ops/day/pod | tar -xf - -C "$s" || { rm -rf "$s"; return 1; }
+  for f in "$s"/tools/ops/day/pod/*.sh "$s"/tools/ops/day/pod/weights.py "$s"/tools/ops/day/pod/weights.txt; do
+    tr -d '\r' < "$f" > "$3/$(basename "$f")" || { rm -rf "$s"; return 1; }; done
+  rm -rf "$s"; }
+# pod_sum <dir>: POD_SCRIPTS, sha256 over the sha256sum lines of <dir>'s files sorted by name.
+pod_sum() { (cd "$1" && LC_ALL=C ls | LC_ALL=C sort | while read -r f; do sha256sum "$f"; done | sha256sum | cut -d' ' -f1); }

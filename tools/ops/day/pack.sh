@@ -5,13 +5,18 @@
 # lists it, refuses forbidden files, starts a detached send and prints the exec-pod body that
 # receives the payload into /work/<run>, starts bin/notify.sh, then bin/setup.sh there; a failed
 # receive or unpack ends setup.log with RECEIVE_FAILED or UNPACK_FAILED. <run>: [a-z0-9_-], used once.
-# Refuses: uncommitted changes under tools/ops/day/pod; a files.txt line outside the list format
+# Refuses: uncommitted changes under tools/ops/day/pod; pod scripts at HEAD that differ from local
+# main's (`git diff --quiet main HEAD -- tools/ops/day/pod`: a stale stream worktree would pack
+# old scripts; PACK_OFF_MAIN_POD=1 overrides, for testing an ops branch only); a files.txt line outside the list format
 # (tools/ops/day/pod/setup.sh); forbidden files; table entries (directories included) with '..'
 # or a leading '/' or './'; table entries outside TABLE_ALLOW or in TABLE_DENY; a grep error in
 # any check (the checks fail closed). Any failure after $RENT/out/<run> is created removes it.
 # Env: MARK (pytest -m for lines without A; default "not slow and not fullset": the per-tip run;
 # MARK=fullset for the merge-candidate run, DAYBOX.md "Merge candidate"), runner knobs go in the exec body.
-# meta.env also gets WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
+# meta.env also gets GATE_VERSION (2: weights, reserves, gate lock, claims) and POD_SCRIPTS (sha256
+# over the packed bin/ files, sorted by name, common.sh pod_sum; setup.sh copies both to gate.env
+# for podcheck.sh, which podcheck_body.sh runs before a send),
+# and WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
 # tools/ops/day/wait.sh.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
@@ -39,6 +44,9 @@ TOP=$(git -C "$HERE" rev-parse --show-toplevel)
 DIRTY=$(git -C "$TOP" status --porcelain -- tools/ops/day/pod)
 [ -z "$DIRTY" ] || refuse "uncommitted changes in tools/ops/day/pod; commit them first" "$DIRTY"
 OPS=$(git -C "$TOP" rev-parse HEAD)
+if [ "${PACK_OFF_MAIN_POD:-}" != 1 ] && ! git -C "$TOP" diff --quiet main HEAD -- tools/ops/day/pod; then
+  refuse "tools/ops/day/pod at HEAD differs from main's; merge main (or set PACK_OFF_MAIN_POD=1 to test an ops branch)" \
+    "$(git -C "$TOP" diff --stat main HEAD -- tools/ops/day/pod)"; fi
 [ -f "$LIST" ] || refuse "no such test list" "$LIST"
 
 mkdir -p "$P/bin"
@@ -56,9 +64,7 @@ COMMIT=$(git -C "$REPO" rev-parse --verify "$C^{commit}")
 DECOMP=$(git -C "$REPO/external/pokeplatinum" rev-parse HEAD)
 git -C "$REPO" -c core.autocrlf=false archive --format=tar -o "$P/code.tar" "$COMMIT"
 cp "$TB" "$P/tables.tar.xz"
-mkdir "$P/podsrc"; git -C "$TOP" -c core.autocrlf=false archive --format=tar "$OPS" tools/ops/day/pod | tar -xf - -C "$P/podsrc"
-for f in "$P"/podsrc/tools/ops/day/pod/*.sh "$P"/podsrc/tools/ops/day/pod/weights.py "$P"/podsrc/tools/ops/day/pod/weights.txt; do tr -d '\r' < "$f" > "$P/bin/$(basename "$f")"; done
-rm -rf "$P/podsrc"
+pod_bin "$TOP" "$OPS" "$P/bin" || refuse "could not extract tools/ops/day/pod at $OPS" ""
 # Beacon codes: two fresh random codephrases per run, WATCH_F (first failure) and WATCH_D (results),
 # for bin/notify.sh (runpodctl send --code) and tools/ops/day/wait.sh. runpodctl v3.1.1's croc fork
 # (cmd/transfer/croc.go:551,722) puts a transfer in the relay room code[:3] and its data rooms in
@@ -70,7 +76,8 @@ draw() { local a=abcdefghijklmnopqrstuvwxyz l="" b
 WF=$(draw); WD=$(draw)
 while [ "${WD:0:3}" = "${WF:0:3}" ]; do WD=$(draw); done
 for w in "$WF" "$WD"; do echo "$w" | grep -qE '^[a-z]{3}[0-9a-f]{30}$' || refuse "could not draw a random beacon code" "${#w} characters"; done
-printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$WF" "$WD" > "$P/meta.env"
+PODSUM=$(pod_sum "$P/bin")
+printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$WF" "$WD" > "$P/meta.env"
 CT=$(tar -tf "$P/code.tar"); TALL=$(tar -tJf "$P/tables.tar.xz")   # TALL: directories included
 T=$(printf '%s\n' "$TALL" | pick -v '/$') || exit 3                  # T: files only
 deny "tables entry with '..', a leading '/' or './'" "$TALL" -E "$BADPATH"

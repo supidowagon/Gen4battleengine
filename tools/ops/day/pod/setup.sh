@@ -16,10 +16,13 @@ set -euxo pipefail
 export PATH="/root/.local/bin:/work/_bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 # meta.env holds the beacon codes: sourced with the trace off, so setup.log never shows them.
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; set +x; . ./meta.env; unset WATCH_F WATCH_D; set -x
+printf 'GATE_VERSION=%s\nPOD_SCRIPTS=%s\n' "${GATE_VERSION:-}" "${POD_SCRIPTS:-}" > "$D/gate.env"   # podcheck.sh reads it
+. "$D/bin/gate.sh"   # cgmem: container memory, cgroup v2 or v1
 MARK="${MARK:-not slow and not fullset}"   # pack.sh writes MARK into meta.env; this default is the same
 echo $$ > "$D/setup.pid"; SETUP_DONE=0
 trap 'rc=$?; [ "$SETUP_DONE" = 1 ] || echo "SETUP_FAILED rc=$rc $(date +%s)"' EXIT
 echo "SETUP_START $(date +%s)"
+cgmem current > /dev/null || { echo "ERROR: no cgroup memory file (v2 memory.current or v1 memory/memory.usage_in_bytes)"; exit 1; }
 # The decomp worktree is shared by every run on the pod: one setup at a time creates it.
 ( flock -w 600 9 || { echo "ERROR: decomp lock /work/_decomp/.lock still held after 600 s"; exit 1; }
   if [ ! -d "/work/_decomp/$DECOMP" ]; then
@@ -42,10 +45,10 @@ rm -rf col out; mkdir -p col out
 grep -vE '^[[:space:]]*(#|$)' files.txt > col/list.txt   # the one list both steps below number
 awk '{print NR "|" $1 "|" ($3 == "A" ? "A" : "N")}' col/list.txt > col/jobs.txt
 collect_one() { IFS='|' read -r n f mk <<< "$1"; cd "$R"; ma=(-m "$MARK"); [ "$mk" = A ] && ma=()
-  while [ $(( $(cat /sys/fs/cgroup/memory.current) / 1000000000 )) -ge "$GATE_GB" ]; do sleep 10; done
+  while b=$(cgmem current) || return 1; [ $(( b / 1000000000 )) -ge "$GATE_GB" ]; do sleep 10; done
   uv run --frozen pytest --collect-only -q "${ma[@]}" -p no:cacheprovider "$f" > "$D/col/$n.out" 2>&1
   echo $? > "$D/col/$n.rc"; grep '::' "$D/col/$n.out" > "$D/col/$n.ids" || true; }
-export -f collect_one; export D R MARK GATE_GB="${GATE_GB:-88}"
+export -f collect_one cgmem; export D R MARK GATE_GB="${GATE_GB:-88}"
 xargs -d '\n' -P "${COLLECTP:-4}" -I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt
 (cd "$R" && uv run --frozen python - "$D") <<'PY'
 import sys, pathlib, collections
