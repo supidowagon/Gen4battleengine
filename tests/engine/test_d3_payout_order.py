@@ -60,7 +60,7 @@ def test_doubles_sandstorm_double_faint_pays_battler_1_first(tables, names):
     """Battler 1 (slot 1) pays before battler 3 (slot 0): the holder is capped by the Attack EV
     and the Speed yield finds the 510 total reached. Slot order would give the reverse."""
     s = sandstorm_double_faint(tables, names)
-    out = jax.jit(field_conditions)(tables, s, jnp.asarray([3, 1], jnp.int32))
+    out = jax.jit(field_conditions)(tables, s, jnp.asarray([3, 1], jnp.int32))[0]
     assert int(out.hp[1, 0]) == 0 and int(out.hp[1, 1]) == 0
     assert np.asarray(out.evs[0, HOLDER]).tolist() == [100, 101, 100, 100, 100, 9]
     assert int(out.exp[HOLDER]) > int(s.exp[HOLDER])

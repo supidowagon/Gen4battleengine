@@ -26,6 +26,6 @@ def test_ref_double_faint_pays_battler_1_first_and_equals_the_engine(tables, nam
     _field_conditions(turn, ref, [3, 1])
     got = from_ref(ref)
     assert np.asarray(got.evs[0, HOLDER]).tolist() == [100, 101, 100, 100, 100, 9]
-    want = jax.jit(field_conditions)(tables, s, jnp.asarray([3, 1], jnp.int32))
+    want = jax.jit(field_conditions)(tables, s, jnp.asarray([3, 1], jnp.int32))[0]
     for name, x, y in zip(want._fields, want, got, strict=True):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)

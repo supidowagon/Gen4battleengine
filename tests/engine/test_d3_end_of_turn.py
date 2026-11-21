@@ -64,8 +64,9 @@ def base(tables, names):
 def end_turn(tables, state, outcome):
     """The end of the turn as ``step_events`` plays it after the actions."""
     sides = end_of_turn_order(tables, state, outcome)
-    e = field_conditions(tables, state, sides)
-    e = end_of_turn(tables, e, None, outcome, None, sides)
+    # Both return the state first (E3-B2-21: a learn prompt's halt and position follow).
+    e = field_conditions(tables, state, sides)[0]
+    e = end_of_turn(tables, e, None, outcome, None, sides)[0]
     e = _future_sight(tables, e, sides, outcome, jnp.zeros(state.active.shape[0], jnp.int32))
     return e
 
