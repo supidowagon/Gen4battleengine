@@ -41,7 +41,7 @@ Usage:
 
 A usage error (unknown --parts name, B < A, --chunk < 1, an empty part list, raise shares
 outside 0 <= --raise-warn <= --raise-fail < 1, --workers or --gate-gb not a whole number of at
-least 1) exits 2.
+least 1, --workers > 1 without a cgroup memory reading) exits 2.
 
 Needs a checkout and its built tables only (tools/ops/build_tables.sh: ``data/gen4_platinum``,
 ``data/gen4_platinum_kaizo``, ``data/intermediate``, ``data/intermediate_kaizo``); never the
@@ -105,12 +105,18 @@ other than "step" starts only after its chunk's "step" part has ended (it reads 
 ``.inputs.pkl.gz``), whatever its result, as the serial order runs it. A child killed or ended
 without a RESULT line is an ERROR (a failure). Memory gate (``--gate-gb G``, default: env
 ``SNAP_GATE_GB``, else 88; GB = 10^9 bytes): with N > 1 a part starts only while container
-memory (cgroup v2 ``memory.current``, else v1 ``memory.usage_in_bytes``, under ``CGROOT``,
-default /sys/fs/cgroup; with neither, the live parts' RSS) + the reserve + the part's expected
-peak (``PART_GB``) stays at or under G; the reserve is each live part's expected peak minus its
-RSS, where positive. With no live part a part starts while memory is under G. Start order:
-longest expected part first (``PART_S``), then the part-list order; a part that does not fit
-lets a later one that fits start.
+memory without reclaimable page cache (cgroup v2 ``memory.current`` minus ``inactive_file``,
+else v1 ``memory.usage_in_bytes`` minus ``total_inactive_file``, under ``CGROOT``, default
+/sys/fs/cgroup; ``container_bytes``) + the reserve + the part's expected peak (``PART_GB``)
+stays at or under G; the reserve is each live part's expected peak minus its RSS, where
+positive. N > 1 with neither cgroup file readable (off Linux) is a usage error. With no live
+part the next part starts whatever memory reads: memory this job does not hold (active page
+cache, other jobs) need not fall under G while nothing of this job runs, so waiting on it could
+wait forever (as ``tools/ops/day/pod/gate.sh`` ``start-idle-wait``). While a ready
+part waits for the gate the driver prints ``gate wait: <n> ready, <live> live, memory <GB> GB,
+gate <G> GB`` at most once a minute. Start order: longest expected part first (``PART_S``),
+then the part-list order; a part that does not fit lets a later one that fits start. A TERM
+kills every live child, then the driver exits 143.
 
 Version independence: inputs are saved as plain {field: array} dicts, not pickled NamedTuples.
 A later commit rebuilds them by field name, through ``UPGRADES`` first (below): a field it has
@@ -1503,6 +1509,7 @@ PART_S = {"roark.rank": 904, "roark.trace": 269, "step": 75, "sample": 69, "jits
           "rest": 36, "gen": 33, "ai": 11}  # fmt: skip
 SPACING_S = 2.0  # s between two part starts, so container memory shows the last start
 POLL_S = 1.0
+WAIT_SAY_S = 60.0  # s between two "gate wait" lines
 
 
 def part_group(part: str) -> str:
@@ -1523,16 +1530,37 @@ def part_deps(mode: str, part: str, planned) -> set[str]:
     return {f"{head}.step"} & set(planned)
 
 
+def _stat_value(path: Path, key: str) -> int:
+    """The value of line ``<key> <n>`` in a cgroup ``memory.stat``; 0 when the file or the
+    line is missing or not a number."""
+    try:
+        for line in path.read_text().splitlines():
+            f = line.split()
+            if len(f) == 2 and f[0] == key and f[1].isdigit():
+                return int(f[1])
+    except OSError:
+        pass
+    return 0
+
+
 def container_bytes() -> int | None:
-    """Container memory in bytes: cgroup v2 ``memory.current``, else v1
-    ``memory/memory.usage_in_bytes``, under ``CGROOT`` (default /sys/fs/cgroup), as
-    tools/ops/day/pod/gate.sh ``cgmem current`` reads it; None when neither is readable."""
+    """Container memory in bytes without reclaimable page cache: cgroup v2 ``memory.current``
+    minus ``inactive_file`` of ``memory.stat``, else v1 ``memory/memory.usage_in_bytes`` minus
+    ``total_inactive_file`` of ``memory/memory.stat``, under ``CGROOT`` (default
+    /sys/fs/cgroup); a missing ``memory.stat`` or line subtracts nothing. The same reading as
+    tools/ops/day/snap.sh ``cgused`` (tests/tools/test_snap_parallel.py checks both on the same
+    files); None when neither usage file is readable."""
     root = Path(os.environ.get("CGROOT", "/sys/fs/cgroup"))
-    for f in (root / "memory.current", root / "memory" / "memory.usage_in_bytes"):
+    for cur, stat, key in (
+        (root / "memory.current", root / "memory.stat", "inactive_file"),
+        (root / "memory" / "memory.usage_in_bytes", root / "memory" / "memory.stat",
+         "total_inactive_file"),
+    ):  # fmt: skip
         try:
-            return int(f.read_text().split()[0])
+            used = int(cur.read_text().split()[0])
         except (OSError, ValueError, IndexError):
             continue
+        return used - min(used, _stat_value(stat, key))
     return None
 
 
@@ -1552,12 +1580,13 @@ def admit(
     want_gb: float, live: dict[str, tuple[float, int]], mem: int | None, gate_gb: int
 ) -> bool:
     """May a part of expected peak ``want_gb`` start beside ``live`` ``{part: (expected GB,
-    RSS bytes)}``? With no live part: while memory is under the gate (no reading: yes). Else
-    memory (no reading: the live RSS sum) + the reserve (each live part's expected peak minus
-    its RSS, where positive) + ``want_gb`` at or under the gate."""
+    RSS bytes)}``? With no live part: yes, whatever memory reads (memory this job does not
+    hold need not fall under the gate while nothing of this job runs). Else memory (no
+    reading: the live RSS sum) + the reserve (each live part's expected peak minus its RSS,
+    where positive) + ``want_gb`` at or under the gate."""
     gate = gate_gb * 1e9
     if not live:
-        return mem is None or mem < gate
+        return True
     used = mem if mem is not None else sum(r for _, r in live.values())
     reserve = sum(max(0.0, w * 1e9 - r) for w, r in live.values())
     return used + reserve + want_gb * 1e9 <= gate
@@ -1568,18 +1597,25 @@ class PartPool:
     ``result(part)`` blocks until that part's child has ended and gives ``(returncode,
     stdout, stderr, took)``. ``launch(cmd, out, err)`` starts a child writing to the open files
     ``out`` and ``err`` and returns a Popen-like object (``pid``, ``poll``, ``kill``, ``wait``);
-    ``memory``, ``rss``, ``clock`` and ``sleep`` are seams for the tests."""
+    ``memory``, ``rss``, ``clock``, ``sleep`` and ``say`` (prints a ``gate wait`` line) are
+    seams for the tests; the children's output files go to a fresh folder under ``tmp``
+    (default: the system temp folder), which ``close`` removes. ``stop()`` (the TERM handler)
+    makes the next ``result`` call raise SystemExit(143) at a point where every launched child
+    is recorded, so ``close`` kills them all."""
 
     def __init__(self, mode, directory, parts, workers, gate_gb, *, launch=None,
                  memory=container_bytes, rss=rss_bytes, clock=time.monotonic, sleep=time.sleep,
-                 spacing=SPACING_S, poll=POLL_S):  # fmt: skip
+                 say=None, spacing=SPACING_S, poll=POLL_S, tmp=None):  # fmt: skip
         import tempfile
 
         self.mode, self.directory, self.parts = mode, directory, list(parts)
         self.workers, self.gate_gb = workers, gate_gb
         self.launch = launch or self._popen
         self.memory, self.rss, self.clock, self.sleep = memory, rss, clock, sleep
+        self.say = say or (lambda s: print(s, flush=True))
         self.spacing, self.poll = spacing, poll
+        self.stopped = False
+        self.last_wait_say = None
         self.deps = {p: part_deps(mode, p, self.parts) for p in self.parts}
         index = {p: i for i, p in enumerate(self.parts)}
         self.order = sorted(self.parts, key=lambda p: (-PART_S.get(part_group(p), 0), index[p]))
@@ -1587,16 +1623,21 @@ class PartPool:
         self.done: dict[str, tuple[int, str, str, float]] = {}
         self.last_start = None
         self.peak_live = 0
-        self.tmp = Path(tempfile.mkdtemp(prefix="snap_parts_"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="snap_parts_", dir=tmp))
 
     @staticmethod
     def _popen(cmd, out, err):
         return subprocess.Popen(cmd, cwd=ROOT, stdout=out, stderr=err, stdin=subprocess.DEVNULL)
 
+    def stop(self) -> None:
+        self.stopped = True
+
     def result(self, part: str) -> tuple[int, str, str, float]:
         if part not in self.deps:
             raise KeyError(f"{part} is not in this pool")
         while part not in self.done:
+            if self.stopped:
+                raise SystemExit(143)
             self._reap()
             if part in self.done:
                 break
@@ -1631,6 +1672,11 @@ class PartPool:
         mem = self.memory()
         part = next((p for p in ready if admit(part_gb(p), live, mem, self.gate_gb)), None)
         if part is None:
+            if self.last_wait_say is None or now - self.last_wait_say >= WAIT_SAY_S:
+                self.last_wait_say = now
+                gb = "unread" if mem is None else f"{mem / 1e9:.0f} GB"
+                self.say(f"gate wait {time.strftime('%H:%M:%S')}: {len(ready)} ready, "
+                         f"{len(self.live)} live, memory {gb}, gate {self.gate_gb} GB")  # fmt: skip
             return
         name = part.replace("/", "_")
         out = open(self.tmp / f"{name}.out", "w+", encoding="utf-8")  # noqa: SIM115
@@ -1663,31 +1709,41 @@ class PartPool:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
-def check_workers(workers: int, gate_gb: int) -> None:
+def check_workers(workers: int, gate_gb: int, wsrc="--workers", gsrc="--gate-gb") -> None:
+    """A UsageError unless both are at least 1; ``wsrc`` / ``gsrc`` name where each came from
+    (the flag, or the env variable)."""
     if workers < 1:
-        raise UsageError(f"--workers {workers}: must be at least 1")
+        raise UsageError(f"{wsrc} {workers}: must be at least 1")
     if gate_gb < 1:
-        raise UsageError(f"--gate-gb {gate_gb}: must be at least 1")
+        raise UsageError(f"{gsrc} {gate_gb}: must be at least 1")
 
 
-def _exit_on_term():
-    """Turn SIGTERM into SystemExit(143), so the driver's ``finally`` kills its children; the
-    undo (restores the old handler)."""
+def _stop_on_term(pool):
+    """Make SIGTERM call ``pool.stop()``: the pool's next ``result`` raises SystemExit(143) and
+    the driver's ``finally`` kills every child. The handler raises nothing itself, so a TERM
+    between a child's launch and its record cannot orphan it. Returns the undo (restores the
+    old handler)."""
     import signal
     import threading
 
     if threading.current_thread() is not threading.main_thread():
         return lambda: None
-    old = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    old = signal.signal(signal.SIGTERM, lambda *_: pool.stop())
     return lambda: signal.signal(signal.SIGTERM, old)
 
 
-def _env_int(name: str, default: int) -> int:
-    v = os.environ.get(name, "")
+def _knob(flag_value: int | None, flag: str, env: str, default: int) -> tuple[int, str]:
+    """``(value, source)``: the flag when given, else env ``env``, else ``default``. A
+    UsageError, naming ``env``, when the env value is not a whole number."""
+    if flag_value is not None:
+        return flag_value, flag
+    v = os.environ.get(env, "")
+    if not v:
+        return default, env
     try:
-        return int(v) if v else default
+        return int(v), env
     except ValueError:
-        return -1  # a usage error (check_workers)
+        raise UsageError(f"env {env}={v!r}: not a whole number") from None
 
 
 def check_shares(warn: float, fail: float) -> None:
@@ -1701,9 +1757,15 @@ def parent(args) -> int:
     try:
         lo, hi, parts = plan_parts(args.seeds, args.chunk, args.parts, args.no_roark)
         check_shares(args.raise_warn, args.raise_fail)
-        workers = args.workers if args.workers is not None else _env_int("SNAP_WORKERS", 1)
-        gate_gb = args.gate_gb if args.gate_gb is not None else _env_int("SNAP_GATE_GB", 88)
-        check_workers(workers, gate_gb)
+        workers, wsrc = _knob(args.workers, "--workers", "SNAP_WORKERS", 1)
+        gate_gb, gsrc = _knob(args.gate_gb, "--gate-gb", "SNAP_GATE_GB", 88)
+        check_workers(workers, gate_gb, wsrc, gsrc)
+        if workers > 1 and container_bytes() is None:
+            raise UsageError(
+                f"{wsrc} {workers}: parts at once need the container memory reading "
+                "(cgroup memory.current or memory/memory.usage_in_bytes under CGROOT, default "
+                "/sys/fs/cgroup) and none is readable here; run with 1 worker"
+            )
     except UsageError as e:
         print(f"{args.mode}: usage error: {e}", flush=True)
         return 2
@@ -1752,10 +1814,12 @@ def parent(args) -> int:
         pool = PartPool(args.mode, directory, [p for p in parts if not missing(p)], workers,
                         gate_gb)  # fmt: skip
         print(f"{args.mode}: up to {workers} parts at once, memory gate {gate_gb} GB", flush=True)
-        undo = _exit_on_term()  # a TERM kills the children too (pool.close below)
+        undo = _stop_on_term(pool)  # a TERM kills the children too (pool.close below)
     try:
         bad = _run_parts(args, directory, parts, pool, record, allow, allow_raise, overs,
                          skipped, upgraded, classes)  # fmt: skip
+        if pool is not None and pool.stopped:  # a TERM after the last part's result
+            raise SystemExit(143)
     finally:
         if pool is not None:
             pool.close()

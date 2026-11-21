@@ -44,8 +44,10 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
    the targeted run on the merged tip (CLAUDE.md, Merges) on the pod. The `fullset`
    tests are their own pod run (DAYBOX.md: one mark per run). With the tip it sends for
-   these runs the stream sends its `--allow-new` list and the divergences it expects; then
-   the managing session runs the tip's snapshot compare (section 5).
+   these runs the stream sends its `--allow-new` list, which first passes the local
+   pre-check (section 5, Allow-new list; the tip message says it passed), and the
+   divergences it expects; then the managing session runs the tip's snapshot compare
+   (section 5).
 7. The stream sends one message: the final tip, the batch contents with citations, the
    review outcome, the targeted run's results with time and peak memory per test file, and
    its ledger's explanation of every diverged part of the snapshot compare.
@@ -54,8 +56,9 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    inside the diff range and is checked against the compare log). Verdict: MERGE or FIX. When
    only tests or docs changed since an already-reviewed commit, a diff stat of `src` and
    `tools` replaces the review.
-9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, send the stream the
-   new tip and the non-blocking notes, and tell the user in at most three lines.
+9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, then
+   `bash tools/ops/offsite.sh` (section 12, Off-site copy), send the stream the new tip and the
+   non-blocking notes, and tell the user in at most three lines.
 
 **Merge train.** When two or more batches are expected to be merge-ready within one gate run
 of each other (about 3 hours), the managing session names a train order.
@@ -132,6 +135,12 @@ per day is the rate used for estimates.
   hours: one pod per active stream plus one capture pod (section 1). Pod N's id
   is in `_scratch/rent/day<N>/POD_ID_<N>`; pod 1's is in `_scratch/rent/POD_ID`. Each pod
   gets its own pod check before every pack (DAYBOX.md, Send a run step 3).
+  The capture pod is pod 1 (id in `_scratch/rent/POD_ID`), rented like any test pod
+  (`ci-day-big`, Bring-up in DAYBOX.md) in the 256 GB shape, so `snap.sh` runs with
+  `SNAP_GATE_GB` 176 (on a 128 GB pod: 88). When pod 1 is down, the managing session names
+  another up pod the capture pod and writes it in `_scratch/handoff/MANAGER.md`. For the
+  no-idle-pods rule a pending compare counts as queued: a pod holding the capture a sent or
+  expected merge candidate compares against is not idle (`docs/decisions.md`, section 5).
   Read the shape before sending a body: exec
   `{"command":["sh","-c","cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes"],"timeoutSeconds":25}`
   on the pod (cgroup v2's `memory.max`, else cgroup v1's `memory.limit_in_bytes`: some rented
@@ -215,7 +224,12 @@ per day is the rate used for estimates.
   from there instead of re-capturing (owner, 21 Nov 2026). Only a capture lost with a pod
   without the volume, or one the volume does not hold, is re-made on the next pod.
 - **Capture pod.** Snapshot captures and compares run on the capture pod only. No pack run
-  is sent to it while a capture or compare is going there. A job runs its parts in parallel
+  is sent to it while a capture or compare is going there. One snapshot job at a time per
+  pod: each job gates only on its own parts, so two at once could overrun memory together.
+  `run.sh` enforces it with a pod-wide lock (`/work/.snaplock`, taken after `uv sync`,
+  released on every exit, a TERM included; a lock whose pid no longer runs a `run.sh` is
+  removed); a second job sent meanwhile waits for it, printing one `lock wait` line a minute
+  (DAYBOX.md, Snapshot compare). A job runs its parts in parallel
   (`SNAP_WORKERS`, default 16, each part its own process; `tools/snap_compare.py`, Workers):
   about 30 minutes for a capture or a compare (estimate: the longest part, `roark.rank`, takes
   15-22 minutes alone; replace it with the first timed parallel run). Serially
@@ -250,11 +264,16 @@ per day is the rate used for estimates.
   and reserves; the runner sees it only as container memory. Pack runs stay off the capture
   pod while a job runs there (Capture pod above); a pack run already live there when a job
   starts keeps the pod's `MAXP`, and the runners' `GATE_GB` and `KILL_GB` read the job's
-  memory. `SNAP_GATE_GB` is the job's own gate: the job starts only while container memory
-  is under it, and each part starts only while container memory + the live parts' reserve
+  memory. `SNAP_GATE_GB` is the job's own gate, on container memory without reclaimable page
+  cache (`memory.current` minus `inactive_file`; cgroup v1: `total_inactive_file`): the job
+  starts while that is under it, or once no pack unit has been live on the pod for
+  `IDLE_WAIT_S` (300 s; `GATE_IDLE_START` in `times.txt`), and each part starts only while
+  it + the live parts' reserve
   (expected peak minus RSS) + its own expected peak stays at or under it (`snap_compare.py`
   `PART_GB`: 13 GB for a step, jitstep or sample part, 8 rest, 2 ai, 1 gen, 11 `roark.trace`,
-  27 `roark.rank`; the largest peaks of 19 pod logs times about 1.2).
+  27 `roark.rank`; the largest peaks of 19 pod logs times about 1.2). With no part of the job
+  live the next part starts whatever memory reads (memory the job does not hold need not
+  fall); a part held by the gate prints `gate wait` about once a minute.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
@@ -357,6 +376,7 @@ rows.
 | `47 9,21 * * *` | Fallback check: watchdog plus usage; silent unless something is wrong |
 | `7 22 * * *` | Dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier on `ci-day-big` when that is up, else on `ci-nightly`, and deletes `ci-nightly` itself |
 | `57 22 * * *` | Delete the test pod if nothing is queued and no nightly runs on it, verify with a pod listing, log the cost |
+| `37 23 * * *` | `bash tools/ops/offsite.sh` from the main checkout (section 12, Off-site copy); report only a non-zero exit (a refusal, a rejected branch, an abort or a failed push) |
 
 ## 8. Usage rules
 
@@ -436,6 +456,55 @@ pod work. This section is the source of the handoff procedure; a copy in
   `HOME` set to `_scratch/rent/home` (DAYBOX.md, Paths).
 - The watch scripts: `tools/ops/watch_flags.ps1` and `tools/ops/watchdog.ps1` with the stream
   list `_scratch/manager/streams.json` (section 6; command line in `_scratch/handoff/MANAGER.md`).
+
+### Off-site copy
+
+The private GitHub repo added as git remote `offsite` in the main checkout. Never push it to
+`origin`, never make it public. It never receives ROMs, saves, save states, keys, tokens,
+table archives or run outputs.
+- `bash tools/ops/offsite.sh` (Git Bash, from the main checkout's root) pushes every local
+  branch (`git push offsite --all`: no force, no delete; rejected branches are reported) and
+  mirrors the state files into the clone `_scratch/offsite/state/` as commits on the branch
+  `scratch-state`, which has no common history with the code. Deletions are mirrored inside
+  that clone only; git history keeps old versions. `--dry-run` prints what would be pushed and
+  copied and changes nothing. Temp files go to `_scratch/offsite/tmp/`.
+- Refusals (exit 2), checked before any push: a push URL of `offsite` (every one, after
+  `insteadOf`/`pushInsteadOf`) that names the same repo as any URL of `origin` (compared as
+  lower-case `host/owner/repo`, so a trailing `/`, a missing `.git`, letter case and `git@` vs
+  `https://` do not matter); a repo that `gh repo view <host/owner/repo> --json isPrivate` does
+  not report private (also when `gh` is missing or not logged in); `remote.offsite.mirror` or
+  `remote.offsite.push` set; a local branch named `scratch-state`; a leftover
+  `_scratch/offsite/state/.git/index.lock`. The state clone gets the checked push URLs, `core.autocrlf=false`,
+  `core.longpaths=true`, and the remote `offsite` when it is missing. Other exits: 1 error,
+  3 offender in the state tree (nothing committed), 4 a branch rejected or a push failed.
+  `NUZLINE_OFFSITE_TEST_LOCAL=1` lets the tests use local-path remotes; it never skips the
+  check for a network URL.
+- Runs after every push of `main` (section 2 step 9) and nightly (section 7).
+- State files, paths relative to `_scratch/`: `handoff/`; the text files of `manager/` and of
+  each stream folder `e<n>/` (rule sheets, family lists, plans, podlists, notes, small
+  scripts and logs); in `rent/` the `*.md` notes, the pod id files (`POD_ID*`, `*POD*.txt`),
+  `lists/*.txt` and the top-level helper scripts. Folder names are lower case: a top-level
+  folder such as `E5/` or `Handoff/` is reported (`dir:not-lower-case`) and skipped. Folders
+  named `src`, `tests`, `tools`, `docs`, `data`, `out`, `bin`, `home` (and the cache and
+  emulator folders) are skipped at any depth, inside stream folders too.
+- Never copied (the script enforces it and re-checks the whole state tree before every
+  commit; an offender aborts the commit): worktrees and nested repos, `.cache/`, `.venv/`,
+  `external/`, cache, code-copy and table-copy folders, ROM, save and archive files
+  (`*.nds`, `*.sav`, `*.dsv`, `*.ds<n>`, `*.zip`, `*.7z`, `*.tar*`, `*.npz`, `*.npy`,
+  `*.pkl`, `*.bin`, ...; extensions in any letter case), keys and credentials
+  (`_scratch/rent/home/.runpod/`, `*.key`, `*.pem`, `.env*`, `*.env`, `local.toml`, `*.b64`),
+  files with a NUL byte whatever their extension, files whose content looks like a key or
+  token (private keys, Runpod/GitHub/OpenAI/AWS/Slack/Hugging Face/Google keys, JWTs,
+  `user:password@` in URLs, `Bearer` tokens, `api_key=`/`apiKey:`/`PASSWORD=`-style
+  assignments in any letter case), `rent/out/` and other run outputs, logs over 1 MB, files
+  over 2 MB, anything inside a folder named `backup*`, copied `.gitignore`, `.gitattributes`
+  and `.gitmodules` files. A content scan that cannot run (grep error) refuses too.
+- Restore on a new machine: `git clone -o offsite <off-site repo> <project folder>` gives
+  every branch (`git checkout <branch>`), then in it `git remote add origin <public repo>`.
+  Then `git clone -c core.autocrlf=false -o offsite -b scratch-state <off-site repo>
+  _scratch/offsite/state` and copy its files (not `.git`) into `_scratch/`. Worktrees, tables,
+  `.cache/`, the runpodctl key and the inputs are rebuilt or supplied as in "What you must
+  supply yourself".
 
 ### What does not travel
 

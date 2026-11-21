@@ -73,6 +73,7 @@ def _rom_trainer(tid, name, party, **kw):
         "format": "single",
         "opponent_2": None,
         "partner": [],
+        "walking_partner": [],
         "start_condition": "none",
     }
     t.update(kw)
@@ -152,6 +153,7 @@ def synthetic(
     rom_format="single",
     rom_opponent_2=None,
     rom_partner=(),
+    rom_walking_partner=(),
     pkcalc_tag=None,
     pkcalc_double=None,
     rom_difficulty=200,
@@ -182,6 +184,7 @@ def synthetic(
             format=rom_format,
             opponent_2=rom_opponent_2,
             partner=list(rom_partner) if rom_partner is not None else None,
+            walking_partner=list(rom_walking_partner),
             start_condition=rom_condition,
         ),
         _rom_trainer(9, "Y", [_rom_mon(species=3, level=12)]),
@@ -435,13 +438,20 @@ def test_no_second_opponent_is_none_not_absent():
     assert (row.rom, row.pkcalc, row.sheet) == ("none", "none", None)
 
 
-def test_walk_multi_keeps_its_format_row_beside_the_sight_pair():
+def test_walk_single_compares_as_multi_beside_the_sight_pair():
+    # A lone walk-map enemy is a single in the ROM (encounter.c:738-739); the sight pair makes
+    # it a multi beside the walking partner (resolve.trainer_record).
     rows = trainer_rows(
-        *synthetic(rom_format="multi", pkcalc_tag=[["Ace X", "Ace Y", "Cheryl"]]),
+        *synthetic(
+            rom_format="single",
+            rom_walking_partner=[608],
+            pkcalc_tag=[["Ace X", "Ace Y", "Cheryl"]],
+        ),
         trainer_maps={5: [7], 9: [7]},
     )
     assert find(rows, "trainers", "5 Ace X", "format").rom == "multi"
     assert find(rows, "trainers", "5 Ace X", "sight_pair").rom == 9
+    assert find(rows, "trainers", "5 Ace X", "partner_present").rom is True
 
 
 def test_unknown_start_condition_and_format_are_not_rows():
