@@ -5,11 +5,11 @@ Usage:
 
     uv run python tools/snap_compare.py capture DIR A-B [--chunk 10] [--repo PATH]
         [--commit SHA] [--no-roark] [--parts G,...] [--allow-all-raise F,...] [--dirty-ok]
-        [--raise-warn R] [--raise-fail R] [-v]
+        [--raise-warn R] [--raise-fail R] [--workers N] [--gate-gb G] [-v]
     uv run python tools/snap_compare.py compare DIR A-B [--chunk 10] [--repo PATH]
         [--commit SHA] [--no-roark] [--parts G,...] [--allow-new NAME,...]
         [--allow-all-raise F,...] [--subset-ok] [--same-ok] [--dirty-ok]
-        [--raise-warn R] [--raise-fail R] [-v]
+        [--raise-warn R] [--raise-fail R] [--workers N] [--gate-gb G] [-v]
 
     DIR      the snapshot folder (capture writes it, compare reads it).
     A-B      the seed range, inclusive (one seed: A); B >= A.
@@ -40,7 +40,8 @@ Usage:
     -v       print each part's timings per output.
 
 A usage error (unknown --parts name, B < A, --chunk < 1, an empty part list, raise shares
-outside 0 <= --raise-warn <= --raise-fail < 1) exits 2.
+outside 0 <= --raise-warn <= --raise-fail < 1, --workers or --gate-gb not a whole number of at
+least 1) exits 2.
 
 Needs a checkout and its built tables only (tools/ops/build_tables.sh: ``data/gen4_platinum``,
 ``data/gen4_platinum_kaizo``, ``data/intermediate``, ``data/intermediate_kaizo``); never the
@@ -95,6 +96,21 @@ ref_step; "jitstep": jit(step); "sample": jit(sample_outcome); "rest": enumerate
 decision_actions, root_belief; "ai": ai_action_distribution on the AI states; "gen": the
 generator check), then "roark.trace" and "roark.rank", one process each. The parent prints each
 part's wall time and peak memory and flags a part over 60 s or 4 GB (OVER LIMIT).
+
+Workers: ``--workers N`` (default: env ``SNAP_WORKERS``, else 1) runs up to N parts at once,
+each its own child process as above; 1 runs them one after another. Results, files, exit codes
+and the order of every printed part are the same for any N: parts print in the part-list order,
+each once its own child is done and every part before it has printed. On capture a seed group
+other than "step" starts only after its chunk's "step" part has ended (it reads the chunk's
+``.inputs.pkl.gz``), whatever its result, as the serial order runs it. A child killed or ended
+without a RESULT line is an ERROR (a failure). Memory gate (``--gate-gb G``, default: env
+``SNAP_GATE_GB``, else 88; GB = 10^9 bytes): with N > 1 a part starts only while container
+memory (cgroup v2 ``memory.current``, else v1 ``memory.usage_in_bytes``, under ``CGROOT``,
+default /sys/fs/cgroup; with neither, the live parts' RSS) + the reserve + the part's expected
+peak (``PART_GB``) stays at or under G; the reserve is each live part's expected peak minus its
+RSS, where positive. With no live part a part starts while memory is under G. Start order:
+longest expected part first (``PART_S``), then the part-list order; a part that does not fit
+lets a later one that fits start.
 
 Version independence: inputs are saved as plain {field: array} dicts, not pickled NamedTuples.
 A later commit rebuilds them by field name, through ``UPGRADES`` first (below): a field it has
@@ -1460,17 +1476,218 @@ def compare_problems(args, base: dict | None, here: dict, problems, parts) -> li
 # --- parent -----------------------------------------------------------------------------
 
 
+def child_cmd(mode: str, directory: Path, part: str) -> list[str]:
+    """The command line of one part's child process."""
+    return [sys.executable, str(Path(__file__).resolve()), "_child", mode, str(directory), part,
+            str(ROOT)]  # fmt: skip
+
+
 def run_part(mode: str, directory: Path, part: str) -> tuple[int, str, str]:
     """Run one part in a child process: ``(returncode, stdout, stderr)``."""
     proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "_child", mode, str(directory), part,
-         str(ROOT)],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )  # fmt: skip
+        child_cmd(mode, directory, part), cwd=ROOT, capture_output=True, text=True, check=False
+    )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+# Expected peak per part, GB of 10^9 bytes, for the memory gate of --workers > 1: the largest
+# "peak" (the child's max RSS, GiB) of each group over the 19 capture and compare logs fetched
+# from the pods up to 21 Nov 2026 (380 parts per seed group, 19 per Roark part), in GB, times
+# about 1.2, rounded up: step 9.88 GiB, jitstep 9.80, sample 9.79, rest 6.06, ai 1.09,
+# gen 0.48, roark.trace 7.92, roark.rank 20.35. A group not listed weighs UNLISTED_GB.
+PART_GB = {"step": 13, "jitstep": 13, "sample": 13, "rest": 8, "ai": 2, "gen": 1,
+           "roark.trace": 11, "roark.rank": 27}  # fmt: skip
+UNLISTED_GB = 13
+# Mean wall seconds per group over the same logs, run alone: the start order (longest first).
+PART_S = {"roark.rank": 904, "roark.trace": 269, "step": 75, "sample": 69, "jitstep": 65,
+          "rest": 36, "gen": 33, "ai": 11}  # fmt: skip
+SPACING_S = 2.0  # s between two part starts, so container memory shows the last start
+POLL_S = 1.0
+
+
+def part_group(part: str) -> str:
+    """``0-9.step`` -> ``step``; a Roark part is its own group."""
+    return part if part.startswith("roark.") else part.split(".", 1)[1]
+
+
+def part_gb(part: str) -> int:
+    return PART_GB.get(part_group(part), UNLISTED_GB)
+
+
+def part_deps(mode: str, part: str, planned) -> set[str]:
+    """The parts that must end before ``part`` starts: on capture, a seed group other than
+    "step" reads the inputs its chunk's "step" part writes (``seed_steps``)."""
+    head, _, group = part.partition(".")
+    if mode != "capture" or head == "roark" or group == "step":
+        return set()
+    return {f"{head}.step"} & set(planned)
+
+
+def container_bytes() -> int | None:
+    """Container memory in bytes: cgroup v2 ``memory.current``, else v1
+    ``memory/memory.usage_in_bytes``, under ``CGROOT`` (default /sys/fs/cgroup), as
+    tools/ops/day/pod/gate.sh ``cgmem current`` reads it; None when neither is readable."""
+    root = Path(os.environ.get("CGROOT", "/sys/fs/cgroup"))
+    for f in (root / "memory.current", root / "memory" / "memory.usage_in_bytes"):
+        try:
+            return int(f.read_text().split()[0])
+        except (OSError, ValueError, IndexError):
+            continue
+    return None
+
+
+def rss_bytes(pid: int) -> int:
+    """A live child's resident memory (Linux ``/proc/<pid>/status`` VmRSS); 0 when unreadable,
+    so its whole expected peak stays reserved."""
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def admit(
+    want_gb: float, live: dict[str, tuple[float, int]], mem: int | None, gate_gb: int
+) -> bool:
+    """May a part of expected peak ``want_gb`` start beside ``live`` ``{part: (expected GB,
+    RSS bytes)}``? With no live part: while memory is under the gate (no reading: yes). Else
+    memory (no reading: the live RSS sum) + the reserve (each live part's expected peak minus
+    its RSS, where positive) + ``want_gb`` at or under the gate."""
+    gate = gate_gb * 1e9
+    if not live:
+        return mem is None or mem < gate
+    used = mem if mem is not None else sum(r for _, r in live.values())
+    reserve = sum(max(0.0, w * 1e9 - r) for w, r in live.values())
+    return used + reserve + want_gb * 1e9 <= gate
+
+
+class PartPool:
+    """Runs ``parts`` as up to ``workers`` child processes at once under the memory gate;
+    ``result(part)`` blocks until that part's child has ended and gives ``(returncode,
+    stdout, stderr, took)``. ``launch(cmd, out, err)`` starts a child writing to the open files
+    ``out`` and ``err`` and returns a Popen-like object (``pid``, ``poll``, ``kill``, ``wait``);
+    ``memory``, ``rss``, ``clock`` and ``sleep`` are seams for the tests."""
+
+    def __init__(self, mode, directory, parts, workers, gate_gb, *, launch=None,
+                 memory=container_bytes, rss=rss_bytes, clock=time.monotonic, sleep=time.sleep,
+                 spacing=SPACING_S, poll=POLL_S):  # fmt: skip
+        import tempfile
+
+        self.mode, self.directory, self.parts = mode, directory, list(parts)
+        self.workers, self.gate_gb = workers, gate_gb
+        self.launch = launch or self._popen
+        self.memory, self.rss, self.clock, self.sleep = memory, rss, clock, sleep
+        self.spacing, self.poll = spacing, poll
+        self.deps = {p: part_deps(mode, p, self.parts) for p in self.parts}
+        index = {p: i for i, p in enumerate(self.parts)}
+        self.order = sorted(self.parts, key=lambda p: (-PART_S.get(part_group(p), 0), index[p]))
+        self.live: dict[str, tuple] = {}  # part -> (proc, start, out, err)
+        self.done: dict[str, tuple[int, str, str, float]] = {}
+        self.last_start = None
+        self.peak_live = 0
+        self.tmp = Path(tempfile.mkdtemp(prefix="snap_parts_"))
+
+    @staticmethod
+    def _popen(cmd, out, err):
+        return subprocess.Popen(cmd, cwd=ROOT, stdout=out, stderr=err, stdin=subprocess.DEVNULL)
+
+    def result(self, part: str) -> tuple[int, str, str, float]:
+        if part not in self.deps:
+            raise KeyError(f"{part} is not in this pool")
+        while part not in self.done:
+            self._reap()
+            if part in self.done:
+                break
+            self._start()
+            self.sleep(self.poll)
+        return self.done[part]
+
+    def _reap(self) -> None:
+        for part, (proc, start, out, err) in list(self.live.items()):
+            code = proc.poll()
+            if code is None:
+                continue
+            took = self.clock() - start
+            texts = []
+            for f in (out, err):
+                f.close()
+                texts.append(Path(f.name).read_text(encoding="utf-8", errors="replace"))
+            del self.live[part]
+            self.done[part] = (code, texts[0], texts[1], took)
+
+    def _start(self) -> None:
+        now = self.clock()
+        if len(self.live) >= self.workers:
+            return
+        if self.last_start is not None and now - self.last_start < self.spacing:
+            return
+        waiting = [p for p in self.order if p not in self.done and p not in self.live]
+        ready = [p for p in waiting if self.deps[p] <= set(self.done)]
+        if not ready:
+            return
+        live = {p: (part_gb(p), self.rss(v[0].pid)) for p, v in self.live.items()}
+        mem = self.memory()
+        part = next((p for p in ready if admit(part_gb(p), live, mem, self.gate_gb)), None)
+        if part is None:
+            return
+        name = part.replace("/", "_")
+        out = open(self.tmp / f"{name}.out", "w+", encoding="utf-8")  # noqa: SIM115
+        err = open(self.tmp / f"{name}.err", "w+", encoding="utf-8")  # noqa: SIM115
+        try:
+            proc = self.launch(child_cmd(self.mode, self.directory, part), out, err)
+        except OSError as e:
+            out.close()
+            err.close()
+            self.done[part] = (127, "", f"could not start the child: {e}", 0.0)
+            return
+        self.live[part] = (proc, now, out, err)
+        self.last_start = now
+        self.peak_live = max(self.peak_live, len(self.live))
+
+    def close(self) -> None:
+        """Kill every child still running (the driver stopped early) and remove the temp
+        files."""
+        import shutil
+
+        for proc, _, out, err in self.live.values():
+            try:
+                proc.kill()
+                proc.wait()
+            except OSError:
+                pass
+            out.close()
+            err.close()
+        self.live.clear()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+def check_workers(workers: int, gate_gb: int) -> None:
+    if workers < 1:
+        raise UsageError(f"--workers {workers}: must be at least 1")
+    if gate_gb < 1:
+        raise UsageError(f"--gate-gb {gate_gb}: must be at least 1")
+
+
+def _exit_on_term():
+    """Turn SIGTERM into SystemExit(143), so the driver's ``finally`` kills its children; the
+    undo (restores the old handler)."""
+    import signal
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    old = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    return lambda: signal.signal(signal.SIGTERM, old)
+
+
+def _env_int(name: str, default: int) -> int:
+    v = os.environ.get(name, "")
+    try:
+        return int(v) if v else default
+    except ValueError:
+        return -1  # a usage error (check_workers)
 
 
 def check_shares(warn: float, fail: float) -> None:
@@ -1484,6 +1701,9 @@ def parent(args) -> int:
     try:
         lo, hi, parts = plan_parts(args.seeds, args.chunk, args.parts, args.no_roark)
         check_shares(args.raise_warn, args.raise_fail)
+        workers = args.workers if args.workers is not None else _env_int("SNAP_WORKERS", 1)
+        gate_gb = args.gate_gb if args.gate_gb is not None else _env_int("SNAP_GATE_GB", 88)
+        check_workers(workers, gate_gb)
     except UsageError as e:
         print(f"{args.mode}: usage error: {e}", flush=True)
         return 2
@@ -1527,6 +1747,43 @@ def parent(args) -> int:
     bad, overs, skipped, total = 0, [], [], time.monotonic()
     upgraded: dict[str, int] = {}
     classes = dict.fromkeys(CLASSES, 0)
+    pool, undo = None, lambda: None
+    if workers > 1:
+        pool = PartPool(args.mode, directory, [p for p in parts if not missing(p)], workers,
+                        gate_gb)  # fmt: skip
+        print(f"{args.mode}: up to {workers} parts at once, memory gate {gate_gb} GB", flush=True)
+        undo = _exit_on_term()  # a TERM kills the children too (pool.close below)
+    try:
+        bad = _run_parts(args, directory, parts, pool, record, allow, allow_raise, overs,
+                         skipped, upgraded, classes)  # fmt: skip
+    finally:
+        if pool is not None:
+            pool.close()
+        undo()
+    counts = ""
+    if args.mode == "compare":
+        print(f"layout upgrades run: {_counts(upgraded)}", flush=True)
+        counts = "parts: " + ", ".join(f"{n} {c}" for c, n in classes.items()) + "; "
+    verdict = "ok" if not bad else f"FAILED ({bad} failure(s), skips included)"
+    seeded = [p for p in parts if not p.startswith("roark.")]
+    groups = ", ".join(dict.fromkeys(p.split(".", 1)[1] if p in seeded else p for p in parts))
+    seeds = f"seeds: {lo}-{hi} ({hi - lo + 1})" if seeded else "seeds: none"
+    if pool is not None:
+        print(f"{args.mode}: at most {pool.peak_live} parts ran at once", flush=True)
+    print(
+        f"{args.mode}: {verdict} ({time.monotonic() - total:.0f} s); {counts}"
+        f"groups: {groups}; {seeds}; "
+        f"over 60 s / 4 GB: {', '.join(overs) or 'none'}; "
+        f"skipped (each a failure): {', '.join(skipped) or 'none'}"
+    )
+    return 1 if bad else 0
+
+
+def _run_parts(args, directory, parts, pool, record, allow, allow_raise, overs, skipped,
+               upgraded, classes) -> int:  # fmt: skip
+    """Run (``pool`` None: one after another) and print every part in ``parts`` order; the
+    failure count. Fills ``overs``, ``skipped``, ``upgraded``, ``classes`` and ``record``."""
+    bad = 0
     for part in parts:
         failed, kind = 1, "error"
         lack = missing(part)
@@ -1535,9 +1792,12 @@ def parent(args) -> int:
                   flush=True)  # fmt: skip
             skipped.append(part)
         else:
-            start = time.monotonic()
-            code, stdout, stderr = run_part(args.mode, directory, part)
-            took = time.monotonic() - start
+            if pool is None:
+                start = time.monotonic()
+                code, stdout, stderr = run_part(args.mode, directory, part)
+                took = time.monotonic() - start
+            else:
+                code, stdout, stderr, took = pool.result(part)
             line = next((ln for ln in stdout.splitlines() if ln.startswith("RESULT ")), None)
             if code or line is None:
                 print(f"{part}: ERROR (exit {code}, {took:.0f} s)\n{stdout[-3000:]}"
@@ -1554,21 +1814,7 @@ def parent(args) -> int:
         if record is not None:
             record["parts"][part] = "failed" if failed else "ok"
             write_capture(directory, record)
-    counts = ""
-    if args.mode == "compare":
-        print(f"layout upgrades run: {_counts(upgraded)}", flush=True)
-        counts = "parts: " + ", ".join(f"{n} {c}" for c, n in classes.items()) + "; "
-    verdict = "ok" if not bad else f"FAILED ({bad} failure(s), skips included)"
-    seeded = [p for p in parts if not p.startswith("roark.")]
-    groups = ", ".join(dict.fromkeys(p.split(".", 1)[1] if p in seeded else p for p in parts))
-    seeds = f"seeds: {lo}-{hi} ({hi - lo + 1})" if seeded else "seeds: none"
-    print(
-        f"{args.mode}: {verdict} ({time.monotonic() - total:.0f} s); {counts}"
-        f"groups: {groups}; {seeds}; "
-        f"over 60 s / 4 GB: {', '.join(overs) or 'none'}; "
-        f"skipped (each a failure): {', '.join(skipped) or 'none'}"
-    )
-    return 1 if bad else 0
+    return bad
 
 
 CLASSES = ("ok", "diverged", "error", "sampler drift", "generator drift")
@@ -1681,6 +1927,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dirty-ok", action="store_true", help="allow a dirty checkout")
     p.add_argument("--raise-warn", type=float, default=RAISE_WARN, help="warn above this share")
     p.add_argument("--raise-fail", type=float, default=RAISE_FAIL, help="fail above this share")
+    p.add_argument("--workers", type=int, help="parts at once (default: env SNAP_WORKERS, else 1)")
+    p.add_argument(
+        "--gate-gb", type=int, help="memory gate in GB (default: env SNAP_GATE_GB, else 88)"
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
