@@ -2793,9 +2793,29 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     a closing compare reverts: the `_draw_terrain` hunk of 25fcebb5 in tests/strategies.py.
   - 1405cbb2 (after the compare) changes only tests/engine/test_attract.py (two fullset tests), which no snapshot
     part runs: the compare holds for 1405cbb2.
-  - Closing compare: branch `e1-close-h-5` = the new tip with both reverts (the classes sit in different parts,
-    `sample` and `gen`, so one run attributes each). Expected: COMPARE_RC=0 with the same allow-new; a turn-0 drift
-    hides later `gen` steps today, so any other `gen` difference shows there first.
+  - First closing compare `snapcmp-e1closeh6-462ce77`: branch `e1-close-h-6` (462ce77b) = tip 507220df (after the
+    train merge) with the class A and class B reverts, against the train-tip 38099359 capture (82e54463 plus an
+    off-site test change). COMPARE_RC=1, 101 ok, 1 diverged, 20 generator drift. Log
+    `_scratch/rent/out/snapcmp-e1closeh6-462ce77/fetch-1795303179/compare.log`. With the terrain drift reverted, the
+    two classes it hid showed up:
+  - Diverged, class C (H-1, Acid Rain at B = 2): `130-139.sample` seed 136 turn 3 `.sample_outcome.future_hit[0]`
+    53 -> 47 (and [1] 53 -> 1). Cause: H-1 grids the masks an Acid Rain write leaves (`_future_fields`) and so drops
+    the B = 2 loose source (`acid = acid_rain_reachable(...) if fmt.B > 2 else False`, outcome.py:844). Where a
+    Pursuit can chase a U-turn or switch (subscript_pursuit.s:100, :115; battle_script.c:6899-6916) the class
+    `hit_class(53, {46, 85})` = 47 is stored where main stored the raw 53. Seed 136: Pursuit against U-turn, with
+    Gravity on. Every reachable mask gives the thresholds {46, 85}, so the class decides the hit exactly as the roll
+    does. The hit is not due (timer 2, battle_controller_player.c:1767-1769), so no `step` part moved. Intended
+    mechanic, sound. The single change a closing compare reverts: outcome.py:844 back to
+    `acid = acid_rain_reachable(state, actions, uses, effect)`. Report: `_scratch/e1/h-next/close-h6-diverge-report.md`.
+  - Generator drift, class D (H-2 / H-3, new abilities): all 20 `gen` parts, first diffs such as `.in_state.ability`
+    25 -> 99, 24 -> 101, 28 -> 98, and the ability slots, actions and speeds that follow from them. Cause:
+    `supported_pokemon` (tests/strategies.py:623) draws every ability slot that is not `AbilityId.UNSUPPORTED`, and
+    batch H implements eight more abilities: AbilityId 97-104, Immunity, Own Tempo, Water Veil, Magma Armor,
+    Oblivious (H-2) and Color Change, Marvel Scale, Soundproof (H-3). Generator only. Batch H adds no move effect and
+    no M1 item. The single change a closing compare reverts: the slot filter keeps ids below `AbilityId.IMMUNITY`.
+  - Closing compare: branch `e1-close-h-7` = 507220df with the class A, B, C and D reverts, against the 38099359
+    capture with the same allow-new. Expected: COMPARE_RC=0. (`e1-close-h-5`, cut before the train merge, was
+    cancelled.)
   - Should-fix `REVEALS_ON` (Insomnia / Vital Spirit / Limber on `STATUS_CURE`) is batch I group I-6 (`_scratch/e1/i-next/sheets/ability-status-cure-reveals.md`).
 
 ## Stream state (restart point, 2026-11-19)
