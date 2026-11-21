@@ -39,6 +39,10 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    section 5).
 5. One Opus review agent checks the batch; one fix round fixes its findings. Commits added
    after a review get their own review before the merge, except as in step 8.
+   Every review brief (this step and step 8) demands the battle-script read for any finding
+   that a check is missing because "the C command has no check": the reviewer reads the
+   battle scripts (`res/battle/scripts`) that run the command and cites them, or the finding
+   is dropped. (21 Nov 2026: a Griseous Orb finding was wrong because only the C was read.)
    A new test that asserts over a growing set or a coverage-dependent refusal carries the
    `fullset` marker.
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
@@ -192,6 +196,17 @@ per day is the rate used for estimates.
   the nightly; it verifies the delete with a pod listing, renames the pod's id file to
   `.deleted`, logs it in `DISPATCH.md` and sends the managing session one line. In working
   hours it only reports idle pods. Creating pods stays with the managing session.
+- **Script step on a pod.** Besides pack runs, the dispatcher may run one committed script on
+  a pod when a request names it: the script as committed at the sha under test (from that
+  sha's checkout on the pod, never a file sent from the PC or typed into the exec body); it
+  reads only that checkout and the built tables; it runs after the run's list has finished;
+  its output is text written into the run's results folder and collected with the results.
+  The exact command, sha and pod go in `_scratch/handoff/DISPATCH.md` before it runs.
+- **Local pytest with four streams.** With four streams working, the pod is the default place
+  for in-work tests. A local pytest (CLAUDE.md, Where tests run: one process, one file or
+  chunk) runs only when more than 6 GB of RAM is free, checked right before it starts
+  (PowerShell: `(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB`), not earlier
+  in the session.
 - **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
   sends no new tip while that run is going, unless the run has already failed (a first-failure
   report counts). The managing session holds any other request until the run is back.
@@ -492,13 +507,21 @@ table archives or run outputs.
   `external/`, cache, code-copy and table-copy folders, ROM, save and archive files
   (`*.nds`, `*.sav`, `*.dsv`, `*.ds<n>`, `*.zip`, `*.7z`, `*.tar*`, `*.npz`, `*.npy`,
   `*.pkl`, `*.bin`, ...; extensions in any letter case), keys and credentials
-  (`_scratch/rent/home/.runpod/`, `*.key`, `*.pem`, `.env*`, `*.env`, `local.toml`, `*.b64`),
+  (`_scratch/rent/home/.runpod/`, `*.key`, `*.pem`, `*.ppk`, `.env*`, `*.env`, `local.toml`, `*.b64`),
   files with a NUL byte whatever their extension, files whose content looks like a key or
   token (private keys, Runpod/GitHub/OpenAI/AWS/Slack/Hugging Face/Google keys, JWTs,
   `user:password@` in URLs, `Bearer` tokens, `api_key=`/`apiKey:`/`PASSWORD=`-style
   assignments in any letter case), `rent/out/` and other run outputs, logs over 1 MB, files
   over 2 MB, anything inside a folder named `backup*`, copied `.gitignore`, `.gitattributes`
   and `.gitmodules` files. A content scan that cannot run (grep error) refuses too.
+- Only the state files are scanned. The branches go as git has them: `git push offsite --all`
+  does not scan branch contents, so what keeps keys, ROMs and saves out of a branch is the
+  repo's own rules (`.gitignore`, never committing them), not this script.
+- Diverged `scratch-state` (the push of the state clone is rejected, exit 4, because the
+  off-site branch has commits the clone lacks, e.g. after a restore elsewhere):
+  `git -C _scratch/offsite/state fetch offsite scratch-state`, then
+  `git -C _scratch/offsite/state rebase FETCH_HEAD`, then run `bash tools/ops/offsite.sh`
+  again. Never force-push it.
 - Restore on a new machine: `git clone -o offsite <off-site repo> <project folder>` gives
   every branch (`git checkout <branch>`), then in it `git remote add origin <public repo>`.
   Then `git clone -c core.autocrlf=false -o offsite -b scratch-state <off-site repo>
