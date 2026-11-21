@@ -12,7 +12,8 @@ HEADER = "file collected passed failed skipped errors xfailed xpassed not_run ma
 UNITS = "--- per unit: unit ids max_rss_MB wall_s rc first_id"
 
 
-def _agg(root: Path, run: str, units: list[str], ids: dict[str, list[str]] = {}) -> Path:
+def _agg(root: Path, run: str, units: list[str], ids: dict[str, list[str]] | None = None) -> Path:
+    ids = ids or {}
     d = root / run / "results"
     (d / "out").mkdir(parents=True)
     for u, xs in ids.items():
@@ -24,7 +25,7 @@ def _agg(root: Path, run: str, units: list[str], ids: dict[str, list[str]] = {})
 
 def test_generated_lines_take_the_max_per_file_with_floor_and_skip_hand_kept_units(tmp_path):
     w = tmp_path / "weights.txt"
-    w.write_text("# head\ntests/h.py::test_big 90 r0\ntests/f.py 7 r0\n" + wfa.MARK + "\nold line 1 x\n",
+    w.write_text("# head\ntests/h.py::test_big 90 r0\ntests/f.py 7 r0\n" + wfa.MARK + "\ntests/old.py 1 x\n",
                  encoding="utf-8")
     a1 = _agg(tmp_path, "run-a", [
         "u_001 2 20000 10 0 tests/a.py::test_1",        # 20000 MiB -> 21 GB
@@ -51,3 +52,33 @@ def test_an_agg_without_a_unit_table_uses_its_file_rows(tmp_path):
 
 def test_tracked_table_has_the_marker():
     assert wfa.MARK in (ROOT / "tools/ops/day/pod/weights.txt").read_text(encoding="utf-8").splitlines()
+
+
+def test_warnings_for_kernel_kills_triple_kills_hand_kept_overruns_and_lower_values(tmp_path):
+    w = tmp_path / "weights.txt"
+    w.write_text("tests/h.py::test_big 10 r0\n" + wfa.MARK + "\ntests/a.py 40 old\n", encoding="utf-8")
+    agg = _agg(tmp_path, "run-a", [
+        "u_001 1 20000 10 0 tests/a.py::test_1",       # 21 GB: lower than the 40 before
+        "u_002 1 60000 10 137 tests/a.py::test_2",     # kernel kill: a lower bound, not a peak
+        "u_003 1 0 10 98 tests/b.py::test_1",          # killed three times: no peak
+        "u_004 1 30000 10 0 tests/h.py::test_big",     # hand-kept 10 GB, peaked at 32
+    ])
+    warn: list[str] = []
+    out = wfa.render(w, [agg], warn).splitlines()
+    assert out[-1] == "tests/a.py 21 run-a"
+    assert sorted(warn) == sorted([
+        "killed three times, no peak: run-a u_003 tests/b.py",
+        "hand-kept ids peaked at 32 GB, above their largest hand-kept weight 10 GB: run-a u_004 tests/h.py::test_big",
+        "rc 137 lower bound 63 GB above the file's 21 GB; add a hand-kept line: tests/a.py (run-a u_002)",
+        "lower than before: tests/a.py 40 -> 21 GB",
+    ])
+
+
+def test_a_file_the_aggs_no_longer_measure_is_warned_and_main_prints_warnings(tmp_path, capsys):
+    w = tmp_path / "weights.txt"
+    w.write_text(wfa.MARK + "\ntests/gone.py 9 old\ntests/a.py 4 old\n", encoding="utf-8")
+    agg = _agg(tmp_path, "run-a", ["u_001 1 3000 10 0 tests/a.py::test_1"])
+    assert wfa.main([str(w), str(agg)]) == 0
+    io = capsys.readouterr()
+    assert io.out.splitlines()[-1] == "tests/a.py 4 run-a"
+    assert io.err.splitlines() == ["WARNING: no longer measured, dropped: tests/gone.py (was 9 GB); pass the agg.txt that measured it"]

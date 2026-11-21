@@ -9,6 +9,11 @@ max_rss_MB, MiB, x 1.048576 / 1000, rounded up, at least FLOOR_GB), run = the ru
 ids (<agg dir>/out/<unit>.ids, else its first id) has no hand-kept entry: ids with one are
 weighed by that entry. An agg.txt without a per-unit table counts its per-file max_rss_MB.
 A file that has a hand-kept file-level entry is not printed again.
+Warnings (stderr, "WARNING: ..."; the table is still printed): a unit killed three times (rc 98,
+no peak), a kernel kill (rc 137: a lower bound, never a peak) above its file's measured peak, a
+unit of hand-kept ids only that peaked above its largest hand-kept weight, a file whose new line
+is lower than its line before, and a file of the old generated part that no <agg.txt> measures
+(dropped). Each asks for a look before the table is committed; a hand-kept line fixes most.
 """
 
 from __future__ import annotations
@@ -38,13 +43,18 @@ def _hand_covered(test_id: str, hand: list[tuple[str, int]]) -> bool:
     return any(weights._matches(e, test_id) for e, _ in hand)
 
 
-def measure(aggs: list[Path], hand: list[tuple[str, int]]) -> dict[str, tuple[int, str]]:
-    """file -> (largest MiB, run)."""
+def measure(aggs: list[Path], hand: list[tuple[str, int]]) -> tuple[dict[str, tuple[int, str]], list[str]]:
+    """(file -> (largest MiB, run), warnings). Rows with rc 137 (killed by the kernel: a lower
+    bound) and rc 98 (killed three times at KILL_GB: no peak) are not measured peaks; both are
+    warned about, as is a unit made only of hand-kept ids that peaked above its largest
+    hand-kept weight."""
     best: dict[str, tuple[int, str]] = {}
+    low: dict[str, tuple[int, str]] = {}
+    warn: list[str] = []
 
-    def take(f: str, mib: int, run: str) -> None:
-        if mib > 0 and (f not in best or mib > best[f][0]):
-            best[f] = (mib, run)
+    def take(d: dict, f: str, mib: int, run: str) -> None:
+        if mib > 0 and (f not in d or mib > d[f][0]):
+            d[f] = (mib, run)
 
     for agg in aggs:
         run = run_name(agg)
@@ -59,28 +69,56 @@ def measure(aggs: list[Path], hand: list[tuple[str, int]]) -> dict[str, tuple[in
                 idf = agg.parent / "out" / f"{p[0]}.ids"
                 ids = [x for x in idf.read_text(encoding="utf-8").splitlines() if x.strip()] if idf.is_file() else []
                 ids = ids or [p[5]]
-                if all(_hand_covered(t, hand) for t in ids):
+                f, mib, rc = ids[0].split("::")[0], int(p[2]), p[4]
+                if rc == "98":
+                    warn.append(f"killed three times, no peak: {run} {p[0]} {f}")
                     continue
-                take(ids[0].split("::")[0], int(p[2]), run)
+                covered = [max(g for e, g in hand if weights._matches(e, t)) for t in ids if _hand_covered(t, hand)]
+                if len(covered) == len(ids):  # weighed by its hand-kept lines
+                    if gb(mib) > max(covered):
+                        warn.append(f"hand-kept ids peaked at {gb(mib)} GB{' (rc 137: at least)' if rc == '137' else ''}, "
+                                    f"above their largest hand-kept weight {max(covered)} GB: {run} {p[0]} {ids[0]}")
+                    continue
+                if rc == "137":
+                    take(low, f, mib, f"{run} {p[0]}")
+                    continue
+                take(best, f, mib, run)
         else:
             for ln in lines[1:]:
                 p = ln.split()
                 if ln.startswith("---"):
                     break
                 if len(p) == 12 and p[0].startswith("tests/") and p[9].isdigit():
-                    take(p[0], int(p[9]), run)
-    return best
+                    take(best, p[0], int(p[9]), run)
+    for f, (mib, where) in sorted(low.items()):
+        if f not in best or gb(mib) > gb(best[f][0]):
+            have = f"{gb(best[f][0])} GB" if f in best else "no measured peak"
+            warn.append(f"rc 137 lower bound {gb(mib)} GB above the file's {have}; add a hand-kept line: {f} ({where})")
+    return best, warn
 
 
-def render(weights_txt: Path, aggs: list[Path]) -> str:
+def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None) -> str:
     text = weights_txt.read_text(encoding="utf-8").splitlines()
     if MARK not in text:
         raise SystemExit(f"{weights_txt}: no line {MARK!r}")
     head = text[: text.index(MARK) + 1]
+    old = dict(weights.load_lines(text[text.index(MARK) + 1:]))
     hand = weights.load_lines(head)
     hand_entries = {e for e, _ in hand}
-    rows = [(gb(m), f, r) for f, (m, r) in measure(aggs, hand).items() if f not in hand_entries]
+    best, w = measure(aggs, hand)
+    rows = [(gb(m), f, r) for f, (m, r) in best.items() if f not in hand_entries]
     rows.sort(key=lambda x: (-x[0], x[1]))
+    for g, f, _ in rows:
+        if f in old and g < old[f]:
+            w.append(f"lower than before: {f} {old[f]} -> {g} GB")
+    new = {f for _, f, _ in rows}
+    for f in sorted(set(old) - new - hand_entries):
+        w.append(f"no longer measured, dropped: {f} (was {old[f]} GB); pass the agg.txt that measured it")
+    if warn is not None:
+        warn.extend(w)
+    else:
+        for line in w:
+            print(f"WARNING: {line}", file=sys.stderr)
     return "\n".join(head + [f"{f} {g} {r}" for g, f, r in rows]) + "\n"
 
 
