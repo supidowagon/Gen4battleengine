@@ -51,9 +51,9 @@ mkdir -p "$R/external"; ln -sfn "/work/_decomp/$DECOMP" "$R/external/pokeplatinu
 if command -v npm >/dev/null && [ -f "$R/tools/smogon_calc/package-lock.json" ]; then ( cd "$R" && npm ci -s --prefix tools/smogon_calc )
 elif [ "${NUZLINE_REQUIRE_NODE:-}" = 1 ]; then echo "ERROR: npm or tools/smogon_calc/package-lock.json missing"; exit 1; fi
 # Compile cache seed from the network volume (bin/cache_sync.sh seed: once per pod and jax version),
-# only when /vol is a mountpoint; a pod without the volume runs exactly as before. A failed seed
+# only when /vol (CACHE_VOL; tests point it elsewhere) is a mountpoint; a pod without the volume runs exactly as before. A failed seed
 # only means cold compiles.
-if mountpoint -q /vol 2>/dev/null; then
+if mountpoint -q "${CACHE_VOL:-/vol}" 2>/dev/null; then
   JV=$(cd "$R" && uv run --frozen python -c 'from nuzline.jaxcache import jax_version; print(jax_version())') \
     && CACHE_JAXVER="$JV" CACHE_PY="$R/.venv/bin/python" bash "$D/bin/cache_sync.sh" seed \
     || echo "WARNING: cache seed failed (rc $?); this run compiles what the pod lacks"
