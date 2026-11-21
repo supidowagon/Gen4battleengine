@@ -3273,7 +3273,8 @@ def form_change_pending(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool``: ``BattleSystem_TriggerFormChange`` (battle_lib.c:6305-6451) would change a form
     now: any of its four blocks (``hooks.form_change``: Castform's types, Cherrim's and Arceus's
     ``form_num``, a Transformed Giratina-Origin's rebuild, which shows in ``form_num``), H-5. A
-    Giratina Origin that is not Transformed and lacks the Orb is refused by coverage."""
+    Giratina Origin that is not Transformed and lacks the Orb is refused by coverage: it can lack
+    it only from the battle's start, since no move takes the Orb (``hooks.form_change``)."""
     from nuzline.engine.hooks import form_change  # hooks imports this module
 
     new = form_change(tables, state)

@@ -2618,6 +2618,26 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   in both engines). Snapshot (expected): no output divergence (tests/strategies.py draws no Cherrim, Arceus or Castform;
   its Giratina holds the Orb at form 0; every block is idle, the Transform pre-run included); the one new field is
   `form_num` (`--allow-new form_num`), set from the active slot's form by the generator.
+  - H-5 review fix (merge-gate finding: "the Orb can leave by Knock Off / Trick, so Origin should revert"): finding
+    withdrawn, the decomp says the Orb cannot leave in battle. The C commands have no Orb test (TryKnockOff
+    battle_script.c:6608-6630, TrySwapItems :6336-6357), but the scripts that call them fail first on a held Griseous
+    Orb: subscript_knock_off.s:7 (-> :15 End; effect_script_0188.s:5), subscript_exchange_items.s:9-10 (attacker or
+    defender -> :49-50 MOVE_STATUS_FAILED; Trick / Switcheroo, effect_script_0177.s:5), Thief / Covet in the C
+    (TryStealItem :5111; an Origin attacker holds the Orb, so :5120 fails it too), Fling effect_script_0233.s:6, Embargo
+    subscript_embargo_start.s:9. Pluck / Bug Bite eat only a pluck-effect berry (BattleSystem_PluckBerry,
+    battle_lib.c:5539-5543; TryPluck battle_script.c:8116-8131); every other RemoveItem takes the holder's own consumed
+    item; Sticky Barb's transfer and Recycle need an empty hand (battle_lib.c:5389, :7378; effect_script_0184.s:5). So
+    the no-Orb branch of TriggerFormChange (battle_lib.c:6412-6418 -> subscript_giratina_form_change.s) is reachable
+    only from the battle's start (the Origin without the Orb that coverage refuses, `coverage._check_form`), and
+    `form_change_pending` has no missed early return before the Destiny Knot step. Both engines already model every
+    one of those script checks (`effects` Knock Off cond, Skill Swap / Role Play / Embargo / Fling / Thief tests;
+    reference engine.py:4825, :8352); Trick / Switcheroo are refused moves today, and their model must carry :9-10.
+    Change: no engine behaviour; the coverage.py form-change bullet, the `hooks.form_change` and
+    `effects.form_change_pending` docstrings now cite these checks. Test (slow, peak 8.52 GB cold):
+    `test_knock_off_leaves_giratina_origin_its_griseous_orb_and_its_form` (item, mark, `form_num` 1, stats, Levitate
+    kept, both engines); passed, and the H-5 block (21 tests) passed. No new field, no table input changed. Snapshot:
+    no part can meet it (no engine change; tests/strategies.py:385 draws Giratina with the Orb at form 0), so the
+    closing compare e1-close-h-5 stays valid.
 - H-6 The trainer AI's reads of Filter (111), Solid Rock (116), Levitate (26) and Scrappy (113) (rule sheets
   ai-filter.md, ai-solid-rock.md, ai-levitate.md, ai-scrappy.md). AI only: the battle's own handling of the four was
   built in `damage` earlier (`_finish`, `levitated`, `identified`); the engine, the reference and the tables are
@@ -2776,6 +2796,7 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   - Closing compare: branch `e1-close-h-5` = the new tip with both reverts (the classes sit in different parts,
     `sample` and `gen`, so one run attributes each). Expected: COMPARE_RC=0 with the same allow-new; a turn-0 drift
     hides later `gen` steps today, so any other `gen` difference shows there first.
+  - Should-fix `REVEALS_ON` (Insomnia / Vital Spirit / Limber on `STATUS_CURE`) is batch I group I-6 (`_scratch/e1/i-next/sheets/ability-status-cure-reveals.md`).
 
 ## Stream state (restart point, 2026-11-19)
 

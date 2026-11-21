@@ -82,7 +82,13 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_giratina_form_change``), which the engine does not model (the Orb cannot leave in
-  battle, so an Origin that starts with it never reaches that branch); Castform, Cherrim, Arceus
+  battle, so an Origin that starts with it never reaches that branch: Knock Off, Trick /
+  Switcheroo, Thief / Covet, Fling and Embargo fail on a held Griseous Orb,
+  subscript_knock_off.s:7, subscript_exchange_items.s:9-10, battle_script.c:5111,
+  effect_script_0233.s:6, subscript_embargo_start.s:9; Pluck eats only berries,
+  ``BattleSystem_PluckBerry``, battle_lib.c:5539-5543; every other ``RemoveItem`` takes the
+  holder's own consumed item; Sticky Barb and Recycle need an empty hand, battle_lib.c:5389,
+  :7379, effect_script_0184.s:5); Castform, Cherrim, Arceus
   and the Transformed Giratina-Origin are modelled since E1 batch H (``hooks.form_change``,
   ``BattleSystem_TriggerFormChange``, battle_lib.c:6305-6451, F-6, H-5); Shaymin-Sky reverts to Land
   Forme when frozen (``subscript_check_shaymin_form.s``, ``battle_controller_player.c:3497-3505``)

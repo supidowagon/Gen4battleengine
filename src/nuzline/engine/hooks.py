@@ -437,7 +437,9 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[row, mon] > 0)
     w = fcm.weather_bits(state)
     already = fcm.ability_bits(w, weather) == w
-    state = announce(state, "weather_announced", side, on)  # :3747, :3756, :3765, :3774, even when already up
+    state = announce(
+        state, "weather_announced", side, on
+    )  # :3747, :3756, :3765, :3774, even when already up
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
     return fcm.weather_ability(state, weather, on)
 
@@ -1163,7 +1165,11 @@ def form_change(tables: Tables, state: BattleState, cond=True) -> BattleState:
     TRIGGER_SWITCH_IN_EFFECTS (bcp.c:3672) reaches the MOLD_BREAKER / PRESSURE states
     (battle_lib.c:4075, :4096-4110; subscript_pressure.s, ``BattleAI_SetAbility``,
     battle_script.c:11806: ``reveal_ability``) with it. A Giratina Origin that is not Transformed
-    changes only without the Griseous Orb (:6416-6418, :6450-6453): refused by coverage.
+    changes only without the Griseous Orb (:6416-6418, :6450-6453), which it can lack only from
+    the battle's start, refused by coverage (``coverage._check_form``): no move takes the Orb in
+    battle (Knock Off subscript_knock_off.s:7, Trick / Switcheroo subscript_exchange_items.s:9-10,
+    Thief / Covet battle_script.c:5111, Fling effect_script_0233.s:6 all fail on it; the C
+    commands TryKnockOff / TrySwapItems run only after those script checks).
 
     The state is not advanced while a change happened (battle_lib.c:4115-4121), so the call
     repeats until none changes. Each result is stable under its own test, and only the Giratina

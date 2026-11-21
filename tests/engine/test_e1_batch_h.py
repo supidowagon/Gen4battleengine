@@ -1461,6 +1461,30 @@ def test_a_transformed_giratina_origin_is_rebuilt_as_altered_with_pressure(table
     assert int(out.ai_ability_known[0]) == ABILITY_DECOMP_IDS[AbilityId.PRESSURE]
 
 
+# A step compile like the test above (peak above the fast tier's ~8.3 GB): slow tier.
+@pytest.mark.slow
+def test_knock_off_leaves_giratina_origin_its_griseous_orb_and_its_form(tables, names):
+    """H-5 review fix: subscript_knock_off.s:7 ends the script on a held Griseous Orb before
+    TryKnockOff (battle_script.c:6608-6630) runs, so the Origin keeps the Orb and never reaches
+    the no-Orb revert (battle_lib.c:6412-6418): item, slot mark, ``form_num`` Origin, its stats
+    and Levitate all stay. Both engines."""
+    from dataclasses import replace
+
+    from nuzline.engine.state import make_state
+    from tests.engine.test_pivot import _mon
+
+    n = names
+    origin = replace(_mon(n, "Giratina", ["Growl"], 50, item="Griseous Orb"), form=1)
+    s = make_state(tables, [_mon(n, "Sneasel", ["Knock Off"], 50)], [origin])
+    assert int(s.form_num[1]) == 1 and int(s.ability[1, 0]) == int(AbilityId.LEVITATE)
+    out = assert_matches_reference(tables, s, (0, 0), empty_outcome())
+    assert int(out.item[1, 0]) == n.item("Griseous Orb") and int(out.knocked_off[1, 0]) == 0
+    assert int(out.form_num[1]) == 1 and int(out.form[1, 0]) == 1
+    assert out.stats[1, 0].tolist() == s.stats[1, 0].tolist()
+    assert int(out.ability[1, 0]) == int(AbilityId.LEVITATE)
+    assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # the hit itself lands
+
+
 @pytest.mark.parametrize("target", ["Golduck", "Giratina"])
 def test_a_doubles_giratina_copy_rebuilds_from_its_chosen_targets_party_pokemon(
     tables, names, target
