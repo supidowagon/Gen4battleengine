@@ -2,6 +2,13 @@
 
 A tool that finds high-EV lines for single-player nuzlocke battles in Pokemon Platinum (US) and Platinum Kaizo (`--game kaizo`). Given the player's save file and a chosen trainer fight, it recommends pre-battle setup (box picks, lead, held items, prestatus, predamage) and ranked in-battle actions each turn, maximizing the probability of winning with zero faints. See `docs/design.md`.
 
+## Taking over this project
+
+- Standing rules: `CLAUDE.md`.
+- How the project is run, and how to take it over: `docs/process.md`, section 12 "Taking over".
+- Standing decisions and approvals: `docs/decisions.md`.
+- Live state (tips, runs in flight, next steps): `_scratch/handoff/` in the main checkout (git-ignored).
+
 ## Commands
 
 ```
