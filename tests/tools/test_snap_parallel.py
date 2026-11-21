@@ -721,14 +721,14 @@ def _group_leader(s=60):
 def test_sgprune_drops_a_group_once_it_has_no_member(tmp_path, fns):
     p, g = _group_leader()
     try:
-        keep = _bash(f". '{fns.as_posix()}'; SG=\"$$ {g}\"; procscan; sgprune; echo \"$SG\"")
+        keep = _own_group_bash(f". '{fns.as_posix()}'; SG=\"$$ {g}\"; procscan; sgprune; echo \"$SG\"")
         assert keep.stdout.split()[1:] == [g], keep.stdout + keep.stderr
     finally:
         _bash(f"kill -9 {g}")  # by bash's pid (Git Bash: Popen.kill may miss the exec'd sleep)
         p.kill()
         p.wait()
     assert _until(lambda: _bash(f"kill -0 {g} 2>/dev/null || echo dead").stdout.strip(), 10)
-    gone = _bash(f". '{fns.as_posix()}'; SG=\"$$ {g}\"; procscan; sgprune; echo \"$$ $SG\"")
+    gone = _own_group_bash(f". '{fns.as_posix()}'; SG=\"$$ {g}\"; procscan; sgprune; echo \"$$ $SG\"")
     me, *sg = gone.stdout.split()
     assert sg == [me], gone.stdout + gone.stderr
 
@@ -743,8 +743,10 @@ def test_snapwatch_drops_a_dead_group_from_sg_and_the_groups_file(tmp_path, fns)
     assert _until(lambda: _bash(f"kill -0 {g} 2>/dev/null || echo dead").stdout.strip(), 10)
     lock = tmp_path / "lock"
     lock.mkdir()
-    r = _bash(f". '{fns.as_posix()}'; L='{lock.as_posix()}'; echo $$ > \"$L/pid\"; SG=\"$$ {g}\"; "
-              f"sleep 3 & snapwatch $! \"$L\"; echo \"rc=$? $$|$SG|$(cat \"$L/groups\")\"")  # fmt: skip
+    # SG starts as the shell's pid, as in run.sh, which leads its own group under setsid.
+    r = _own_group_bash(f". '{fns.as_posix()}'; L='{lock.as_posix()}'; echo $$ > \"$L/pid\"; "
+                        f"SG=\"$$ {g}\"; sleep 3 & snapwatch $! \"$L\"; "
+                        f"echo \"rc=$? $$|$SG|$(cat \"$L/groups\")\"")  # fmt: skip
     head, sg, groups = r.stdout.strip().split("|")
     rc, me = head.split()
     assert (rc, sg.split(), groups.split()) == ("rc=0", [me], [me]), r.stdout + r.stderr
