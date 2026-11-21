@@ -34,7 +34,7 @@ import pytest
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import confusion_damage
 from nuzline.engine.enumerate import outcome_laws
-from nuzline.engine.format import DOUBLES
+from nuzline.engine.format import DOUBLES, MULTI
 from nuzline.engine.ids import Stat
 from nuzline.engine.outcome import empty_outcome
 from tests.engine.d2_states import four, with_hp, with_moves
@@ -118,17 +118,32 @@ def test_a_b4_haze_lets_a_non_participant_eat_its_starf_with_entry_0(tables, nam
     assert relevant[1] == relevant[2] == relevant[3] == [False] * 4
 
 
-def test_a_partner_holder_that_switches_out_is_on_the_replacement_bench(tables, names):
-    """DOUBLES, shared party: battler 0's active Pokemon holds a Starf Berry at its pinch and
-    switches out; battler 2 (1 HP) can fall to battler 1's Tackle. At the end-of-turn replacement
-    ReplaceFainted excludes the partner's slot as it stands then (``selectedPartySlot[i ^ 2]``,
-    bcp.c:4096-4107), so battler 2 can send in the holder, which reads battler 2's replacement
-    draw (column 1): ``relevant.starf[2][1]``. The Haze test above keeps row 2 all False."""
-    s = _all_moves(four(tables, names, DOUBLES), names, "Swords Dance")
+def _switching_holder(tables, names, fmt):
+    """``fmt``: battler 0's active Pokemon holds a Starf Berry at its pinch with all five Starf
+    stats at +6, so ShowBattleMon's TriggerEffectOnSwitch did not eat it (no stat to raise,
+    battle_lib.c:5278-5286; else ``step._turn_start_items`` eats it before commands, bcp.c:256-268,
+    battle_lib.c:4151-4165), and it switches out (its stages reset, so a replacement sends it in
+    fresh at its pinch); battler 2 (1 HP) can fall to battler 1's Tackle."""
+    s = _all_moves(four(tables, names, fmt), names, "Swords Dance")
     s = with_moves(s, names, 1, ["Tackle"])
     s = _set_item(s, 0, names.item("Starf Berry"))
+    s = s._replace(stages=s.stages.at[0, Stat.ATK : Stat.SPE + 1].set(6))
     s = with_hp(s, 0, int(s.max_hp[0, 0]) // 4)
     s = with_hp(s, 2, 1)
     actions = jnp.asarray([MOVE_ACTIONS + 2, 0, 0, 0], jnp.int32)
-    laws = jax.tree.map(np.asarray, outcome_laws(tables, s, actions))
-    assert bool(laws.relevant.starf[2][1])
+    return jax.tree.map(np.asarray, outcome_laws(tables, s, actions)).relevant.starf
+
+
+def test_a_partner_holder_that_switches_out_is_on_the_replacement_bench(tables, names):
+    """DOUBLES, shared party (``_switching_holder``): at the end-of-turn replacement ReplaceFainted
+    excludes the partner's slot as it stands then (``selectedPartySlot[i ^ 2]``, bcp.c:4096-4107),
+    so battler 2 can send in battler 0's switched-out holder, which reads battler 2's replacement
+    draw (column 1): ``relevant.starf[2][1]``. The Haze test above keeps row 2 all False."""
+    assert bool(_switching_holder(tables, names, DOUBLES)[2][1])
+
+
+def test_a_partner_holder_of_another_party_is_not_on_the_replacement_bench(tables, names):
+    """MULTI, separate parties (format.py MULTI: battler 2 draws from party 2): the same board's
+    holder belongs to battler 0's party only, so battler 2's replacement never sends it in
+    (ReplaceFainted reads the battler's own party, bcp.c:4081-4107): ``starf[2][1]`` stays False."""
+    assert not bool(_switching_holder(tables, names, MULTI)[2][1])
