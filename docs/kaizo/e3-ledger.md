@@ -1876,3 +1876,15 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   (both only prune less, so they stay exact). `--growth-cap` took `_cap` (rejected -1) in GT-3: now `_count`, help text corrected. The root offers count moves not known at the root (an empty slot is not modelled: 5 answers
   counted as the sheet). The levels of later gaps are the caller's input (`EvolutionGap.level`).
   Tests: tests/prep/test_growth.py (plan half), tests/data/test_gauntlet_settings.py. Not run locally (no local pytest): for the pod.
+
+- E3-B3-17 GT-17 single post-fight evolution (`src/nuzline/prep/report.py`). No table input changed.
+  `post_fight_evolution(tables, learnsets, carry, levelled, result, map_method, time, settings, *, score=None, k=0, next_trainer=None)` -> `PostFight` (GT-14's prompts plus, with `score`, every
+  answer scored); `post_fight_lines`, `post_fight_json`, `next_fight_scorer` (`prep.states.make_states` + `screen.screen`); `render` and `record` take `post_fight=` (record key `post_fight_evolution`).
+  Rules: evolution runs after the battle (`battle_system.c:826-850`, state `battle_main.c:261`, case `:274-297`), so it never changes the fight just planned; without `--next` cancel is recommended
+  because a cancelled member is offered again only after its next level-up (the mask bit is cleared when examined, `battle_system.c:838-840`; B cancels, `evolution.c:283-286`; Rare Candy re-check
+  `callbacks.c:816-829`); the report always prints "An evolution cannot be undone.". Answers = every subset of the living offered members evolving (learn prompts after evolving given up), ranked by
+  `prep_order` with cost = number of evolutions, so a tie goes to cancel; a fainted member is offered, answer cancel (design section 6).
+  Input, not built: the post-fight party (`carry`, `levelled`) is `carry_out`'s (GT-4b, waits for D3-8b `party_held_item`); no BattleState is read. `cli.py _prep` is not wired: it has no post-fight
+  Carry to pass until `carry_out` exists; it then passes `post_fight_evolution(...)` built with `next_fight_scorer` for `args.next_fight`'s trainer (fight tables, `build_trainer_party`).
+  Deviations: sheet's `battle_system.c:835-849` is the loop; the mask bit clear is `:838-840`; `battle_main.c:261` sets the state, the case is `:274`.
+  Tests: tests/prep/test_report.py. Not run (no local pytest): for the pod.

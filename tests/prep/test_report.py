@@ -5,10 +5,25 @@ import json
 from dataclasses import replace
 
 import numpy as np
+import pytest
 
+from nuzline.data import tables as table_data
 from nuzline.engine.ids import Status
+from nuzline.prep.growth import BATTLE_RESULT_WIN
 from nuzline.prep.problem import Resources
-from nuzline.prep.report import cost_line, ladder_lines, prep_steps, record, render, setup_card
+from nuzline.prep.report import (
+    CANNOT_UNDO,
+    PostFight,
+    cost_line,
+    ladder_lines,
+    post_fight_evolution,
+    post_fight_json,
+    post_fight_lines,
+    prep_steps,
+    record,
+    render,
+    setup_card,
+)
 from nuzline.prep.screen import ScreenStats
 from nuzline.prep.search import (
     Finalist,
@@ -24,6 +39,7 @@ from nuzline.search import deaths
 from nuzline.search.stage_b import ActionValue, PlanNode, SolveResult, SolveSettings
 from tests.engine.helpers import sample_party
 from tests.prep.fixtures import candidate, problem
+from tests.prep.test_growth import MASK1, A, carry_of, carry_settings, level_evolver, sp
 
 LEFT_OUT = "party slot 5 ABRA: left out: Teleport (move effect not implemented)"
 
@@ -363,3 +379,141 @@ def test_prep_steps_deposits_left_out_party(tables, names):
         "Deposit GEODUDE (party slot 4).",
         "Withdraw KRICKETOT (box 1 slot 1).",
     ]
+
+
+# --- GT-17 single battle, post-fight evolution (E3-B3-17) --------------------------------------
+
+
+@pytest.fixture(scope="module")
+def manifest(tables):
+    return table_data._read_manifest(table_data.DEFAULT)
+
+
+@pytest.fixture(scope="module")
+def method(manifest):
+    return {name: i for i, name in enumerate(manifest["evolution_methods"])}
+
+
+def fake_score(evolved_wins, cancelled_wins, n=100):
+    """Screens by the Carries' first species: ``win_0`` counts, the rest a loss."""
+
+    def score(carries):
+        out = []
+        for c in carries:
+            wins = evolved_wins if int(c.species[0]) == A else cancelled_wins
+            out.append(ScreenStats((wins, 0, 0, 0, 0, 0, n - wins, 0), 0, 0.0, 0.0, False))
+        return out
+
+    return score
+
+
+def post(tables, manifest, method, carry=None, *, score=None, next_trainer=None, mask=MASK1):
+    carry = carry if carry is not None else carry_of(tables, [sp()])
+    return post_fight_evolution(
+        tables,
+        level_evolver(manifest, method),
+        carry,
+        mask,
+        BATTLE_RESULT_WIN,
+        0,
+        None,
+        carry_settings(),
+        score=score,
+        next_trainer=next_trainer,
+    )
+
+
+def test_post_fight_without_next_recommends_cancel(tables, names, manifest, method):
+    got = post(tables, manifest, method)
+    lines = post_fight_lines(got, names)
+    text = "\n".join(lines)
+    assert [(p.slot, p.target) for p in got.prompts] == [(0, A)] and got.answers == ()
+    assert names.species_names[A] in text and "Recommended answer: cancel" in text
+    assert "offered again at that Pokemon's next level-up" in text
+    assert lines[-1] == "  " + CANNOT_UNDO and text.isascii()
+
+
+def test_post_fight_with_next_names_the_better_answer_with_both_numbers(
+    tables, names, manifest, method
+):
+    evolve_better = post(
+        tables, manifest, method, score=fake_score(90, 60), next_trainer="Roark (trainer 7)"
+    )
+    text = "\n".join(post_fight_lines(evolve_better, names))
+    assert evolve_better.answers[0].evolve == (0,)
+    assert "Against Roark (trainer 7), the next fight (0 deaths allowed)" in text
+    assert "90.0 %" in text and "60.0 %" in text
+    assert f"Better answer: evolve {names.species_names[132]} to {names.species_names[A]}." in text
+    assert text.endswith(CANNOT_UNDO)
+    cancel_better = post(
+        tables, manifest, method, score=fake_score(40, 70), next_trainer="Roark (trainer 7)"
+    )
+    text = "\n".join(post_fight_lines(cancel_better, names))
+    assert cancel_better.answers[0].evolve == () and "Better answer: cancel." in text
+    assert "40.0 %" in text and "70.0 %" in text and text.endswith(CANNOT_UNDO)
+
+
+def test_a_tie_goes_to_cancel(tables, names, manifest, method):
+    got = post(tables, manifest, method, score=fake_score(80, 80), next_trainer="X")
+    assert got.answers[0].evolve == ()
+
+
+def test_the_scorer_gets_one_carry_per_answer_after_the_evolutions(tables, manifest, method):
+    carry = carry_of(tables, [sp(), sp()])
+    seen = []
+
+    def score(carries):
+        seen.append([[int(c.species[0]), int(c.species[1])] for c in carries])
+        return fake_score(50, 50)(carries)
+
+    mask = [True, True, False, False, False, False]
+    post(tables, manifest, method, carry, score=score, next_trainer="X", mask=mask)
+    old = int(carry.species[0])
+    # every subset of the two members, cancel all first
+    assert seen == [[[old, old], [A, old], [old, A], [A, A]]]
+
+
+def test_a_fainted_member_is_offered_with_the_answer_cancel(tables, names, manifest, method):
+    carry = carry_of(tables, [sp(current_hp=0)])
+    scored_calls = []
+    got = post(
+        tables,
+        manifest,
+        method,
+        carry,
+        score=lambda c: scored_calls.append(c) or fake_score(1, 1)(c),
+        next_trainer="X",
+    )
+    text = "\n".join(post_fight_lines(got, names))
+    assert got.prompts[0].dead and got.answers == () and scored_calls == []
+    assert "fainted: offered, the answer is cancel" in text
+    assert "every offered Pokemon fainted" in text and text.endswith(CANNOT_UNDO)
+
+
+def test_no_line_when_nothing_evolves(tables, names, manifest, method):
+    got = post(tables, manifest, method, mask=[False] * 6)
+    assert got.prompts == () and post_fight_lines(got, names) == []
+    assert post_fight_json(got, names) is None
+    below = post(tables, manifest, method, carry_of(tables, [sp(level=5)]))
+    assert post_fight_lines(below, names) == []
+
+
+def test_render_and_record_carry_the_post_fight_section(tables, names, manifest, method):
+    prob, setup = fixture(tables, names)
+    got = post(tables, manifest, method, score=fake_score(90, 60), next_trainer="X")
+    result = make_result(prob, setup)
+    lines = render(result, prob, names, tables=tables, post_fight=got)
+    assert (
+        CANNOT_UNDO in "".join(lines)
+        and lines.index(post_fight_lines(got, names)[0]) < len(lines) - 2
+    )
+    assert not any("After the fight" in line for line in render(result, prob, names, tables=tables))
+    rec = record(result, prob, names, PrepSettings(), 0, "tv", tables=tables, post_fight=got)
+    assert rec["post_fight_evolution"]["note"] == CANNOT_UNDO
+    assert rec["post_fight_evolution"]["answers"][0]["evolve"] == [0]
+    assert json.dumps(rec["post_fight_evolution"])
+    assert (
+        record(result, prob, names, PrepSettings(), 0, "tv", tables=tables)["post_fight_evolution"]
+        is None
+    )
+    assert isinstance(got, PostFight)
