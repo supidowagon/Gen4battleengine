@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PC SIDE (Git Bash). Usage: pack.sh <commit> <tables.tar.xz> <run> <files.txt>
 # Bundles the git archive of <commit> + built tables + the test list + the pod scripts of
-# tools/ops/day/pod (from git at this checkout's HEAD, LF) into $RENT/out/<run>/payload.tar,
+# tools/ops/day/pod (*.sh, weights.py, weights.txt; from git at this checkout's HEAD, LF) into $RENT/out/<run>/payload.tar,
 # lists it, refuses forbidden files, starts a detached send and prints the exec-pod body that
 # receives the payload into /work/<run>, starts bin/notify.sh, then bin/setup.sh there; a failed
 # receive or unpack ends setup.log with RECEIVE_FAILED or UNPACK_FAILED. <run>: [a-z0-9_-], used once.
@@ -22,7 +22,7 @@ refuse() { echo "REFUSED: $1"; echo "$2"; exit 3; }
 
 FORBID='\.(nds|sav|dsv|ds[0-9]|zip|xlsx|ods)$|(^|/)\.cache/|(^|/)backups?/|desktop|local\.toml'
 BADPATH='\.\.|^/|^\./'
-LINE='^tests[^[:space:]]* [1-9][0-9]*( A)?$'
+LINE='^tests[^[:space:]]* [1-9][0-9]*( A)?( [1-9][0-9]*G)?$'
 COMMENT='^[[:space:]]*(#|$)'
 # Every pattern must compile: on empty input grep exits 1 for a valid pattern, 2 for a bad one.
 for pat in "$FORBID" "$BADPATH" "$LINE" "$COMMENT" "$TABLE_ALLOW" "$TABLE_DENY"; do
@@ -45,19 +45,19 @@ mkdir -p "$P/bin"
 # From here every failure removes the payload folder, so the run name stays usable.
 trap 'rc=$?; [ "$rc" = 0 ] || { cd /; rm -rf "$P" || echo "WARNING: could not remove $P"; }' EXIT
 
-# Test list: "<test file, folder or node id> <ids per chunk> [A]". The uploaded copy drops comment
+# Test list: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]". The uploaded copy drops comment
 # and blank lines, and that copy is what gets checked.
 L=$(tr -d '\r' < "$LIST" | pick -vE "$COMMENT") || exit 3
 printf '%s\n' "$L" | sed '/^$/d' > "$P/files.txt"
 [ -s "$P/files.txt" ] || refuse "test list has no entries" "$LIST"
-deny "files.txt lines outside the format '<tests path or id> <ids per chunk> [A]'" "$(cat "$P/files.txt")" -vE "$LINE"
+deny "files.txt lines outside the format '<tests path or id> <ids per chunk> [A] [<GB>G]'" "$(cat "$P/files.txt")" -vE "$LINE"
 
 COMMIT=$(git -C "$REPO" rev-parse --verify "$C^{commit}")
 DECOMP=$(git -C "$REPO/external/pokeplatinum" rev-parse HEAD)
 git -C "$REPO" -c core.autocrlf=false archive --format=tar -o "$P/code.tar" "$COMMIT"
 cp "$TB" "$P/tables.tar.xz"
 mkdir "$P/podsrc"; git -C "$TOP" -c core.autocrlf=false archive --format=tar "$OPS" tools/ops/day/pod | tar -xf - -C "$P/podsrc"
-for f in "$P"/podsrc/tools/ops/day/pod/*.sh; do tr -d '\r' < "$f" > "$P/bin/$(basename "$f")"; done
+for f in "$P"/podsrc/tools/ops/day/pod/*.sh "$P"/podsrc/tools/ops/day/pod/weights.py "$P"/podsrc/tools/ops/day/pod/weights.txt; do tr -d '\r' < "$f" > "$P/bin/$(basename "$f")"; done
 rm -rf "$P/podsrc"
 # Beacon codes: two fresh random codephrases per run, WATCH_F (first failure) and WATCH_D (results),
 # for bin/notify.sh (runpodctl send --code) and tools/ops/day/wait.sh. runpodctl v3.1.1's croc fork

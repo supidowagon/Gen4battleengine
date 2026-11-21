@@ -1,0 +1,72 @@
+# Expected peak per unit, read by setup.sh (weights.py) into out/<unit>.w for runner.sh's gate.
+# Line: <test file, folder, test or node id> <GB> <run it was measured in>
+# GB = 10^9 bytes, the unit of runner.sh's container memory: the measured max RSS (agg.txt
+# max_rss_MB, MiB) times 1.048576 / 1000, rounded up. An entry matches an id equal to it or
+# starting with it plus "::", "[" or "/"; the longest matching entry gives an id's weight, the
+# largest id weight is the unit's. Ids no entry matches weigh 12 (docs/process.md section 5,
+# Chunking). A list line's own <GB>G field replaces this table for the units cut from it.
+# A test measured inside a multi-id unit carries that unit's peak. "killed" = the unit was killed
+# at the memory limit (rc 137), so the peak is a lower bound.
+# Runs: _scratch/rent/out/<run>/results/agg.txt on the managing PC.
+
+# Slow tier, tests over 40 GB.
+tests/prep/test_search.py::test_team_phase_halving                         92 slow-20261120-8c5cd83
+tests/prep/test_search.py::test_reproducible                               92 slow-20261120-8c5cd83
+tests/prep/test_exhaustive.py::test_pruned_setups_are_valued               90 slow-20261120-8c5cd83 killed
+tests/prep/test_exhaustive.py::test_funnel_matches_exhaustive_small        90 slow-20261120-8c5cd83 killed
+tests/prep/test_exhaustive.py::test_funnel_matches_exhaustive_ci           90 slow-20261120-8c5cd83 killed
+tests/prep/test_pp_stall.py::test_short_stall_ranked_first                 87 slow-20261120-8c5cd83 killed
+tests/prep/test_pp_stall.py::test_tank_alone_does_not_win                  87 slow-20261120-8c5cd83 killed
+tests/search/test_stage_b_budget.py::test_protected_line_matches_exhaustive 87 e2-d3g-bud-e4fbd40
+tests/search/test_stage_b_budget.py::test_sacrifice_matches_exhaustive     84 e2-d3g-bud-e4fbd40
+tests/search/test_stage_b_budget.py::test_distribution_sums                82 e2-d3g-bud-e4fbd40
+tests/search/test_stage_b_budget.py::test_failed_nodes_value_zero          82 e2-d3g-bud-e4fbd40
+tests/search/test_stage_b_budget.py::test_pending_root_matches_exhaustive  74 e2-d3e-9f06232
+tests/search/test_stage_b_budget.py::test_budget_does_not_change_k0        73 e2-d3g-bud-e4fbd40
+tests/search/test_stage_b_budget.py::test_second_replacement_decision_in_plan 73 e2-d3e-9f06232
+tests/search/test_stage_b_budget.py::test_pending_root_drops_only_an_ai_refused_replacement 66 e2-d3e-9f06232 killed
+tests/search/test_stage_b_learn.py::test_a_turn_child_stops_at_the_learn_prompt 82 slow-20261120-8c5cd83
+tests/search/test_stage_b_learn.py::test_the_learn_stop_holds_the_turns_pursuit_power_mul 82 slow-20261120-8c5cd83
+tests/search/test_stage_b_learn.py::test_stage_b_branches_into_the_learn_options 82 slow-20261120-8c5cd83
+tests/search/test_stage_b_learn.py::test_a_root_with_a_pending_learn       82 slow-20261120-8c5cd83
+tests/search/test_stage_b_learn.py::test_a_learn_at_a_terminal_state_stays_terminal 82 slow-20261120-8c5cd83
+tests/search/test_leaves.py::test_halves_disjoint_and_reproducible         78 slow-20261120-8c5cd83
+tests/search/test_leaves.py::test_matches_batched_playout                  78 slow-20261120-8c5cd83
+tests/search/test_leaves.py::test_forced_matches_playout_from_action       78 slow-20261120-8c5cd83
+tests/search/test_leaves.py::test_forced_first_turn_matches_expand         78 slow-20261120-8c5cd83
+tests/search/test_leaves.py::test_allocate                                 78 slow-20261120-8c5cd83
+tests/search/test_leaves.py::test_leaf_value_properties                    78 slow-20261120-8c5cd83
+tests/search/test_leaves.py::test_wins_count_successes                     78 slow-20261120-8c5cd83
+tests/search/test_leaves.py::test_protected_death_is_a_failure             78 slow-20261120-8c5cd83
+tests/search/test_leaves.py                                                32 slow-20261120-8c5cd83
+tests/search/test_k0_regression.py                                         77 slow-20261120-8c5cd83
+tests/test_cli.py::test_cli_user_save_rank                                 83 slow-20261120-8c5cd83
+tests/test_cli.py::test_cli_prep_small                                     83 slow-20261120-8c5cd83
+tests/test_cli.py::test_cli_prep_resume                                    83 slow-20261120-8c5cd83
+tests/test_cli.py::test_solve_record_has_game                              83 slow-20261120-8c5cd83
+tests/test_cli.py::test_kaizo_rival_refusal_prints_on_a_cp1252_console     83 slow-20261120-8c5cd83
+tests/test_cli.py::test_kaizo_roark_coverage_on_the_saves_is_exact         83 slow-20261120-8c5cd83
+tests/test_cli.py::test_rank_prints_nine_rows                              79 slow-20261120-8c5cd83
+tests/test_cli.py::test_rank_output_is_plain_ascii                         79 slow-20261120-8c5cd83
+tests/test_cli.py::test_rank_lead_and_opponent_active_played               79 slow-20261120-8c5cd83
+tests/test_cli.py::test_cli_solve_small                                    79 slow-20261120-8c5cd83
+tests/test_cli.py::test_rank_with_save_played                              79 slow-20261120-8c5cd83
+tests/test_cli.py::test_cli_rank_deaths_and_protect                        79 slow-20261120-8c5cd83
+tests/test_cli.py::test_cli_rank_default_budget_keeps_the_header           79 slow-20261120-8c5cd83
+tests/test_cli.py::test_cli_solve_deaths                                   79 slow-20261120-8c5cd83
+
+# Files over 20 GB (any tier; the file's largest unit).
+tests/search/test_line.py                                                  35 slow-20261120-8c5cd83
+tests/search/test_player_eval.py                                           35 slow-20261120-8c5cd83
+tests/search/test_player.py                                                34 slow-20261120-8c5cd83
+tests/search/test_playout.py                                               30 s2mf
+tests/test_differential.py                                                 30 e2-d3u-1909895
+tests/engine/test_faints.py                                                27 e2-d3g-c434945
+tests/search/test_player_learn.py                                          27 train11-fs-d4c8f4a
+tests/search/test_expand.py                                                26 slow-20261120-8c5cd83
+tests/search/test_replacements.py                                          26 e2-d3e-9f06232
+tests/search/test_stage_a.py                                               25 e2-d3g-fs-e4fbd40
+tests/search/test_line_search.py                                           24 slow-20261120-8c5cd83
+tests/ai/test_kaizo_policy.py                                              23 slow-20261120-8c5cd83
+tests/engine/test_batch11.py                                               22 train-e5490cc
+tests/search/test_stage_b.py                                               22 slow-20261120-8c5cd83

@@ -9,7 +9,9 @@
 # status.sh's setup=gone with runner=none is the failure test. bin/notify.sh is started by the
 # exec-pod body before this script. Collection runs at most COLLECTP (default 4) jobs at once, each
 # started only while container memory is under GATE_GB (default 88, the runner's gate).
-# files.txt lines: "<test file, folder or node id> <ids per chunk> [A]"; A = no -m filter.
+# files.txt lines: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]"; A = no -m filter;
+# <GB>G = the expected peak of every unit cut from that line. Each unit's expected peak goes to
+# out/<unit>.w: the line's <GB>G, else bin/weights.py over bin/weights.txt; runner.sh gates on it.
 set -euxo pipefail
 export PATH="/root/.local/bin:/work/_bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 # meta.env holds the beacon codes: sourced with the trace off, so setup.log never shows them.
@@ -47,9 +49,10 @@ export -f collect_one; export D R MARK GATE_GB="${GATE_GB:-88}"
 xargs -d '\n' -P "${COLLECTP:-4}" -I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt
 (cd "$R" && uv run --frozen python - "$D") <<'PY'
 import sys, pathlib, collections
-D = pathlib.Path(sys.argv[1]); q = []; summ = []; n = 0; seen = set()
+D = pathlib.Path(sys.argv[1]); sys.path.insert(0, str(D / "bin")); import weights
+table = weights.load(D / "bin" / "weights.txt"); q = []; summ = []; n = 0; seen = set()
 for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
-    p = line.split(); f, chunk = p[0], int(p[1]); mk = "A" if len(p) > 2 and p[2] == "A" else "N"
+    f, chunk, mk, line_gb = weights.parse_line(line)
     rc = (D / "col" / f"{k}.rc").read_text().strip()
     by = collections.OrderedDict()
     for i in (D / "col" / f"{k}.ids").read_text().splitlines():
@@ -61,6 +64,7 @@ for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
             n += 1; u = f"u_{n:03d}"
             (D / "out" / f"{u}.ids").write_text("\n".join(ids[s:s + chunk]) + "\n")
             (D / "out" / f"{u}.m").write_text(mk + "\n")
+            (D / "out" / f"{u}.w").write_text(f"{weights.unit_weight(ids[s:s + chunk], table, line_gb)}\n")
             q.append(f"{u} {tf}")
 (D / "out" / "queue.txt").write_text("\n".join(q) + "\n")
 (D / "collected.txt").write_text("\n".join(summ) + "\n")

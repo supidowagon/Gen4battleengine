@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # POD SIDE, started by setup.sh. Starts the units of out/queue.txt in order, one pytest process each.
 # Start gate: container memory (/sys/fs/cgroup/memory.current) < GATE_GB, fewer than MAXP live
-# units across every run on the pod (/work/*/out/run/* and /work/*/*/out/run/*), and fewer than
-# RUNMAXP units of this run in run/.
+# units across every run on the pod (/work/*/out/run/* and /work/*/*/out/run/*), fewer than
+# RUNMAXP units of this run in run/, and the memory gate: memory + reserve + w < GATE_GB, where w
+# is the next unit's expected peak (out/<unit>.w, written by setup.sh) and reserve sums, over every
+# live unit on the pod (every run), its expected peak minus its current RSS (process group sum),
+# where positive. A unit without a .w file (a run packed before weights) counts DEFAULT_WEIGHT_GB.
+# With no live unit on the pod the memory gate is skipped (memory < GATE_GB still holds), so a
+# unit heavier than GATE_GB starts alone and no unit waits forever. Units start in queue order: a
+# unit that does not fit holds back the ones behind it.
 # A unit is live while its process group has a member that is not a zombie: PID 1 of the pod
 # (sleep infinity) never reaps orphans, so finished units can linger as zombies.
 # Backstop, checked once per loop: memory.current >= KILL_GB kills this run's newest live unit
@@ -14,7 +20,8 @@
 # in line (lost.txt); after two requeues (kills and losses together) it gets rc 98 (overkilled.txt).
 # Signals only process groups this runner started and that are alive; never PID 1.
 # Knobs (env of the exec-pod body that starts setup.sh): GATE_GB (default 88), MAXP (10),
-# RUNMAXP (MAXP), SPACING s between starts (15), KILL_GB (118), WARMUP, WARMUP_S (900).
+# RUNMAXP (MAXP), SPACING s between starts (15), KILL_GB (118), DEFAULT_WEIGHT_GB (12), WARMUP,
+# WARMUP_S (900).
 # Warm-up: when queue.txt has a tests/engine unit, one pytest process over the node id WARMUP
 # (default tests/engine/test_step_basic.py::test_miss_deals_no_damage, which compiles step; none
 # turns it off) runs alone first (unit.sh --warmup, files in out/warmup/), so step is compiled once
@@ -25,14 +32,25 @@
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
 GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; RUNMAXP="${RUNMAXP:-$MAXP}"; SPACING="${SPACING:-15}"; KILL_GB="${KILL_GB:-118}"
+DEFW="${DEFAULT_WEIGHT_GB:-12}"
 cd "$O"; mkdir -p run
 memgb() { echo $(( $(cat /sys/fs/cgroup/memory.current) / 1000000000 )); }
 okpg() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac   # a group member that is not a zombie
   ps -eo pgid=,stat= | awk -v g="$1" '$1 == g && $2 !~ /^Z/ {f = 1} END {exit !f}'; }
-podlive() {  # live units of every run on the pod
-  local n=0 f
-  for f in /work/*/out/run/* /work/*/*/out/run/*; do [ -f "$f" ] && okpg "$(cat "$f" 2>/dev/null)" && n=$((n + 1)); done
-  echo "$n"
+wgb() { local w; w=$(cat "$1" 2>/dev/null); case "$w" in ''|*[!0-9]*) echo "$DEFW";; *) echo "$w";; esac; }
+# podgate <run files>: "<live units> <reserve GB>" over the given run/<unit> files (each holds a
+# process group id; its weight is ../<unit>.w), from one ps snapshot. A unit is live while its group
+# has a member that is not a zombie; its reserve is weight - group RSS (GB = 10^9 bytes) when
+# positive. The reserve total is rounded up.
+podgate() {
+  local f
+  { for f in "$@"; do [ -f "$f" ] || continue
+      echo "U $(cat "$f" 2>/dev/null) $(cat "${f%/run/*}/${f##*/}.w" 2>/dev/null)"; done
+    ps -eo pgid=,stat=,rss= | awk '{print "P", $1, $2, $3}'; } | awk -v d="$DEFW" '
+    $1 == "P" { if ($3 !~ /^Z/) live[$2] = 1; rss[$2] += $4; next }
+    $1 == "U" && $2 ~ /^[0-9]+$/ && $2 > 1 { n++; g[n] = $2; w[n] = ($3 ~ /^[0-9]+$/) ? $3 : d }
+    END { for (i = 1; i <= n; i++) if (live[g[i]]) { c++; r = w[i] - rss[g[i]] * 1024 / 1e9; if (r > 0) t += r }
+          printf "%d %d\n", c, (t == int(t)) ? t : int(t) + 1 }'
 }
 largest() {  # this run's live unit with the largest RSS (summed over its process group)
   local r g m best=none bm=-1
@@ -96,11 +114,18 @@ while :; do
     fi
     sleep 30; continue
   fi
-  if [ "$npend" -gt 0 ] && [ "$mem" -lt "$GATE_GB" ] && [ "$(podlive)" -lt "$MAXP" ] && [ "$nrun" -lt "$RUNMAXP" ]; then
-    read -r u f < pending.txt; sed -i 1d pending.txt
-    setsid bash "$D/bin/unit.sh" "$u" < /dev/null > /dev/null 2>&1 &
-    echo "$!" > "run/$u"; echo "$(date +%s) start $u $f mem ${mem} GB pod units $(podlive)"
-    sleep "$SPACING"; continue
+  if [ "$npend" -gt 0 ] && [ "$mem" -lt "$GATE_GB" ] && [ "$nrun" -lt "$RUNMAXP" ]; then
+    read -r plive pres <<< "$(podgate /work/*/out/run/* /work/*/*/out/run/*)"
+    read -r u f < pending.txt; w=$(wgb "$u.w")
+    if [ "$plive" -lt "$MAXP" ] && { [ "$plive" -eq 0 ] || [ $((mem + pres + w)) -lt "$GATE_GB" ]; }; then
+      sed -i 1d pending.txt
+      setsid bash "$D/bin/unit.sh" "$u" < /dev/null > /dev/null 2>&1 &
+      echo "$!" > "run/$u"
+      echo "$(date +%s) start $u $f weight ${w} GB mem ${mem} GB reserve ${pres} GB pod units $((plive + 1))"
+      sleep "$SPACING"; continue
+    fi
+    [ "$plive" -lt "$MAXP" ] && [ "${held:-}" != "$u" ] && { held=$u
+      echo "$(date +%s) hold $u: mem ${mem} + reserve ${pres} + weight ${w} GB >= GATE_GB ${GATE_GB}"; }
   fi
   sleep 10
 done

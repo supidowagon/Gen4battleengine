@@ -28,11 +28,12 @@ Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` sec
 - `nightly_brief.md`: the brief for the nightly run.
 - `day/push_bin.sh`: once per pod (safe to repeat); sends `day/bootstrap.sh` and prints the exec-pod body that runs it in `/work/_bin/new`.
 - `day/bootstrap.sh`: pod side, once per pod; apt tools, uv, Python 3.12, runpodctl checksum, decomp clone; ends with `BOOTSTRAP_OK`.
-- `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`; refuses forbidden files and tables outside `TABLE_ALLOW`; sends; prints the exec-pod body.
+- `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`, `day/pod/weights.py`, `day/pod/weights.txt`; refuses forbidden files and tables outside `TABLE_ALLOW`; sends; prints the exec-pod body.
 - `day/collect.sh <run> <code>`: receives a run's `results.tgz` and unpacks it.
 - `day/nightly_files.txt`: the nightly test list.
-- `day/pod/setup.sh`: checkout, tables, env, collection, chunked units; starts the runner.
-- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
+- `day/pod/setup.sh`: checkout, tables, env, collection, chunked units, each unit's expected peak (`out/<unit>.w`); starts the runner.
+- `day/pod/weights.py`, `day/pod/weights.txt`: list-line parsing and each unit's expected peak; the tracked table of measured peaks of heavy tests and files, each with the run it was measured in.
+- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate, the expected-peak gate (container memory + the unreached expected peaks of every live unit on the pod + the next unit's expected peak under `GATE_GB`; with no live unit on the pod a unit always starts) and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
 - `day/pod/unit.sh`: one pytest process over one unit's ids.
 - `day/pod/status.sh`: progress, memory, collection failures, failing units, other active runs.
 - `day/pod/notify.sh`: started by the exec-pod body before `setup.sh`; offers the first-failure beacon and the results under the run's codes `WATCH_F` and `WATCH_D`.
