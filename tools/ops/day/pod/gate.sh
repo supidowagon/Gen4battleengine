@@ -1,7 +1,8 @@
 # POD SIDE, sourced by runner.sh, setup.sh, status.sh, agg.sh and podcheck.sh: the start gate's
 # arithmetic (tests/tools/test_pod_gate.py runs it with a fake ps) and the container memory reader.
 # Functions only. Reads NO_W_FILE_GB, MAXP, GATE_GB, KILL_GB, IDLE_WAIT_S, CLAIMS, CLAIM_S,
-# CLAIM_MAX_S, UNIT_MAX_S, RESERVE_TOP (default 2), RESERVE_FULL_GB (default 40) from the caller.
+# CLAIM_MAX_S, UNIT_MAX_S, RESERVE_TOP (default 2), RESERVE_FULL_GB (default 40), RESERVE_PCT
+# (default 75) from the caller.
 
 # cgmem <current|max|peak>: container memory in bytes. cgroup v2 first (<CGROOT>/memory.current,
 # memory.max, memory.peak), else cgroup v1 (<CGROOT>/memory/memory.usage_in_bytes,
@@ -22,27 +23,37 @@ unit_overdue() { local s; s=$(cat "$1.start" 2>/dev/null); case "$s" in ''|*[!0-
 # DEFAULT_WEIGHT_GB, for units of runs packed before weights) when missing or not a number.
 wgb() { local w; w=$(cat "$1" 2>/dev/null); case "$w" in ''|*[!0-9]*) echo "$NO_W_FILE_GB";; *) echo "$w";; esac; }
 
+# reserve_knobs: RESERVE_TOP, RESERVE_FULL_GB and RESERVE_PCT are whole numbers (unset: the
+# defaults); otherwise prints "ERROR: <knob> '<value>' is not a whole number" on stderr, returns 2.
+reserve_knobs() { local n v
+  for n in RESERVE_TOP RESERVE_FULL_GB RESERVE_PCT; do v=${!n-}
+    case "$v" in *[!0-9]*) echo "ERROR: $n '$v' is not a whole number" >&2; return 2;; esac; done; }
+
 # podgate <run files>: "<live units> <reserve GB>" over the given run/<unit> files (each holds the
 # pid of the unit's setsid bash, which becomes its process group id; its weight is ../<unit>.w),
 # from one ps snapshot. A unit is live while that pid exists and is not a zombie (a unit that has
 # not called setsid yet) or its group has a member that is not a zombie; ids 0 and 1 and malformed
 # ids never count. A live unit's gap is weight - group RSS (GB = 10^9 bytes) when positive.
-# Reserve = every gap of a heavy unit (weight >= RESERVE_FULL_GB) + the RESERVE_TOP largest gaps
-# of the light units; the other light units count only at their RSS, which memory already holds:
-# light units do not reach their peaks together (measured pod peak 0.6-0.73 x the live weight sum
-# at 12+ live units, 21 Nov), heavy ones are too large to bet on. The reserve is rounded up.
+# Reserve = every gap of a heavy unit (weight >= RESERVE_FULL_GB, default 40) + the light reserve:
+# the larger of the RESERVE_TOP (default 2) largest light gaps and RESERVE_PCT (default 75) % of
+# the light units' weight sum minus their RSS sum. The top gaps cover a few light units peaking
+# at once; the floor covers many growing together (18 chunks of one file grow in step; measured
+# pod peak 0.6-0.73 x the live weight sum at 12+ live units, 21 Nov). Rounded up. Bad knobs:
+# reserve_knobs's error, return 2, nothing on stdout.
 podgate() {
   local f
+  reserve_knobs || return 2
   { for f in "$@"; do [ -f "$f" ] || continue
       echo "U $(cat "$f" 2>/dev/null) $(cat "${f%/run/*}/${f##*/}.w" 2>/dev/null)"; done
     ps -eo pid=,pgid=,stat=,rss= | awk '{print "P", $1, $2, $3, $4}'; } |
-  awk -v d="$NO_W_FILE_GB" -v top="${RESERVE_TOP:-2}" -v full="${RESERVE_FULL_GB:-40}" '
+  awk -v d="$NO_W_FILE_GB" -v top="${RESERVE_TOP:-2}" -v full="${RESERVE_FULL_GB:-40}" -v pct="${RESERVE_PCT:-75}" '
     $1 == "P" { if ($4 !~ /^Z/) { live[$2] = 1; live[$3] = 1 }; rss[$3] += $5; next }
     $1 == "U" && $2 ~ /^[0-9]+$/ && $2 > 1 { n++; g[n] = $2; w[n] = ($3 ~ /^[0-9]+$/) ? $3 : d }
-    END { for (i = 1; i <= n; i++) if (live[g[i]]) { c++; r = w[i] - rss[g[i]] * 1024 / 1e9
-            if (r > 0) { if (w[i] >= full) t += r; else gap[++m] = r } }
+    END { for (i = 1; i <= n; i++) if (live[g[i]]) { c++; u = rss[g[i]] * 1024 / 1e9; r = w[i] - u
+            if (w[i] >= full) { if (r > 0) t += r } else { lw += w[i]; lu += u; if (r > 0) gap[++m] = r } }
           for (k = 1; k <= top; k++) { b = 0; for (j = 1; j <= m; j++) if (gap[j] > 0 && (b == 0 || gap[j] > gap[b])) b = j
-            if (b == 0) break; t += gap[b]; gap[b] = 0 }
+            if (b == 0) break; tl += gap[b]; gap[b] = 0 }
+          fl = lw * pct / 100 - lu; t += (fl > tl) ? fl : tl
           printf "%d %d\n", c, (t == int(t)) ? t : int(t) + 1 }'
 }
 

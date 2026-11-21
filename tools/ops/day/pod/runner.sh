@@ -6,8 +6,9 @@
 # RUNMAXP units of this run in run/, and the memory gate: memory + reserve + w < GATE_GB, where w
 # is the next unit's expected peak (out/<unit>.w, written by setup.sh) and reserve covers the
 # gaps (expected peak minus current RSS, process group sum, where positive) of the live units on
-# the pod (every run): every gap of a unit with w >= RESERVE_FULL_GB, and the RESERVE_TOP largest
-# gaps of the lighter ones (gate.sh podgate). A unit without a .w file (a run packed before
+# the pod (every run): every gap of a unit with w >= RESERVE_FULL_GB, and for the lighter ones the
+# larger of their RESERVE_TOP largest gaps and RESERVE_PCT % of their weight sum minus their RSS
+# sum (gate.sh podgate). A unit without a .w file (a run packed before
 # weights) counts DEFAULT_WEIGHT_GB.
 # With no live unit on the pod (memory < GATE_GB still holds) a unit starts when memory + w <
 # KILL_GB, so a unit heavier than GATE_GB runs alone; one with w >= KILL_GB starts alone anyway
@@ -40,7 +41,9 @@
 # measured files and 12 GB is the 90th percentile of 7183 measured units),
 # RESERVE_TOP (2: light units reserved at once; 18 mixed units under a memory-only gate peaked at
 # 185-229 GB, 0.6-0.73 x their weight sum), RESERVE_FULL_GB (40: units this heavy keep their whole
-# gap reserved), IDLE_WAIT_S (300), RUNNER_LOCK (/work/.runner.lock), CLAIM_S (120), CLAIMS (/work/.claims),
+# gap reserved), RESERVE_PCT (75: the light reserve is at least this % of the light units' weight
+# sum minus their RSS; 0.73 measured worst, and chunks of one file grow in step; the three
+# RESERVE_ knobs must be whole numbers, else the runner stops with an ERROR line), IDLE_WAIT_S (300), RUNNER_LOCK (/work/.runner.lock), CLAIM_S (120), CLAIMS (/work/.claims),
 # CLAIM_MAX_S (3600: a claim whose pid is alive but no runner, a reused pid, is deleted once
 # older, "claim-expired"; a dead runner's claim goes at once, "claim-dead"; a live runner's claim never expires
 # by time; this runner's own lost claim lets its head be gated again with a fresh hold timer),
@@ -59,12 +62,13 @@ D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
 GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; RUNMAXP="${RUNMAXP:-$MAXP}"; SPACING="${SPACING:-4}"; KILL_GB="${KILL_GB:-118}"
 NO_W_FILE_GB="${DEFAULT_WEIGHT_GB:-12}"; IDLE_WAIT_S="${IDLE_WAIT_S:-300}"; LOCK="${RUNNER_LOCK:-/work/.runner.lock}"
 CLAIMS="${CLAIMS:-/work/.claims}"; CLAIM_S="${CLAIM_S:-120}"; CLAIM_MAX_S="${CLAIM_MAX_S:-3600}"; RUN=$(basename "$D")
-UNIT_MAX_S="${UNIT_MAX_S:-21600}"; WORK="${WORK:-/work}"; RESERVE_TOP="${RESERVE_TOP:-2}"; RESERVE_FULL_GB="${RESERVE_FULL_GB:-40}"
+UNIT_MAX_S="${UNIT_MAX_S:-21600}"; WORK="${WORK:-/work}"; RESERVE_TOP="${RESERVE_TOP:-2}"; RESERVE_FULL_GB="${RESERVE_FULL_GB:-40}"; RESERVE_PCT="${RESERVE_PCT:-75}"
 cd "$O"; mkdir -p run
 . "$D/bin/gate.sh"   # cgmem, wgb, podgate, admit, choose, claims, unit_overdue
 memgb() { local b; b=$(cgmem current) || return 1; echo $(( b / 1000000000 )); }
 nomem() { echo "$(date +%s) ERROR: no cgroup memory file (v2 memory.current or v1 memory/memory.usage_in_bytes); runner stops"; exit 1; }
 memgb > /dev/null || nomem
+reserve_knobs || { echo "$(date +%s) ERROR: bad RESERVE_ knob; runner stops"; exit 1; }
 # Temp files this runner writes (p.new, run/.<unit>.tmp, its claim temp files) go on any exit.
 trap 'rm -f p.new run/.*.tmp "$CLAIMS/.$RUN".*.tmp' EXIT; trap 'exit 143' TERM; trap 'exit 130' INT; trap 'exit 129' HUP
 okpg() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac   # the pid (setsid not called yet) or a group
