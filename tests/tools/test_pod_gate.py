@@ -27,12 +27,30 @@ def _bash() -> str | None:
 
 
 BASH = _bash()
+
+
+def _runner_knobs() -> set[str]:
+    """setup.sh's RUN_ENV_NAMES (the knobs a pod run's exec-pod body may set, which every process of
+    the run, this test included, inherits), plus the other variables the pod scripts read."""
+    text = (GATE.parent / "setup.sh").read_text(encoding="utf-8")
+    line = next(x for x in text.splitlines() if x.startswith("RUN_ENV_NAMES="))
+    return set(line.split("=", 1)[1].strip('"').split()) | {
+        "MARK", "NO_W_FILE_GB", "NOW", "CLAIM_PID", "WATCH_F", "WATCH_D", "PACK_OFF_MAIN_POD", "NUZLINE_REPO", "NUZLINE_SCRATCH"}
+
+
+def _clean_env() -> dict[str, str]:
+    """os.environ without any runner knob: on the pod the tests run inside a run whose knobs
+    (KILL_GB, GATE_GB, MAXP, SPACING, ...) would otherwise reach the scripts under test."""
+    knobs = _runner_knobs()
+    return {k: v for k, v in os.environ.items() if k not in knobs}
+
+
 pytestmark = pytest.mark.skipif(BASH is None, reason="no POSIX bash")
 
 
 def _run(script: str, env: str = "NO_W_FILE_GB=12 MAXP=10 GATE_GB=88 KILL_GB=118 IDLE_WAIT_S=300") -> str:
     full = f"set -u; {env}; . '{GATE.as_posix()}'\n{script}"
-    r = subprocess.run([BASH, "-c", full], capture_output=True, text=True, check=True)
+    r = subprocess.run([BASH, "-c", full], capture_output=True, text=True, check=True, env=_clean_env())
     return r.stdout.strip()
 
 
@@ -228,7 +246,7 @@ def _podcheck(root: Path, pids: dict[int, str], cg: Path, want: str = "") -> tup
     """want: podcheck.sh's arguments after <root> (POD_SCRIPTS, POD_WEIGHTS)."""
     script = (f"{_fake_ps(pids)}\nexport -f ps\nCGROOT='{cg.as_posix()}' bash '{PODCHECK.as_posix()}' "
               f"'{root.as_posix()}' {want}")
-    r = subprocess.run([BASH, "-c", script], check=False, capture_output=True, text=True)
+    r = subprocess.run([BASH, "-c", script], check=False, capture_output=True, text=True, env=_clean_env())
     return r.returncode, r.stdout.strip().splitlines()
 
 
@@ -302,24 +320,62 @@ def test_podcheck_reports_other_weights_on_their_own_line_not_as_mixed(tmp_path)
 BODY = ROOT / "tools" / "ops" / "day" / "podcheck_body.sh"
 
 
-def test_podcheck_body_carries_heads_gate_and_podcheck_and_their_sum():
+def _exec_body_files(body: dict) -> tuple[str, dict[str, bytes]]:
+    """common.sh exec_body: the argv is ["sh","-c",<script>,"_","=<name>",<chunk>,...]; every item
+    at most 4000 characters (exec-pod refuses one over 4096), at most 256 items. Returns the script
+    and the decoded files."""
     import base64
+    cmd = body["command"]
+    assert cmd[:2] == ["sh", "-c"] and cmd[3] == "_"
+    assert len(cmd) <= 256
+    assert max(len(x) for x in cmd) <= 4000
+    files: dict[str, str] = {}
+    name = None
+    for a in cmd[4:]:
+        if a.startswith("="):
+            name = a[1:]
+            files[name] = ""
+        else:
+            assert name is not None
+            files[name] += a
+    return cmd[2], {n: base64.b64decode(b64) for n, b64 in files.items()}
+
+
+def _head(name: str) -> bytes:
+    out = subprocess.run(["git", "show", f"HEAD:tools/ops/day/pod/{name}"], check=True, capture_output=True, cwd=ROOT).stdout
+    return out.replace(b"\r", b"")
+
+
+def test_podcheck_body_carries_heads_gate_and_podcheck_and_their_sum():
     import json
     import re
-    env = {**os.environ, "PACK_OFF_MAIN_POD": "1"}   # this checkout may be an ops branch
+    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1"}   # this checkout may be an ops branch
     r = subprocess.run([BASH, BODY.as_posix()], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
     if "REFUSED: uncommitted changes" in r.stdout:
         pytest.skip("tools/ops/day/pod has uncommitted changes")
     assert r.returncode == 0, r.stdout + r.stderr
-    body = json.loads(r.stdout.strip().splitlines()[-1])
-    cmd = body["command"][2]
-    parts = re.findall(r"echo ([A-Za-z0-9+/=]+) \| base64 -d > /work/_podcheck/(\w+\.sh)", cmd)
-    assert [n for _, n in parts] == ["gate.sh", "podcheck.sh"]
-    for b64, name in parts:
-        head = subprocess.run(["git", "show", f"HEAD:tools/ops/day/pod/{name}"], check=True, capture_output=True, cwd=ROOT).stdout
-        assert base64.b64decode(b64) == head.replace(b"\r", b"")
-    assert re.search(r"bash /work/_podcheck/podcheck.sh /work [0-9a-f]{64} [0-9a-f]{64}$", cmd)
+    script, files = _exec_body_files(json.loads(r.stdout.strip().splitlines()[-1]))
+    assert list(files) == ["gate.sh", "podcheck.sh"]
+    for name, data in files.items():
+        assert data == _head(name)
+    assert re.search(r"; bash \$W/podcheck.sh /work [0-9a-f]{64} [0-9a-f]{64}$", script)
+    assert script.startswith("W=/work/_podcheck;")
 
+
+def test_exec_body_script_writes_the_files_byte_for_byte(tmp_path):
+    import json
+    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1"}
+    r = subprocess.run([BASH, BODY.as_posix()], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
+    if "REFUSED: uncommitted changes" in r.stdout:
+        pytest.skip("tools/ops/day/pod has uncommitted changes")
+    cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"]
+    script = cmd[2].replace("W=/work/_podcheck;", f"W='{tmp_path.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
+    run = subprocess.run([BASH, "--posix", "-c", script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.startswith("RAN /work ")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["gate.sh", "podcheck.sh"]
+    for n in ("gate.sh", "podcheck.sh"):
+        assert (tmp_path / n).read_bytes() == _head(n)
 
 
 # pack.sh's main check, in a throwaway repo holding only the scripts it needs before that check.
@@ -340,7 +396,7 @@ def test_pack_refuses_pod_scripts_that_differ_from_main(tmp_path):
     _git(repo, "checkout", "-qb", "ops")
     (repo / "tools/ops/day/pod/a.sh").write_text("echo 2\n", encoding="utf-8", newline="\n")
     _git(repo, "commit", "-qam", "ops")
-    env = {k: v for k, v in os.environ.items() if k not in ("NUZLINE_REPO", "NUZLINE_SCRATCH", "PACK_OFF_MAIN_POD")}
+    env = _clean_env()   # no NUZLINE_REPO, NUZLINE_SCRATCH or PACK_OFF_MAIN_POD either
 
     def pack(**extra: str) -> subprocess.CompletedProcess:
         return subprocess.run([BASH, "tools/ops/day/pack.sh", "HEAD", "t.tar.xz", "r1", "nolist.txt"], check=False,
@@ -368,14 +424,14 @@ def test_setup_writes_gate_env_without_the_beacon_codes(tmp_path):
     # no cgroup memory file: setup stops right after writing gate.env
     knobs = "GATE_GB=176 MAXP=18 SPACING=4 RUNMAXP=6 WARMUP=none NUZLINE_HYPOTHESIS_PROFILE=explore DUR='40 x'"
     r = subprocess.run([BASH, "-c", f"{knobs} CGROOT='{(tmp_path / 'nocg').as_posix()}' bash '{(d / 'bin/setup.sh').as_posix()}'"],
-                       check=False, capture_output=True, text=True)
+                       check=False, capture_output=True, text=True, env=_clean_env())
     assert r.returncode != 0
     assert (d / "gate.env").read_text(encoding="utf-8") == "GATE_VERSION=2\nPOD_SCRIPTS=abc\nPOD_WEIGHTS=def\n"
     env = (d / "run.env").read_text(encoding="utf-8")
     assert "secret" not in env and "WATCH" not in env
     show = (f". '{(d / 'run.env').as_posix()}'; echo \"$GATE_GB|$MAXP|$SPACING|$RUNMAXP|$WARMUP|"
             f"$NUZLINE_HYPOTHESIS_PROFILE|$DUR|${{KILL_GB:-unset}}\"")
-    got = subprocess.run([BASH, "-c", show], check=True, capture_output=True, text=True)
+    got = subprocess.run([BASH, "-c", show], check=True, capture_output=True, text=True, env=_clean_env())
     assert got.stdout.strip() == "176|18|4|6|none|explore|40 x|unset"
     assert "ERROR: no cgroup memory file" in r.stdout
     assert "SETUP_FAILED" in r.stdout
@@ -407,7 +463,7 @@ def test_runner_kills_a_unit_over_unit_max_s_with_rc_96(tmp_path):
     env = (f"CGROOT='{cg}' WORK='{work}' RUNNER_LOCK='{tmp_path / 'lock'}' CLAIMS='{tmp_path / 'claims'}' "
            "WARMUP=none SPACING=0 UNIT_MAX_S=2")
     log = d / "runner.log"
-    subprocess.run([BASH, "-c", f"{env} bash '{d / 'bin/runner.sh'}' > '{log}' 2>&1"], check=True, timeout=120)
+    subprocess.run([BASH, "-c", f"{env} bash '{d / 'bin/runner.sh'}' > '{log}' 2>&1"], check=True, timeout=120, env=_clean_env())
     o = d / "out"
     assert (o / "u_001.rc").read_text(encoding="utf-8").strip() == "96"
     assert (o / "timedout.txt").read_text(encoding="utf-8").split() == ["u_001"]
@@ -425,7 +481,7 @@ def _alive(pid: int) -> bool:
 
 
 def _launch(script: str) -> None:
-    subprocess.run([BASH, "-c", script], check=True, timeout=30)
+    subprocess.run([BASH, "-c", script], check=True, timeout=30, env=_clean_env())
 
 
 def _children(pid: int) -> list[int]:
@@ -435,7 +491,8 @@ def _children(pid: int) -> list[int]:
 
 
 def _stop(run: str, root: Path) -> subprocess.CompletedProcess:
-    return subprocess.run([BASH, str(STOP), run, str(root)], check=False, capture_output=True, text=True, timeout=60)
+    return subprocess.run([BASH, str(STOP), run, str(root)], check=False, capture_output=True, text=True, timeout=60,
+                          env=_clean_env())
 
 
 Q = "> /dev/null 2>&1 < /dev/null"
@@ -511,28 +568,25 @@ def test_stop_skips_stale_pid_files_and_unit_groups_that_name_other_processes(tm
 
 def test_stop_refuses_bad_names_and_missing_runs(tmp_path):
     for name in ("", "_bin", "a/b", "A"):
-        r = subprocess.run([BASH, STOP.as_posix(), name, tmp_path.as_posix()], check=False, capture_output=True, text=True)
+        r = subprocess.run([BASH, STOP.as_posix(), name, tmp_path.as_posix()], check=False, capture_output=True, text=True,
+                           env=_clean_env())
         assert (r.returncode, r.stdout.startswith("STOP_REFUSED")) == (2, True), name
-    r = subprocess.run([BASH, STOP.as_posix(), "nope", tmp_path.as_posix()], check=False, capture_output=True, text=True)
+    r = subprocess.run([BASH, STOP.as_posix(), "nope", tmp_path.as_posix()], check=False, capture_output=True, text=True,
+                       env=_clean_env())
     assert (r.returncode, r.stdout.strip()) == (2, f"STOP_REFUSED: no folder {tmp_path.as_posix()}/nope")
 
 
 
 def test_stop_body_carries_heads_stop_sh_and_the_run_name():
-    import base64
     import json
-    import re
-    env = {**os.environ, "PACK_OFF_MAIN_POD": "1"}   # this checkout may be an ops branch
+    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1"}   # this checkout may be an ops branch
     body_sh = (ROOT / "tools" / "ops" / "day" / "stop_body.sh").as_posix()
     r = subprocess.run([BASH, body_sh, "run-x"], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
     if "REFUSED: uncommitted changes" in r.stdout:
         pytest.skip("tools/ops/day/pod has uncommitted changes")
     assert r.returncode == 0, r.stdout + r.stderr
-    cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"][2]
-    m = re.fullmatch(r"mkdir -p /work/_podcheck && echo ([A-Za-z0-9+/=]+) \| base64 -d > /work/_podcheck/stop.sh && "
-                     r"bash /work/_podcheck/stop.sh run-x", cmd)
-    assert m
-    head = subprocess.run(["git", "show", "HEAD:tools/ops/day/pod/stop.sh"], check=True, capture_output=True, cwd=ROOT).stdout
-    assert base64.b64decode(m.group(1)) == head.replace(b"\r", b"")
+    script, files = _exec_body_files(json.loads(r.stdout.strip().splitlines()[-1]))
+    assert files == {"stop.sh": _head("stop.sh")}
+    assert script.startswith("W=/work/_podcheck;") and script.endswith("; bash $W/stop.sh run-x")
     bad = subprocess.run([BASH, body_sh, "Bad/name"], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
     assert bad.returncode == 2
