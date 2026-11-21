@@ -3334,9 +3334,12 @@ def _act(
         "trick_room": ctl["trick_room"] & runs_move,
         # A switch or a bag item fixes no defender (SwitchCommand keeps the stale one, bcp.c:
         # 1977-1987; ItemCommand's is read by MoveEnd only): battler 0 / BATTLER_NONE, and the
-        # caller's defender events are empty then.
-        "target": jnp.where(is_move, ctl["target"], 0).astype(_I32),
-        "defender": jnp.where(is_move, ctl["defender"], NO_DEFENDER).astype(_I32),
+        # caller's defender events are empty then. A resumed pivot's action is its pick (a
+        # switch) but its move goes on: battleCtx->defender stays the one FightCommand fixed
+        # (bcp.c:1900; the party list rewrites none, D3-10), read by UpdateFlagsWhenHit's moveCopied
+        # (bcp.c:3956 -> :4484) and MoveEnd's cure (:3966-3967).
+        "target": jnp.where(is_move | resumed, ctl["target"], 0).astype(_I32),
+        "defender": jnp.where(is_move | resumed, ctl["defender"], NO_DEFENDER).astype(_I32),
         "record": ctl["record"] & runs_move,
         "pause": ctl["pause"] & runs_move,
         "pursue": ctl["pursue"] & runs_move,

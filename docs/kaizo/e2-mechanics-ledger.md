@@ -432,6 +432,7 @@ Files E2 touches that another stream owns (send with the family list):
     comment at ~390 still says int8[2]); step.py ~2762/~2768 use jnp.arange(2) against order: resize
     together at B=4.
   - Owed D6-D7 (from E1 H-1 7074311e): Future Sight's hit law is exact per post-Acid-Rain mask only at B = 2; at B = 4 an acid pair keeps `loose` (raw 1-100 roll) because a third battler can write fieldConditionsMask before subscript_pursuit.s:115 (a newcomer's weather ability sand_stream.s:11-12, an earlier KO's FAINT_MON clearing an Uproar bit, a second chase). Exact form: enumerate the post-mask variants over the battlers acting before the chase (sheet _scratch/e1/h-next/sheets/acid-future-law.md section 4.6).
+  - Owed D6-18 (D3 gate review): `outcome_laws` marks `relevant.starf[2][1]` (battler 2's faint-replacement draw) on a board where nothing can faint: DOUBLES, all Swords Dance, battler 3 Haze, battler 0 a Starf holder at its pinch with Attack to Speed at +6, order (0, 1, 2, 3) (tests/engine/test_d3_starf_item_pass.py, the Haze test). Over-approximate (exact relevance needs a possible faint).
   - A Trick Room user's own MoveEnd learn pause at B = 4 skips that action's re-sort in both engines; unreachable, since a Trick Room action fells nobody (E3 sign-off finding 4); comment at the site (step `_execute_actions` D3-18 re-sort, reference `_actions` Trick Room MoveEnd).
 - D8-D9: AI per-target scoring, the TAG_STRATEGY script and partner arguments.
   - Owed (D8): per-battler AI knowledge. The decomp keeps the AI's record per battler

@@ -28,12 +28,14 @@ from nuzline.engine.format import DOUBLES
 from nuzline.engine.ids import Stat
 from nuzline.engine.order import action_order
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
+from nuzline.engine.state import make_state
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
 from tests.engine.d2_states import four, with_hp, with_moves
-from tests.engine.helpers import jit_step
+from tests.engine.helpers import A, assert_matches_reference, jit_step
 from tests.engine.test_d3_action_loop import _engine, hp, speed_ordered
 from tests.engine.test_d3_pause import _engine_resume
+from tests.engine.test_e3_batch2 import _hits, _spec
 
 IDLE = "Swords Dance"
 ATK = Stat.ATK
@@ -190,6 +192,34 @@ def test_follow_me_is_kept_over_a_pause_and_the_later_actor_reads_it(tables, nam
     out, _ = resume_turn(tables, paused, targets)
     assert hp(out, 3) < hp(paused, 3)  # battler 0's Tackle at battler 1 hit battler 3
     assert hp(out, 1) == hp(s, 1)
+
+
+def test_the_resumed_u_turn_records_its_move_for_its_kept_defender(tables, names):
+    """B = 4 half: in the case above the resumed U-turn's moveCopied goes to battler 3 (its kept
+    defender, overwritten by battler 0's Tackle), never to battler 0 (``step._act``'s resumed
+    ``target``). B = 2: a player U-turn pauses at its party list before UpdateFlagsWhenHit, so the
+    paused state holds no moveCopied; the resume runs it for battleCtx->defender, which the party
+    list does not rewrite (bcp.c:1900, :3956 -> :4484-4485), after the user's switch-out cleared
+    its foes' entries (battle_lib.c:2140-2147): the foe holds U-turn, hit by battler 0, and the
+    foe's Growl then writes the newcomer's. Both engines agree on both states."""
+    _, paused, targets = paused_after_follow_me(tables, names)
+    out, _ = resume_turn(tables, paused, targets)
+    assert np.asarray(out.move_copied).tolist() == [0, 0, 0, names.move("Tackle")]
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_spec(n, "Bidoof", 50, ("U-turn",)), _spec(n, "Geodude", 50, ("Tackle",))],
+        [_spec(n, "Geodude", 50, ("Growl",))],
+    )
+    paused = assert_matches_reference(t, s, A("U-turn", "Growl", s, n), _hits())
+    assert int(paused.pivot_battler) == 1  # Bidoof is faster by its own stats
+    assert not np.asarray(paused.move_copied).any()
+    acts = np.asarray(paused.ts_actions).astype(int).tolist()
+    acts[0] = MOVE_ACTIONS + 1
+    done = assert_matches_reference(t, paused, tuple(acts), _hits())
+    u_turn, growl = n.move("U-turn"), n.move("Growl")
+    assert np.asarray(done.move_copied).tolist() == [growl, u_turn]
+    assert np.asarray(done.move_copied_hit).tolist() == [[0, growl], [u_turn, 0]]
 
 
 # --- the whole turn: ts_follow_me is 0 after it (lib.c:2251-2252) ------------------------------

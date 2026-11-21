@@ -1204,7 +1204,9 @@ def test_a_skill_swap_into_wonder_guard_fails_and_swaps_nothing(tables, names):
             [_spec(n, "Monferno", 40, ("Skill Swap",), "Sitrus Berry")],
             [_spec(n, foe, 20, (foe_move,))],
         )
-        s = s._replace(turn=jnp.asarray(1, s.turn.dtype))  # :17-20 would write totalTurns & 1 = 1
+        # Turn 1 with truant 0 is reachable: a lead never gets the switch-in write of
+        # battle_lib.c:2119 / :2197 (truant = (totalTurns + 1) & 1); :17-20 would write 1.
+        s = s._replace(turn=jnp.asarray(1, s.turn.dtype))
         assert int(s.stats[0, 0, SPE]) > int(s.stats[1, 0, SPE])
         mine, theirs = int(s.ability[0, 0]), int(s.ability[1, 0])
         assert mine == AbilityId.BLAZE and theirs != AbilityId.NONE

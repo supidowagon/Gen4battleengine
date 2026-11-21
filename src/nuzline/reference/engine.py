@@ -8562,6 +8562,9 @@ def _ref_step(
         _actions(turn, s, 0)
         if actions_only:
             _carry_flags(turn, s)
+            # The sort after the last action (bcp.c:888-891) is the action phase's in step
+            # (``_execute_actions``); here it opens ``_end_turn``.
+            _record_speeds(turn.tables, s)
             return s
         return _end_turn(turn, s)
     except _Pause as pause:
@@ -9183,6 +9186,9 @@ def _resume_learn(
             _actions(turn, s, cursor + 1)
             if actions_only:  # the test seam of ``ref_step``: stop before the end of the turn
                 _carry_flags(turn, s)
+                # The sort after the last action (bcp.c:888-891) is the action phase's in step
+                # (``_execute_actions``); here it opens ``_end_turn``.
+                _record_speeds(turn.tables, s)
                 return s
             return _end_turn(turn, s)
         return _end_turn(turn, s, site, cursor)
@@ -9316,6 +9322,9 @@ def _resume(
         _actions(turn, s, position + 1)
         if actions_only:  # the test seam of ``ref_step``: stop before the end of the turn
             _carry_flags(turn, s)
+            # The sort after the last action (bcp.c:888-891) is the action phase's in step
+            # (``_execute_actions``); here it opens ``_end_turn``.
+            _record_speeds(turn.tables, s)
             return s
         return _end_turn(turn, s)
     except _Pause as pause:

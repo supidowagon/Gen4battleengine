@@ -16,8 +16,11 @@ the Starf has no stat to raise and is kept (battle_lib.c:5278-5286):
   TriggerHeldItemOnStatus's Starf case lib.c:5278; D3-15).
 - B = 4, at another battler's action, as neither attacker nor defender: battler 0 starts at its
   pinch with all five stats at +6; battler 3's Haze (RANGE_FIELD: its defender is its user,
-  lib.c:1665-1669) zeroes every stage and battler 0 eats in that action's AfterMoveEffects
-  (bcp.c:3672 -> lib.c:4151-4165, TriggerHeldItemOnStatus lib.c:5278).
+  lib.c:1665-1669), the turn's last action, zeroes every stage and battler 0's berry is eaten in
+  that action. The game eats it at Haze's AfterMoveEffects (bcp.c:3672 -> lib.c:4151-4165,
+  TriggerHeldItemOnStatus lib.c:5278); MoveEnd's check (bcp.c:3973, ``step._move_end_tail``) would
+  find the same berry, and Haze cannot KO, so nothing sits between them: the test does not separate
+  the two.
 
 Every run is checked against the reference engine."""
 
@@ -59,7 +62,7 @@ def test_a_b4_self_hit_starf_is_eaten_at_its_move_end_with_entry_0(tables, names
     action's AfterMoveEffects (bcp.c:3672) can check its item, and the phase ends with its action
     (``play`` stops before the turn end). It hurts itself onto its pinch and eats the berry at its
     MoveEnd: entry 0 of its queue picks the stat (draw 0: Attack;
-    draw 3: rank 3 of the five, Sp. Atk, lib.c:5288), the other entries are unread, and the law
+    draw 3: rank 3 of the five, Sp. Atk, lib.c:5288), Outcome.starf columns 1-3 are unread, and the law
     reads entry 0 only. Its Swords Dance never ran (the self-hit ends the action)."""
     s = _all_moves(four(tables, names, DOUBLES), names, "Swords Dance")
     s = _set_item(s, 0, names.item("Starf Berry"))
@@ -84,11 +87,14 @@ def test_a_b4_self_hit_starf_is_eaten_at_its_move_end_with_entry_0(tables, names
 @pytest.mark.slow
 def test_a_b4_haze_lets_a_non_participant_eat_its_starf_with_entry_0(tables, names):
     """DOUBLES: battler 0 (Starf Berry) at its pinch with Attack to Speed at +6 keeps the berry
-    (lib.c:5278-5286) and acts first (+6 Speed; its Swords Dance changes nothing). Battler 3's Haze
-    is the next action; its user is its only defender (lib.c:1665-1669), so battler 0 is neither.
-    Haze zeroes every stage and battler 0 eats the Starf in that action's AfterMoveEffects
-    (bcp.c:3672 -> lib.c:4151-4165): entry 0 of its queue picks the stat (draw 0: Attack; draw 3:
-    Sp. Atk), entries 1-3 are unread, and the law reads battler 0's entry 0."""
+    (lib.c:5278-5286). ``play`` gives the order (0, 1, 2, 3) by raw speeds and asserts it
+    (tests/engine/test_d3_action_loop.py:73-78, :106), so battler 3's Haze is the last action and
+    the only one after which battler 0 can eat; its user is its only defender (lib.c:1665-1669), so
+    battler 0 is neither. Haze zeroes every stage and the berry is eaten in that action: entry 0 of
+    battler 0's queue picks the stat (draw 0: Attack; draw 3: Sp. Atk); Outcome.starf columns 1-3
+    are unread (column 1 is the faint-replacement draw; the queue is columns 0, 2, 3, ids.py:1230);
+    the law reads battler 0's column 0 only. Battler 2's column 1 is marked relevant though nothing
+    can faint here: over-approximate, owed to D6-18 (e2 ledger)."""
     s = _all_moves(four(tables, names, DOUBLES), names, "Swords Dance")
     s = with_moves(s, names, 3, ["Haze"])
     s = _set_item(s, 0, names.item("Starf Berry"))
@@ -98,11 +104,13 @@ def test_a_b4_haze_lets_a_non_participant_eat_its_starf_with_entry_0(tables, nam
 
     def stages(col, draw):
         o = base._replace(starf=base.starf.at[0, col].set(draw))
-        out, _ = play(tables, s, [0, 0, 0, 0], (0, 3, 1, 2), outcome=o)
+        out, _ = play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), outcome=o)
         assert int(out.item[0, 0]) == 0 and not np.any(np.asarray(out.stages[3]))
         return {Stat(i).name: int(v) for i, v in enumerate(np.asarray(out.stages[0])) if v}
 
     assert stages(0, 0) == {"ATK": 2} and stages(0, 3) == {"SPA": 2}
     assert all(stages(col, 3) == {"ATK": 2} for col in (1, 2, 3))
     laws = jax.tree.map(np.asarray, outcome_laws(tables, s, jnp.zeros(4, jnp.int32)))
-    assert laws.relevant.starf[0].tolist() == [True, False, False, False]
+    relevant = laws.relevant.starf.tolist()
+    assert relevant[0] == [True, False, False, False]
+    assert relevant[1] == [False] * 4 and relevant[3] == [False] * 4
