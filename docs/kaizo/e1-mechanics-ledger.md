@@ -2677,6 +2677,12 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `end_speed_tie` / `quick_claw` branches of such a turn now lead to identical child states and may merge (the
   decomp draws no tie bit there). Owed (cleanup): `hooks.order_swaps`' own dead-battler line (hooks.py:412-413)
   is now redundant with `player_second`; drop it in a later cleanup.
+- H-M1 (merge of main 7698de58, D3, into batch H; 2df0a922) Owed, B = 4 only: the resumed U-turn tail's sideEffectMon
+  is the lowest-index pursuer with `ts_loved` (step.py `pre_list`, reference `_resume` `turn.sync_mon`). D3's
+  Pursuit chain lets several pursuers hit one U-turn user, and every contact-ability trigger sets sideEffectMon to the
+  attacker (battle_lib.c:4296, :4313, :4331, :4350: Effect Spore, Poison Point, Flame Body, Cute Charm), so the
+  decomp's value is the last pursuer whose hit triggered any contact ability. Both engines agree (the differential
+  cannot see it). B = 2 has one pursuer: exact. Fix: carry the last contact-triggering pursuer through the pause.
 
 ## Stream state (restart point, 2026-11-19)
 
