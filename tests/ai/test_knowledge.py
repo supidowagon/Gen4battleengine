@@ -173,8 +173,10 @@ def test_player_switch_in_resets_last_move(tables, names):
     s = roark_state(tables, names)
     s = s._replace(last_move=s.last_move.at[0].set(names.move("Scratch")))
     out = _both(tables, s, A(SWITCH_TO_1, "Leer", s, names))
-    # Committed for the Pokemon that was active when the AI decided, then reset.
-    assert np.asarray(out.ai_seen_moves[0]).tolist() == [names.move("Scratch"), 0, 0, 0]
+    # Recorded into battler 0's row at the AI's command selection (trainer_ai.c:2705-2716),
+    # then cleared by the newcomer's entry (BattleSystem_UpdateAfterSwitch, battle_lib.c:
+    # 2151-2153; D45-1 rule 3); last_move reset with it.
+    assert np.asarray(out.ai_seen_moves[0]).tolist() == [0, 0, 0, 0]
     assert int(out.last_move[0]) == 0
 
 

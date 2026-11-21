@@ -112,14 +112,15 @@ def test_doubles_battler_2_marks_its_own_byte(tables, names):
     """Rule 4: DOUBLES battler 2 sends from party 0 into its own byte; MULTI battler 2 is the
     partner's party. Engine ``replace_round`` against ``ref_replace_round``."""
     for fmt, party_row, expected in (
-        (DOUBLES, 0, [1, 1, 0b10010, 1]),
+        (DOUBLES, 0, [1, 1, 0b10010, 0b10]),
         (MULTI, 2, [1, 1, 0b10001, 1]),
     ):
         s = four(tables, names, fmt)
         s = down(s, (party_row, int(s.active[2])))
         p = np.asarray([-1, -1, 4, -1], np.int8)
         out = step_module.replace_round(tables, s, p)
-        # DOUBLES: battler 2 leads slot 1, so 1 << 1 | 1 << 4; MULTI: its lead is slot 0.
+        # DOUBLES: battler 2 leads slot 1, so 1 << 1 | 1 << 4 (battler 3 keeps its start's
+        # 1 << 1, rule 3); MULTI: its lead is slot 0.
         assert _sent(out) == expected, fmt
         _same(out, ref.ref_replace_round(to_numpy(tables), to_ref(s), p.tolist()))
 
