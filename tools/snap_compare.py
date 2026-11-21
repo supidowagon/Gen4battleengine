@@ -41,7 +41,7 @@ Usage:
 
 A usage error (unknown --parts name, B < A, --chunk < 1, an empty part list, raise shares
 outside 0 <= --raise-warn <= --raise-fail < 1, --workers or --gate-gb not a whole number of at
-least 1) exits 2.
+least 1, --workers > 1 without a cgroup memory reading) exits 2.
 
 Needs a checkout and its built tables only (tools/ops/build_tables.sh: ``data/gen4_platinum``,
 ``data/gen4_platinum_kaizo``, ``data/intermediate``, ``data/intermediate_kaizo``); never the
@@ -105,12 +105,14 @@ other than "step" starts only after its chunk's "step" part has ended (it reads 
 ``.inputs.pkl.gz``), whatever its result, as the serial order runs it. A child killed or ended
 without a RESULT line is an ERROR (a failure). Memory gate (``--gate-gb G``, default: env
 ``SNAP_GATE_GB``, else 88; GB = 10^9 bytes): with N > 1 a part starts only while container
-memory (cgroup v2 ``memory.current``, else v1 ``memory.usage_in_bytes``, under ``CGROOT``,
-default /sys/fs/cgroup; with neither, the live parts' RSS) + the reserve + the part's expected
-peak (``PART_GB``) stays at or under G; the reserve is each live part's expected peak minus its
-RSS, where positive. With no live part the next part starts whatever memory reads: container
-memory counts page cache, which need not fall under G while nothing of this job runs, so waiting
-on it could wait forever (as ``tools/ops/day/pod/gate.sh`` ``start-idle-wait``). While a ready
+memory without reclaimable page cache (cgroup v2 ``memory.current`` minus ``inactive_file``,
+else v1 ``memory.usage_in_bytes`` minus ``total_inactive_file``, under ``CGROOT``, default
+/sys/fs/cgroup; ``container_bytes``) + the reserve + the part's expected peak (``PART_GB``)
+stays at or under G; the reserve is each live part's expected peak minus its RSS, where
+positive. N > 1 with neither cgroup file readable (off Linux) is a usage error. With no live
+part the next part starts whatever memory reads: memory this job does not hold (active page
+cache, other jobs) need not fall under G while nothing of this job runs, so waiting on it could
+wait forever (as ``tools/ops/day/pod/gate.sh`` ``start-idle-wait``). While a ready
 part waits for the gate the driver prints ``gate wait: <n> ready, <live> live, memory <GB> GB,
 gate <G> GB`` at most once a minute. Start order: longest expected part first (``PART_S``),
 then the part-list order; a part that does not fit lets a later one that fits start. A TERM
@@ -1528,16 +1530,37 @@ def part_deps(mode: str, part: str, planned) -> set[str]:
     return {f"{head}.step"} & set(planned)
 
 
+def _stat_value(path: Path, key: str) -> int:
+    """The value of line ``<key> <n>`` in a cgroup ``memory.stat``; 0 when the file or the
+    line is missing or not a number."""
+    try:
+        for line in path.read_text().splitlines():
+            f = line.split()
+            if len(f) == 2 and f[0] == key and f[1].isdigit():
+                return int(f[1])
+    except OSError:
+        pass
+    return 0
+
+
 def container_bytes() -> int | None:
-    """Container memory in bytes: cgroup v2 ``memory.current``, else v1
-    ``memory/memory.usage_in_bytes``, under ``CGROOT`` (default /sys/fs/cgroup), as
-    tools/ops/day/pod/gate.sh ``cgmem current`` reads it; None when neither is readable."""
+    """Container memory in bytes without reclaimable page cache: cgroup v2 ``memory.current``
+    minus ``inactive_file`` of ``memory.stat``, else v1 ``memory/memory.usage_in_bytes`` minus
+    ``total_inactive_file`` of ``memory/memory.stat``, under ``CGROOT`` (default
+    /sys/fs/cgroup); a missing ``memory.stat`` or line subtracts nothing. The same reading as
+    tools/ops/day/snap.sh ``cgused`` (tests/tools/test_snap_parallel.py checks both on the same
+    files); None when neither usage file is readable."""
     root = Path(os.environ.get("CGROOT", "/sys/fs/cgroup"))
-    for f in (root / "memory.current", root / "memory" / "memory.usage_in_bytes"):
+    for cur, stat, key in (
+        (root / "memory.current", root / "memory.stat", "inactive_file"),
+        (root / "memory" / "memory.usage_in_bytes", root / "memory" / "memory.stat",
+         "total_inactive_file"),
+    ):  # fmt: skip
         try:
-            return int(f.read_text().split()[0])
+            used = int(cur.read_text().split()[0])
         except (OSError, ValueError, IndexError):
             continue
+        return used - min(used, _stat_value(stat, key))
     return None
 
 
@@ -1557,8 +1580,8 @@ def admit(
     want_gb: float, live: dict[str, tuple[float, int]], mem: int | None, gate_gb: int
 ) -> bool:
     """May a part of expected peak ``want_gb`` start beside ``live`` ``{part: (expected GB,
-    RSS bytes)}``? With no live part: yes, whatever memory reads (container memory counts page
-    cache, which need not fall under the gate while nothing of this job runs). Else memory (no
+    RSS bytes)}``? With no live part: yes, whatever memory reads (memory this job does not
+    hold need not fall under the gate while nothing of this job runs). Else memory (no
     reading: the live RSS sum) + the reserve (each live part's expected peak minus its RSS,
     where positive) + ``want_gb`` at or under the gate."""
     gate = gate_gb * 1e9
@@ -1737,6 +1760,12 @@ def parent(args) -> int:
         workers, wsrc = _knob(args.workers, "--workers", "SNAP_WORKERS", 1)
         gate_gb, gsrc = _knob(args.gate_gb, "--gate-gb", "SNAP_GATE_GB", 88)
         check_workers(workers, gate_gb, wsrc, gsrc)
+        if workers > 1 and container_bytes() is None:
+            raise UsageError(
+                f"{wsrc} {workers}: parts at once need the container memory reading "
+                "(cgroup memory.current or memory/memory.usage_in_bytes under CGROOT, default "
+                "/sys/fs/cgroup) and none is readable here; run with 1 worker"
+            )
     except UsageError as e:
         print(f"{args.mode}: usage error: {e}", flush=True)
         return 2

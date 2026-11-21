@@ -102,6 +102,7 @@ def run(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "missing", lambda part: [])
     monkeypatch.setattr(sc, "git_info", lambda r: None)
     monkeypatch.setattr(sc, "content_hash", lambda r: "code-a")
+    monkeypatch.setattr(sc, "container_bytes", lambda: 0)  # a cgroup reading, as on the pod
     real = sc.PartPool
 
     def go(argv, capsys, took=lambda p: 10.0, codes=None):
@@ -510,21 +511,23 @@ def test_snap_sh_capture_run_sh_passes_workers_gate_and_takes_the_lock(snap_dry)
     assert "NOTE:" not in r.stdout
     cmd = (f'uv run --frozen python "tools/snap_compare.py" capture "$W/snap" 0-199 --repo '
            f'"$W/repo" --commit {snap_dry.new} --workers 16 --gate-gb 88 -v > "$W/capture.log" '
-           f"2>&1 & wait $!; ")  # fmt: skip
+           f'2>&1 &\nsnapwatch $! "$L"; ')  # fmt: skip
     assert cmd in run_sh
     lines = run_sh.splitlines()
     assert any(ln.startswith(f'W="/work/snapmain-{snap_dry.new[:7]}";') for ln in lines)
     assert any(ln.startswith("m=$(tr -dc 0-9 < /proc/sys/vm/max_map_count") and
                'echo "MAP_COUNT_LOW ${m:-none} $(date +%s)" >> "$W/times.txt"; exit 1;' in ln
                for ln in lines)  # fmt: skip
-    assert "L=/work/.snaplock" in lines
+    assert "L=/work/.snaplock; SG=$$" in lines
     assert "trap 'snapunlock \"$L\"' EXIT" in lines
-    assert any(ln.startswith("trap 'trap \"\" TERM; kill -TERM -- -$$")
-               and ln.endswith("exit 143' TERM") for ln in lines)  # fmt: skip
-    for fn in ("cgmem", "snaplive", "snaplock", "snapunlock"):
+    assert ("trap 'trap \"\" TERM; echo \"TERM $(date +%s)\" >> \"$W/times.txt\"; snapstop "
+            "\"$W/times.txt\"; exit 143' TERM") in lines  # fmt: skip
+    for fn in ("cgused", "procscan", "snapmembers", "snaplive", "snaplock", "snapunlock",
+               "snapwatch", "snapstop", "snapgate", "reserve_knobs", "podgate"):  # fmt: skip
         assert f"{fn} () " in run_sh
     order = ["MAP_COUNT_LOW", "SYNC_RC=", 'snaplock "$L" "$W/times.txt"; echo "SNAP_LOCK',
-             'gate; echo "CAPTURE_START', "CAPTURE_RC=", "echo ALL_DONE"]  # fmt: skip
+             'snapgate 88 "$W/times.txt"; echo "CAPTURE_START', "CAPTURE_RC=",
+             'snapstop "$W/times.txt"\necho ALL_DONE']  # fmt: skip
     at = [run_sh.index(k) for k in order]
     assert at == sorted(at)
 
@@ -535,9 +538,9 @@ def test_snap_sh_compare_run_sh_quotes_and_knobs(snap_dry):
                          SNAP_WORKERS="4", SNAP_GATE_GB="176")  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
     assert (f'compare "{cap}" 0-199 --repo "$W/repo" --commit {snap_dry.new} --allow-new a,b.c '
-            f'--workers 4 --gate-gb 176 -v > "$W/compare.log" 2>&1 & wait $!;') in run_sh  # fmt: skip
+            f'--workers 4 --gate-gb 176 -v > "$W/compare.log" 2>&1 &\n') in run_sh  # fmt: skip
     assert f'printf \'%s\\n\' "{cap}" > "$W/reads"' in run_sh
-    assert "-ge 176 ]" in run_sh  # run.sh's own gate
+    assert 'snapgate 176 "$W/times.txt"' in run_sh  # run.sh's own gate
 
 
 def test_snap_sh_old_snap_compare_runs_serially_with_a_note(snap_dry):
@@ -555,29 +558,183 @@ def test_snap_sh_refuses_a_bad_knob(snap_dry, knob):
     assert run_sh == ""
 
 
+def test_workers_need_a_cgroup_memory_reading(run, capsys, monkeypatch):
+    """Off Linux (no cgroup file) --workers > 1 would admit parts blind: a usage error."""
+    monkeypatch.setattr(sc, "container_bytes", lambda: None)
+    for argv in (["--workers", "3"], []):
+        if not argv:
+            monkeypatch.setenv("SNAP_WORKERS", "4")
+        rc, lines = run(["capture", str(run.snap), "0-9", "--commit", BASE, *argv], capsys)
+        src = "--workers 3" if argv else "SNAP_WORKERS 4"
+        assert rc == 2 and any(ln.startswith(f"capture: usage error: {src}: parts at once need "
+                                             "the container memory reading") for ln in lines)  # fmt: skip
+        assert not run.snap.exists()
+    rc, _ = run(["capture", str(run.snap), "0-9", "--commit", BASE, "--workers", "1"], capsys)
+    assert rc == 0  # one at a time needs no reading
+
+
+# --- tools/ops/day/snap.sh: the generated run.sh's functions -------------------------------
+
+GB = 10**9
+# cgroup trees: {file: text}, and the bytes both readers give (None: no reading).
+CG_TREES = {
+    "v2": ({"memory.current": f"{200 * GB}\n",
+            "memory.stat": f"anon 1\nactive_file 5\ninactive_file {150 * GB}\nfile 9\n"}, 50 * GB),
+    "v2-no-stat": ({"memory.current": f"{200 * GB}\n"}, 200 * GB),
+    "v2-stat-over": ({"memory.current": "100\n", "memory.stat": "inactive_file 500\n"}, 0),
+    "v1": ({"memory/memory.usage_in_bytes": f"{90 * GB}\n",
+            "memory/memory.stat": f"inactive_file 7\ntotal_inactive_file {30 * GB}\n"}, 60 * GB),
+    "v1-no-stat": ({"memory/memory.usage_in_bytes": "1234\n"}, 1234),
+    "v2-garbage": ({"memory.current": "max\n", "memory/memory.usage_in_bytes": "77\n"}, 77),
+    "missing": ({}, None),
+}  # fmt: skip
+
+
+@pytest.fixture
+def fns(tmp_path, snap_dry):
+    """The function definitions of a dry-run capture run.sh, in a file to source."""
+    r, run_sh = snap_dry("capture", snap_dry.new, "snapt-fns")
+    assert r.returncode == 0, r.stdout + r.stderr
+    body = run_sh[run_sh.index("cgused () ") : run_sh.index("L=/work/.snaplock")]
+    f = tmp_path / "fns.sh"
+    f.write_text(body, encoding="utf-8", newline="\n")
+    return f
+
+
+def _bash(cmd, timeout=60, **env):
+    from tests.tools.test_pod_gate import BASH, _clean_env
+
+    return subprocess.run([BASH, "-c", cmd], check=False, capture_output=True, text=True,
+                          timeout=timeout, env={**_clean_env(), **env})  # fmt: skip
+
+
+@pytest.mark.parametrize("tree", sorted(CG_TREES))
+def test_cgused_and_container_bytes_subtract_inactive_file_alike(tmp_path, monkeypatch, fns, tree):
+    files, want = CG_TREES[tree]
+    root = tmp_path / "cg"
+    root.mkdir()
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8", newline="\n")
+    monkeypatch.setenv("CGROOT", str(root))
+    assert sc.container_bytes() == want
+    r = _bash(f". '{fns.as_posix()}'; cgused", CGROOT=root.as_posix())
+    if want is None:
+        assert (r.returncode, r.stdout) == (1, "")
+    else:
+        assert (r.returncode, r.stdout.strip()) == (0, str(want))
+
+
+def test_snaplock_treats_its_own_pid_in_the_lock_as_stale(tmp_path, fns):
+    """A lock whose pid is the waiting shell's own is another holder's pid, reused: stale. The
+    shell runs a script named run.sh, so its own pid would pass snaplive's run.sh test."""
+    lock, times, script = tmp_path / "lock", tmp_path / "times.txt", tmp_path / "j" / "run.sh"
+    script.parent.mkdir()
+    script.write_text(f". '{fns.as_posix()}'; W=/work/me; d='{lock.as_posix()}'; mkdir -p \"$d\"; "
+                      f"echo $$ > \"$d/pid\"; echo /work/old > \"$d/name\"; snaplock \"$d\" "
+                      f"'{times.as_posix()}'; echo \"$$ $(cat \"$d/pid\") $(cat \"$d/name\")\"\n",
+                      encoding="utf-8", newline="\n")  # fmt: skip
+    r = _bash(f"bash '{script.as_posix()}'")
+    assert r.returncode == 0, r.stderr
+    me, held, name = r.stdout.split()
+    assert held == me and name == "/work/me"
+    assert re.fullmatch(rf"SNAP_LOCK_STALE {me} \d+\n", _text(times))
+
+
+def test_snaplock_removes_a_lock_without_a_pid_file_after_10_s(tmp_path, fns):
+    import time
+
+    lock, times = tmp_path / "lock", tmp_path / "times.txt"
+    lock.mkdir()
+    (lock / "name").write_text("/work/died\n")
+    t0 = time.monotonic()
+    r = _bash(f". '{fns.as_posix()}'; W=/work/me; snaplock '{lock.as_posix()}' "
+              f"'{times.as_posix()}' > /dev/null; cat '{lock.as_posix()}/name'")  # fmt: skip
+    took = time.monotonic() - t0
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "/work/me"
+    assert re.fullmatch(r"SNAP_LOCK_STALE none \d+\n", _text(times))
+    assert 9 <= took < 40, took
+
+
+def test_snaplive_counts_a_dead_leader_s_live_group_and_the_groups_file(tmp_path, fns):
+    """A holder pid that is gone still holds while a process of its group, or of a group in
+    <lock>/groups, is live; a dead pid with nothing of its groups live does not."""
+    from tests.tools.test_pod_gate import BASH, _clean_env
+
+    p = subprocess.Popen([BASH, "-c", "sleep 60 > /dev/null 2>&1 < /dev/null & echo $$ $!"],
+                         stdout=subprocess.PIPE, text=True, env=_clean_env(),
+                         start_new_session=True)  # fmt: skip
+    leader, kid = p.stdout.read().split()
+    p.wait()
+    lock = tmp_path / "lock"
+    lock.mkdir()
+    live = f". '{fns.as_posix()}'; snaplive {{}} '{lock.as_posix()}' && echo LIVE || echo GONE"
+    dead = _bash("echo $$").stdout.strip()
+    try:
+        assert _until(
+            lambda: _bash(f"kill -0 {leader} 2>/dev/null || echo dead").stdout.strip(), 10
+        )
+        assert _bash(live.format(leader)).stdout.strip() == "LIVE"
+        assert _bash(live.format(dead)).stdout.strip() == "GONE"
+        (lock / "groups").write_text(f"{dead} {leader}\n")  # the job's groups, snapwatch's file
+        assert _bash(live.format(dead)).stdout.strip() == "LIVE"
+    finally:
+        _bash(f"kill -9 {kid}")
+    assert _until(lambda: _bash(live.format(leader)).stdout.strip() == "GONE", 10)
+    assert _bash(live.format(dead)).stdout.strip() == "GONE"
+
+
 # --- the generated run.sh, run with a fake uv ---------------------------------------------
+
+# Git Bash's ps has no -o: the columns podgate reads (pid pgid stat rss) from ps -l, whose first
+# column may be a status letter.
+PS_SHIM = """#!/bin/bash
+/usr/bin/ps -l | awk 'NR > 1 { if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 }; print $1, $3, "S", 0 }'
+"""
+# Fake uv: sync passes; run writes its pid to <job>/uv.pid, and then: with FAKE_UV_LEAVE starts a
+# sleep it leaves behind (pid in <job>/left.pid) and exits 9; with FAKE_UV_SETSID becomes a
+# sleep in a session of its own; else a sleep of FAKE_UV_S s.
+FAKE_UV = """#!/bin/bash
+[ "$1" = sync ] && exit 0
+echo $$ > "$W/uv.pid"
+if [ -n "$FAKE_UV_LEAVE" ]; then sleep 120 > /dev/null 2>&1 < /dev/null & echo $! > "$W/left.pid"; exit 9; fi
+[ -n "$FAKE_UV_SETSID" ] && exec setsid sleep "$FAKE_UV_S"
+exec sleep "$FAKE_UV_S"
+"""
 
 
 @pytest.fixture
 def pod(tmp_path, snap_dry):
-    """``pod.job(name, uv_s) -> Popen``: a capture run.sh from snap.sh, rewritten so its /work,
-    max_map_count, cgroup and uv are under ``tmp_path`` (fake uv: ``sync`` passes, ``run``
-    writes its pid to ``<job>/uv.pid`` and sleeps ``uv_s`` s). ``pod.lock``: the pod lock
-    folder. Every job left is killed at teardown."""
+    """``pod.job(name, uv_s, **env) -> Popen``: a capture run.sh from snap.sh, rewritten so its
+    /work, max_map_count, cgroup and uv are under ``tmp_path`` (FAKE_UV), with IDLE_WAIT_S 300
+    unless ``env`` sets it. ``pod.mem(current, inactive)``: the fake cgroup v2 reading.
+    ``pod.lock``: the pod lock folder; ``pod.work``: the fake /work. Every job and pid left is
+    killed at teardown."""
     import os
 
     bash = snap_dry.bash
     work, fake = tmp_path / "work", tmp_path / "fakebin"
     fake.mkdir()
-    uv = '#!/bin/bash\n[ "$1" = sync ] && exit 0\necho $$ > "$W/uv.pid"\nexec sleep "$FAKE_UV_S"\n'
-    (fake / "uv").write_text(uv, encoding="utf-8", newline="\n")
+    (fake / "uv").write_text(FAKE_UV, encoding="utf-8", newline="\n")
     os.chmod(fake / "uv", 0o755)
+    if subprocess.run([bash, "-c", "ps -eo pid=,pgid=,stat=,rss= > /dev/null 2>&1"],
+                      check=False).returncode != 0:  # fmt: skip
+        (fake / "ps").write_text(PS_SHIM, encoding="utf-8", newline="\n")
+        os.chmod(fake / "ps", 0o755)
     (tmp_path / "mc").write_text("1048576\n")
-    (tmp_path / "cg").mkdir()
-    (tmp_path / "cg" / "memory.current").write_text("0\n")
-    procs = []
+    cg = tmp_path / "cg"
+    cg.mkdir()
 
-    def job(name, uv_s):
+    def mem(current, inactive=None):
+        (cg / "memory.current").write_text(f"{current}\n")
+        if inactive is not None:
+            (cg / "memory.stat").write_text(f"active_file 1\ninactive_file {inactive}\n")
+
+    mem(0)
+    procs, pids = [], []
+
+    def job(name, uv_s, **extra):
         r, run_sh = snap_dry("capture", snap_dry.new, name)
         assert r.returncode == 0, r.stdout + r.stderr
         # The paths go in as variables: the project path has spaces, and run.sh writes the
@@ -587,9 +744,9 @@ def pod(tmp_path, snap_dry):
         d = work / name
         (d / "repo").mkdir(parents=True)
         (d / "run.sh").write_text(run_sh, encoding="utf-8", newline="\n")
-        env = {**os.environ, "FAKE_UV_S": str(uv_s), "CGROOT": posix(tmp_path / "cg"),
-               "W": posix(d), "POD": posix(work), "FAKEBIN": posix(fake),
-               "MC": posix(tmp_path / "mc")}  # fmt: skip
+        env = {**os.environ, "FAKE_UV_S": str(uv_s), "CGROOT": posix(cg), "W": posix(d),
+               "POD": posix(work), "FAKEBIN": posix(fake), "MC": posix(tmp_path / "mc"),
+               "IDLE_WAIT_S": "300", **extra}  # fmt: skip
         out = open(d / "run.out", "w")  # noqa: SIM115
         p = subprocess.Popen([bash, (d / "run.sh").as_posix()], stdout=out,
                              stderr=subprocess.STDOUT, env=env, start_new_session=True)  # fmt: skip
@@ -606,9 +763,15 @@ def pod(tmp_path, snap_dry):
         return subprocess.run([bash, "-c", 'cygpath -u "$0"', str(path)], check=True,
                               capture_output=True, text=True).stdout.strip()  # fmt: skip
 
-    job.job = job
-    job.lock = work / ".snaplock"
+    def sleeper(s=120):  # a live process's pid, as bash numbers it
+        pid = sh(f"sleep {s} > /dev/null 2>&1 < /dev/null & echo $!").stdout.strip()
+        pids.append(pid)
+        return pid
+
+    job.job, job.mem, job.sleeper, job.sh = job, mem, sleeper, sh
+    job.work, job.lock = work, work / ".snaplock"
     job.term = lambda pid: sh(f"kill -TERM {pid}")
+    job.kill = lambda pid: sh(f"kill -KILL {pid}")
     job.alive = lambda pid: sh(f"kill -0 {pid}").returncode == 0
     job.dead_pid = lambda: sh("echo $$").stdout.strip()
     yield job
@@ -617,10 +780,13 @@ def pod(tmp_path, snap_dry):
             p.kill()
             p.wait()
         out.close()
-    for p, _ in procs:  # a fake uv a failed test left behind
-        pid = _text(p.dir / "uv.pid").strip()
-        if pid:
-            sh(f"kill -9 {pid}")
+    for p, _ in procs:  # a fake uv or left sleep a failed test left behind
+        for f in ("uv.pid", "left.pid"):
+            pid = _text(p.dir / f).strip()
+            if pid:
+                sh(f"kill -9 {pid}")
+    for pid in pids:
+        sh(f"kill -9 {pid}")
 
 
 def _until(cond, s=30.0):
@@ -641,6 +807,14 @@ def _text(path):
         return ""
 
 
+def _setsid() -> bool:
+    import shutil
+
+    from tests.tools.test_pod_gate import BASH
+
+    return BASH is not None and shutil.which("setsid") is not None and sys.platform != "win32"
+
+
 def test_run_sh_one_job_per_pod_and_term_releases_the_lock_and_kills_the_job(pod):
     a = pod.job("snapt-a", 120)
     assert _until(lambda: _text(a.dir / "uv.pid").strip()), _text(a.dir / "run.out")
@@ -655,18 +829,21 @@ def test_run_sh_one_job_per_pod_and_term_releases_the_lock_and_kills_the_job(pod
     assert len(lines) == 1  # one line a minute
     assert re.fullmatch(r"lock wait \S+: .+/snapt-a holds .+/\.snaplock", lines[0])
     pod.term(holder)
-    assert a.wait(timeout=30) == 143
+    assert a.wait(timeout=60) == 143
     assert _until(lambda: not pod.alive(a_uv), 10)  # the job a's run.sh started is gone
-    times_a = _text(a.dir / "times.txt")
-    assert "CAPTURE_START" in times_a
-    assert "ALL_DONE" not in times_a and "CAPTURE_RC" not in times_a
+    times_a = _text(a.dir / "times.txt").splitlines()
+    assert any(ln.startswith("CAPTURE_START") for ln in times_a)
+    term = [i for i, ln in enumerate(times_a) if re.fullmatch(r"TERM \d+", ln)]
+    assert term and times_a[term[0] + 1].startswith("JOB_LEFT ")
+    assert a_uv in times_a[term[0] + 1].split()
+    assert not any(ln.startswith(("ALL_DONE", "CAPTURE_RC")) for ln in times_a)
     # b takes the lock once a's TERM released it, never judging it stale
     assert _until(lambda: _text(b.dir / "uv.pid").strip()), _text(b.dir / "run.out")
     assert _text(pod.lock / "name").strip().endswith("/snapt-b")
     assert "SNAP_LOCK_STALE" not in _text(b.dir / "times.txt")
     b_uv = _text(b.dir / "uv.pid").strip()
     pod.term(_text(pod.lock / "pid").strip())
-    assert b.wait(timeout=30) == 143
+    assert b.wait(timeout=60) == 143
     assert _until(lambda: not pod.alive(b_uv), 10)
     assert not pod.lock.exists()
 
@@ -680,5 +857,94 @@ def test_run_sh_removes_a_stale_lock_of_a_dead_pid(pod):
     assert a.wait(timeout=60) == 0, _text(a.dir / "run.out")
     times = _text(a.dir / "times.txt")
     assert f"SNAP_LOCK_STALE {dead} " in times and "CAPTURE_RC=0" in times
-    assert times.rstrip().endswith("ALL_DONE")
+    assert "JOB_LEFT" not in times and times.rstrip().endswith("ALL_DONE")
     assert not pod.lock.exists()
+
+
+def test_run_sh_a_killed_holder_with_a_live_job_keeps_the_lock(pod):
+    """run.sh KILLed (no trap runs) while its job runs: the job's group still holds the lock;
+    once the job is gone the next job judges it stale and runs."""
+    a = pod.job("snapt-k", 120)
+    assert _until(lambda: _text(a.dir / "uv.pid").strip()), _text(a.dir / "run.out")
+    a_uv, holder = _text(a.dir / "uv.pid").strip(), _text(pod.lock / "pid").strip()
+    pod.kill(holder)
+    a.wait(timeout=30)
+    assert pod.alive(a_uv) and pod.lock.exists()
+    b = pod.job("snapt-l", 0)
+    assert _until(lambda: "lock wait" in _text(b.dir / "run.out")), _text(b.dir / "run.out")
+    assert not _until(lambda: "SNAP_LOCK" in _text(b.dir / "times.txt"), 4)
+    pod.kill(a_uv)
+    assert b.wait(timeout=60) == 0, _text(b.dir / "run.out")
+    times = _text(b.dir / "times.txt")
+    assert f"SNAP_LOCK_STALE {holder} " in times and times.rstrip().endswith("ALL_DONE")
+
+
+def test_run_sh_stops_what_the_driver_left_before_all_done(pod):
+    a = pod.job("snapt-x", 0, FAKE_UV_LEAVE="1")
+    assert a.wait(timeout=90) == 0, _text(a.dir / "run.out")
+    left = _text(a.dir / "left.pid").strip()
+    lines = _text(a.dir / "times.txt").splitlines()
+    assert re.fullmatch(r"CAPTURE_RC=9 \d+", lines[-3])
+    assert re.fullmatch(rf"JOB_LEFT {left} \d+", lines[-2]) and lines[-1] == "ALL_DONE"
+    assert not pod.alive(left)
+    assert not pod.lock.exists()
+
+
+@pytest.mark.skipif(not _setsid(), reason="needs setsid (Linux, the pod)")
+def test_run_sh_tracks_a_job_in_a_group_of_its_own(pod):
+    """A job process in its own session (as uv might start the driver): snapwatch records its
+    group in the lock, so a KILLed run.sh's lock stays held, and a TERM stops it."""
+    a = pod.job("snapt-g1", 120, FAKE_UV_SETSID="1")
+    assert _until(lambda: _text(a.dir / "uv.pid").strip()), _text(a.dir / "run.out")
+    a_uv = _text(a.dir / "uv.pid").strip()
+    assert _until(lambda: a_uv in _text(pod.lock / "groups").split(), 10)
+    pod.term(_text(pod.lock / "pid").strip())
+    assert a.wait(timeout=60) == 143
+    assert _until(lambda: not pod.alive(a_uv), 10)
+    b = pod.job("snapt-g2", 120, FAKE_UV_SETSID="1")
+    assert _until(lambda: _text(b.dir / "uv.pid").strip()), _text(b.dir / "run.out")
+    b_uv, holder = _text(b.dir / "uv.pid").strip(), _text(pod.lock / "pid").strip()
+    assert _until(lambda: b_uv in _text(pod.lock / "groups").split(), 10)
+    pod.kill(holder)
+    b.wait(timeout=30)
+    c = pod.job("snapt-g3", 0)
+    assert _until(lambda: "lock wait" in _text(c.dir / "run.out")), _text(c.dir / "run.out")
+    assert not _until(lambda: "SNAP_LOCK" in _text(c.dir / "times.txt"), 4)
+    pod.kill(b_uv)
+    assert c.wait(timeout=60) == 0, _text(c.dir / "run.out")
+
+
+def test_run_sh_gate_starts_alone_after_idle_wait_when_memory_stays_high(pod):
+    """Memory stuck over the gate (page cache no unit holds) with no pack unit live: after
+    IDLE_WAIT_S the job starts anyway, GATE_IDLE_START in times.txt."""
+    pod.mem(200 * GB)
+    a = pod.job("snapt-i", 0, IDLE_WAIT_S="2")
+    assert a.wait(timeout=60) == 0, _text(a.dir / "run.out")
+    lines = [ln.split()[0] for ln in _text(a.dir / "times.txt").splitlines()]
+    assert lines[lines.index("SNAP_LOCK") + 1:] == ["GATE_IDLE_START", "CAPTURE_START",
+                                                    "CAPTURE_RC=0", "ALL_DONE"]  # fmt: skip
+    out = _text(a.dir / "run.out").splitlines()
+    assert out and all(re.fullmatch(r"gate wait \S+: memory 200 GB without page cache, gate 88 "
+                                    r"GB, 0 pack units live", ln) for ln in out)  # fmt: skip
+
+
+def test_run_sh_gate_waits_while_a_pack_unit_is_live(pod):
+    pod.mem(200 * GB)
+    unit = pod.sleeper()
+    run_dir = pod.work / "r1" / "out" / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "u_001").write_text(unit + "\n")
+    a = pod.job("snapt-u", 0, IDLE_WAIT_S="2")
+    assert _until(lambda: "1 pack units live" in _text(a.dir / "run.out")), _text(a.dir / "run.out")
+    assert not _until(lambda: "CAPTURE_START" in _text(a.dir / "times.txt"), 5)
+    pod.kill(unit)
+    assert a.wait(timeout=60) == 0, _text(a.dir / "run.out")
+    assert "GATE_IDLE_START" in _text(a.dir / "times.txt")
+
+
+def test_run_sh_gate_does_not_count_inactive_file_cache(pod):
+    pod.mem(200 * GB, inactive=150 * GB)  # 50 GB without the cache: under the 88 GB gate
+    a = pod.job("snapt-c", 0)
+    assert a.wait(timeout=60) == 0, _text(a.dir / "run.out")
+    assert "gate wait" not in _text(a.dir / "run.out")
+    assert "GATE_IDLE_START" not in _text(a.dir / "times.txt")

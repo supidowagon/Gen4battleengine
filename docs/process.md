@@ -224,13 +224,16 @@ per day is the rate used for estimates.
   and reserves; the runner sees it only as container memory. Pack runs stay off the capture
   pod while a job runs there (Capture pod above); a pack run already live there when a job
   starts keeps the pod's `MAXP`, and the runners' `GATE_GB` and `KILL_GB` read the job's
-  memory. `SNAP_GATE_GB` is the job's own gate: the job starts only while container memory
-  is under it, and each part starts only while container memory + the live parts' reserve
+  memory. `SNAP_GATE_GB` is the job's own gate, on container memory without reclaimable page
+  cache (`memory.current` minus `inactive_file`; cgroup v1: `total_inactive_file`): the job
+  starts while that is under it, or once no pack unit has been live on the pod for
+  `IDLE_WAIT_S` (300 s; `GATE_IDLE_START` in `times.txt`), and each part starts only while
+  it + the live parts' reserve
   (expected peak minus RSS) + its own expected peak stays at or under it (`snap_compare.py`
   `PART_GB`: 13 GB for a step, jitstep or sample part, 8 rest, 2 ai, 1 gen, 11 `roark.trace`,
   27 `roark.rank`; the largest peaks of 19 pod logs times about 1.2). With no part of the job
-  live the next part starts whatever memory reads (container memory counts page cache, which
-  need not fall); a part held by the gate prints `gate wait` about once a minute.
+  live the next part starts whatever memory reads (memory the job does not hold need not
+  fall); a part held by the gate prints `gate wait` about once a minute.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):

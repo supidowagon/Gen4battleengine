@@ -17,8 +17,9 @@ pod_bin "$TOP" HEAD "$T/bin"
 SUM=$(pod_sum "$T/bin"); WSUM=$(pod_wsum "$T/bin")
 # A pod whose vm.max_map_count is under 1048576 (65530 aborts JAX units, rc 134) or unreadable is
 # refused before podcheck.sh runs: PODCHECK REFUSED vm.max_map_count=<value>, exit 1. Only its digits
-# are read (tr -dc 0-9).
-MAPCHECK="m=\$(tr -dc 0-9 < /proc/sys/vm/max_map_count); [ \$m -ge 1048576 ] || { echo PODCHECK REFUSED vm.max_map_count=\$m, need 1048576 or more; exit 1; }"
+# are read (tr -dc 0-9), so ${m:-0} is one word without quotes (exec_body refuses double quotes;
+# an empty value tests as 0).
+MAPCHECK="m=\$(tr -dc 0-9 < /proc/sys/vm/max_map_count); [ \${m:-0} -ge 1048576 ] || { echo PODCHECK REFUSED vm.max_map_count=\$m, need 1048576 or more; exit 1; }"
 BODY=$(exec_body "$MAPCHECK; bash \$W/podcheck.sh /work $SUM $WSUM" "gate.sh=$T/bin/gate.sh" "podcheck.sh=$T/bin/podcheck.sh") || { echo "$BODY"; exit 3; }
 echo "== exec-pod body (pod scripts of HEAD $(git -C "$TOP" rev-parse --short HEAD), POD_SCRIPTS ${SUM:0:12}):"
 echo "$BODY"
