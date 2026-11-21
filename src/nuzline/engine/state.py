@@ -697,7 +697,9 @@ class BattleState(NamedTuple):
     # BattleContext_Init at the action's end, battle_lib.c:2013-2015). U-turn clears the attacker's
     # slot before the list (subscript_attack_then_switch_out.s:70), so the resumed tail's Destiny
     # Knot step (battle_lib.c:4546-4566, ``effects.knot``) sees only a pursuer the user's Cute Charm
-    # flagged in the Pursuit (:54); a Pursuit-felled user's tail (:55) reads its own flag
+    # flagged in the Pursuit (:54); a Pursuit-felled user's tail (:55) reads its own flag. 1: flagged
+    # and the sideEffectMon at the list; 2 (B = 4, H-M1): flagged, but a later pursuer's contact
+    # trigger moved sideEffectMon off it (battle_lib.c:4350), so the resumed tail's knot cannot pass
     ts_loved: jnp.ndarray
     # int8[B], 1 = the battler fainted in the paused action holding MOVE_EFFECT_GRUDGE (review b2
     # #5): SYSCTL_MON_FAINTED keeps it flagged across a U-turn's party list (battle_script.c:

@@ -2677,12 +2677,33 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `end_speed_tie` / `quick_claw` branches of such a turn now lead to identical child states and may merge (the
   decomp draws no tie bit there). Owed (cleanup): `hooks.order_swaps`' own dead-battler line (hooks.py:412-413)
   is now redundant with `player_second`; drop it in a later cleanup.
-- H-M1 (merge of main 7698de58, D3, into batch H; 2df0a922) Owed, B = 4 only: the resumed U-turn tail's sideEffectMon
-  is the lowest-index pursuer with `ts_loved` (step.py `pre_list`, reference `_resume` `turn.sync_mon`). D3's
-  Pursuit chain lets several pursuers hit one U-turn user, and every contact-ability trigger sets sideEffectMon to the
-  attacker (battle_lib.c:4296, :4313, :4331, :4350: Effect Spore, Poison Point, Flame Body, Cute Charm), so the
-  decomp's value is the last pursuer whose hit triggered any contact ability. Both engines agree (the differential
-  cannot see it). B = 2 has one pursuer: exact. Fix: carry the last contact-triggering pursuer through the pause.
+- H-M1 (merge of main 7698de58, D3, into batch H; 2df0a922) Built, B = 4 only: the U-turn tail's sideEffectMon after
+  several pursuers. Writes between the U-turn hit and the list: the target's contact trigger on the U-turn hit
+  (subscript_attack_then_switch_out.s:6, battle_lib.c:4224, :4313, :4331, :4350: the user) and each Pursuit hit's
+  (subscript_pursuit.s:40, :86; BtlCmd_TryPursuit takes the pursuers in index order, battle_script.c:6899-6934): the
+  U-turn user's trigger sets sideEffectMon = that pursuer whether or not its subscript lands (:4350 before
+  subscript_infatuate.s:7 TryAttract). No other command in subscript_pursuit.s, its called subscripts or
+  attack_then_switch_out.s:52-69 writes it (BattleSystem_SetupLoop, battle_lib.c:3357, does not); Toxic Spikes'
+  CheckToxicSpikes (battle_script.c:7638-7641) and King's Rock (bcp.c:4643) come after the list. Readers: the
+  Synchronize step (its flag cleared at :69, set again only by the list's Toxic Spikes, `entry_toxic`) and the knot
+  step (battle_lib.c:4546-4566), which needs the defender (or attacker) to be the sideEffectMon and flagged
+  INFATUATED (subscript_infatuate.s:29; the only reader of that flag). The U-turn user has one ability, so with any
+  flagged pursuer every pursuer trigger is Cute Charm. Rule: the sideEffectMon at the list is the last pursuer
+  whose Cute Charm trigger passed. Built in `ts_loved` (no new field): 1 = flagged and the sideEffectMon, 2 =
+  flagged but a later pursuer's trigger moved sideEffectMon off it (the flag stays: King's Rock in the tail can make
+  the defender the sideEffectMon again). Engine: `_pursuit_hit` returns `MoveHit.charm_proc`; the Pursuit pass
+  turns 1 into 2 on a trigger and marks a charmed pursuer 1; `pre_list` reads `ts_loved == 1`; the MODE_PURSUIT
+  tail's `pursuit_sync` sideEffectMon also moves on the trigger (a charmed pursuer stays sideEffectMon when a later
+  pursuer fells the user: a fainting hit passes no Cute Charm trigger, :4347). Reference: the pause writes 1 / 2 from
+  the live `turn.sync_mon`; `_resume` takes the 1 slot. Tests (test_e1_batch_h.py):
+  `test_the_resumed_knot_reads_the_last_pursuers_cute_charm_trigger` (4 cases: superseded by a failed or a landed
+  later trigger, the last charmed is the knot holder, only the second charmed),
+  `test_a_u_turn_user_felled_by_a_later_pursuer_keeps_the_charmed_one_as_side_effect_mon`. Snapshot class: B = 2
+  none (one pursuer: only 1 occurs, and its fainted-tail trigger cannot pass). Not built (both engines, all B):
+  a Static / Poison Point / Flame Body trigger whose status the subscript then blocks (the attacker's Limber,
+  Immunity, Water Veil, Leaf Guard, type) moves sideEffectMon in the decomp, but both engines move it only on a
+  landing (`sync_landed`, reference `_status_landed`). Known effect: B = 4 MODE_PURSUIT tail only, a Synchronize
+  pursuer statused earlier in the chain then still passes its status to the felled user. Owed (H-M2).
 
 ## Stream state (restart point, 2026-11-19)
 

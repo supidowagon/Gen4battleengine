@@ -610,7 +610,9 @@ three structs has a row.
   attacker's slot is cleared before the list (subscript_attack_then_switch_out.s:70, battle_script.c:9623-9624), so
   the resumed tail sees only a pursuer flagged by the U-turn user's Cute Charm during the Pursuit (:54,
   subscript_pursuit.s:40); a user felled by the Pursuit ends the script at :55 and its MODE_PURSUIT tail reads its
-  own flag. Both feed the tail's Destiny Knot step (battle_lib.c:4546-4566). The two self turn flags kept across a
+  own flag. Both feed the tail's Destiny Knot step (battle_lib.c:4546-4566). Value 1: flagged and the
+  sideEffectMon at the list; 2 (B = 4 only, H-M1): flagged, but a later pursuer's Cute Charm trigger made that
+  pursuer the sideEffectMon (battle_lib.c:4350), so the resumed tail reads the 1 slot (or none) as sideEffectMon. The two self turn flags kept across a
   U-turn's list (`BattleContext_Init` clears the rest at the action's end, bcp.c:3998); `ts_grudge`: per battler, the battler fainted in the paused
   action holding `MOVE_EFFECT_GRUDGE`: its `battleStatusMask` SYSCTL_MON_FAINTED bit and `moveEffectsMask` survive the
   U-turn's list (battle_script.c:1770-1771, :1799; battle_lib.c:2166), so the resumed action's LOOP_FAINTED runs

@@ -2464,7 +2464,10 @@ def _use_move(
     # layers reach it (subscript_hazards_check.s:5-14, battle_script.c:7638-7641), and King's
     # Rock the defender (bcp.c:4643). Without the pursuer's flag only the Synchronize step reads
     # the value, and its flag is set only by the list's Toxic Spikes poison: the newcomer.
-    kept_loved = state_in.ts_loved != 0
+    # H-M1: several pursuers (B = 4): the sideEffectMon is the last pursuer whose contact trigger
+    # ran, which ``ts_loved`` marks 1 where that pursuer is flagged (2: flagged, superseded). An
+    # unflagged last one cannot pass the knot step (it needs the flag on the sideEffectMon).
+    kept_loved = state_in.ts_loved == 1
     pre_list = jnp.where(
         jnp.any(kept_loved) & ~jnp.asarray(entry_toxic, bool),
         jnp.argmax(kept_loved).astype(_I32),
@@ -3604,7 +3607,7 @@ def _active_hp(fmt: Format, state: BattleState, battler):
 
 def _pursuit_hit(
     tables: Tables, state: BattleState, pursuer, switcher, actions, choices, outcome: Outcome
-) -> tuple[BattleState, jnp.ndarray]:
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray]:
     """The pursuer hits the outgoing Pokemon: ``BtlCmd_TryPursuit`` spends the PP and
     sets ``powerMul = 20``; ``subscript_pursuit.s`` then runs crit, damage and the type
     chart with no accuracy check. The pursuer's own action is over; it wrote
@@ -3695,10 +3698,13 @@ def _pursuit_hit(
         info.update_hp,  # the script's normal path (:30-49): not missed, no substitute
     )
     state = shell_bell_heal(tables, state, pursuer, info.pursuit_shell_bell, info.update_hp)
-    # ``(state, super_effective)``: the Pursuit's chart flag whatever the Substitute or damage
-    # (SetupLoop and ApplyTypeEffectiveness run before CheckSubstitute, subscript_pursuit.s:8-20;
-    # lib.c:3359, script.c:6964-6973): a U-turn's tail reads the last one (``ts_se``).
-    return life_orb_recoil(tables, state, pursuer, info.update_hp), info.super_effective
+    # ``(state, super_effective, charm_proc)``: the Pursuit's chart flag whatever the Substitute or
+    # damage (SetupLoop and ApplyTypeEffectiveness run before CheckSubstitute, subscript_pursuit.s:
+    # 8-20; lib.c:3359, script.c:6964-6973): a U-turn's tail reads the last one (``ts_se``); and
+    # the switcher's Cute Charm trigger (subscript_pursuit.s:40, battle_lib.c:4339-4350), which
+    # made the pursuer the sideEffectMon whether or not the infatuation landed (H-M1).
+    state = life_orb_recoil(tables, state, pursuer, info.update_hp)
+    return state, info.super_effective, info.charm_proc
 
 
 def _acid_rain(pre: BattleState, hit: BattleState, state: BattleState, pursuer, switcher, fire):
@@ -4174,7 +4180,7 @@ def _execute_actions(
         pmove = _pursuer_move(
             pre, pursuer, acts[pursuer], choices[0][pursuer], choices[1][pursuer]
         )[1]
-        hit, p_se = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
+        hit, p_se, p_charm = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
         crit = crit_lands(tables, pre, pursuer, pmove, outcome.crit[pursuer, 0])
         crit = crit & ~crit_blocked(pre, pursuer, side)
         seen = _hit_events(pre, hit, pursuer, True, crit, side)
@@ -4201,14 +4207,22 @@ def _execute_actions(
         # the :70 clear, which is the attacker's slot only): subscript_infatuate.s:29 flags the
         # pursuer INFATUATED in the paused action's selfTurnFlags (``ts_loved``, H-4).
         charmed = ap & fire & (pre.infatuated[pursuer] == 0) & (struck.infatuated[pursuer] != 0)
+        # H-M1 (B = 4): every Pursuit hit whose Cute Charm trigger passed made its pursuer the
+        # sideEffectMon (battle_lib.c:4350), landed or not, so a later pursuer's trigger moves it
+        # off an earlier charmed one: a slot whose flag stays but is no longer the sideEffectMon
+        # reads 2 (``ts_loved``), the flagged sideEffectMon 1. Nothing else between the U-turn hit
+        # and the list writes it (subscript_pursuit.s:8-117, subscript_attack_then_switch_out.s:
+        # 52-69). B = 2 has one pursuer: only 1 occurs.
+        proc = ap & fire & p_charm
+        loved = jnp.where(proc & (state.ts_loved == 1), 2, state.ts_loved)
         state = state._replace(
-            ts_loved=state.ts_loved.at[pursuer]
-            .set(jnp.where(charmed, 1, state.ts_loved[pursuer]))
+            ts_loved=loved.at[pursuer]
+            .set(jnp.where(charmed, 1, loved[pursuer]))
             .astype(state.ts_loved.dtype)
         )
         pursuit_sync = (
             sync[0] ^ chased,
-            jnp.where(chased, pursuer, sync[1]),
+            jnp.where(chased | proc, pursuer, sync[1]),
             struck.status[party(fmt, battlers), struck.active].astype(_I32),
         )
         # subscript_pursuit.s:100-113: Pursuit's own payout (no pending move: the pursuer's

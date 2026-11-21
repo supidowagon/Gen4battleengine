@@ -9342,8 +9342,17 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
             s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)]
         )
         _put(s, "ts_grudge", turn.grudge_kept)
-        # SELF_TURN_FLAG_INFATUATED stays through the list too, the attacker's cleared at :70 (H-4).
-        _put(s, "ts_loved", [int(f) for f in turn.loved[: _fmt(s).B]])
+        # SELF_TURN_FLAG_INFATUATED stays through the list too, the attacker's cleared at :70 (H-4):
+        # 1 on the flagged slot that is the sideEffectMon at the list, 2 on one a later pursuer's
+        # contact trigger moved it off (H-M1, B = 4: battle_lib.c:4350; engine ``ts_loved``).
+        _put(
+            s,
+            "ts_loved",
+            [
+                (1 if b == turn.sync_mon else 2) if f else 0
+                for b, f in enumerate(turn.loved[: _fmt(s).B])
+            ],
+        )
         fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
         for k, pt in enumerate(s.parties):
             pt.ts_alive = sum(
@@ -9556,6 +9565,8 @@ def _resume(
     se = bool(s.ts_se)  # the tail's moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
     position = s.ts_cursor
     grudge = _get(s, "ts_grudge")
+    # The flagged slot that was the sideEffectMon at the list (``ts_loved`` 1, H-M1).
+    marked = next((b for b, sd in enumerate(s.battlers) if sd.ts_loved == 1), side)
     _clear_scratch(s)
     foe = turn.target_side if _fmt(s).B == 4 else _foe(side)  # the kept defender (D3-10)
     # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (F-4): the tail's TriggerHeldItemOnHit returns
@@ -9572,7 +9583,9 @@ def _resume(
     # (subscript_pursuit.s:40, battle_lib.c:4351); else read only by the Synchronize step, whose
     # flag only the list's Toxic Spikes poison sets, and CheckToxicSpikes makes the newcomer the
     # sideEffectMon (``_entry_hazards``).
-    turn.sync_mon = next((b for b in range(_fmt(s).B) if turn.loved[b]), side)
+    # H-M1 (B = 4): with several pursuers it is the last whose contact trigger ran, the slot the
+    # pause marked 1 (``ts_loved``); an unflagged one cannot pass the knot step.
+    turn.sync_mon = marked
     _enter(turn, s, side, actions[side] - MOVE_ACTIONS, baton)
     _send_out_exp(s, side)  # :18
     _entry_hazards(turn, s, side)  # :22

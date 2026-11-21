@@ -192,7 +192,9 @@ class RefBattler:
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
     ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
-    ts_loved: int  # the paused action's SELF_TURN_FLAG_INFATUATED of the slot, after :70 (H-4)
+    # the paused action's SELF_TURN_FLAG_INFATUATED of the slot, after :70 (H-4): 1 flagged and the
+    # sideEffectMon at the list, 2 flagged but superseded by a later pursuer's trigger (H-M1)
+    ts_loved: int
     ts_speed_order: int  # the paused action's monSpeedOrder entry (D3-10; B = 4 only)
     ts_grudge: int  # fainted in the paused action holding Grudge (engine.state, review b2 #5)
     ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)

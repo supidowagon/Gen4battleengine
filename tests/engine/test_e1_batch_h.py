@@ -1059,6 +1059,106 @@ def test_a_u_turn_user_felled_by_the_pursuit_keeps_its_flag_for_its_knot(tables,
     assert int(out.ai_item_known[0]) == n.item("Destiny Knot")
 
 
+def _chased_charm(tables, names, genders, holder, target):
+    """H-M1 (B = 4): battler 2 (female, Cute Charm) U-turns at ``target``; battlers 1 and 3 chose
+    Pursuit and both chase it before the list (index order, subscript_pursuit.s:79-82), each hit
+    passing the Cute Charm trigger (``contact_proc`` of battler 2). ``genders``: battlers 1 and 3
+    (0 male: charmed; 1 female: the trigger passes, TryAttract fails). ``holder`` holds a Destiny
+    Knot; the newcomer (battler 2's party slot 2) is female."""
+    from tests.engine.d2_states import party_of, with_ability
+    from tests.engine.test_d3_pause import pivoting
+
+    s = with_moves(pivoting(tables, names), names, 0, ["Swords Dance"])
+    for b in (1, 3):
+        s = with_moves(s, names, b, ["Pursuit"])
+    s = with_moves(s, names, 2, ["U-turn"])
+    s = with_ability(s, 2, AbilityId.CUTE_CHARM)
+    p2 = party_of(s, 2)
+    gender = s.gender.at[p2, int(s.active[2])].set(1).at[p2, 2].set(1)
+    for b, g in zip((1, 3), genders, strict=True):
+        gender = gender.at[party_of(s, b), int(s.active[b])].set(g)
+    s = s._replace(gender=gender)
+    knot = names.item("Destiny Knot")
+    s = s._replace(item=s.item.at[party_of(s, holder), int(s.active[holder])].set(knot))
+    procs = jnp.zeros((4, MAX_HITS), jnp.int8).at[2].set(1)
+    from nuzline.engine.format import DOUBLES
+
+    outcome = empty_outcome(DOUBLES)._replace(contact_proc=procs)
+    return s, outcome, (0, 0, target, 0)
+
+
+@pytest.mark.slow  # two B = 4 action phases, each engine and reference (over 60 s)
+@pytest.mark.parametrize(
+    "genders, holder, target, loved, reflects",
+    [
+        # Battler 3's trigger (battle_lib.c:4350) moved sideEffectMon off charmed battler 1, the
+        # defender holding the knot: the knot's defender test fails (battle_lib.c:4547-4549).
+        ((0, 1), 1, 1, [0, 2, 0, 0], False),
+        ((0, 0), 1, 1, [0, 2, 0, 1], False),
+        # Both charmed: the last, battler 3, is the sideEffectMon and the defender with the knot.
+        ((0, 0), 3, 3, [0, 2, 0, 1], True),
+        # Only battler 3 charmed (battler 1's failed TryAttract moved sideEffectMon first).
+        ((1, 0), 3, 3, [0, 0, 0, 1], True),
+    ],
+)
+def test_the_resumed_knot_reads_the_last_pursuers_cute_charm_trigger(
+    tables, names, genders, holder, target, loved, reflects
+):
+    """H-M1: subscript_pursuit.s:40 runs the U-turn user's Cute Charm on each pursuer's hit, and
+    every trigger sets sideEffectMon = attacker (battle_lib.c:4339-4350) whether or not
+    subscript_infatuate.s's TryAttract lands (:7, battle_script.c:5732-5735); no other write
+    comes before the list (subscript_attack_then_switch_out.s:52-69). The resumed AfterMoveEffects'
+    knot step (battle_lib.c:4546-4552) needs the defender to be that sideEffectMon and flagged
+    INFATUATED (subscript_infatuate.s:29): ``ts_loved`` 1 marks the flagged sideEffectMon, 2 a
+    flagged pursuer a later trigger superseded. Engine == reference on both halves."""
+    from tests.engine.test_d3_action_loop import play
+    from tests.engine.test_d3_pause import resume
+
+    s, outcome, targets = _chased_charm(tables, names, genders, holder, target)
+    paused, _ = play(tables, s, [0, 0, 0, 0], (2, 0, 1, 3), targets=targets, outcome=outcome)
+    assert int(paused.pivot_battler) == 3 and int(paused.ts_pursued) == 0b1010
+    assert np.asarray(paused.ts_loved).tolist() == loved
+    out = resume(tables, paused, outcome=outcome)
+    assert (int(out.infatuated[2]) != 0) is reflects
+    assert not np.asarray(out.ts_loved).any()
+
+
+@pytest.mark.slow  # a B = 4 action phase, engine and reference (over 60 s)
+def test_a_u_turn_user_felled_by_a_later_pursuer_keeps_the_charmed_one_as_side_effect_mon(
+    tables, names
+):
+    """H-M1, the MODE_PURSUIT tail (subscript_attack_then_switch_out.s:55): the U-turn's contact
+    meets battler 1's Static (battle_lib.c:4214-4224: sideEffectMon = the user, which is paralyzed),
+    battler 1's Pursuit hit then passes the user's Cute Charm trigger and is charmed (:4350,
+    sideEffectMon = 1), battler 3's hit fells the user, and a hit that faints the defender passes no
+    Cute Charm trigger (DEFENDING_MON.curHP, :4347): the sideEffectMon stays battler 1 at
+    AfterMoveEffects, so the knot of the defender (battler 1, flagged) reflects
+    (battle_lib.c:4546-4552) onto the felled user. Engine == reference."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.outcome import outcome_to_py
+    from nuzline.reference.convert import from_ref, to_ref
+    from nuzline.reference.engine import ref_step
+    from tests.engine.d2_states import party_of, with_ability, with_hp
+    from tests.engine.test_d3_action_loop import hp, play, speed_ordered
+
+    s, outcome, targets = _chased_charm(tables, names, (0, 0), 1, 1)
+    s = speed_ordered(with_ability(s, 1, AbilityId.STATIC), [2, 0, 1, 3])
+    outcome = outcome._replace(contact_proc=outcome.contact_proc.at[1].set(1))
+    # The reference alone measures the two Pursuit hits (equal Bulbasaurs, no crit: equal damage).
+    probe = from_ref(
+        ref_step(
+            to_numpy(tables), to_ref(s), (0, 0, 0, 0), outcome_to_py(outcome), list(targets),
+            actions_only=True,
+        )
+    )  # fmt: skip
+    both = int(s.hp[party_of(s, 2), int(s.active[2])]) - hp(probe, 2)
+    s = with_hp(s, 2, both // 2 + 1)  # the first hit leaves it, the second fells it
+    out, _ = play(tables, s, [0, 0, 0, 0], (2, 0, 1, 3), targets=targets, outcome=outcome)
+    assert hp(out, 2) == 0 and int(out.pivot_battler) == 0
+    assert int(probe.status[party_of(s, 2), int(s.active[2])]) == Status.PARALYSIS
+    assert int(out.infatuated[1]) != 0 and int(out.infatuated[2]) != 0, np.asarray(out.infatuated)
+
+
 def test_the_h4_items_have_their_own_ids_and_the_inert_ones_one_shared_set(tables, names):
     from nuzline.engine.coverage import IMPLEMENTED_ITEMS
     from nuzline.engine.ids import NO_IN_BATTLE_HOLD_EFFECT_ITEMS, ItemId
