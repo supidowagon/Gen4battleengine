@@ -178,7 +178,9 @@ fight label prefix). No rebuild needed.
 - **Battle formats (10).** Single, double, two-trainer double or multi come from the ROM's
   field scripts. When PKCalc or the sheet pairs two trainers that the scripts do not, and both
   stand on the same map, they are a sight pair (both see you in one step): a two-trainer
-  double. Coverage refuses every non-single format.
+  double. On a walking-partner map a lone enemy is a single (or double, by the partner's
+  header) and a sight pair is a multi with the partner. Coverage refuses every non-single
+  format.
 - **Rivals (11).** Each rival or partner fight is tied to the player's starter. With `--save`
   only the variant for your starter is used; without one, a rival fight needs `--save` or
   `--trainer-id`. A name that matches several rival fights (`barry`) must name the fight

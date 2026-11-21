@@ -26,7 +26,7 @@ New groups: needed in this split and in no earlier one.
 | Split | Rows | Battles | Singles | Doubles | Two-trainer | Multi (no known partner) | Runnable battles | Distinct missing groups | New groups |
 |---|---|---|---|---|---|---|---|---|---|
 | Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 24 | 2 | 2 |
-| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 12 | 11 | 11 |
+| Gardenia Split | 42 | 35 | 23 | 5 | 0 | 7 (0) | 16 | 11 | 11 |
 | Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 31 | 9 | 8 |
 | Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 25 | 4 | 0 |
 | Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 20 | 9 | 6 |
@@ -35,7 +35,7 @@ New groups: needed in this split and in no earlier one.
 | Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 29 | 23 | 15 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 9 | 4 | 0 |
 | Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 26 | 2 | 0 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 230 | 47 | 47 |
+| **Whole game** | 458 | 387 | 279 | 37 | 32 | 39 (0) | 234 | 47 | 47 |
 
 ## Whole game
 
@@ -259,7 +259,7 @@ Groups by kind: battle format 2
 
 | Fights blocked | Group |
 |---|---|
-| 18 | battle format: a multi battle |
+| 14 | battle format: a multi battle |
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
 | 5 | battle format: a double battle |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) |
@@ -282,7 +282,7 @@ Groups by kind: battle format 12, AI 1
 | Fights blocked | Group |
 |---|---|
 | 129 | AI: AI_FLAG_TAG_STRATEGY |
-| 82 | battle format: a multi battle |
+| 78 | battle format: a multi battle |
 | 64 | battle format: a double_two_trainer battle |
 | 37 | battle format: a double battle |
 | 9 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain |

@@ -5,10 +5,14 @@ Both extractors turn a map's script file into the same normalized ``Op`` list
 from ``scr_seq.narc`` bytes), and this module derives from it which trainers are fought
 in two-trainer doubles, tag battles and beside a walking partner (plan Rulings 2-5):
 
-* ``multi``: an enemy of a ``StartTagBattle``, or an enemy placed on a map whose script
-  sets ``VAR_PARTNER_TRAINER_ID`` and runs ``SetHasPartner``: ``ScrCmd_StartTrainerBattle``
-  adds the partner whenever ``SystemFlag_CheckHasPartner`` is set
-  (``src/scrcmd_trainer.c:133-134``).
+* ``multi``: an enemy of a ``StartTagBattle``, or a scripted pair on a walking-partner
+  map (a map whose script sets ``VAR_PARTNER_TRAINER_ID`` and runs ``SetHasPartner``;
+  ``ScrCmd_StartTrainerBattle`` adds the partner whenever ``SystemFlag_CheckHasPartner``
+  is set, ``src/scrcmd_trainer.c:133-134``). A lone placed enemy on such a map is a single
+  or double: BATTLE_TYPE_TRAINER (``src/encounter.c:738-739``) ORed with the walking
+  partner's header type, the last trainer ``Trainer_Encounter`` loads
+  (``src/trainer_data.c:31-50``). Every structure on such a map carries
+  ``walking_partner``.
 * ``double_two_trainer``: an operand of a ``StartTrainerBattle t1, t2`` with two trainer
   constants. Two trainers who spot the player in the same step
   (``res/field/scripts/scripts_battles.s:173``, ``StartTrainerBattle VAR_0x8004,
@@ -44,6 +48,9 @@ VAR_RANGES = ((0x4000, 0x4120), (0x8000, 0x800D))
 # The format of a trainer whose battle structure the scripts leave to game state
 # (battle_structures' ``refused``): not modelled, so coverage refuses it.
 UNKNOWN_FORMAT = "unknown"
+# A lone placed enemy on a walking-partner map: internal, never written; ``lone_walk_formats``
+# replaces it with the walking partner's header format.
+WALK_ALONE = "walk_alone"
 # A partner routine's evaluation stops after this many ops (none in vanilla needs 20).
 _MAX_STEPS = 10_000
 
@@ -59,6 +66,7 @@ class BattleStructure:
     format: str
     opponent_2: int | None
     partner: tuple[PartnerVariant, ...] | None  # None: not evaluated (``unknown_partner``)
+    walking_partner: tuple[int, ...] = ()
 
 
 def is_var(value: int | str) -> bool:
@@ -284,10 +292,15 @@ def battle_structures(
       (``partner_variants``); any other op there raises, unless ``unknown_partner`` (the
       Kaizo ROM reader, K2b Task 8), which keeps the pair with partner ``None``: present
       but not evaluated, never guessed.
-    * On a header whose script runs ``SetHasPartner``, every placed enemy is fought beside
-      the one trainer the script assigns to ``VAR_PARTNER_TRAINER_ID``. Placed enemies
-      with no such trainer, or with several, raise (with several and ``unknown_partner``,
-      the partner is ``None``).
+    * On a header whose script runs ``SetHasPartner``, every placed enemy is fought under
+      the walking-partner flag, with the one trainer the script assigns to
+      ``VAR_PARTNER_TRAINER_ID``: in a scripted pair it is "multi" beside the partner; a
+      lone placed enemy is BATTLE_TYPE_TRAINER (``src/encounter.c:738-739``) ORed with the
+      walking partner's header type, the last trainer ``Trainer_Encounter`` loads
+      (``src/trainer_data.c:31-50``): ``WALK_ALONE`` until ``lone_walk_formats`` sets its
+      format. Every such structure carries ``walking_partner``, the sorted partner ids.
+      Placed enemies with no such trainer, or with several, raise (with several and
+      ``unknown_partner``, the partner is ``None``).
 
     The same structure seen twice (a pair fought from two scripts, a script shared by
     several headers) is one structure. A trainer claimed by two different pairs, two
@@ -347,18 +360,18 @@ def battle_structures(
         enemies = placed.get(header, set())
         if not enemies:
             continue
-        partners = partner_ids(ops)
-        if len(partners) == 1:
-            team = (PartnerVariant(partners.pop(), None, None),)
-        elif unknown_partner and partners:
+        ids = tuple(sorted(partner_ids(ops)))
+        if len(ids) == 1:
+            team = (PartnerVariant(ids[0], None, None),)
+        elif unknown_partner and ids:
             team = None
         else:
             raise ValueError(
                 f"map {header}: runs SetHasPartner and places enemy trainers "
-                f"{sorted(enemies)} but sets partner ids {sorted(partners)}, not one"
+                f"{sorted(enemies)} but sets partner ids {list(ids)}, not one"
             )
         for t in enemies:
-            claim(t, ("walk", team), header)
+            claim(t, ("walk", team, ids), header)
 
     out = {}
     for t, cs in sorted(claims.items()):
@@ -366,6 +379,7 @@ def battle_structures(
         tags = [c for c in cs if c[0] == "tag"]
         walks = [c for c in cs if c[0] == "walk"]
         selfs = [c for c in cs if c[0] == "self"]
+        walk_ids = walks[0][2] if len(walks) == 1 else ()
         if selfs and len(cs) == 1:
             out[t] = BattleStructure("double", None, ())
             continue
@@ -392,13 +406,19 @@ def battle_structures(
                 and len(others) <= 1
             ):
                 # One enemy pair, several partner claims: multi, partner not evaluated.
-                out[t] = BattleStructure("multi", next(iter(others), None), None)
+                # The tag counts as fought under the flag only if its script is on the walk map.
+                on_walk = bool(walks and tags and cs[tags[0]] <= cs[walks[0]])
+                out[t] = BattleStructure(
+                    "multi", next(iter(others), None), None, walk_ids if on_walk else ()
+                )
                 continue
             raise ValueError(f"trainer {t} is claimed by {len(cs)} battle structures: {listed}")
         if tags:
             out[t] = BattleStructure("multi", tags[0][1], tags[0][2])
+        elif walks and pairs:
+            out[t] = BattleStructure("multi", pairs[0][1], walks[0][1], walk_ids)
         elif walks:
-            out[t] = BattleStructure("multi", pairs[0][1] if pairs else None, walks[0][1])
+            out[t] = BattleStructure(WALK_ALONE, None, (), walk_ids)
         else:
             out[t] = BattleStructure("double_two_trainer", pairs[0][1], ())
     if refused:
@@ -407,11 +427,12 @@ def battle_structures(
 
 
 def structure_fields(structure: BattleStructure | None, header_format: str) -> dict:
-    """The ``trainers.json`` fields ``format``, ``opponent_2`` and ``partner`` of a trainer
+    """The ``trainers.json`` fields ``format``, ``opponent_2``, ``partner`` and
+    ``walking_partner`` of a trainer
     whose header format is ``header_format`` (Ruling 2's precedence). ``partner`` is null
     for a partner present but not evaluated (``battle_structures``' ``unknown_partner``)."""
     if structure is None:
-        return {"format": header_format, "opponent_2": None, "partner": []}
+        return {"format": header_format, "opponent_2": None, "partner": [], "walking_partner": []}
     return {
         "format": structure.format,
         "opponent_2": structure.opponent_2,
@@ -421,4 +442,25 @@ def structure_fields(structure: BattleStructure | None, header_format: str) -> d
             {"trainer": p.trainer, "starter": p.starter, "player_gender": p.player_gender}
             for p in structure.partner
         ],
+        "walking_partner": list(structure.walking_partner),
     }
+
+
+def lone_walk_formats(rows: list[dict]) -> None:
+    """Replace each ``WALK_ALONE`` format in place: BATTLE_TYPE_TRAINER
+    (``src/encounter.c:738-739``) ORed with the header type of the last trainer
+    ``Trainer_Encounter`` loads, the walking partner at BATTLER_PLAYER_2
+    (``src/trainer_data.c:31-50``, ``src/encounter.c:751-753``): the partner rows' own
+    header format. Raises when the candidate partners' formats differ or are not
+    single/double."""
+    by_id = {r["id"]: r for r in rows}
+    for r in rows:
+        if r["format"] != WALK_ALONE:
+            continue
+        formats = {by_id[p]["format"] for p in r["walking_partner"]}
+        if len(formats) != 1 or not formats <= {"single", "double"}:
+            raise ValueError(
+                f"trainer {r['id']}: walking partners {r['walking_partner']} have header "
+                f"formats {sorted(formats)}, not one single/double"
+            )
+        r["format"] = formats.pop()

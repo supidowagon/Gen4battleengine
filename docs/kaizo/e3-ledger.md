@@ -213,6 +213,13 @@ Each is open; close it with its ruling.
    for a battler that receives Slow Start (ability 112). Not modelled: Slow Start is an
    unsupported ability, so no battler holds it. Model these lines with the Slow Start group.
 
+9. Walking-partner heal: a won fight whose row has `walking_partner` fully heals the party
+   (encounter.c:197-199). The next fight's start state is full HP/PP/status. E4-P prep consumes it.
+10. Sight-pair setting: whether to engage a walk-map or off-map lone trainer together with a neighbour
+   who can see the same step (VS2, trainer_encounter.c:94-106) is a play choice (manager ruling 21 Nov).
+   Add it as a run setting: default single; a pair gives multi beside the walking partner (or
+   double_two_trainer off a walk map). It is not a data field.
+
 Checked, no change (batch 1 gate round): Trace retries at every move end (battle_lib.c:3718-3737,
 `hooks.move_end_switch_in`), so with two Trace holders a Worry Seed or Skill Swap can make one
 Trace succeed mid-turn. The enumeration covers it: the side's later hit is unclassified by the
@@ -1616,3 +1623,41 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/engine/test_e3_batch2.py (powerMul after a learn resume, the kept Quick Claw draw, each turn-end counter
   drops once over a pause at each learn site). Snapshot: states captured at a pause carry `ts_qc` and the turn-end
   countdowns; no other class.
+
+- E3-B2-34 Lone enemies on walking-partner maps are singles (sheet partnerfix/sheet.md; decomp 579d2d5c6; no move, no
+  table array). Rule: every field-script battle goes through `ScrCmd_StartTrainerBattle`, which passes
+  `partner = VAR_PARTNER_TRAINER_ID` while `SystemFlag_CheckHasPartner` is set (scrcmd_trainer.c:124-140, :133-135;
+  `ScrCmd_StartTagBattle` reaches the same `Encounter_NewVsTrainer`, :154). `Encounter_NewVsTrainer` (encounter.c:725-758)
+  gives TAG_DOUBLES / TRAINER_WITH_AI_PARTNER for e2 != 0 and e1 != e2 (:730-735), TRAINER_DOUBLES for e1 == e2
+  (:736-737), else BATTLE_TYPE_TRAINER (:738-739); trainerIDs[1] = e1, [3] = e2, [2] = partner (:751-753).
+  `Trainer_Encounter` ORs the header type of the last trainer it loads (trainer_data.c:31-50): with e2 = 0 and a
+  walking partner that is the partner, and every partner header is type 0. So a lone enemy, talked to
+  (scripts_battles.s:8-37, `StartTrainerBattle VAR_0x8004` at :37) or spotted alone (trainer_encounter.c:99-101 ->
+  scripts_battles.s:131-142), is TRAINER | the partner's header type: a single (two battlers; Cheryl's party is built
+  and unused). A scripted pair, a tag, or a sight pair (VS2, trainer_encounter.c:94-106; `hasTwoAliveMons` forced
+  TRUE under the flag, field_control.c:181-186; scripts_battles.s:192-213) is multi. Contrast, off a walk map: 846
+  Worker Conrad (header double, fought alone) is TRAINER | its own header (the enemy is the last one loaded,
+  trainer_data.c:50), so double; ours stands. After a won fight with the flag set `Party_HealAllMembers` runs
+  (encounter.c:197-199, in `FieldTask_Encounter` :160; the trainer path through `StartEncounter` :223).
+  Built: new row field `walking_partner` (sorted partner ids the walk map's script assigns to VAR_PARTNER_TRAINER_ID;
+  `[]` off a walk map): `BattleStructure.walking_partner`, `Trainer.walking_partner` (`load_trainers` refuses a table
+  without it), the internal format `walk_alone` and `lone_walk_formats` (tools/battle_scripts.py; called from
+  extract_decomp and the ROM trainers reader). A walk-map tag keeps multi and the ids only when its script is on the
+  walk map itself (Kaizo 435/436, 749/750, 835/836, 387/405, 420/427; 562/572, 581/606, 582/583 get `[]`).
+  `tools/kaizo/resolve.py`: a sight pair of a lone walk enemy resolves to multi with the partner from `walking_partner`
+  (several ids: `None`, calc fills it, as 282/286/419/426), a user format answer that is not multi drops the walking
+  partner (no heal assumed), a multi answer with no named partner takes it from `walking_partner`;
+  `rows_trainers.py` compares the ROM single of such a trainer as multi beside the sight pair.
+  Rows changed (multi -> single): vanilla 56 (Eterna Forest 201-206, 395, 398; Victory Road 1F room 2 373, 386, 389, 390,
+  393, 394, 396, 397, 399, 400, 446, 447, 499, 500; Stark Mountain room 2 556, 561, 562, 569-572, 579-582, 584, 586, 589,
+  590, 606; Wayward Cave 1F 379, 380, 383, 443, 450, 454, 455, 458, 459, 496; Iron Island B2F left 372, 388, 392, 445, 452,
+  453, 505, 506; 835/836 stay multi), Kaizo built 14 (202, 203, 411, 413; 570, 571, 579, 580, 584, 586, 589, 590; 679; 675;
+  checked against the built tables: exactly these format changes). Kaizo ROM level: 69 rows (the 14, the 52 sight-pair
+  members, which resolve back to multi, and the user-answered 556, 561, 569). Pairing is a play choice, not data
+  (manager ruling 21 Nov): the default is single (Owed 10). Kaizo 561 Perdita (header double, user answer double) and
+  556/569 stay the user's answers. Deleted resolutions (data/kaizo/resolutions.toml): the `format` and
+  `partner_present` entries for 202, 203, 411, 413 (ROM single now agrees with calc single; a stale one fails the
+  build, crosscheck.py:17, :200). Backlog regenerated: Gardenia multi 43 -> 39, split multi rows 82 -> 78, singles
+  +4. docs/kaizo/pipeline.md rule 10 updated. Owed lines closed: none. Owed lines added: 9 (walking-partner heal,
+  encounter.c:197-199) and 10 (sight-pair setting). Not built: the heal's consumer (E4-P). Doubles (section 5, item 3):
+  the ids, not a yes/no. The table key changes (data tables rebuilt).
