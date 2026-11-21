@@ -52,8 +52,10 @@ def test_a_starf_eaten_at_the_foes_action_is_read_by_the_law(tables, names):
 
 @pytest.mark.slow
 def test_a_b4_self_hit_starf_is_eaten_at_its_move_end_with_entry_0(tables, names):
-    """DOUBLES, everyone Swords Dance; battler 0 (Starf Berry, confused) hurts itself onto its
-    pinch and eats the berry at its MoveEnd: entry 0 of its queue picks the stat (draw 0: Attack;
+    """DOUBLES, everyone Swords Dance; battler 0 (Starf Berry, confused) acts last, so no later
+    action's AfterMoveEffects (bcp.c:3672) can check its item, and the phase ends with its action
+    (``play`` stops before the turn end). It hurts itself onto its pinch and eats the berry at its
+    MoveEnd: entry 0 of its queue picks the stat (draw 0: Attack;
     draw 3: rank 3 of the five, Sp. Atk, lib.c:5288), the other entries are unread, and the law
     reads entry 0 only. Its Swords Dance never ran (the self-hit ends the action)."""
     s = _all_moves(four(tables, names, DOUBLES), names, "Swords Dance")
@@ -66,7 +68,7 @@ def test_a_b4_self_hit_starf_is_eaten_at_its_move_end_with_entry_0(tables, names
 
     def stages(col, draw):
         o = base._replace(starf=base.starf.at[0, col].set(draw))
-        out, _ = play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), outcome=o)
+        out, _ = play(tables, s, [0, 0, 0, 0], (1, 2, 3, 0), outcome=o)
         assert int(out.item[0, 0]) == 0 and int(out.hp[0, 0]) == int(s.max_hp[0, 0]) // 4
         return {Stat(i).name: int(v) for i, v in enumerate(np.asarray(out.stages[0])) if v}
 

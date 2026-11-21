@@ -1184,34 +1184,36 @@ def test_role_play_fails_on_its_listed_conditions_and_still_shows_the_attack_mes
     assert _rpgo(t, n, gone).ability[:, 0].tolist() == base.ability[:, 0].tolist()
 
 
-def test_a_failed_skill_swap_leaves_both_abilities(tables, names):
-    """Review b2 #2: subscript_exchange_abilities.s:12-13 (both abilities ABILITY_NONE) jumps to
-    :156 (MOVE_STATUS_FAILED): the swap writes nothing, so both stay ABILITY_NONE; with real
-    abilities the same Skill Swap exchanges them. CheckMoveFailure sends the failure to
-    subscript_missed.s with commandNext LOOP_FAINTED (bcp.c:3324-3327), skipping AfterMoveEffects;
-    that skip has no item-visible effect on this path: every item state there (bcp.c:3672, :3684,
-    :3691, :3730) is repeated by MoveEnd's TriggerEffectOnSwitch (bcp.c:3973, battle_lib.c:
-    4151-4165), and a failed status move changes no HP. The board is reachable: both at full HP,
-    the Monferno faster."""
+def test_a_skill_swap_into_wonder_guard_fails_and_swaps_nothing(tables, names):
+    """Review b2 #2: Skill Swap fails on a defender with Wonder Guard (subscript_exchange_abilities.s:7
+    jumps to :156, MOVE_STATUS_FAILED) before :17-27 write the Truant parity and the abilities, so the
+    Monferno keeps Blaze, the Shedinja keeps Wonder Guard and neither ``truant`` changes; against a
+    Geodude the same Skill Swap exchanges the abilities. CheckMoveFailure sends the failure to
+    subscript_missed.s with commandNext LOOP_FAINTED (battle_controller_player.c:3324-3327),
+    skipping AfterMoveEffects. That skip has no item-visible effect on this path: the item states
+    there (bcp.c:3672, :3684, :3691, :3730) are repeated by MoveEnd's TriggerEffectOnSwitch
+    (bcp.c:3973, battle_lib.c:4151-4165), and TRIGGER_ITEMS_ON_HIT (bcp.c:3698, battle_lib.c:
+    5370-5430), which MoveEnd does not repeat, cannot fire without damage. Both boards are reachable:
+    natural abilities, full HP, the faster Monferno by its own stats."""
     t, n = tables, names
-    s = make_state(
-        t,
-        [_spec(n, "Monferno", 20, ("Skill Swap",), "Sitrus Berry")],
-        [_spec(n, "Geodude", 40, ("Defense Curl",))],
-    )
-    s = s._replace(
-        stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1),
-        ability=s.ability.at[0, 0].set(AbilityId.BLAZE).at[1, 0].set(AbilityId.ROCK_HEAD),
-    )
-    acts = A("Skill Swap", "Defense Curl", s, n)
-    worked = assert_matches_reference(t, s, acts, _hits())
-    assert [int(a) for a in worked.ability[:, 0]] == [AbilityId.ROCK_HEAD, AbilityId.BLAZE]
-    none = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
-    failed = assert_matches_reference(t, none, acts, _hits())
-    assert failed.ability[:, 0].tolist() == [AbilityId.NONE] * 2
-    for out in (worked, failed):  # full HP: the Sitrus Berry stays held
-        assert int(out.item[0, 0]) == n.item("Sitrus Berry")
-        assert int(out.hp[0, 0]) == int(out.max_hp[0, 0])
+    for foe, foe_move in (("Geodude", "Defense Curl"), ("Shedinja", "Harden")):
+        s = make_state(
+            t,
+            [_spec(n, "Monferno", 40, ("Skill Swap",), "Sitrus Berry")],
+            [_spec(n, foe, 20, (foe_move,))],
+        )
+        assert int(s.stats[0, 0, SPE]) > int(s.stats[1, 0, SPE])
+        mine, theirs = int(s.ability[0, 0]), int(s.ability[1, 0])
+        assert mine == AbilityId.BLAZE and theirs != AbilityId.NONE
+        out = assert_matches_reference(t, s, A("Skill Swap", foe_move, s, n), _hits())
+        got = [int(a) for a in out.ability[:, 0]]
+        if foe == "Shedinja":
+            assert theirs == AbilityId.WONDER_GUARD
+            assert got == [mine, theirs]  # a swap would give [theirs, mine]
+            assert out.truant.tolist() == s.truant.tolist()
+        else:
+            assert got == [theirs, mine]
+        assert int(out.item[0, 0]) == n.item("Sitrus Berry")  # full HP: the berry stays held
 
 
 def test_role_play_reads_the_raw_ability_through_gastro_acid(tables, names):
