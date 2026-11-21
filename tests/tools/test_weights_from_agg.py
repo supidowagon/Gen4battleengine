@@ -56,21 +56,22 @@ def test_tracked_table_has_the_marker():
 
 def test_warnings_for_kernel_kills_triple_kills_hand_kept_overruns_and_lower_values(tmp_path):
     w = tmp_path / "weights.txt"
-    w.write_text("tests/h.py::test_big 10 r0\n" + wfa.MARK + "\ntests/a.py 40 old\n", encoding="utf-8")
+    w.write_text("tests/h.py::test_big 10 r0\n" + wfa.MARK + "\ntests/a.py 70 old\n", encoding="utf-8")
     agg = _agg(tmp_path, "run-a", [
-        "u_001 1 20000 10 0 tests/a.py::test_1",       # 21 GB: lower than the 40 before
-        "u_002 1 60000 10 137 tests/a.py::test_2",     # kernel kill: a lower bound, not a peak
+        "u_001 1 20000 10 0 tests/a.py::test_1",       # 21 GB measured
+        "u_002 1 60000 10 137 tests/a.py::test_2",     # kernel kill: at least 63 GB, the line takes it
         "u_003 1 0 10 98 tests/b.py::test_1",          # killed three times: no peak
         "u_004 1 30000 10 0 tests/h.py::test_big",     # hand-kept 10 GB, peaked at 32
     ])
     warn: list[str] = []
     out = wfa.render(w, [agg], warn).splitlines()
-    assert out[-1] == "tests/a.py 21 run-a"
+    assert out[-1] == "tests/a.py 63 run-a"
     assert sorted(warn) == sorted([
         "killed three times, no peak: run-a u_003 tests/b.py",
         "hand-kept ids peaked at 32 GB, above their largest hand-kept weight 10 GB: run-a u_004 tests/h.py::test_big",
-        "rc 137 lower bound 63 GB above the file's 21 GB; add a hand-kept line: tests/a.py (run-a u_002)",
-        "lower than before: tests/a.py 40 -> 21 GB",
+        "rc 137 lower bound 63 GB above the file's 21 GB; the line takes the bound, the real peak may be higher "
+        "(a hand-kept line or a rerun): tests/a.py (run-a u_002)",
+        "lower than before: tests/a.py 70 -> 63 GB",
     ])
 
 

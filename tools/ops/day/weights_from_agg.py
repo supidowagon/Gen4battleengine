@@ -9,11 +9,14 @@ max_rss_MB, MiB, x 1.048576 / 1000, rounded up, at least FLOOR_GB), run = the ru
 ids (<agg dir>/out/<unit>.ids, else its first id) has no hand-kept entry: ids with one are
 weighed by that entry. An agg.txt without a per-unit table counts its per-file max_rss_MB.
 A file that has a hand-kept file-level entry is not printed again.
+A unit killed by the kernel (rc 137) peaked at least at its max_rss_MB: its file's line is
+max(the largest measured peak, the largest such lower bound).
 Warnings (stderr, "WARNING: ..."; the table is still printed): a unit killed three times (rc 98,
-no peak), a kernel kill (rc 137: a lower bound, never a peak) above its file's measured peak, a
-unit of hand-kept ids only that peaked above its largest hand-kept weight, a file whose new line
-is lower than its line before, and a file of the old generated part that no <agg.txt> measures
-(dropped). Each asks for a look before the table is committed; a hand-kept line fixes most.
+no peak), a kernel kill whose lower bound is above its file's measured peak (the line takes the
+bound; the real peak may be higher), a unit of hand-kept ids only that peaked above its largest
+hand-kept weight, a file whose new line is lower than its line before, and a file of the old
+generated part that no <agg.txt> measures (dropped). DAYBOX.md, Send a run step 2: the new table
+is not moved into place while any warning stands.
 """
 
 from __future__ import annotations
@@ -44,12 +47,14 @@ def _hand_covered(test_id: str, hand: list[tuple[str, int]]) -> bool:
 
 
 def measure(aggs: list[Path], hand: list[tuple[str, int]]) -> tuple[dict[str, tuple[int, str]], list[str]]:
-    """(file -> (largest MiB, run), warnings). Rows with rc 137 (killed by the kernel: a lower
-    bound) and rc 98 (killed three times at KILL_GB: no peak) are not measured peaks; both are
-    warned about, as is a unit made only of hand-kept ids that peaked above its largest
-    hand-kept weight."""
+    """(file -> (largest MiB, run), warnings). Rows with rc 98 (killed three times at KILL_GB)
+    have no peak and are warned about. Rows with rc 137 (killed by the kernel) are lower bounds:
+    a file's value is max(largest measured peak, largest lower bound), warned about when the
+    bound is the larger. A unit made only of hand-kept ids that peaked above its largest
+    hand-kept weight is warned about."""
     best: dict[str, tuple[int, str]] = {}
     low: dict[str, tuple[int, str]] = {}
+    low_unit: dict[tuple[str, int], str] = {}
     warn: list[str] = []
 
     def take(d: dict, f: str, mib: int, run: str) -> None:
@@ -80,7 +85,8 @@ def measure(aggs: list[Path], hand: list[tuple[str, int]]) -> tuple[dict[str, tu
                                     f"above their largest hand-kept weight {max(covered)} GB: {run} {p[0]} {ids[0]}")
                     continue
                 if rc == "137":
-                    take(low, f, mib, f"{run} {p[0]}")
+                    take(low, f, mib, run)
+                    low_unit[f, mib] = p[0]
                     continue
                 take(best, f, mib, run)
         else:
@@ -90,10 +96,12 @@ def measure(aggs: list[Path], hand: list[tuple[str, int]]) -> tuple[dict[str, tu
                     break
                 if len(p) == 12 and p[0].startswith("tests/") and p[9].isdigit():
                     take(best, p[0], int(p[9]), run)
-    for f, (mib, where) in sorted(low.items()):
+    for f, (mib, run) in sorted(low.items()):
         if f not in best or gb(mib) > gb(best[f][0]):
             have = f"{gb(best[f][0])} GB" if f in best else "no measured peak"
-            warn.append(f"rc 137 lower bound {gb(mib)} GB above the file's {have}; add a hand-kept line: {f} ({where})")
+            warn.append(f"rc 137 lower bound {gb(mib)} GB above the file's {have}; the line takes the bound, "
+                        f"the real peak may be higher (a hand-kept line or a rerun): {f} ({run} {low_unit[f, mib]})")
+            best[f] = (mib, run)
     return best, warn
 
 
