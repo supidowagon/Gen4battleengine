@@ -169,9 +169,12 @@ def test_cute_charm_and_oblivious_map(tables, names, kaizo_tables, kaizo_names):
         assert rows.size > 0 or t is kaizo_tables
         assert (np.asarray(t.species_abilities)[rows, slots] == AbilityId.OBLIVIOUS).all()
         # Mental Herb (HOLD_EFFECT_HEAL_INFATUATION) and Destiny Knot (RECIPROCATE_INFAT)
-        # would touch infatuation: unsupported, so coverage refuses them.
-        for item in ("Mental Herb", "Destiny Knot"):
-            assert int(t.item_effect[n.item(item)]) == ItemId.UNSUPPORTED
+        # are modelled (batch H): each maps to its own item effect.
+        for item, effect in (
+            ("Mental Herb", ItemId.MENTAL_HERB),
+            ("Destiny Knot", ItemId.DESTINY_KNOT),
+        ):
+            assert int(t.item_effect[n.item(item)]) == effect
 
 
 def _function(source: str, name: str) -> str:
@@ -706,17 +709,17 @@ def test_oblivious_is_covered(tables, names):
 
 @pytest.mark.parametrize("item", ["Mental Herb", "Destiny Knot"])
 @pytest.mark.fullset
-def test_infatuation_items_are_refused(tables, names, item):
+def test_infatuation_items_are_covered(tables, names, item):
     # HOLD_EFFECT_HEAL_INFATUATION (battle_lib.c:4890, :5103) and HOLD_EFFECT_RECIPROCATE_INFAT
-    # (:4545-4559) would change infatuation; neither is modelled, so the item is refused on
-    # both sides, in the pool and in prep.
+    # (:4545-4559) are modelled (batch H): the item is refused on neither side, nor in the
+    # pool or in prep.
     base = sample_party(names)
     mon = replace_spec(base[0], item=names.item(item))
-    line = f"MONFERNO (slot 0): {item} (held item UNSUPPORTED)"
     report = check_coverage(tables, names, [mon, *base[1:]], roark_trainer(), roark_party(names), 0)
-    assert f"Player {line}" in report.missing
+    assert not any(item in m for m in report.missing)
     opp = [mon, *roark_party(names)[1:]]
-    assert f"Roark {line}" in check_coverage(tables, names, base, roark_trainer(), opp, 0).missing
+    report = check_coverage(tables, names, base, roark_trainer(), opp, 0)
+    assert not any(item in m for m in report.missing)
     cand = Candidate(("party", 0, 0), "P", mon, 0, (), ())
-    assert f"P: {item} (held item UNSUPPORTED)" in check_pool(tables, names, [cand], ()).missing
-    assert _item_refusal(tables, mon.item) == "held item not implemented"
+    assert not any(item in m for m in check_pool(tables, names, [cand], ()).missing)
+    assert _item_refusal(tables, mon.item) is None
