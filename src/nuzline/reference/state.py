@@ -38,7 +38,7 @@ class RefPokemon:
     ability_form: int  # the form whose personal row ability_slot indexes (engine.state)
     item: int
     item_consumed: int
-    knocked_off: int  # the slot's knockedOffItemsMask bit (B10-6)
+    knocked_item: int  # the party's item while its side's knocked_off bit is set (engine.state)
     moves: list[int]
     pp: list[int]
     pp_ups: list[int]  # BattleMon.ppUps (E1 Batch D)
@@ -68,6 +68,7 @@ class RefBattler:
     stages: list[int]  # index ids.Stat, 0 = neutral
     confusion: int
     leech_seed: int
+    leech_seed_recipient: int  # 1 + the seeder's battler, 0 = not seeded (D3-11b)
     substitute_hp: int
     taunt: int
     torment: int  # VOLATILE_CONDITION_TORMENT (E3-2-1)
@@ -190,8 +191,10 @@ class RefBattler:
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
     ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
+    ts_speed_order: int  # the paused action's monSpeedOrder entry (D3-10; B = 4 only)
     ts_grudge: int  # fainted in the paused action holding Grudge (engine.state, review b2 #5)
     ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)
+    ts_helping_hand: int  # turnFlags.helpingHand, 0 between turns (D3 fix B)
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
 
@@ -209,6 +212,9 @@ class RefSideConds:
     tailwind: int
     future_sight: int  # SIDE_CONDITION_FUTURE_SIGHT
     ts_follow_me: int  # 1 + followMeUser while followMe is set, else 0 (D2-11)
+    # knockedOffItemsMask (battle_context.h:49) as one 0/1 per party slot: the side's bit, shared by
+    # every party of the side (B10-6, D3 fix B)
+    knocked_off: list[int]
 
 
 @dataclass
@@ -228,9 +234,10 @@ class RefState:
     ai_seen_moves: list[list[int]]
     ai_item_known: list[int]  # battlerHeldItems of the player's slots (item ids)
     ai_ability_known: list[int]
-    # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask[0].
+    # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask: an int at B = 2
+    # (entry 0), a list of 2 at B = 4 (entry (b >> 1) & 1 of enemy battler b).
     exp: list[int]
-    exp_mask: int
+    exp_mask: int | list[int]
     exp_boost: list[int]
     pokerus: list[int]
     friend_bonus: list[int]
@@ -249,6 +256,7 @@ class RefState:
     ts_used: int
     ts_damaged: int
     ts_dealt: int
+    ts_defender: int  # 1 + the paused action's battleCtx->defender (D3-10; B = 4 only)
     ts_se: int
     ts_power_mul: int
     ts_pick_mul: int
