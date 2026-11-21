@@ -1083,7 +1083,7 @@ def _use_move(
     ``defender_in`` (B = 4, D3-10): ``battleCtx->defender`` of the paused action, as FightCommand
     fixed it (bcp.c:1900); ``MODE_PURSUIT`` and ``MODE_RESUME`` use it as the resolved defender and
     never pick one again (the draws of ``targets.resolve`` are not read twice). B = 2 re-resolves
-    (the same battler there, ledger D3-10).
+    (the same battler there, ledger D3-10) and keeps the foe when the re-resolve finds it fainted.
 
     Returns ``(state, own, foe, ctl)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -1137,6 +1137,13 @@ def _use_move(
         # The tail modes keep the defender of the action's start (D3-10; the Pursuit and the
         # party list never rebind ``battleCtx->defender``, subscript_pursuit.s:5, :80, :116).
         resolved = _redefend(resolved, side, defender_in, ~head_on)
+    elif fmt.B == 2:
+        # The tail modes keep FightCommand's defender too (bcp.c:1900): the paused or pursued move
+        # hit, so it named the user (a self range: Baton Pass, RANGE_USER) or the foe alive at the
+        # action's start. The re-resolve on ``state_in`` gives the same battler but for a foe that
+        # fell since (the U-turn's KO, a Pursuit's recoil): that foe stays the defender.
+        kept = jnp.where(resolved.defender == NO_DEFENDER, _foe(side), resolved.defender)
+        resolved = _redefend(resolved, side, kept, ~head_on)
     if mover is not None:
         # E3-B2-6: the reflected pass's defender: BtlCmd_MagicCoat (battle_script.c:6487-6507)
         # makes the holder the attacker and the mover's side's living Follow Me user, else the
@@ -4392,7 +4399,7 @@ def _execute_actions(
         "ts_dealt": jnp.where(pivot_stopped, state.ts_dealt, 0),
         # The paused action's battleCtx->defender (1 + battler) and monSpeedOrder: written at B = 4
         # only (D3-10), at every stop (a MoveEnd learn pause's tail reads the order); at B = 2 the
-        # re-resolve gives the same defender and the order is the identity.
+        # defender is the user or the foe (``_use_move``'s tail keep) and the order is the identity.
         "ts_defender": (1 + defender_c) if fmt.B == 4 else jnp.zeros((), _I32),
         "ts_speed_order": speed_c if fmt.B == 4 else jnp.zeros(fmt.B, _I32),
         "ts_se": jnp.where(pivot_stopped, state.ts_se, 0),

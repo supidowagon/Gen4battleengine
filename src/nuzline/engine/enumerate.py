@@ -212,7 +212,7 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
 from nuzline.engine import targets
-from nuzline.engine.actions import absent_now, imprisoning_foe
+from nuzline.engine.actions import absent_now, imprisoning_foe, replacement_bench
 from nuzline.engine.damage import (
     NUM_TYPES,
     PHYSICAL,
@@ -2991,7 +2991,12 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # now, or anywhere in the party when it can lose HP first (it leaves after a hit, a hazard).
     setters = foes(uses_move & _any_of(effect, (_E.SPIKES, _E.STEALTH_ROCK)))
     leaving = switch | enters
-    bench = (slots != state.active[:, None]) | leaving[:, None]
+    # The replacement's choices (ReplaceFainted, bcp.c:4081-4140): never the partner's active slot
+    # of a shared party (DOUBLES, bcp.c:4096-4107; ``actions.replacement_bench``), plus the own
+    # active one when it can leave (it is on the bench by the replacement).
+    bench = jnp.stack([replacement_bench(state, b) for b in range(fmt.B)]) | (
+        leaving[:, None] & (slots == state.active[:, None])
+    )
     hurt = (hazards | setters | leaving)[:, None]
     rep = live & jnp.any(bench & (pinched_b | (holds_b & hurt)), axis=1)
     # The count: fixed at 5 unless a stat can reach +6 before the eating.

@@ -93,8 +93,9 @@ def test_a_b4_haze_lets_a_non_participant_eat_its_starf_with_entry_0(tables, nam
     battler 0 is neither. Haze zeroes every stage and the berry is eaten in that action: entry 0 of
     battler 0's queue picks the stat (draw 0: Attack; draw 3: Sp. Atk); Outcome.starf columns 1-3
     are unread (column 1 is the faint-replacement draw; the queue is columns 0, 2, 3, ids.py:1230);
-    the law reads battler 0's column 0 only. Battler 2's column 1 is marked relevant though nothing
-    can faint here: over-approximate, owed to D6-18 (e2 ledger)."""
+    the law reads battler 0's column 0 only. Battler 2's column 1 stays unmarked: its replacement
+    choices exclude battler 0's active holder of the shared party (ReplaceFainted, bcp.c:4096-4107;
+    ``actions.replacement_bench``)."""
     s = _all_moves(four(tables, names, DOUBLES), names, "Swords Dance")
     s = with_moves(s, names, 3, ["Haze"])
     s = _set_item(s, 0, names.item("Starf Berry"))
@@ -113,4 +114,4 @@ def test_a_b4_haze_lets_a_non_participant_eat_its_starf_with_entry_0(tables, nam
     laws = jax.tree.map(np.asarray, outcome_laws(tables, s, jnp.zeros(4, jnp.int32)))
     relevant = laws.relevant.starf.tolist()
     assert relevant[0] == [True, False, False, False]
-    assert relevant[1] == [False] * 4 and relevant[3] == [False] * 4
+    assert relevant[1] == relevant[2] == relevant[3] == [False] * 4

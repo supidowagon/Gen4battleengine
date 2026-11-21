@@ -8,10 +8,11 @@ is battler 0 (the AI-record difference at battler 2, D3-17, is not met). Real Ca
 
 from __future__ import annotations
 
-from nuzline.engine.ids import AbilityId
+from nuzline.engine.ids import AbilityId, Status, Type
 from tests.engine.d2_states import four, with_ability, with_moves
 from tests.engine.test_d3_action_loop import hp, play
 from tests.engine.test_d3_pause import encore
+from tests.engine.test_d3_review_targets import with_status
 
 ORDER = (1, 0, 2, 3)  # battler 1 acts first
 TARGETS = (0, 2, 0, 0)  # battler 1's move is chosen at battler 2
@@ -48,7 +49,7 @@ def test_a_move_with_no_pp_is_redirected_silently_and_records_at_the_holder(tabl
     move. DecrementPP flags MOVE_STATUS_NO_PP and returns FALSE (bcp.c:2285-2297), so BeforeMove
     still reaches REDIRECT_TARGET (bcp.c:3204-3206), which has no NO_EFFECTS check
     (battle_lib.c:1732-1790): the holder becomes the defender. NO_PP is a NO_EFFECTS status
-    (moves.h:85): no SYSCTL_MOVE_SUCCEEDED (bcp.c:3208-3212), no TryMove, so no redirect message
+    (moves.h:85): no SYSCTL_MOVE_SUCCEEDED (bcp.c:3209-3212), no TryMove, so no redirect message
     (battle_lib.c:1796); subscript_no_pp.s prints the attack message and "no PP left"
     (bcp.c:3316-3319): no hit, no AI record, movePrevByBattler = MOVE_NONE (bcp.c:3945-3949), and
     UpdateFlagsWhenHit (bcp.c:4480-4486, SYSCTL_ATTACK_MESSAGE_SHOWN) writes moveCopied at the
@@ -65,3 +66,35 @@ def test_a_move_with_no_pp_is_redirected_silently_and_records_at_the_holder(tabl
     assert int(out.last_move[1]) == 0
     tbolt = names.move("Thunderbolt")
     assert int(out.move_copied[0]) == tbolt and int(out.move_copied[2]) == 0
+
+
+def test_the_no_pp_move_updates_the_holders_hit_flags(tables, names):
+    """The case above, UpdateFlagsWhenHit's other writes at the holder (bcp.c:4487-4535): with
+    SYSCTL_ATTACK_MESSAGE_SHOWN its choiceLockedMove is cleared (no Choice item, :4489-4495) and
+    moveHit = moveCur (:4498-4500); NO_PP is a NO_EFFECTS status and sets no SYSCTL_MOVE_SUCCEEDED,
+    so conversion2Move / Battler / Type are cleared (:4511-4512 fail, else branch :4531-4534). Drawn
+    state: battlers 0 and 2 asleep (no attack message: their own UpdateMoveBuffers leaves their
+    lock, bcp.c:3921-3934) with a Choice lock and a conversion2 record, battler 0 first so its
+    own ClearFlags (:4389-4390) runs before the redirect. Battler 2 keeps its lock and its
+    conversion2 battler and type (its ClearFlags clears only its moveHit and conversion2Move)."""
+    s = state(tables, names, AbilityId.LIGHTNINGROD, "Thunderbolt")
+    s = with_moves(s, names, 1, ["Swords Dance", "Thunderbolt", "Thunderbolt"])
+    slot1 = int(s.active[1])
+    s = s._replace(pp=s.pp.at[1, slot1, 1].set(0))
+    s = encore(s, names, 1, 1, "Thunderbolt")
+    sd, tackle = names.move("Swords Dance"), names.move("Tackle")
+    for b in (0, 2):
+        s = with_status(s, b, Status.SLEEP, 4)
+        s = s._replace(
+            choice_lock=s.choice_lock.at[b].set(sd),
+            conv2_move=s.conv2_move.at[b].set(tackle),
+            conv2_battler=s.conv2_battler.at[b].set(4),  # 1 + battler 3
+            conv2_type=s.conv2_type.at[b].set(int(Type.FIRE)),
+        )
+    out, _ = play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), targets=TARGETS)
+    tbolt = names.move("Thunderbolt")
+    assert int(out.move_copied[0]) == tbolt
+    assert int(out.move_hit[0]) == tbolt and int(out.move_hit[2]) == 0
+    assert int(out.choice_lock[0]) == 0 and int(out.choice_lock[2]) == sd
+    assert [int(out.conv2_move[0]), int(out.conv2_battler[0]), int(out.conv2_type[0])] == [0, 0, 0]
+    assert [int(out.conv2_battler[2]), int(out.conv2_type[2])] == [4, int(Type.FIRE)]

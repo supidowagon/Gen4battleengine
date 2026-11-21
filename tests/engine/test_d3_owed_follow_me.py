@@ -25,17 +25,21 @@ import pytest
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.format import DOUBLES
-from nuzline.engine.ids import Stat
+from nuzline.engine.ids import AbilityId, Stat, Status
+from nuzline.engine.levelup import LEARN_MOVE_END
 from nuzline.engine.order import action_order
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
-from nuzline.engine.state import make_state
+from nuzline.engine.state import BattleState, initial_arrays
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.engine.d2_states import four, with_hp, with_moves
-from tests.engine.helpers import A, assert_matches_reference, jit_step
+from tests.engine.d2_states import four, mon, with_ability, with_hp, with_moves
+from tests.engine.helpers import assert_matches_reference, jit_step
 from tests.engine.test_d3_action_loop import _engine, hp, speed_ordered
 from tests.engine.test_d3_pause import _engine_resume
-from tests.engine.test_e3_batch2 import _hits, _spec
+from tests.engine.test_levelup import _base
+from tests.engine.test_levelup import _mon as _lv_mon
+from tests.engine.test_singles_followup2 import O as O_B2
+from tests.engine.test_singles_followup2 import _resume_slot1, _u_turn_duel
 
 IDLE = "Swords Dance"
 ATK = Stat.ATK
@@ -195,31 +199,66 @@ def test_follow_me_is_kept_over_a_pause_and_the_later_actor_reads_it(tables, nam
 
 
 def test_the_resumed_u_turn_records_its_move_for_its_kept_defender(tables, names):
-    """B = 4 half: in the case above the resumed U-turn's moveCopied goes to battler 3 (its kept
-    defender, overwritten by battler 0's Tackle), never to battler 0 (``step._act``'s resumed
-    ``target``). B = 2: a player U-turn pauses at its party list before UpdateFlagsWhenHit, so the
-    paused state holds no moveCopied; the resume runs it for battleCtx->defender, which the party
-    list does not rewrite (bcp.c:1900, :3956 -> :4484-4485), after the user's switch-out cleared
-    its foes' entries (battle_lib.c:2140-2147): the foe holds U-turn, hit by battler 0, and the
-    foe's Growl then writes the newcomer's. Both engines agree on both states."""
+    """In the case above the resumed U-turn's UpdateFlagsWhenHit writes moveCopied and
+    moveCopiedHit for battler 3, its kept defender (bcp.c:1900, :3956 -> :4480-4486), never for
+    battler 0 (``step._act``'s resumed ``target``): battler 3 holds U-turn from battler 2 and
+    battler 0's later Tackle overwrites its moveCopied. Both engines agree."""
     _, paused, targets = paused_after_follow_me(tables, names)
     out, _ = resume_turn(tables, paused, targets)
-    assert np.asarray(out.move_copied).tolist() == [0, 0, 0, names.move("Tackle")]
-    t, n = tables, names
-    s = make_state(
-        t,
-        [_spec(n, "Bidoof", 50, ("U-turn",)), _spec(n, "Geodude", 50, ("Tackle",))],
-        [_spec(n, "Geodude", 50, ("Growl",))],
+    tackle, u_turn = names.move("Tackle"), names.move("U-turn")
+    assert np.asarray(out.move_copied).tolist() == [0, 0, 0, tackle]
+    assert np.asarray(out.move_copied_hit)[3].tolist() == [tackle, 0, u_turn, 0]
+
+
+def test_a_battle_that_ends_at_the_resumed_u_turn_reaches_its_fainted_defender(tables, names):
+    """B = 2, a drawn state (Tyranitar given Unburden): the player's U-turn leaves the foe's last
+    Pokemon at 1 HP, its Pursuit's Life Orb recoil fells it in the paused pass, and the battle ends
+    at the resumed U-turn's MoveEnd (SF2 (a2)). battleCtx->defender is still the foe FightCommand
+    named (bcp.c:1900; the list rewrites none), so MoveEnd's RecoverStatusByAbility runs for it
+    (bcp.c:3966-3967) before CheckBattleOver (:3969). Its Unburden case has no HP test (battle_lib.c:
+    4433-4437): the fainted holder of the Life Orb gets canUnburden again, which its faint cleared
+    (moveEffectsData zeroed, battle_lib.c:2186-2189). The status cures need HP in both engines (a
+    fainted Pokemon's party status is 0, battle_controller.c:1484-1486), so this is the only write.
+    Both engines agree."""
+    s = _u_turn_duel(tables, names)
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.UNBURDEN))
+    paused = assert_matches_reference(tables, s, (0, 0), O_B2)
+    assert int(paused.pivot_battler) == 1 and int(paused.hp[1, 0]) == 0
+    assert int(paused.can_unburden[1]) == 0  # the faint cleanup
+    out = _resume_slot1(tables, paused)
+    assert int(out.over) == 1 and int(out.winner) == 2
+    assert int(out.can_unburden[1]) == 1
+
+
+def test_the_resumed_u_turns_move_end_cures_its_kept_defender_before_the_payout(tables, names):
+    """B = 4: battler 2's U-turn hits battler 3 (Limber, paralyzed: a drawn state); battler 1's
+    Pursuit (1 HP, Life Orb) hits battler 2 as it leaves and falls to its recoil. The resumed
+    U-turn's MoveEnd cures its kept defender, battler 3 (bcp.c:3966; battleCtx->defender from
+    FightCommand, :1900), then pays battler 1's exp (:3968): battler 0 levels to 19 and the
+    learn prompt pauses the turn (``LEARN_MOVE_END``) before TriggerEffectOnSwitch's
+    FORBIDDEN_STATUS pass (:3973). So the paused state shows battler 3 cured. Both engines agree."""
+    prinplup = _lv_mon(
+        names,
+        "Prinplup",
+        18,
+        moves=("Bubble", "Roar", "Tackle", "Water Gun"),
+        ivs=(3,) * 6,
+        exp=_base(tables, names, "Prinplup", 19) - 1,
     )
-    paused = assert_matches_reference(t, s, A("U-turn", "Growl", s, n), _hits())
-    assert int(paused.pivot_battler) == 1  # Bidoof is faster by its own stats
-    assert not np.asarray(paused.move_copied).any()
-    acts = np.asarray(paused.ts_actions).astype(int).tolist()
-    acts[0] = MOVE_ACTIONS + 1
-    done = assert_matches_reference(t, paused, tuple(acts), _hits())
-    u_turn, growl = n.move("U-turn"), n.move("Growl")
-    assert np.asarray(done.move_copied).tolist() == [growl, u_turn]
-    assert np.asarray(done.move_copied_hit).tolist() == [[0, growl], [u_turn, 0]]
+    player = [prinplup, mon(names, ("U-turn",))] + [mon(names) for _ in range(2)]
+    pursuer = _lv_mon(names, "Geodude", 12, moves=("Pursuit",), item=names.item("Life Orb"))
+    opponent = [pursuer, mon(names, (IDLE,))] + [mon(names) for _ in range(2)]
+    a = initial_arrays(DOUBLES, tables, [player, opponent], opp2_items=())
+    s = BattleState(**{k: jnp.asarray(v) for k, v in a.items()})
+    s = with_ability(with_hp(s, 1, 1), 3, AbilityId.LIMBER)
+    s = s._replace(status=s.status.at[1, 1].set(Status.PARALYSIS))
+    targets = (1, 2, 3, 0)
+    _, paused = play_turn(tables, s, [0, 0, 0, 0], (2, 0, 3, 1), targets)
+    assert int(paused.pivot_battler) == 3 and int(paused.hp[1, 0]) == 0
+    assert int(paused.status[1, 1]) == Status.PARALYSIS
+    out, _ = resume_turn(tables, paused, targets)
+    assert int(out.learn_site) == LEARN_MOVE_END and int(out.level[0, 0]) == 19
+    assert int(out.status[1, 1]) == Status.NONE
 
 
 # --- the whole turn: ts_follow_me is 0 after it (lib.c:2251-2252) ------------------------------

@@ -282,7 +282,7 @@ class _Turn:
     # UpdateMoveBuffers' moveProtect (bcp.c:3936-3942).
     attack_message: bool = False
     # MOVE_STATUS_NO_PP of the current action (bcp.c:2285, :2293): no SYSCTL_MOVE_SUCCEEDED
-    # (bcp.c:3208-3212), so a Baton Pass is not exempt from the Choice lock (bcp.c:3928).
+    # (bcp.c:3209-3212), so a Baton Pass is not exempt from the Choice lock (bcp.c:3928).
     no_pp: bool = False
     # SYSCTL_FIRST_OF_MULTI_TURN of the current action: a charge turn (B10-12), which updates the
     # Choice locks as the attack message does (bcp.c:3921-3922, :4490-4491).
@@ -6170,13 +6170,13 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     # HasNoTarget (:3189-3194), CHECK_STOLEN (no reflect under NO_EFFECTS, :3069) and
     # REDIRECT_TARGET (:3204-3206), whose BattleSystem_CheckRedirectionAbilities has no NO_EFFECTS
     # check (battle_lib.c:1732-1790; only the message's Trigger has one, :1796). The move fails at
-    # BeforeMove's end (:3208-3209) against the redirected defender: UpdateFlagsWhenHit's moveCopied
+    # BeforeMove's end (:3209-3210) against the redirected defender: UpdateFlagsWhenHit's moveCopied
     # (bcp.c:4480-4486) is the holder's.
     no_pp = False
     if not struggling and not locked:
         slot = action
         if mon.pp[slot] == 0:
-            no_pp = turn.no_pp = True  # last_move stays MOVE_NONE (bcp.c:3208-3212, :3945-3949)
+            no_pp = turn.no_pp = True  # last_move stays MOVE_NONE (bcp.c:3209-3212, :3945-3949)
         else:
             mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, turn.defender, move), 0)
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306, :3190): BattleSystem_Defender found no
@@ -8665,7 +8665,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 _life_orb_recoil(turn, s, side)
             # UpdateFlagsWhenHit / UpdateMoveBuffers: the Choice lock (the foe is the defender
             # exactly when _fight returns its moveHit record); a Baton Pass that succeeded
-            # (moveTemp, bcp.c:3928; SYSCTL_MOVE_SUCCEEDED, not set on no PP, :3208-3212)
+            # (moveTemp, bcp.c:3928; SYSCTL_MOVE_SUCCEEDED, not set on no PP, :3209-3212)
             # never locks. A reflection's defender is the holder (bcp.c:3831-3834).
             defender = turn.target_side if record is not None or turn.reflected else None
             exempt = move == MOVE_BATON_PASS and turn.attack_message and not turn.no_pp
@@ -9217,12 +9217,13 @@ def _resume(
     ``UpdateMoveBuffers``, ``MoveEnd``), the later actions and the end of the turn."""
     side = s.pivot_battler - 1
     turn = _turn_from_scratch(tables, s, outcome, s.ts_cursor)
-    # The paused move's battleCtx->defender, for MoveEnd's battle-end cure (bcp.c:3966-3967):
-    # FightCommand's pick (bcp.c:1900) re-resolved here on the paused state, before ``_enter``
-    # (the outgoing mon's Encore and chosen_target still in place); ``step._act`` re-resolves in
-    # MODE_RESUME on the post-list state. No visible case at B = 2 (ledger SF2-gate (2)), so B = 2
-    # keeps the re-resolve. The game never re-resolves: battleCtx->defender stays from
-    # FightCommand; at B = 4 both engines carry it (``ts_defender``, D3-10).
+    # The paused move's battleCtx->defender, for MoveEnd's cure (bcp.c:3966-3967): the one
+    # FightCommand fixed (bcp.c:1900); the party list rewrites none. B = 4 carries it
+    # (``ts_defender``, D3-10). B = 2 stores none: the paused move hit, so FightCommand named the
+    # user (a self range: Baton Pass, RANGE_USER) or the foe, alive then. The re-resolve here,
+    # before ``_enter`` (the outgoing mon's Encore and chosen_target in place), gives that battler
+    # but for a foe that fell since (the U-turn's KO, a pursuer's recoil): it stays the defender,
+    # as ``step._use_move``'s B = 2 tail keep.
     p_move, p_struggling, _ = turn.choices[side]
     p_sd = s.battlers[side]
     if (
@@ -9239,11 +9240,12 @@ def _resume(
         turn.target_side = kept if kept >= 0 and kept != side else _foe(side)
         turn.speed_order = _get(s, "ts_speed_order")
     else:
-        turn.defender = _resolve(
+        kept = _resolve(
             tables, s, side, p_move, p_struggling or bool(p_sd.encore_move), p_sd.chosen_target,
             turn.speed_order if turn.speed_order is not None else list(range(_fmt(s).B)),
             outcome.target_draw[side],
         )[0]  # fmt: skip
+        turn.defender = _foe(side) if kept is None else kept
     move, used = s.battlers[side].ts_move, s.ts_used
     damaged, dealt = bool(s.ts_damaged), s.ts_dealt
     se = bool(s.ts_se)  # the tail's moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
