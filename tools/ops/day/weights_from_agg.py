@@ -6,10 +6,9 @@ per-test lines), then one line per test file measured in any <agg.txt>:
 "<file> <GB> <run>", GB = the file's largest unit peak across the runs (agg.txt per-unit
 max_rss_MB, MiB, x 1.048576 / 1000, rounded up, at least FLOOR_GB), run = the run it came from
 (<run>/results/agg.txt or <run>/agg.txt), then one line per test id whose own peak is at least
-PER_TEST_MARGIN_GB under its file's line: "<id> <GB> <run>", GB = the peak of the smallest unit
-(fewest ids) that ran the id and passed (rc 0), the largest such peak when several units of that
-size did. A unit
-counts toward its file only when one of its ids (<agg dir>/out/<unit>.ids, else its first id)
+PER_TEST_MARGIN_GB under its file's line: "<id> <GB> <run>", GB = the largest peak of the 1-id
+units that ran the id and passed it (rc 0, and the log <agg dir>/out/<unit>.log ends "1 passed",
+warnings allowed: a skipped test's peak is not its cost). A unit counts toward its file only when one of its ids (<agg dir>/out/<unit>.ids, else its first id)
 has no hand-kept entry: ids with one are weighed by that entry. An agg.txt without a per-unit
 table counts its per-file max_rss_MB. A file that has a hand-kept file-level entry is not
 printed again.
@@ -19,8 +18,9 @@ Warnings (stderr, "WARNING: ..."; the table is still printed): a unit killed thr
 no peak), a kernel kill whose lower bound is above its file's measured peak (the line takes the
 bound; the real peak may be higher), a unit of hand-kept ids only that peaked above its largest
 hand-kept weight, a hand-kept per-test line PER_TEST_MARGIN_GB or more above its test's own
-measured peak (as above; not for a line whose cite has the word "keep"), a file whose new line is lower than its line before, and a file of the
-old generated part that no <agg.txt> measures (dropped). DAYBOX.md, Send a run step 2: the new
+measured peak (as above; not for a line whose cite has the word "keep"), a file whose new line is
+lower than its line before, a per-test line lower than the test's line before or, without one,
+its file's line before, and a file of the old generated part that no <agg.txt> measures (dropped). DAYBOX.md, Send a run step 2: the new
 table is not moved into place while any warning stands.
 """
 
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -50,6 +51,25 @@ def run_name(agg: Path) -> str:
     return agg.parent.parent.name if agg.parent.name == "results" else agg.parent.name
 
 
+_SUMMARY = re.compile(r"^(?:=+ )?((?:\d+ \w+(?:, )?)+) in [0-9.]+s")
+
+
+def passed_alone(log: Path) -> bool:
+    """The pytest log's last summary line counts exactly one passed test and nothing else but
+    warnings."""
+    if not log.is_file():
+        return False
+    last = None
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = _SUMMARY.match(line.strip())
+        if m:
+            last = m.group(1)
+    if last is None:
+        return False
+    got = {k: int(n) for n, k in re.findall(r"(\d+) (\w+)", last) if k not in ("warning", "warnings")}
+    return got == {"passed": 1}
+
+
 def _hand_covered(test_id: str, hand: list[tuple[str, int]]) -> bool:
     return any(weights._matches(e, test_id) for e, _ in hand)
 
@@ -60,8 +80,8 @@ def measure(aggs: list[Path], hand: list[tuple[str, int]],
     have no peak and are warned about. Rows with rc 137 (killed by the kernel) are lower bounds:
     a file's value is max(largest measured peak, largest lower bound), warned about when the
     bound is the larger. A unit made only of hand-kept ids that peaked above its largest
-    hand-kept weight is warned about. per_test, when given, gets id -> (ids of the smallest unit
-    that ran it, that unit's MiB, run), over the units with rc 0, hand-kept ids included."""
+    hand-kept weight is warned about. per_test, when given, gets id -> (1, largest MiB, run) over
+    the 1-id units that passed their id (rc 0, passed_alone), hand-kept ids included."""
     best: dict[str, tuple[int, str]] = {}
     low: dict[str, tuple[int, str]] = {}
     low_unit: dict[tuple[str, int], str] = {}
@@ -89,11 +109,9 @@ def measure(aggs: list[Path], hand: list[tuple[str, int]],
                 if rc == "98":
                     warn.append(f"killed three times, no peak: {run} {p[0]} {f}")
                     continue
-                if rc == "0" and mib > 0:
-                    for t in ids:
-                        old = per_test.get(t)
-                        if old is None or len(ids) < old[0] or (len(ids) == old[0] and mib > old[1]):
-                            per_test[t] = (len(ids), mib, run)
+                alone = rc == "0" and mib > 0 and p[1] == "1" and len(ids) == 1
+                if alone and passed_alone(agg.parent / "out" / f"{p[0]}.log") and mib > per_test.get(ids[0], (1, 0, ""))[1]:
+                    per_test[ids[0]] = (1, mib, run)
                 covered = [max(g for e, g in hand if weights._matches(e, t)) for t in ids if _hand_covered(t, hand)]
                 if len(covered) == len(ids):  # weighed by its hand-kept lines
                     if gb(mib) > max(covered):
@@ -148,13 +166,16 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None) -
             continue
         if f in file_gb and gb(m) <= file_gb[f] - PER_TEST_MARGIN_GB and not _hand_covered(t, hand):
             tests.append(f"{t} {gb(m)} {r}")
+            before, what = (old[t], "its own line") if t in old else (old.get(f), "its file's line")
+            if before is not None and gb(m) < before:
+                w.append(f"per-test line lower than before ({what}): {t} {before} -> {gb(m)} GB")
     for e, g in hand:
         if "::" not in e or e in keep:
             continue
         got = [(gb(m), n, r) for t, (n, m, r) in per_test.items() if weights._matches(e, t)]
         if got and max(got)[0] <= g - PER_TEST_MARGIN_GB:
-            m, n, r = max(got)
-            w.append(f"hand-kept line {g} GB above its test's own peak {m} GB (smallest unit {n} ids, {r}): {e}")
+            m, _, r = max(got)
+            w.append(f"hand-kept line {g} GB above its test's own peak {m} GB (passed alone, {r}): {e}")
     if warn is not None:
         warn.extend(w)
     else:
