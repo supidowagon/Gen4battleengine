@@ -131,13 +131,17 @@ AI_EFFECT_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
 AI_HP_READERS: dict[str, str] = {
     "_hp_percent": "percent",
     "if_current_move_kills": "kill",
-    "count_alive_party_battlers": "alive",
+    # E4-A W1: the party commands' members (CountAlivePartyBattlers, IfPartyMember[Not]Status,
+    # trainer_ai.c:1126-1155, :1348-1412) read HP != 0 through ``_member_alive``; every
+    # battler arg's live test (``curHP != 0``) through ``_alive``: HP > 0 only
+    "_member_alive": "alive",
+    "_alive": "alive",
+    # E4-A W1: IfAnyPartyMemberIsWounded (trainer_ai.c:1968-1985) is only called on
+    # AI_BATTLER_ATTACKER (script.s:1047, :1559), the AI's side
+    "if_any_party_member_is_wounded": "opponent",
     # IfPartyMemberDealsMoreDamage (E1 batch 15) reads only the AI side's HP, its living
     # party members (trainer_ai.c:2147-2150)
     "if_party_member_deals_more_damage": "opponent",
-    # IfPartyMemberStatus (E2 batch 12, Expert_HealBell) reads HP != 0 of the battler's own
-    # party (trainer_ai.c:1370-1371), the AI's (AI_BATTLER_ATTACKER, script.s:3402)
-    "if_party_member_status": "opponent",
     "_use_item": "opponent",
     "_post_ko": "opponent",
     "_layout": "opponent",
