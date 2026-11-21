@@ -123,8 +123,9 @@ def test_rom_map_evolution_methods_match(vanilla_files, symbols, decomp_inter):
 
 
 @pytest.mark.slow
-def test_kaizo_keeps_the_map_evolution_methods(vanilla_files, kaizo_files, symbols):
-    # data/kaizo/rom_diff.toml has no entry for the function or its table.
+def test_kaizo_keeps_the_map_evolution_methods(vanilla_files, kaizo_files, symbols, decomp):
+    # data/kaizo/rom_diff.toml has no entry for the function or its table. ``decomp``: the read
+    # names the maps from the decomp's generated/map_headers.txt (skips when not cloned).
     assert map_evolution_methods(kaizo_files, symbols) == map_evolution_methods(
         vanilla_files, symbols
     )
