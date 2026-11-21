@@ -1,42 +1,60 @@
-"""Regenerate tools/ops/day/pod/weights.txt from pod-run results.
+"""Refresh tools/ops/day/pod/weights.txt from pod-run results.
 
-Usage: python tools/ops/day/weights_from_agg.py <weights.txt> <agg.txt>... > <new weights.txt>
-Prints <weights.txt> up to and including the line MARK unchanged (header and the hand-kept
-per-test lines), then one line per test file measured in any <agg.txt>:
-"<file> <GB> <run>", GB = the file's largest unit peak across the runs (agg.txt per-unit
-max_rss_MB, MiB, x 1.048576 / 1000, rounded up, at least FLOOR_GB), run = the run it came from
-(<run>/results/agg.txt or <run>/agg.txt), then one line per test id whose own peak is at least
-PER_TEST_MARGIN_GB under its file's line: "<id> <GB> <run>", GB = the largest peak of the 1-id
-units that ran the id and passed it (rc 0, and the log <agg dir>/out/<unit>.log ends "1 passed",
-warnings allowed: a skipped test's peak is not its cost). A unit counts toward its file only when one of its ids (<agg dir>/out/<unit>.ids, else its first id)
-has no hand-kept entry: ids with one are weighed by that entry. An agg.txt without a per-unit
-table counts its per-file max_rss_MB. A file that has a hand-kept file-level entry is not
-printed again.
-A unit killed by the kernel (rc 137) peaked at least at its max_rss_MB: its file's line is
-max(the largest measured peak, the largest such lower bound).
-Warnings (stderr, "WARNING: ..."; the table is still printed): a unit killed three times (rc 98,
-no peak), a kernel kill whose lower bound is above its file's measured peak (the line takes the
-bound; the real peak may be higher), a unit of hand-kept ids only that peaked above its largest
-hand-kept weight, a hand-kept per-test line PER_TEST_MARGIN_GB or more above its test's own
-measured peak (as above; not for a line whose cite has the word "keep"), a file whose new line is
-lower than its line before, a per-test line lower than the test's line before or, without one,
-its file's line before, and a file of the old generated part that no <agg.txt> measures (dropped). DAYBOX.md, Send a run step 2: the new
-table is not moved into place while any warning stands.
+Usage: python tools/ops/day/weights_from_agg.py [--since <spec>]... <weights.txt> <agg.txt>... > <new weights.txt>
+--since <spec>, repeatable: only these results count. <spec> is a commit (the run's meta.env
+COMMIT must descend from it, `git merge-base --is-ancestor`) or a run-name glob (it has * ? or [).
+"<test file>=<spec>" applies to the units of that file only, on top of the other specs.
+Without --since every given result counts.
+
+Measurements (GB = MiB x 1.048576 / 1000, rounded up, at least FLOOR_GB), over the units of the
+counted results (agg.txt per-unit table; ids from <agg dir>/out/<unit>.ids, else the first id):
+- a test's peak: the largest peak of the 1-id units that passed it (rc 0, its log
+  <agg dir>/out/<unit>.log ends "1 passed", warnings allowed); a skipped test's peak is not its cost;
+- a file's peak: its largest unit peak (rc 137: a lower bound, counted), leaving out units killed
+  three times (rc 98) and units whose ids all have a hand-kept line or a test peak (each then has
+  its own line). An agg.txt without a per-unit table counts its per-file max_rss_MB.
+New value of a line of GB g with fresh measurement m: m when m > g; else the larger of m's floor
+and nothing lower: floor(m) = ceil(m x 1.1) when m >= 40, else ceil(max(m x 1.25, m + 2)); a line
+moves down to floor(m) only when floor(m) < g. A line with no fresh measurement stays. Also stays:
+a hand-kept line whose cite has the word "keep" (never lowered), a hand-kept per-test line whose
+test is in a counted rc 137 or rc 98 unit (never lowered), a file line whose fresh units do not
+cover the mark of the run its line cites (never lowered: a fast-tier run does not lower a line a
+slow-tier run measured). Covered: a unit without -m filter (out/<unit>.m "A"), the same mark, or
+"not slow" by both "not slow and not fullset" and "fullset". The cited run's mark is read from
+<out>/<run>/results/meta.env or <out>/<run>/meta.env beside the given agg.txt files.
+Output: <weights.txt> up to the line MARK with hand-kept lines changed as above (a changed line
+becomes "<entry padded to 74> <GB> <run>"), then the file lines (largest first, then by name),
+then the per-test lines by name: every old one (as above) and a new one for each test peak,
+at floor(m), when that is PER_TEST_MARGIN_GB or more under its file's line or above it. A
+per-test line within PER_TEST_MARGIN_GB under its file's line or equal to it is left out (the
+file's line weighs it). Ids with a space or "#" get no line.
+stderr: "REDUCED <entry> <old> -> <new> GB" for the 20 largest reductions (a new per-test line
+counts from its file's line), "changed: <n> down, <n> up", and warnings ("WARNING: ..."; the
+table is still printed): a unit killed three times (rc 98, no peak), a kernel kill whose lower
+bound is above its file's measured peak (the line takes the bound; the real peak may be higher),
+a unit of hand-kept ids only that peaked above its largest hand-kept weight. DAYBOX.md, Send a
+run step 2: the new table is not moved into place while any warning stands.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import math
 import re
+import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 MARK = "# --- generated by tools/ops/day/weights_from_agg.py below this line; do not edit ---"
 FLOOR_GB = 4
-# A per-test line is written only this far under its file's line: smaller differences do not
+# A per-test line is written only this far from its file's line: smaller differences do not
 # change what the gate admits enough to be worth a line.
 PER_TEST_MARGIN_GB = 4
+DEFAULT_MARK = "not slow and not fullset"
+UNITS = "--- per unit: unit ids max_rss_MB wall_s rc first_id"
+REPO = Path(__file__).resolve().parents[3]
 
 _spec = importlib.util.spec_from_file_location("pod_weights", Path(__file__).resolve().parent / "pod" / "weights.py")
 weights = importlib.util.module_from_spec(_spec)
@@ -47,8 +65,32 @@ def gb(mib: int) -> int:
     return max(FLOOR_GB, math.ceil(mib * 1048576 / 1e9))
 
 
+def floor_gb(m: int) -> int:
+    """The lowest value a line measured at m GB may go down to."""
+    return (m * 11 + 9) // 10 if m >= 40 else max((m * 5 + 3) // 4, m + 2)   # whole numbers: no float rounding
+
+
+def new_value(old: int, m: int | None) -> int:
+    if m is None:
+        return old
+    if m > old:
+        return m
+    return min(old, floor_gb(m))
+
+
 def run_name(agg: Path) -> str:
     return agg.parent.parent.name if agg.parent.name == "results" else agg.parent.name
+
+
+def _meta(d: Path) -> dict[str, str]:
+    m = {}
+    f = d / "meta.env"
+    if f.is_file():
+        for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "=" in ln:
+                k, v = ln.split("=", 1)
+                m[k] = v.strip().strip('"')
+    return m
 
 
 _SUMMARY = re.compile(r"^(?:=+ )?((?:\d+ \w+(?:, )?)+) in [0-9.]+s")
@@ -74,121 +116,262 @@ def _hand_covered(test_id: str, hand: list[tuple[str, int]]) -> bool:
     return any(weights._matches(e, test_id) for e, _ in hand)
 
 
-def measure(aggs: list[Path], hand: list[tuple[str, int]],
-            per_test: dict[str, tuple[int, int, str]] | None = None) -> tuple[dict[str, tuple[int, str]], list[str]]:
-    """(file -> (largest MiB, run), warnings). Rows with rc 98 (killed three times at KILL_GB)
-    have no peak and are warned about. Rows with rc 137 (killed by the kernel) are lower bounds:
-    a file's value is max(largest measured peak, largest lower bound), warned about when the
-    bound is the larger. A unit made only of hand-kept ids that peaked above its largest
-    hand-kept weight is warned about. per_test, when given, gets id -> (1, largest MiB, run) over
-    the 1-id units that passed their id (rc 0, passed_alone), hand-kept ids included."""
-    best: dict[str, tuple[int, str]] = {}
-    low: dict[str, tuple[int, str]] = {}
-    low_unit: dict[tuple[str, int], str] = {}
-    warn: list[str] = []
-    per_test = {} if per_test is None else per_test
+def _lineable(t: str) -> bool:
+    return "#" not in t and len(t.split()) == 1
 
-    def take(d: dict, f: str, mib: int, run: str) -> None:
-        if mib > 0 and (f not in d or mib > d[f][0]):
-            d[f] = (mib, run)
 
+def _descends(base: str, commit: str, cache: dict) -> bool:
+    if (base, commit) not in cache:
+        cache[base, commit] = bool(commit) and subprocess.run(
+            ["git", "-C", str(REPO), "merge-base", "--is-ancestor", base, commit],
+            capture_output=True, check=False).returncode == 0
+    return cache[base, commit]
+
+
+class Since:
+    """--since specs: global ones, and per-file ones ("<test file>=<spec>")."""
+
+    def __init__(self, specs: list[str]):
+        self.all = [s for s in specs if "=" not in s]
+        self.per_file: dict[str, list[str]] = {}
+        for s in specs:
+            if "=" in s:
+                f, v = s.split("=", 1)
+                self.per_file.setdefault(f, []).append(v)
+        self._cache: dict = {}
+
+    def _ok(self, spec: str, run: str, commit: str) -> bool:
+        if any(c in spec for c in "*?["):
+            return fnmatch.fnmatchcase(run, spec)
+        return _descends(spec, commit, self._cache)
+
+    def run_counts(self, run: str, commit: str) -> bool:
+        return not self.all or any(self._ok(s, run, commit) for s in self.all)
+
+    def file_counts(self, f: str, run: str, commit: str) -> bool:
+        return all(self._ok(s, run, commit) for s in self.per_file.get(f, []))
+
+
+class Unit(NamedTuple):
+    run: str
+    name: str
+    ids: list[str]
+    mib: int
+    rc: str
+    mark: str
+    alone: bool   # 1 id, rc 0, its log ends "1 passed"
+
+
+def read_units(aggs: list[Path], since: Since) -> tuple[list[Unit], dict[str, tuple[int, str, str]]]:
+    """(units, file -> (MiB, run, mark) from agg.txt files without a per-unit table)."""
+    units: list[Unit] = []
+    flat: dict[str, tuple[int, str, str]] = {}
     for agg in aggs:
         run = run_name(agg)
+        mt = _meta(agg.parent)
+        commit, mark = mt.get("COMMIT", ""), mt.get("MARK", DEFAULT_MARK)
+        if not since.run_counts(run, commit):
+            continue
         lines = agg.read_text(encoding="utf-8", errors="replace").splitlines()
-        if "--- per unit: unit ids max_rss_MB wall_s rc first_id" in lines:
-            i = lines.index("--- per unit: unit ids max_rss_MB wall_s rc first_id") + 1
-            while i < len(lines) and not lines[i].startswith("---"):
-                p = lines[i].split()
-                i += 1
-                if len(p) < 6 or not p[2].isdigit():
-                    continue
-                idf = agg.parent / "out" / f"{p[0]}.ids"
-                ids = [x for x in idf.read_text(encoding="utf-8").splitlines() if x.strip()] if idf.is_file() else []
-                ids = ids or [p[5]]
-                f, mib, rc = ids[0].split("::")[0], int(p[2]), p[4]
-                if rc == "98":
-                    warn.append(f"killed three times, no peak: {run} {p[0]} {f}")
-                    continue
-                alone = rc == "0" and mib > 0 and p[1] == "1" and len(ids) == 1
-                if alone and passed_alone(agg.parent / "out" / f"{p[0]}.log") and mib > per_test.get(ids[0], (1, 0, ""))[1]:
-                    per_test[ids[0]] = (1, mib, run)
-                covered = [max(g for e, g in hand if weights._matches(e, t)) for t in ids if _hand_covered(t, hand)]
-                if len(covered) == len(ids):  # weighed by its hand-kept lines
-                    if gb(mib) > max(covered):
-                        warn.append(f"hand-kept ids peaked at {gb(mib)} GB{' (rc 137: at least)' if rc == '137' else ''}, "
-                                    f"above their largest hand-kept weight {max(covered)} GB: {run} {p[0]} {ids[0]}")
-                    continue
-                if rc == "137":
-                    take(low, f, mib, run)
-                    low_unit[f, mib] = p[0]
-                    continue
-                take(best, f, mib, run)
-        else:
+        if UNITS not in lines:
             for ln in lines[1:]:
                 p = ln.split()
                 if ln.startswith("---"):
                     break
-                if len(p) == 12 and p[0].startswith("tests/") and p[9].isdigit():
-                    take(best, p[0], int(p[9]), run)
-    for f, (mib, run) in sorted(low.items()):
-        if f not in best or gb(mib) > gb(best[f][0]):
-            have = f"{gb(best[f][0])} GB" if f in best else "no measured peak"
-            warn.append(f"rc 137 lower bound {gb(mib)} GB above the file's {have}; the line takes the bound, "
-                        f"the real peak may be higher (a hand-kept line or a rerun): {f} ({run} {low_unit[f, mib]})")
-            best[f] = (mib, run)
-    return best, warn
+                if (len(p) == 12 and p[0].startswith("tests/") and p[9].isdigit() and since.file_counts(p[0], run, commit)
+                        and (p[0] not in flat or int(p[9]) > flat[p[0]][0])):
+                    flat[p[0]] = (int(p[9]), run, mark)
+            continue
+        i = lines.index(UNITS) + 1
+        while i < len(lines) and not lines[i].startswith("---"):
+            p = lines[i].split()
+            i += 1
+            if len(p) < 6 or not p[2].isdigit():
+                continue
+            out = agg.parent / "out"
+            idf = out / f"{p[0]}.ids"
+            ids = [x for x in idf.read_text(encoding="utf-8").splitlines() if x.strip()] if idf.is_file() else []
+            ids = ids or [p[5]]
+            if not since.file_counts(ids[0].split("::")[0], run, commit):
+                continue
+            mf = out / f"{p[0]}.m"
+            umark = "A" if mf.is_file() and mf.read_text(encoding="utf-8").strip() == "A" else mark
+            alone = p[1] == "1" and len(ids) == 1 and p[4] == "0" and int(p[2]) > 0 and passed_alone(out / f"{p[0]}.log")
+            units.append(Unit(run, p[0], ids, int(p[2]), p[4], umark, alone))
+    return units, flat
 
 
-def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None) -> str:
+def _covers(marks: set[str], old: str | None) -> bool:
+    if old is None:
+        return False
+    if "A" in marks or old in marks:
+        return True
+    return old == "not slow" and {DEFAULT_MARK, "fullset"} <= marks
+
+
+def _cited_marks(aggs: list[Path]) -> dict[str, str]:
+    """run name -> MARK, for every run folder beside the given results."""
+    roots = {(a.parent.parent.parent if a.parent.name == "results" else a.parent.parent) for a in aggs}
+    marks = {}
+    for root in roots:
+        for d in root.iterdir() if root.is_dir() else []:
+            for m in (d / "results", d):
+                if (m / "meta.env").is_file():
+                    marks.setdefault(d.name, _meta(m).get("MARK", DEFAULT_MARK))
+    return marks
+
+
+def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, since: list[str] | None = None,
+           report: list[str] | None = None) -> str:
     text = weights_txt.read_text(encoding="utf-8").splitlines()
     if MARK not in text:
         raise SystemExit(f"{weights_txt}: no line {MARK!r}")
     head = text[: text.index(MARK) + 1]
-    old = dict(weights.load_lines(text[text.index(MARK) + 1:]))
+    gen = text[text.index(MARK) + 1:]
     hand = weights.load_lines(head)
-    keep = {ln.split()[0] for ln in head if "keep" in ln.split("#", 1)[0].split()[2:]}
+    old = {}
+    for ln in gen:
+        b = ln.split("#", 1)[0].split()
+        if b:
+            old[b[0]] = (int(b[1]), " ".join(b[2:]))
+    weights.load_lines(gen)   # the same format check as the pod's
+    units, flat = read_units(aggs, Since(since or []))
+    w: list[str] = []
+
+    test_m: dict[str, tuple[int, str]] = {}
+    killed: set[str] = set()
+    for u in units:
+        if u.rc in ("98", "137"):
+            killed.update(u.ids)
+        if u.alone and (u.ids[0] not in test_m or u.mib > test_m[u.ids[0]][0]):
+            test_m[u.ids[0]] = (u.mib, u.run)
+
+    best: dict[str, tuple[int, str]] = {}
+    low: dict[str, tuple[int, str, str]] = {}
+    marks: dict[str, set[str]] = {}
+    for f, (mib, run, mark) in flat.items():
+        best[f] = (mib, run)
+        marks.setdefault(f, set()).add(mark)
+    for u in units:
+        f = u.ids[0].split("::")[0]
+        if u.rc == "98":
+            w.append(f"killed three times, no peak: {u.run} {u.name} {f}")
+            continue
+        if u.mib <= 0:
+            continue
+        covered = [max(g for e, g in hand if weights._matches(e, t)) for t in u.ids if _hand_covered(t, hand)]
+        if len(covered) == len(u.ids):
+            if gb(u.mib) > max(covered):
+                w.append(f"hand-kept ids peaked at {gb(u.mib)} GB{' (rc 137: at least)' if u.rc == '137' else ''}, "
+                         f"above their largest hand-kept weight {max(covered)} GB: {u.run} {u.name} {u.ids[0]}")
+            continue
+        if not u.alone and all(_hand_covered(t, hand) or (t in test_m and _lineable(t)) for t in u.ids):
+            continue
+        marks.setdefault(f, set()).add(u.mark)
+        d = low if u.rc == "137" else best
+        if f not in d or u.mib > d[f][0]:
+            d[f] = (u.mib, u.run) if u.rc != "137" else (u.mib, u.run, u.name)
+    for f, (mib, run, name) in sorted(low.items()):
+        if f not in best or gb(mib) > gb(best[f][0]):
+            have = f"{gb(best[f][0])} GB" if f in best else "no measured peak"
+            w.append(f"rc 137 lower bound {gb(mib)} GB above the file's {have}; the line takes the bound, "
+                     f"the real peak may be higher (a hand-kept line or a rerun): {f} ({run} {name})")
+            best[f] = (mib, run)
+
+    changes: list[tuple[int, int, str]] = []
+    new_head = []
+    for ln in head:
+        b = ln.split("#", 1)[0].split()
+        if len(b) < 2 or not b[1].isdigit():
+            new_head.append(ln)
+            continue
+        e, g = b[0], int(b[1])
+        if "::" in e:
+            got = [v for t, v in test_m.items() if weights._matches(e, t)]
+            m = max(got) if got else None
+            frozen = "keep" in b[2:] or any(weights._matches(e, t) for t in killed)
+        else:
+            m, frozen = best.get(e), "keep" in b[2:]
+        n = new_value(g, None if m is None else gb(m[0]))
+        if frozen and n < g:
+            n = g
+        if n == g:
+            new_head.append(ln)
+        else:
+            changes.append((g, n, e))
+            new_head.append(f"{e:<74} {n} {m[1]}")
+
     hand_entries = {e for e, _ in hand}
-    per_test: dict[str, tuple[int, int, str]] = {}
-    best, w = measure(aggs, hand, per_test)
-    rows = [(gb(m), f, r) for f, (m, r) in best.items() if f not in hand_entries]
-    rows.sort(key=lambda x: (-x[0], x[1]))
-    for g, f, _ in rows:
-        if f in old and g < old[f]:
-            w.append(f"lower than before: {f} {old[f]} -> {g} GB")
-    new = {f for _, f, _ in rows}
-    for f in sorted(e for e in set(old) - new - hand_entries if "::" not in e):
-        w.append(f"no longer measured, dropped: {f} (was {old[f]} GB); pass the agg.txt that measured it")
-    file_gb = {f: g for g, f, _ in rows}
-    tests = []
-    for t, (_, m, r) in sorted(per_test.items()):
+    cited = _cited_marks(aggs)
+    files: dict[str, tuple[int, str]] = {}
+    for e, (g, cite) in old.items():
+        if "::" in e:
+            continue
+        m = best.get(e)
+        if m is None:
+            files[e] = (g, cite)
+            continue
+        mg = gb(m[0])
+        if mg > g:
+            files[e] = (mg, m[1])
+        elif _covers(marks.get(e, set()), cited.get(cite.split()[0] if cite else "")):
+            n = new_value(g, mg)
+            files[e] = (n, m[1]) if n != g else (g, cite)
+        else:
+            files[e] = (g, cite)
+        if files[e][0] != g:
+            changes.append((g, files[e][0], e))
+    for f, (mib, run) in best.items():
+        if f not in files and f not in hand_entries:
+            files[f] = (gb(mib), run)
+
+    tests: dict[str, tuple[int, str]] = {}
+    for e, (g, cite) in old.items():
+        if "::" in e:
+            m = test_m.get(e)
+            tests[e] = (g, cite) if m is None else (new_value(g, gb(m[0])), m[1] if new_value(g, gb(m[0])) != g else cite)
+            if tests[e][0] != g:
+                changes.append((g, tests[e][0], e))
+    for t, (mib, run) in test_m.items():
         f = t.split("::")[0]
-        if "#" in t or len(t.split()) != 1:   # weights.txt cannot hold it: the file's line weighs it
+        if t in tests or _hand_covered(t, hand) or not _lineable(t) or f not in files:
             continue
-        if f in file_gb and gb(m) <= file_gb[f] - PER_TEST_MARGIN_GB and not _hand_covered(t, hand):
-            tests.append(f"{t} {gb(m)} {r}")
-            before, what = (old[t], "its own line") if t in old else (old.get(f), "its file's line")
-            if before is not None and gb(m) < before:
-                w.append(f"per-test line lower than before ({what}): {t} {before} -> {gb(m)} GB")
-    for e, g in hand:
-        if "::" not in e or e in keep:
-            continue
-        got = [(gb(m), n, r) for t, (n, m, r) in per_test.items() if weights._matches(e, t)]
-        if got and max(got)[0] <= g - PER_TEST_MARGIN_GB:
-            m, _, r = max(got)
-            w.append(f"hand-kept line {g} GB above its test's own peak {m} GB (passed alone, {r}): {e}")
+        tests[t] = (floor_gb(gb(mib)), run)
+        changes.append((files[f][0], tests[t][0], t))
+
+    def kept(t: str, v: int) -> bool:
+        fg = files.get(t.split("::")[0])
+        return fg is None or not (fg[0] - PER_TEST_MARGIN_GB < v <= fg[0])
+    tests = {t: v for t, v in tests.items() if kept(t, v[0])}
+    changes = [c for c in changes if "::" not in c[2] or c[2] in tests or c[2] in hand_entries]
+
+    down = sorted(((o - n, o, n, e) for o, n, e in changes if n < o), key=lambda x: (-x[0], x[3]))
+    rep = [f"REDUCED {e} {o} -> {n} GB" for _, o, n, e in down[:20]]
+    rep.append(f"changed: {len(down)} down, {sum(1 for o, n, _ in changes if n > o)} up")
+    if report is not None:
+        report.extend(rep)
     if warn is not None:
         warn.extend(w)
-    else:
+    if report is None and warn is None:
+        for line in rep:
+            print(line, file=sys.stderr)
         for line in w:
             print(f"WARNING: {line}", file=sys.stderr)
-    return "\n".join(head + [f"{f} {g} {r}" for g, f, r in rows] + tests) + "\n"
+    rows = sorted(((g, f, c) for f, (g, c) in files.items()), key=lambda x: (-x[0], x[1]))
+    body = [f"{f} {g} {c}".rstrip() for g, f, c in rows] + [f"{t} {g} {c}".rstrip() for t, (g, c) in sorted(tests.items())]
+    return "\n".join(new_head + body) + "\n"
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
+    since = []
+    while argv[:1] == ["--since"] and len(argv) > 1:
+        since.append(argv[1])
+        argv = argv[2:]
+    if len(argv) < 2 or any(a.startswith("--") for a in argv):
         print(__doc__, file=sys.stderr)
         return 2
-    sys.stdout.write(render(Path(argv[0]), [Path(a) for a in argv[1:]]))
+    sys.stdout.reconfigure(newline="\n")   # LF on Windows too, as the tracked file
+    sys.stdout.write(render(Path(argv[0]), [Path(a) for a in argv[1:]], since=since))
     return 0
 
 
