@@ -382,7 +382,7 @@ def test_snap_capture_keys_by_sha_and_table_key_and_writes_fetch_and_store(tmp_p
     # snapstop, before ALL_DONE (the lock is released on exit).
     lines = run.splitlines()
     at = lambda pre: next(i for i, x in enumerate(lines) if x.startswith(pre))   # noqa: E731
-    assert (at('snaplock "$L"') < at("if mountpoint -q /vol") < at("snapgate ") < at("uv run --frozen")
+    assert (at('snaplock "$L"') < at("if mountpoint -q /vol") < at('snapgate 88 "$W') < at("uv run --frozen")
             < at('snapstop "$W/times.txt"') < at('if [ "$rc" = 0 ] && mountpoint') < at("echo ALL_DONE"))
     with tarfile.open(o / "payload.tar") as t:
         assert "cache_sync.sh" in t.getnames()
