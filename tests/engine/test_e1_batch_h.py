@@ -86,11 +86,13 @@ def test_future_sight_law_is_classes_where_acid_rain_can_write(tables, names, fo
     assert _law(tables, s, acts, 1) == hit_class_law([_accuracy(tables, names)])
 
 
-def _fog_chase(tables, names, mask=0x8000):
-    """The foe's 1 HP Geodude (battler 1) switches to the Geodude behind it while the player's
-    Pursuit chases it, on ``mask``; a Future Sight of the player's is due on battler 1."""
+def _fog_chase(tables, names, mask=0x8000, hp=1):
+    """The foe's Geodude (battler 1, ``hp`` HP, None: full) switches to the Geodude behind it
+    while the player's Pursuit chases it, on ``mask``; a Future Sight of the player's is due on
+    battler 1."""
     s = _pursuit_fight(tables, names, ("Pursuit",), ("Growl",))
-    s = _pending(_masked(s.replace_hp(1, 0, 1), mask, 0), names, 1, 0)
+    s = s if hp is None else s.replace_hp(1, 0, hp)
+    s = _pending(_masked(s, mask, 0), names, 1, 0)
     return s, A("Pursuit", MOVE_ACTIONS + 1, s, names)
 
 
@@ -99,20 +101,25 @@ def test_future_sight_law_on_deep_fog_covers_the_acid_rain_gravity(tables, names
     off; the turn end's count leaves 6, bcp.c:1229), so the hit reads x10/6 (bcp.c:2972-2974);
     no KO leaves the fog (x6/10, :2934); a newcomer's weather ability would clear the fog. Law
     over {a*6//10, a, a*10//6}: vanilla [1, 55, 91] / [54, 36, 10]. The step lands every roll
-    after the KO and only rolls up to a*6//10 after a miss; each roll steps as its class."""
+    after the KO and only rolls up to a*6//10 without it; each roll steps as its class. The chase
+    has no accuracy check (subscript_pursuit.s:7-17: TryPursuit, CalcCrit, CalcDamage,
+    ApplyTypeEffectiveness, no CheckMoveHit), so the no-KO row is a full-HP switcher."""
     a = _accuracy(tables, names)
     s, acts = _fog_chase(tables, names)
     assert _law(tables, s, acts, 1) == hit_class_law([a * 6 // 10, a, a * 10 // 6])
-    thr, ok, _ = future_thresholds(tables, s, acts)
-    for pursuit_hits, lands in ((1, lambda u: True), (0, lambda u: u <= a * 6 // 10)):
-        base = _hits()._replace(hit=_hits().hit * pursuit_hits)
+    for hp, lands in ((1, lambda u: True), (None, lambda u: u <= a * 6 // 10)):
+        s, acts = _fog_chase(tables, names, hp=hp)
+        thr, ok, _ = future_thresholds(tables, s, acts)
+        # The baseline's hit roll 0 always misses (step._future_sight: ``roll > 0``); the
+        # default roll 1 lands in every class.
+        base = _hits()._replace(future_hit=jnp.zeros((2,), jnp.int8))
         missed = assert_matches_reference(tables, s, acts, base)
-        assert int(missed.hp[1, 0]) == (0 if pursuit_hits else 1)
+        assert (int(missed.hp[1, 0]) == 0) is (hp == 1)
         assert int(missed.active[1]) == 1 and int(missed.hp[1, 1]) > 5  # survives the hail
         for u in (a * 6 // 10, a * 6 // 10 + 1, a, a + 1, 100):
             o = base._replace(future_hit=jnp.asarray([0, u], jnp.int8))
             out = assert_matches_reference(tables, s, acts, o)
-            assert (int(out.hp[1, 1]) == int(missed.hp[1, 1]) - 5) is lands(u), (pursuit_hits, u)
+            assert (int(out.hp[1, 1]) == int(missed.hp[1, 1]) - 5) is lands(u), (hp, u)
             c = int(hit_class(u, thr[1], ok[1]))
             if c != u:
                 o_c = o._replace(future_hit=jnp.asarray([0, c], jnp.int8))
@@ -142,14 +149,17 @@ def test_future_sight_law_under_kaizo_gravity_follows_the_acid_rain_write(tables
     """T3. Kaizo's Gravity rule (``gravity_rearm``, sub_seq 238, G-67) on 0x1000 (Gravity 1): no
     KO keeps it on (the count ends and re-arms, bcp.c:1227-1238), a KO of the switcher leaves
     0x0FFF (Gravity off). Law over {a, min(a*10//6, 100)}: roll a + 1 misses after the KO and
-    lands without it. (The vanilla rule ends that Gravity: ``loose``.)"""
+    lands without it. Under Gravity Pursuit (accuracy 100) cannot miss (hitRate * 10 / 6,
+    bcp.c:2972-2978), so the no-KO row is a full-HP switcher, not a missed Pursuit. (The vanilla
+    rule ends that Gravity: ``loose``.)"""
     t = _rearming(tables, "gravity_rearm")
     a = _accuracy(t, names)
     assert a < 100
     s, acts = _fog_chase(t, names, 0x1000)
     assert _law(t, s, acts, 1) == hit_class_law([a, min(a * 10 // 6, 100)])
-    for pursuit_hits, lands in ((1, False), (0, True)):
-        base = _hits()._replace(hit=_hits().hit * pursuit_hits)
+    for hp, lands in ((1, False), (None, True)):
+        s, acts = _fog_chase(t, names, 0x1000, hp)
+        base = _hits()
         left = []
         for u in (0, a + 1):
             o = base._replace(future_hit=jnp.asarray([0, u], jnp.int8))
