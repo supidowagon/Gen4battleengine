@@ -443,6 +443,16 @@ def test_tag_enemy_on_two_partner_maps_raises():
         battle_structures({"A": [Op("StartTagBattle", (3, 40, 41))], "B": walk}, {"B": {40}})
 
 
+@pytest.mark.parametrize("unknown_partner", [False, True])
+def test_enemy_on_two_walk_maps_with_different_partners_raises(unknown_partner):
+    # Each map's script sets its own VAR_PARTNER_TRAINER_ID (scrcmd_trainer.c:133-135):
+    # which partner walks when 50 is fought is not in the scripts.
+    a = [Op("SetVar", (PARTNER_VAR, 9)), Op("SetHasPartner", ())]
+    b = [Op("SetVar", (PARTNER_VAR, 10)), Op("SetHasPartner", ())]
+    with pytest.raises(ValueError, match=r"trainer 50 .*maps \['A', 'B'\].*\[\[9\], \[10\]\]"):
+        battle_structures({"A": a, "B": b}, {"A": {50}, "B": {50}}, unknown_partner=unknown_partner)
+
+
 @pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")
 def test_var_ids():
     ids = var_ids(DECOMP)

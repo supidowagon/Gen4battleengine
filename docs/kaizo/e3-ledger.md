@@ -117,9 +117,9 @@ by each split, replacing option A's upper bound.
   removed from data/kaizo/start_conditions.json.
 - The four Gardenia Eterna Forest rows (202, 203, 411, 413): no source pairs them (ROM sight
   pairing only runs on a calc/sheet claim; calc singles; sheet solo spots). They stay four
-  battles. Open rule question for the managing session: encounter.c:730-740 gives a lone
-  enemy beside a walking partner BATTLE_TYPE_TRAINER (not a tag battle), while K2a Ruling 3
-  makes every enemy on a partner map `multi`.
+  battles. Rule question (encounter.c:730-740 gives a lone enemy beside a walking partner
+  BATTLE_TYPE_TRAINER, while K2a Ruling 3 made every enemy on a partner map `multi`): settled
+  by E3-B2-34 (the four are singles).
 - Totals: 387 battles (275 singles, 37 doubles, 32 two-trainer, 43 multi); union 520.
 
 ## Batch 6: join safety and wording (2026-11-14)
@@ -213,8 +213,13 @@ Each is open; close it with its ruling.
    for a battler that receives Slow Start (ability 112). Not modelled: Slow Start is an
    unsupported ability, so no battler holds it. Model these lines with the Slow Start group.
 
-9. Walking-partner heal: a won fight whose row has `walking_partner` fully heals the party
-   (encounter.c:197-199). The next fight's start state is full HP/PP/status. E4-P prep consumes it.
+9. Walking-partner heal: a row with `walking_partner` is placed on a map whose script can set the
+   partner, so it may be fought under the partner flag. `SetHasPartner` runs only in the escort's own
+   script (Eterna Forest: coord event `EternaForest_CoordEvent_CherylStartFollowing`,
+   scripts_eterna_forest.s:27, reaching `SetVar VAR_PARTNER_TRAINER_ID` / `SetHasPartner` at :57-58;
+   `ClearHasPartner` at :90, :209). The post-win full heal (encounter.c:197-199) applies only while the
+   escort is active, which is a run input, not a table fact. E4-P prep consumes it: with the escort
+   active, the next fight's start state is full HP/PP/status.
 10. Sight-pair setting: whether to engage a walk-map or off-map lone trainer together with a neighbour
    who can see the same step (VS2, trainer_encounter.c:94-106) is a play choice (manager ruling 21 Nov).
    Add it as a run setting: default single; a pair gives multi beside the walking partner (or
@@ -1632,10 +1637,14 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   (:736-737), else BATTLE_TYPE_TRAINER (:738-739); trainerIDs[1] = e1, [3] = e2, [2] = partner (:751-753).
   `Trainer_Encounter` ORs the header type of the last trainer it loads (trainer_data.c:31-50): with e2 = 0 and a
   walking partner that is the partner, and every partner header is type 0. So a lone enemy, talked to
-  (scripts_battles.s:8-37, `StartTrainerBattle VAR_0x8004` at :37) or spotted alone (trainer_encounter.c:99-101 ->
-  scripts_battles.s:131-142), is TRAINER | the partner's header type: a single (two battlers; Cheryl's party is built
-  and unused). A scripted pair, a tag, or a sight pair (VS2, trainer_encounter.c:94-106; `hasTwoAliveMons` forced
-  TRUE under the flag, field_control.c:181-186; scripts_battles.s:192-213) is multi. Contrast, off a walk map: 846
+  (scripts_battles.s:8-37, `StartTrainerBattle VAR_0x8004` at :37) or spotted alone with a single header
+  (trainer_encounter.c:99-101 -> scripts_battles.s:131-142), is TRAINER | the partner's header type: a single (two
+  battlers; Cheryl's party is built and unused). A lone enemy whose own header is double and that spots the player is
+  fought with its own map object twice (trainer_encounter.c:110-125), e1 == e2, TRAINER_DOUBLES (encounter.c:736-737),
+  the enemy loaded last (trainer_data.c:50): a double. Talked to, the same enemy is a single. The code
+  (`lone_walk_formats`) picks the spotted case: double when the enemy's own header (or the partner's) is double, else
+  single; Kaizo 561 Perdita (header double, placed on 264 beside Buck 611) is double in the ROM-level table. A scripted pair, a tag, or a sight pair (VS2, trainer_encounter.c:94-106; `hasTwoAliveMons` forced
+  TRUE under the flag, src/overlay005/field_control.c:181-186; scripts_battles.s:192-213) is multi. Contrast, off a walk map: 846
   Worker Conrad (header double, fought alone) is TRAINER | its own header (the enemy is the last one loaded,
   trainer_data.c:50), so double; ours stands. After a won fight with the flag set `Party_HealAllMembers` runs
   (encounter.c:197-199, in `FieldTask_Encounter` :160; the trainer path through `StartEncounter` :223).

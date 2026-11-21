@@ -217,8 +217,10 @@ class Trainer:
     None: a partner is present but the scripts do not say which, Kaizo only) from the field
     scripts (``tools/battle_scripts.py``). ``opponent_2`` is the other
     enemy of a two-trainer or tag battle, else None. ``walking_partner`` is the trainer ids
-    of the walking partner the fight is fought beside, the flag that heals the party after a
-    won battle (``encounter.c:197-199``); empty off a walking-partner map.
+    of the walking partner a map's script can set where the trainer is placed: the fight may
+    be fought under the partner flag. The post-win heal (``encounter.c:197-199``) applies
+    only while the escort is active (``SetHasPartner`` runs in its own script, e.g.
+    ``scripts_eterna_forest.s:57-58``), a run input; empty off a walking-partner map.
 
     Kaizo fields (plan K2b Task 14; all defaulted to vanilla's reading): ``label`` names
     one of several trainers sharing a name; ``pid_routine`` is "vanilla" when

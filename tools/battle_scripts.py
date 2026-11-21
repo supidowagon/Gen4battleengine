@@ -309,9 +309,11 @@ def battle_structures(
     The same structure seen twice (a pair fought from two scripts, a script shared by
     several headers) is one structure. A trainer claimed by two different pairs, two
     different tag battles, two different partners, or a tag battle and anything else
-    raises ``ValueError`` naming it; with ``unknown_partner``, tag or walking claims that
-    agree on the other enemy but not on the partner (Kaizo's Lake Verity: a tag battle per
-    player gender on a walking-partner map) give "multi" with partner ``None``. A pair claim
+    raises ``ValueError`` naming it; with ``unknown_partner``, tag claims (beside at
+    most one walking claim) that agree on the other enemy but not on the partner (Kaizo's
+    Lake Verity: a tag battle per player gender on a walking-partner map) give "multi" with
+    partner ``None``. A trainer placed on two walking-partner maps with different partners
+    raises, ``unknown_partner`` or not. A pair claim
     beside a tag claim is a disagreement about the format, not the partner, and still
     raises. A trainer in ``refused`` (trainer id -> reason; the Kaizo ROM reader's
     ``data/kaizo/battle_formats.json``) whose claims conflict gets format ``"unknown"``,
@@ -402,6 +404,14 @@ def battle_structures(
                     UNKNOWN_FORMAT, next(iter(others), None) if len(others) == 1 else None, None
                 )
                 continue
+            if len(walks) > 1:
+                # Each walk map's script sets its own VAR_PARTNER_TRAINER_ID; which one walks
+                # when this trainer is fought is not in the scripts.
+                maps = sorted({str(h) for c in walks for h in cs[c]})
+                raise ValueError(
+                    f"trainer {t} is placed on walking-partner maps {maps} with different "
+                    f"partners {[list(c[2]) for c in walks]}"
+                )
             if (
                 unknown_partner
                 and (tags or walks)

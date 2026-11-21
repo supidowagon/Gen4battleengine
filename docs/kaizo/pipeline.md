@@ -178,8 +178,11 @@ fight label prefix). No rebuild needed.
 - **Battle formats (10).** Single, double, two-trainer double or multi come from the ROM's
   field scripts. When PKCalc or the sheet pairs two trainers that the scripts do not, and both
   stand on the same map, they are a sight pair (both see you in one step): a two-trainer
-  double. On a walking-partner map a lone enemy is a single (or double, by the partner's
-  header) and a sight pair is a multi with the partner. Coverage refuses every non-single
+  double. On a walking-partner map a lone enemy talked to is a single (scripts_battles.s:37,
+  trainer_data.c:50), and one whose own header is double is a double when it spots you
+  (trainer_encounter.c:110-125, encounter.c:736-737). The tables take the spotted case:
+  double when the enemy's header is double (Kaizo 561 in the ROM-level table), else single.
+  A sight pair there is a multi with the partner. Coverage refuses every non-single
   format.
 - **Rivals (11).** Each rival or partner fight is tied to the player's starter. With `--save`
   only the variant for your starter is used; without one, a rival fight needs `--save` or
