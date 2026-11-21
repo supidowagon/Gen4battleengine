@@ -3368,7 +3368,7 @@ def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> Ba
     return _set(state, "hp", (side, mon), jnp.minimum(hp + heal, max_hp), on)
 
 
-def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
+def entry_hazards(tables: Tables, state: BattleState, side) -> tuple[BattleState, jnp.ndarray]:
     """subscript_hazards_check.s on ``side``'s active Pokemon as it switches in, skipped whole
     for a Magic Guard holder (:5, CheckAbility):
 
@@ -3380,7 +3380,12 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
       Safeguard is an unsupported move).
     * Spikes (:31, ``damage.spikes_loss``) on a grounded newcomer with HP, then Stealth Rock
       (:41, ``damage.stealth_rock_loss``) on one with HP, whatever its grounding; each capped at
-      its HP."""
+      its HP.
+
+    Returns ``(state, stopped)``: ``stopped`` is MOVE_STATUS_NO_MORE_WORK of the Toxic Spikes
+    block (Immunity, or Leaf Guard in sun without a weather lock, plain ability:
+    subscript_poison.s:5-10, :127; subscript_badly_poison.s:5-10, :140). The caller's move action
+    owns the skip (E3-B2-32)."""
     fmt = format_of(state)
     from nuzline.engine.ids import ITEM_ABILITY_IDS
 
@@ -3433,7 +3438,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     # subscript_hazards_check.s: each through UPDATE_HP (B13-17; replace() clears the flag of a
     # turn-end replacement, SetupNextTurn).
     state = hp_update(state, side, mon, -spikes, spikes > 0)
-    return hp_update(state, side, mon, -rock, rock > 0)
+    return hp_update(state, side, mon, -rock, rock > 0), stopped
 
 
 class MoveHit(NamedTuple):

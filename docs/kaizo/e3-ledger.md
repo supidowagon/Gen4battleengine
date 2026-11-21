@@ -1746,3 +1746,22 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   (c) Review of 7c07c614: the brute force (`outcome_laws(loose=True)`) also draws every bit when any battler's
   `recycle_item` is a Quick Claw (`order.qc_recycle`), so it stays a superset of the exact law with no holder left
   (test_quick_claw.py::test_a_flung_quick_claw_recycle_turn_equals_the_bruteforce, slow, failed before the fix).
+- E3-B2-32 `effects.entry_hazards` returns `(state, stopped)`: `stopped` is MOVE_STATUS_NO_MORE_WORK of the Toxic
+  Spikes block (subscript_hazards_check.s:5-28; subscript_poison.s:5-10 -> :127, subscript_badly_poison.s:5-10 -> :140):
+  not Magic Guard, grounded, layers, not a Poison type (battle_script.c:7643-7647), and the plain Immunity or Leaf Guard
+  in sun without a weather lock (battle_script.c:9195-9206), tested before any status, type, substitute or Safeguard
+  test. Reference `_entry_hazards` returns the same bool. `step._send_out` returns the pair; Roar's drag
+  (`drag_stopped`) and `_act`'s list (`entry_stopped`) keep it for E2 D6-21 / D6-20; `replace`, `replace_round`,
+  `hooks.on_switch_in` and the reference `_switch`, `ref_replace`, `ref_replace_round` drop it. No behaviour change;
+  snapshot: no divergence. Tests: tests/engine/test_e3_nmw.py (the flag in both engines, Leaf Guard in sun, Immunity,
+  a burned Leaf Guard newcomer, controls without sun and under Cloud Nine).
+- E3-B2-33 Thunder Wave on a 0x chart (BattleControllerPlayer_CheckTypeChart, bcp.c:2350-2357: the only power-0 move
+  it takes; MOVE_STATUS_INEFFECTIVE, battle_lib.c:7551-7552; DID_NOT_HIT -> subscript_missed.s, LOOP_FAINTED,
+  bcp.c:3325-3328) has no AfterMoveEffects and NO_EFFECTS: `step` `tw_immune` (STATUS_FOE, `move_param[m, 1]`, chart 0
+  or `ground_immune`) ends `items_full`; reference `full = full or tw_immune`. Before: only the paralysis was blocked
+  (`play_hit` `type_ok`). The defender's conversion2 record is cleared (bcp.c:4531-4535), so its Conversion 2 fails; a
+  held Metronome's repeat count drops (battle_lib.c:6181-6197). noEffect (bcp.c:2367-2368) not modelled: its readers
+  need an Uproar / Thrash lock (bcp.c:1525, :1551). Snapshot: conv2 fields of a Thunder Waved Ground defender, its
+  later Conversion 2, and metronome_turns of a Metronome holder repeating Thunder Wave into Ground; item order within
+  the action only. Tests: tests/engine/test_e3_nmw.py (E1 sheet T3 and a landing control).
+  TABLE INPUT: yes (src/nuzline/engine and src/nuzline/reference changed).

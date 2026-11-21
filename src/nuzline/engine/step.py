@@ -824,22 +824,27 @@ def _send_out(
     baton=False,
     trace_pick=None,
     speed_order=None,
-) -> BattleState:
+) -> tuple[BattleState, jnp.ndarray]:
     """A switch action, or Roar's drag (``_use_move``): ``_switch_out``, ``_switch_in``, the
     entry hazards, then (``effects``, static ``False`` or a traced flag) the rest of
     ``hooks.on_switch_in`` (Trace, weather, Intimidate, berries). The party list of a U-turn or
     Baton Pass runs only the hazards (subscript_show_party_list.s:22; the rest comes at
-    ``_use_move``'s ``TRIGGER_SWITCH_IN_EFFECTS``, as Roar's drag does)."""
+    ``_use_move``'s ``TRIGGER_SWITCH_IN_EFFECTS``, as Roar's drag does). Also returns `effects.entry_hazards`' `stopped` (the newcomer's Toxic
+    Spikes block)."""
     entered = _switch_in(tables, _switch_out(state, side), side, slot, state.turn + 1, baton)
-    hazards = entry_hazards(tables, entered, side)
+    hazards, stopped = entry_hazards(tables, entered, side)
     if effects is False:
-        return hazards
+        return hazards, stopped
     if format_of(state).B == 4:  # D3-13: the states over the action's order
         order = jnp.arange(4) if speed_order is None else speed_order
-        return _where(
-            effects, _entry_states(tables, hazards, side, order, None, trace_pick), hazards
+        return (
+            _where(effects, _entry_states(tables, hazards, side, order, None, trace_pick), hazards),
+            stopped,
         )
-    return _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
+    return (
+        _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards),
+        stopped,
+    )
 
 
 def _alive_mask(state: BattleState) -> jnp.ndarray:
@@ -2064,7 +2069,10 @@ def _use_move(
     roar_failed = (roar & ~dragged) | anchored
     drag_slot = roar_slot(eligible, outcome.roar_target[side])
     pre_drag = state
-    state = _where(dragged, _send_out(tables, state, target_side, drag_slot, effects=False), state)
+    sent, drag_stopped = _send_out(tables, state, target_side, drag_slot, effects=False)  # noqa: RUF059
+    # drag_stopped: the newcomer's Toxic Spikes block (effects.entry_hazards), valid only where
+    # ``dragged``; E2 D6-21 reads it (no_more_work |= dragged & drag_stopped, E3-B2-32).
+    state = _where(dragged, sent, state)
     # The drag's Toxic Spikes poisoned the newcomer (subscript_hazards_check.s:14-28): its status
     # subscript set SYSCTL_TRY_SYNCHRONIZE_STATUS with the newcomer, the new defender, as
     # sideEffectMon (BtlCmd_CheckToxicSpikes, battle_script.c:7640-7641; ruling G-13).
@@ -2148,6 +2156,18 @@ def _use_move(
         move_type,
         state.types[party(fmt, target_side), target],
         identified(tables, state, side, target_side),
+    )
+    # BattleControllerPlayer_CheckTypeChart (bcp.c:2350-2357) runs the chart for Thunder Wave, the
+    # only power-0 move it takes (move_param[m, 1], effect_map.TYPE_CHART_STATUS_MOVES): a 0x row
+    # (or LEVITATED / MAGNET_RISE, a Ground moveType only, battle_lib.c:2600-2608) is
+    # MOVE_STATUS_INEFFECTIVE (battle_lib.c:7551-7552), in DID_NOT_HIT: subscript_missed.s and
+    # LOOP_FAINTED (bcp.c:3325-3328), no AfterMoveEffects; NO_EFFECTS for conversion2 and the
+    # Metronome count (E3-B2-33).
+    tw_immune = (
+        connected
+        & (tables.move_effect[used] == EffectId.STATUS_FOE)
+        & (tables.move_param[used, 1] != 0)
+        & ((chart == 0) | ground_immune(tables, state, side, target_side, move_type))
     )
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, run hit, miss or Protect alike once the
     # move passed the no-target check, for a move with power that is not RANGE_USER /
@@ -2333,7 +2353,7 @@ def _use_move(
     rock = resumed & (state_in.ts_damaged != 0) & (outcome.flinch_item[side, 0] != 0)
     state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~tgt_moved)
     items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
-    items_full = items_full & ~baton_failed & ~guarded
+    items_full = items_full & ~baton_failed & ~guarded & ~tw_immune
     # Conversion 2 (subscript_conversion_2.s:5, :12-14): TryConversion2's failure jump sets
     # MOVE_STATUS_FAILED at the ON_HIT, so no AfterMoveEffects. The jump skips only the
     # subscript's own attack message: CheckMoveFailure (bcp.c:3311-3327) then runs
@@ -3255,7 +3275,10 @@ def _act(
     mode = jnp.asarray(mode, _I32)
     resumed = mode == MODE_RESUME
     baton = resumed & (tables.move_effect[state.ts_used] == EffectId.BATON_PASS)
-    entered = _send_out(
+    # entry_stopped: the newcomer's Toxic Spikes block; meaningful only where ``resumed`` (a U-turn's
+    # or Baton Pass's list); E2 D6-20 hands it to the resumed tail beside ``entry_poisoned``
+    # (E3-B2-32).
+    entered, entry_stopped = _send_out(  # noqa: RUF059
         tables,
         state,
         side,
@@ -5962,7 +5985,7 @@ def replace(
     fmt = format_of(state)
     entered = _switch_in(tables, state, side, slot, state.turn)
     effects = jnp.asarray(effects, bool)
-    hazards = entry_hazards(tables, entered, side)  # hooks.on_switch_in's first part
+    hazards, _ = entry_hazards(tables, entered, side)  # hooks.on_switch_in's first part
     arrived = _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
     out = _faint_check(tables, entered, arrived, entry_turn=state.turn)
     waits = ~effects & (out.hp[party(fmt, side), out.active[side]] > 0) & (out.over == 0)
@@ -6030,7 +6053,7 @@ def replace_round(tables: Tables, state: BattleState, picks, trace_pick=None) ->
     for b in range(fmt.B):
         has = picks[b] >= 0
         entered = _switch_in(tables, out, b, jnp.maximum(picks[b], 0), state.turn)
-        hazards = entry_hazards(tables, entered, b)
+        hazards, _ = entry_hazards(tables, entered, b)
         out = _where(
             has, _faint_check(tables, entered, hazards, entry_turn=state.turn, decide=False), out
         )

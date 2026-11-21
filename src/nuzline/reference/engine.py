@@ -3174,17 +3174,22 @@ def _big_root(turn: _Turn, s: RefState, side: int, heal: int) -> int:
     return heal * (_t(turn.tables, "item_param", mon.item, 0) + 100) // 100
 
 
-def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
+def _entry_hazards(turn: _Turn, s: RefState, side: int) -> bool:
     """``subscript_hazards_check.s``: nothing for Magic Guard (:5); a grounded newcomer (Gravity,
     or neither Levitate nor a Flying type, :6-11) meets Toxic Spikes (a Poison type absorbs them,
     one layer poisons, two badly poison: Immunity, Leaf Guard in sun, a status, Poison / Steel
     stop it; script.c:7629-7651, subscript_poison.s / _badly_poison.s:5-10) and Spikes
-    (``Divide(maxHP, (5 - layers) * 2)`` with HP left, script.c:5434-5436); then Stealth Rock."""
+    (``Divide(maxHP, (5 - layers) * 2)`` with HP left, script.c:5434-5436); then Stealth Rock.
+
+    Returns ``stopped``: MOVE_STATUS_NO_MORE_WORK of the Toxic Spikes block (Immunity, or Leaf Guard
+    in sun without a weather lock, plain ability: subscript_poison.s:5-10, :127;
+    subscript_badly_poison.s:5-10, :140). The caller's move action owns the skip (E3-B2-32)."""
     tables = turn.tables
     mon, sd = _active(s, side), s.battlers[side]
     sd_sc = s.sides[side_of(side)]
     if _ability(s, mon) == AbilityId.MAGIC_GUARD:
-        return
+        return False
+    stopped = False
     # CheckAbility reads Battler_Ability: an ingrained Levitate is none (lib.c:3100-3103); a
     # Baton Pass newcomer keeps the Ingrain (lib.c:2079).
     levitate = _ability(s, mon) == AbilityId.LEVITATE and not s.battlers[side].ingrain
@@ -3200,6 +3205,7 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
                 ability = _battler_decomp_ability(tables, s, mon)
                 leaf = ability == ITEM_ABILITY_IDS["Leaf Guard"] and _sunny(tables, s)
                 if ability == ITEM_ABILITY_IDS["Immunity"] or leaf:
+                    stopped = True
                     # "{0}'s {1} prevents poisoning!" (subscript_poison.s:80-82,
                     # _badly_poison.s:93-103): BattleAI_SetAbility (script.c:11806).
                     if _party(_fmt(s), side) == 0:
@@ -3218,6 +3224,7 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
         if sd_sc.spikes and mon.hp:
             _lose_hp(turn, s, side, _divide(mon.max_hp, (5 - sd_sc.spikes) * 2))
     _stealth_rock_damage(turn, s, side)
+    return stopped
 
 
 def _stealth_rock_damage(turn: _Turn, s: RefState, side: int) -> None:
@@ -6770,6 +6777,17 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         full = (effect == EffectId.RECOVER and user.hp == user.max_hp) or (
             heal and foe.hp == foe.max_hp > 0
         )
+        # BattleControllerPlayer_CheckTypeChart's Thunder Wave (bcp.c:2357): a 0x chart or a ground
+        # immunity is MOVE_STATUS_INEFFECTIVE, no AfterMoveEffects (bcp.c:3325-3328), E3-B2-33.
+        tw_immune = (
+            effect == EffectId.STATUS_FOE
+            and _t(tables, "move_param", move, 1) != 0
+            and (
+                _matchup_x40(tables, kind, foe.types, _identified(tables, s, side, tgt)) == 0
+                or _ground_immune(tables, s, side, tgt, kind)
+            )
+        )
+        full = full or tw_immune
         # subscript_swagger.s:7-8 (MOVE_STATUS_FAILED), and Dragon Dance with both stages at +6
         # (MOVE_STATUS_NO_MORE_WORK): CheckMoveFailure skips AfterMoveEffects (bcp.c:3312-3331).
         own, theirs = s.battlers[side].stages, s.battlers[tgt].stages
@@ -7028,7 +7046,8 @@ def _roar(turn: _Turn, s: RefState, side: int, foe: int) -> bool:
     _enter(turn, s, foe, slot)
     turn.dragged[foe] = slot + 1
     _send_out_exp(s, foe)  # PokemonSendOut BTLSCR_DEFENDER (:22)
-    _entry_hazards(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)
+    # drag_stopped: the newcomer's Toxic Spikes block, read by E2 D6-21 (E3-B2-32).
+    drag_stopped = _entry_hazards(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)  # noqa: F841
     # AfterMoveEffects: its Synchronize step (bcp.c:3665) before the switch-in effects (:3672).
     _synchronize(turn, s, side, foe)
     _switch_in_effects(turn, s, foe)
@@ -9271,7 +9290,9 @@ def _resume(
         out.status_counter = 0
     _enter(turn, s, side, actions[side] - MOVE_ACTIONS, baton)
     _send_out_exp(s, side)  # :18
-    _entry_hazards(turn, s, side)  # :22
+    # entry_stopped: the newcomer's Toxic Spikes block; E2 D6-20 hands it to the resumed tail
+    # beside entry_poisoned (E3-B2-32).
+    entry_stopped = _entry_hazards(turn, s, side)  # :22  # noqa: F841
     _faint_check(turn, s, decide=False)  # :23-24: no CheckBattleOver until MoveEnd (SF2 (a2))
     # AfterMoveMessage's King's Rock with the newcomer's item (bcp.c:4630-4650).
     o = turn.outcome
