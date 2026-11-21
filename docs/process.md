@@ -171,7 +171,11 @@ per day is the rate used for estimates.
   cache, no capture store). JAX keeps writing the pod's own cache; `tools/ops/day/pod/cache_sync.sh`
   seeds it from the volume at a run's setup and publishes new entries after the run
   (temp name then rename, each entry checked to decompress first), and is run once more before
-  a pod is deleted. Pruning on every publish: unused jax versions after 7 days, the cache
+  a pod is deleted. The cache on the volume is kept per jax version and per CPU (a host tag of
+  the CPU model and flags: the entries are compiled CPU programs and JAX's cache key does not
+  hold the CPU), so a pod seeds only programs compiled on an identical CPU. Every volume call
+  runs under a 900 s timeout, so a volume that does not answer never holds a run or a snapshot
+  job. Pruning on every publish: unused jax versions after 7 days, the cache
   capped at 20 GiB, the 10 newest captures kept. The volume is never deleted, shrunk or grown
   without the owner. Steps: DAYBOX.md, "Network volume".
 - **Pod runs.** Streams have no pod tool: a stream sends the run dispatcher session (below)

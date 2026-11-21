@@ -1107,7 +1107,7 @@ def test_run_sh_captures_after_a_timed_out_fetch_and_records_a_timed_out_store(p
     assert vt == ["fetch", "store"]
     assert not (a.dir / "snap" / "partial").exists() and not list(a.dir.glob(".snapfetch.*"))
     out = _text(a.dir / "run.out")
-    assert "timed out after 2 s (rc 124): captured instead" in out and "not stored" in out
+    assert "timed out after 900 s (rc 124): captured instead" in out and "not stored" in out
     assert not pod.lock.exists()
 
 

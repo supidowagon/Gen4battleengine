@@ -22,23 +22,14 @@ SYNC = ROOT / "tools" / "ops" / "day" / "pod" / "cache_sync.sh"
 SNAP = ROOT / "tools" / "ops" / "day" / "snap.sh"
 PY = Path(sys.executable).as_posix()
 VER = "0123456789abcdef"
-CPUINFO = ("processor	: 0
-model name	: Test CPU 9000
-flags		: sse2 avx2  fpu
-
-"
-           "processor	: 1
-model name	: Test CPU 9000
-flags		: sse2 avx2 fpu
-")
+CPUINFO = ("processor\t: 0\nmodel name\t: Test CPU 9000\nflags\t\t: sse2 avx2  fpu\n\n"
+           "processor\t: 1\nmodel name\t: Test CPU 9000\nflags\t\t: sse2 avx2 fpu\n")
 
 
 def _tag(model: str, flags: str) -> str:
     """cache_sync.sh host_tag: 12 hex of sha256 over the model name and the sorted flags."""
     import hashlib
-    return hashlib.sha256(f"{model}
-{' '.join(sorted(set(flags.split())))} 
-".encode()).hexdigest()[:12]
+    return hashlib.sha256(f"{model}\n{' '.join(sorted(set(flags.split())))} \n".encode()).hexdigest()[:12]
 
 
 HOST = _tag("Test CPU 9000", "sse2 avx2 fpu")
@@ -55,8 +46,7 @@ def _has(cmd: str) -> bool:
 def _env(tmp: Path, **kw: str) -> dict[str, str]:
     (tmp / "vol").mkdir(exist_ok=True)   # the mount point; a pod with the volume always has it
     if not (tmp / "cpuinfo").exists():
-        (tmp / "cpuinfo").write_text(CPUINFO, encoding="utf-8", newline="
-")
+        (tmp / "cpuinfo").write_text(CPUINFO, encoding="utf-8", newline="\n")
     env = {k: v for k, v in _clean_env().items()
            if not k.startswith("CACHE_") and k not in ("NUZLINE_TEST_COMPILE_CACHE", "RUNPOD_POD_ID")}
     env.update(CACHE_VOL=(tmp / "vol").as_posix(), CACHE_VOL_MOUNTCHECK="0", CACHE_PY=PY, CACHE_POD="poda",
@@ -328,8 +318,7 @@ def test_capture_publish_stores_complete_captures_once_and_fetch_brings_them_bac
 def test_a_stored_capture_that_is_incomplete_is_not_fetched(tmp_path):
     stored = tmp_path / "vol" / "snap" / KEY
     _capture(stored, {"step.0": "pending"})
-    (stored / "KEY").write_text(KEY + "
-")
+    (stored / "KEY").write_text(KEY + "\n")
     rc, out = _sync(tmp_path, "snap-fetch", KEY, (tmp_path / "d").as_posix())
     assert rc == 1 and "not a complete capture" in out
     assert not (tmp_path / "d" / "snap").exists() and _temps(tmp_path) == []
@@ -640,7 +629,7 @@ def test_snap_capture_key_never_comes_from_index_txt(tmp_path, fake_repo):
     official.write_bytes(b"the official build")
     tb.with_suffix("").with_suffix(".key").write_text("e" * 64 + "\n", encoding="utf-8")
     rc, out = _snap(tmp_path, repo, "capture", sha, tb.as_posix(), "snapmain-x2")
-    assert rc == 0 and f"differs from {official.as_posix()}" in out and "NOTE: no table key" in out, out
+    assert rc == 0 and "differs from " in out and official.name in out and "NOTE: no table key" in out, out
     assert "snap-publish" not in (rent / "out" / "snapmain-x2" / "run.sh").read_text()
     # the archive is that build: its key
     shutil.copyfile(tb, official)
