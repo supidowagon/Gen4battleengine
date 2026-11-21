@@ -836,10 +836,12 @@ def compare_speed(
     holders compare speeds reversed, the faster SLOWER, Trick Room ignored (:1412-1417). Else
     (Stall is unsupported) Trick Room reverses the speeds (:1432-1439). At equal speed each
     of these branches gives TIE when ``tie_roll`` (``RandNext() & 1``) is 1, else FASTER,
-    never SLOWER; the decomp draws that bit only there. The dead-battler short-circuit
-    (:1205-1211) is not part of this function, as it was not of ``player_second``; the
-    trainer AI compares at its decision, with both actives alive. A Custap Berry in its pinch
-    (``custap_active``) sets the same flag as an activated Quick Claw (:1288-1300)."""
+    never SLOWER; the decomp draws that bit only there. Before all of it the dead-battler
+    short-circuit (:1204-1211): ``battler1`` with no HP against a ``battler2`` with HP is
+    SLOWER, the reverse FASTER, so a fainted battler is last in the sort after the last action
+    (``BattleSystem_SortMonSpeedOrder``, :3364-3381; ``step.end_of_turn_order``), whatever its
+    Quick Claw or speed. A Custap Berry in its pinch (``custap_active``) sets the same flag as
+    an activated Quick Claw (:1288-1300)."""
     fmt = format_of(state)
     other = _foe(battler1) if battler2 is None else battler2
     speed = tuple(effective_speed(tables, state, b) for b in range(fmt.B))
@@ -859,6 +861,11 @@ def compare_speed(
     )
     lone_claw = jnp.where(claw2, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER)
     result = jnp.where(claw1 != claw2, lone_claw, jnp.where(claw1, by_speed, lagging))
+    alive1 = state.hp[party(fmt, battler1), state.active[battler1]] > 0
+    alive2 = state.hp[party(fmt, other), state.active[other]] > 0
+    result = jnp.where(
+        alive1 == alive2, result, jnp.where(alive1, COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER)
+    )
     return result.astype(_I32)
 
 
