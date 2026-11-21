@@ -176,8 +176,8 @@ grep '^+' "$SEL" | cut -f3 > "$SEL.keep"
 n_keep=$(wc -l < "$SEL.keep" | tr -d ' ')
 bytes=$(grep '^+' "$SEL" | awk -F'\t' '{ s += $2 } END { print s + 0 }')
 grep '^-' "$SEL" | grep -v $'\tdir:pruned\t' | grep -v $'\trent-run-file\t' > "$SEL.excl" || true
-for r in handoff manager e[0-9]* rent; do
-  [ -d "$SCRATCH/$r" ] || continue
+for r in "$SCRATCH"/handoff "$SCRATCH"/manager "$SCRATCH"/e[0-9]* "$SCRATCH"/rent; do
+  [ -d "$r" ] || continue; r=${r##*/}
   awk -F'\t' -v r="$r/" 'index($3, r) == 1 { n++; s += $2 } END { printf "  %-10s %5d files %10d bytes\n", r, n, s }' <(grep '^+' "$SEL")
 done
 echo "  excluded inside the allow-list (reason counts; rent run files and pruned cache/code folders not counted):"
