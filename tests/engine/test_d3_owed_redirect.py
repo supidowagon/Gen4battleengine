@@ -1,7 +1,8 @@
 """D3-16 (owes D2-21, D2-31): Lightning Rod / Storm Drain through the four-actor step. The redirect
-(``BattleSystem_CheckRedirectionAbilities``, battle_lib.c:1732-1790) and its message
-(``TriggerRedirectionAbilities``, :1792-1817; the AI records the holder's ability) only run without
-MOVE_STATUS_NO_EFFECTS (:1796, :1806; moves.h:85 = DID_NOT_HIT | NO_PP | NO_MORE_WORK). The holder
+(``BattleSystem_CheckRedirectionAbilities``, battle_lib.c:1732-1790, BeforeMove's REDIRECT_TARGET,
+bcp.c:3204-3206) has no MOVE_STATUS_NO_EFFECTS check; its message (``TriggerRedirectionAbilities``,
+:1792-1817; the AI records the holder's ability) runs only without it (:1796, :1806; moves.h:85 =
+DID_NOT_HIT | NO_PP | NO_MORE_WORK). The holder
 is battler 0 (the AI-record difference at battler 2, D3-17, is not met). Real CalcTurnOrder through
 ``play`` (engine equal to the reference, field for field)."""
 
@@ -39,15 +40,19 @@ def test_storm_drain_takes_a_single_target_water_move_and_is_recorded(tables, na
     assert int(out.ai_ability_known[int(out.active[0])]) == SD_ID
 
 
-def test_a_move_with_no_pp_neither_redirects_nor_records(tables, names):
+def test_a_move_with_no_pp_is_redirected_silently_and_records_at_the_holder(tables, names):
     """MOVE_STATUS_NO_PP (B10-9): battler 1 is Encored into Thunderbolt, whose slot has 0 PP, and
     the Encore takes over what it chose (FightCommand, bcp.c:1866-1883). The slot is the first of
     two Thunderbolts: Encore's selection (``actions.usable_moves``) leaves a 0-PP encored move no
     legal slot and Struggles, so a 0-PP takeover is reached only while another slot still holds the
-    move. The move fails at DecrementPP (bcp.c:2285): MOVE_STATUS_NO_PP is a NO_EFFECTS status
-    (moves.h:85), so no redirect (battle_lib.c:1796) and no SYSCTL_MOVE_SUCCEEDED (bcp.c:3208-3212);
-    subscript_no_pp.s prints the attack message and "no PP left" (bcp.c:3316-3319): no hit, no
-    ability message, no AI record, and movePrevByBattler = MOVE_NONE (bcp.c:3945-3949)."""
+    move. DecrementPP flags MOVE_STATUS_NO_PP and returns FALSE (bcp.c:2285-2297), so BeforeMove
+    still reaches REDIRECT_TARGET (bcp.c:3204-3206), which has no NO_EFFECTS check
+    (battle_lib.c:1732-1790): the holder becomes the defender. NO_PP is a NO_EFFECTS status
+    (moves.h:85): no SYSCTL_MOVE_SUCCEEDED (bcp.c:3208-3212), no TryMove, so no redirect message
+    (battle_lib.c:1796); subscript_no_pp.s prints the attack message and "no PP left"
+    (bcp.c:3316-3319): no hit, no AI record, movePrevByBattler = MOVE_NONE (bcp.c:3945-3949), and
+    UpdateFlagsWhenHit (bcp.c:4480-4486, SYSCTL_ATTACK_MESSAGE_SHOWN) writes moveCopied at the
+    holder, not at the chosen battler 2."""
     s = state(tables, names, AbilityId.LIGHTNINGROD, "Thunderbolt")
     s = with_moves(s, names, 1, ["Swords Dance", "Thunderbolt", "Thunderbolt"])
     slot1 = int(s.active[1])
@@ -58,3 +63,5 @@ def test_a_move_with_no_pp_neither_redirects_nor_records(tables, names):
     assert int(out.ai_ability_known[int(out.active[0])]) == int(s.ai_ability_known[0])
     assert int(out.pp[1, slot1, 1]) == 0
     assert int(out.last_move[1]) == 0
+    tbolt = names.move("Thunderbolt")
+    assert int(out.move_copied[0]) == tbolt and int(out.move_copied[2]) == 0

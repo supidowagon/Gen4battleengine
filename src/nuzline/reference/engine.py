@@ -6166,12 +6166,19 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         # after DecrementPP's MOVE_STATUS_NO_PP (below; E3-B2-11).
         if struggling or locked or mon.pp[action] != 0:
             _update_last_resort(s, side, move)
+    # DecrementPP's MOVE_STATUS_NO_PP returns FALSE (bcp.c:2285-2297): BeforeMove goes on through
+    # HasNoTarget (:3189-3194), CHECK_STOLEN (no reflect under NO_EFFECTS, :3069) and
+    # REDIRECT_TARGET (:3204-3206), whose BattleSystem_CheckRedirectionAbilities has no NO_EFFECTS
+    # check (battle_lib.c:1732-1790; only the message's Trigger has one, :1796). The move fails at
+    # BeforeMove's end (:3208-3209) against the redirected defender: UpdateFlagsWhenHit's moveCopied
+    # (bcp.c:4480-4486) is the holder's.
+    no_pp = False
     if not struggling and not locked:
         slot = action
         if mon.pp[slot] == 0:
-            turn.no_pp = True  # last_move stays MOVE_NONE (bcp.c:3208-3212, :3945-3949)
-            return record
-        mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, turn.defender, move), 0)
+            no_pp = turn.no_pp = True  # last_move stays MOVE_NONE (bcp.c:3208-3212, :3945-3949)
+        else:
+            mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, turn.defender, move), 0)
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306, :3190): BattleSystem_Defender found no
     # living foe for a move aimed at it. A RANGE_SINGLE_TARGET_SPECIAL move's defender is its
     # user (FightCommand bcp.c:1900; lib.c:1665-1669, ahead of the ``randomize`` branch), so it
@@ -6202,6 +6209,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     if redirected:
         turn.defender = turn.target_side = redirect_to
         _strip_roost(turn, s, turn.target_side)
+    if no_pp:  # subscript_no_pp.s: no script, no TryMove (so no redirect message, lib.c:1796)
+        return record
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
     # (Struggle's own id when struggling; Nature Power, moveTemp, for Nature Power) in
     # movePrevByBattler.
