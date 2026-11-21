@@ -1,20 +1,39 @@
-# POD SIDE, sourced by runner.sh: the start gate's arithmetic (tests/tools/test_pod_gate.py runs it
-# with a fake ps). Reads NO_W_FILE_GB, MAXP, GATE_GB, KILL_GB, IDLE_WAIT_S, CLAIMS, CLAIM_S from the caller.
+# POD SIDE, sourced by runner.sh, setup.sh, status.sh, agg.sh and podcheck.sh: the start gate's
+# arithmetic (tests/tools/test_pod_gate.py runs it with a fake ps) and the container memory reader.
+# Functions only. Reads NO_W_FILE_GB, MAXP, GATE_GB, KILL_GB, IDLE_WAIT_S, CLAIMS, CLAIM_S,
+# CLAIM_MAX_S, UNIT_MAX_S from the caller.
+
+# cgmem <current|max|peak>: container memory in bytes. cgroup v2 first (<CGROOT>/memory.current,
+# memory.max, memory.peak), else cgroup v1 (<CGROOT>/memory/memory.usage_in_bytes,
+# memory.limit_in_bytes, memory.max_usage_in_bytes): some rented hosts are v1. CGROOT defaults to
+# /sys/fs/cgroup. v2's memory.max reads "max" without a limit, v1's limit a value near 2^63.
+# Prints nothing and returns 1 when neither file is readable; callers fail closed.
+cgmem() { local r="${CGROOT:-/sys/fs/cgroup}" a b
+  case "$1" in current) a=memory.current; b=memory.usage_in_bytes;; max) a=memory.max; b=memory.limit_in_bytes;;
+    peak) a=memory.peak; b=memory.max_usage_in_bytes;; *) return 2;; esac
+  if [ -r "$r/$a" ]; then cat "$r/$a"; elif [ -r "$r/memory/$b" ]; then cat "$r/memory/$b"; else return 1; fi; }
+
+# unit_overdue <unit> <now>: the unit started (./<unit>.start, written by unit.sh) more than
+# UNIT_MAX_S s before <now>.
+unit_overdue() { local s; s=$(cat "$1.start" 2>/dev/null); case "$s" in ''|*[!0-9]*) return 1;; esac
+  [ $(( $2 - s )) -gt "$UNIT_MAX_S" ]; }
 
 # wgb <file>: a unit's expected peak in GB from its .w file; NO_W_FILE_GB (runner.sh's
 # DEFAULT_WEIGHT_GB, for units of runs packed before weights) when missing or not a number.
 wgb() { local w; w=$(cat "$1" 2>/dev/null); case "$w" in ''|*[!0-9]*) echo "$NO_W_FILE_GB";; *) echo "$w";; esac; }
 
-# podgate <run files>: "<live units> <reserve GB>" over the given run/<unit> files (each holds a
-# process group id; its weight is ../<unit>.w), from one ps snapshot. A unit is live while its group
-# has a member that is not a zombie; group ids 0 and 1 and malformed ids never count. Its reserve is
-# weight - group RSS (GB = 10^9 bytes) when positive. The reserve total is rounded up.
+# podgate <run files>: "<live units> <reserve GB>" over the given run/<unit> files (each holds the
+# pid of the unit's setsid bash, which becomes its process group id; its weight is ../<unit>.w),
+# from one ps snapshot. A unit is live while that pid exists and is not a zombie (a unit that has
+# not called setsid yet) or its group has a member that is not a zombie; ids 0 and 1 and malformed
+# ids never count. Its reserve is weight - group RSS (GB = 10^9 bytes) when positive. The reserve
+# total is rounded up.
 podgate() {
   local f
   { for f in "$@"; do [ -f "$f" ] || continue
       echo "U $(cat "$f" 2>/dev/null) $(cat "${f%/run/*}/${f##*/}.w" 2>/dev/null)"; done
-    ps -eo pgid=,stat=,rss= | awk '{print "P", $1, $2, $3}'; } | awk -v d="$NO_W_FILE_GB" '
-    $1 == "P" { if ($3 !~ /^Z/) live[$2] = 1; rss[$2] += $4; next }
+    ps -eo pid=,pgid=,stat=,rss= | awk '{print "P", $1, $2, $3, $4}'; } | awk -v d="$NO_W_FILE_GB" '
+    $1 == "P" { if ($4 !~ /^Z/) { live[$2] = 1; live[$3] = 1 }; rss[$3] += $5; next }
     $1 == "U" && $2 ~ /^[0-9]+$/ && $2 > 1 { n++; g[n] = $2; w[n] = ($3 ~ /^[0-9]+$/) ? $3 : d }
     END { for (i = 1; i <= n; i++) if (live[g[i]]) { c++; r = w[i] - rss[g[i]] * 1024 / 1e9; if (r > 0) t += r }
           printf "%d %d\n", c, (t == int(t)) ? t : int(t) + 1 }'
@@ -53,13 +72,16 @@ claim_write() { mkdir -p "$CLAIMS"; local t="$CLAIMS/.$1.$2.tmp"
   echo "$4 $3 ${CLAIM_PID:-$$}" > "$t" && mv -f "$t" "$CLAIMS/$1.$2"; }
 claim_drop() { rm -f "$CLAIMS/$1.$2"; }
 # claim_state <run>: "none" | "mine <unit>" | "other <run>.<unit>" for the oldest live claim;
-# deletes claims whose runner pid is dead (or a zombie) and malformed ones on the way.
+# deletes claims whose runner pid is dead (or a zombie), malformed ones, and claims older than
+# CLAIM_MAX_S (logged "<epoch> claim-expired <name> age <s> s" on stderr) on the way.
 claim_state() {
   local c n e w p best="" be=""
   for c in "$CLAIMS"/*; do [ -f "$c" ] || continue; n=${c##*/}
     read -r e w p < "$c" 2>/dev/null || { rm -f "$c"; continue; }
     case "$e" in ''|*[!0-9]*) rm -f "$c"; continue;; esac
     pidlive "$p" || { rm -f "$c"; continue; }
+    [ $(( ${NOW:-$(date +%s)} - e )) -gt "${CLAIM_MAX_S:-3600}" ] && { rm -f "$c"
+      echo "${NOW:-$(date +%s)} claim-expired $n age $(( ${NOW:-$(date +%s)} - e )) s" >&2; continue; }
     if [ -z "$best" ] || [ "$e" -lt "$be" ] || { [ "$e" -eq "$be" ] && [[ "$n" < "$best" ]]; }; then best=$n; be=$e; fi
   done
   if [ -z "$best" ]; then echo none
