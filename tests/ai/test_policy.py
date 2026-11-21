@@ -159,7 +159,7 @@ def test_item_gate_considers_slot_1_only_with_two_alive(tables, names):
 
 def test_no_item_under_embargo(tables, names):
     """trainer_ai.c:4076-4078: an Embargoed AI battler uses no item (``embargo``, B13-29); the
-    same state without Embargo is unchanged (a B = 2 change of E4-A W1, ledger E4-10)."""
+    same state without Embargo is unchanged (a B = 2 change of E4-A W1, ledger E4-11)."""
     s = trace_e(11)(tables, names)
     assert int(maybe_use_item(tables, s)) == 10  # bag slot 0
     assert int(maybe_use_item(tables, s._replace(embargo=s.embargo.at[1].set(3)))) == NO_ITEM
