@@ -143,7 +143,6 @@ def test_tag_move_and_ability_ids_are_the_decomps(kaizo_names, kaizo_manifest):
     n = kaizo_names
     moves = {
         "Skill Swap": "Skill Swap",
-        "Magnitude": "Bulldoze",
         "Future Sight": "Future Sight",
         "Doom Desire": "Doom Desire",
         "Rain Dance": "Rain Dance",
@@ -159,6 +158,7 @@ def test_tag_move_and_ability_ids_are_the_decomps(kaizo_names, kaizo_manifest):
     }
     for key, kaizo_name in moves.items():
         assert n.move_names[c.MOVE_IDS[key]] == kaizo_name, key
+    assert n.move_names[c.MOVE_MAGNITUDE] == "Bulldoze"
 
 
 def test_tag_site_n_is_the_scripts(kaizo_tables):

@@ -1219,9 +1219,7 @@ MOVE_IDS = {
     "Sleep Talk": 214,
     "Rest": 156,
     # E4-A0, TagStrategy_Main (script.s:6732-6752, :7215-7304); generated/moves.txt (line - 1).
-    # Kaizo's move on id 222 is Bulldoze: the script tests the id (ai:834-844).
     "Skill Swap": 285,
-    "Magnitude": 222,
     "Future Sight": 248,
     "Doom Desire": 353,
     "Rain Dance": 240,
@@ -1235,6 +1233,9 @@ MOVE_IDS = {
     "Surf": 57,
     "Lava Plume": 436,
 }
+# TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:7102-7114) compares the id
+# (trainer_ai.c:834-844); Kaizo's move on id 222 is Bulldoze and takes the same block.
+MOVE_MAGNITUDE = 222
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
     for n in (

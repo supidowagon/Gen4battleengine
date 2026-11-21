@@ -99,6 +99,17 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   - `roark.trace`: Kaizo tables, `kaizo_roark_02.json` through `tools/trace_to_state.py`
     (`trace_to_states`, `replay_turn`, `ref_apply_turn`), which imports no `nuzline.ai` module;
     Roark's flags (`KAIZO.flags` `0b10111`, `layout.py:210`) lack bit 7 in any case.
-  - The 16 bit-7 trainers: no part runs `coverage` or draws a Kaizo trainer other than Roark.
+  - The 16 bit-7 singles rows (6 opponents: 49, 50, 187, 646, 725, 898; 10 tag partners: 607, 608,
+    609, 610, 612, 619, 620, 861, 863, 865, whose Tag Strategy runs only at B = 4): no part runs
+    `coverage` or draws a Kaizo trainer other than Roark.
   So the compare should show `compare: ok` for every part. A divergence in `ai` would be a value
   change of the rewritten shared commands under `VANILLA` (a bug to fix, not a layout upgrade).
+
+- **E4-11. Registry pins of e40a579b (`data/game_constants.py`).** Ability 31 is pinned as
+  `Lightningrod`, the name both games' data use. Move 222 is its own constant
+  `ai/commands.py MOVE_MAGNITUDE` (out of `MOVE_IDS`), name-checked against vanilla only
+  (`vanilla_policy`); `tests/ai/test_tag_strategy.py` pins Kaizo's name: Kaizo names id 222 Bulldoze, and the script compares ids
+  (`AICmd_IfMoveEqualTo`, trainer_ai.c:834-844), so Bulldoze takes Magnitude's block. Cause:
+  39168d89 pinned names that are not in the data, so `load_game` raised `GameDataError` for both
+  games; the review read the code and did not run it. Rule from now on: a tip goes to the pod only
+  after it has passed `load_game` of both games and the four guards' fast parts locally.

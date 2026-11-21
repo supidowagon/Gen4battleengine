@@ -6,7 +6,10 @@ Rules sheet: `_scratch/e4/rules/A-8.md` (sections 1-4, 7). Commands: `docs/ai/sc
 `R@L(N)`: `IfRandomLessThan N` at line L, jump w.p. N/256; the change below is made when it does NOT jump.
 
 Scope. Exact at B = 2 (singles): 16 singles split rows carry bit 7 (`ai:297-309` runs it after bit 6, before
-bit 8). A doubles battle adds bit 7 to every thinking mask (`ai:252-255`); B = 4 is refused: the format gate
+bit 8). Six are opponents (49, 50, 187, 646, 725, 898); the other ten (607, 608, 609, 610, 612, 619, 620, 861,
+863, 865) are tag partners (each is a `partner` of multi rows in `data/intermediate_kaizo/trainers.json`, e.g.
+608 Cheryl, `res/field/scripts/scripts_eterna_forest.s:57`), so they run Tag Strategy only at B = 4 beside the
+player, still refused. A doubles battle adds bit 7 to every thinking mask (`ai:252-255`); B = 4 is refused: the format gate
 (`coverage.IMPLEMENTED_FORMATS`: `double`, `double_two_trainer`, `multi`) and `policy._refused`
 (a B = 4 state whose `thinking_mask` has bit 7), until E4-A models the B = 4 partner reads. Unused labels
 `TagStrategy_Unused_1` / `_2` (`s:7116-7125`) have no jump to them: not transcribed. `TagStrategy_Partner`

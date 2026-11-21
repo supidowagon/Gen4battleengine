@@ -4598,7 +4598,7 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
     ctx, skill_swap = _split(c.if_move_equal_to(_at(ctx, special), _MOVE["Skill Swap"]))
     ctx = c.load_type_from(ctx, LoadType.MOVE_TYPE)
     ctx, quake = _split(c.if_move_equal_to(ctx, _MOVE["Earthquake"]))
-    ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Magnitude"]))
+    ctx, t = _split(c.if_move_equal_to(ctx, c.MOVE_MAGNITUDE))
     quake = quake | t
     ctx, future = _split(c.if_move_equal_to(ctx, _MOVE["Future Sight"]))
     ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Doom Desire"]))

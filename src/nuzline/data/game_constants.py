@@ -733,7 +733,7 @@ CONSTANTS: tuple[Constant, ...] = (
     *_table("nuzline.ai.commands.MOVE_TYPE_MOVES", "move", _P, _MOVE_TYPE_MOVES),
     # TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:7102-7114) compares the id
     # (ai.c:834-844); Kaizo's 222 is Bulldoze and takes the same block (E4-A0).
-    Constant("nuzline.ai.commands.MOVE_IDS", "move", 222, "Magnitude", _P),
+    Constant("nuzline.ai.commands.MOVE_MAGNITUDE", "move", 222, "Magnitude", _P),
     *_table("nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES", "move", _P, _COPYCAT_ENCOURAGED_MOVES),
     # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the
     # decomp tests Levitate a second time, which never matches (quirk).
