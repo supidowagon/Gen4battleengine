@@ -77,31 +77,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
 . "$HERE/pod/gate.sh"   # podgate and reserve_knobs, copied into run.sh
 . "$HERE/send_body.sh"  # send_start, recv_frag, body_json: the transfer and the exec-pod body
-# table_key16 capture|compare <full sha> <tables archive>: the first 16 hex of a build's table
-# key (tools/ops/build_tables.sh, tools/ops/table_key.py), or nothing.
-#   capture (the key a capture is stored under): only from the archive itself, the
-#     <archive minus .tar.xz>.key file beside it, else its tables_k<key16>.tar.xz name; and when
-#     $RENT/tables/tables_k<key16>.tar.xz exists, the archive must be byte for byte that build
-#     (cmp), else nothing (a rebuilt or edited archive beside a stale .key). Never from
-#     index.txt: a capture made with other tables would be stored under the official key and
-#     fetched by every later compare.
-#   compare (the key of the main capture to fetch): as capture, else the last "<sha> <key>" line
-#     of $RENT/tables/index.txt for <full sha>. The fallback only names which stored capture to
-#     fetch; a stored capture got its key from its own archive, so it fetches only a capture made
-#     with that key's tables.
-# (Kept here, not in common.sh: common.sh is an input of the table key.)
-table_key16() { local k="" a="${3:-}" ka
-  if [ -n "$a" ]; then
-    [ -f "${a%.tar.xz}.key" ] && k=$(tr -dc 0-9a-f < "${a%.tar.xz}.key")
-    [ -n "$k" ] || k=$(basename "$a" | sed -n 's/^tables_k\([0-9a-f]\{16\}\)\.tar\.xz$/\1/p')
-    k=${k:0:16}
-    if [[ "$k" =~ ^[0-9a-f]{16}$ ]]; then ka="$RENT/tables/tables_k$k.tar.xz"
-      if [ -f "$a" ] && [ -f "$ka" ] && ! cmp -s "$a" "$ka"; then
-        echo "NOTE: $a differs from $ka, the build of key $k its .key names: no key from it" >&2; k=""; fi
-    else k=""; fi
-  fi
-  [ -n "$k" ] || [ "$1" != compare ] || k=$(awk -v s="$2" '$1 == s {k = $2} END {print k}' "$RENT/tables/index.txt" 2>/dev/null | tr -dc 0-9a-f)
-  k=${k:0:16}; if [[ "$k" =~ ^[0-9a-f]{16}$ ]]; then echo "$k"; fi; return 0; }
+. "$HERE/table_key16.sh"  # table_key16 capture|compare <full sha> <tables archive>: the first 16 hex of a build's table key
 usage() { sed -n '4,7p' "$0" | sed 's/^# *//'; exit 2; }
 # The functions below are copied into run.sh (declare -f); run.sh runs on the pod, not here.
 # cgused: container memory in bytes without reclaimable page cache: cgroup v2 memory.current

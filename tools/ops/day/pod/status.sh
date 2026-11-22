@@ -31,6 +31,7 @@ active=""; for d in /work/*/ /work/*/*/; do r=${d%/}
   case "$r" in "$D"|"$D"/*|/work/_*) continue;; esac; n=${r#/work/}
   if alive "$r/runner.pid" "$r"; then active="$active $n"
   elif alive "$r/setup.pid" "$r"; then active="$active $n(setup)"
+  elif alive "$r/quick.pid" "$r" 'quick\.sh'; then active="$active $n(quick)"
   elif [ ! -f "$r/notify/taken_d" ] && alive "$r/notify.pid" "$r" 'notify\.sh'; then active="$active $n(beacon)"; fi; done
 # Live pytest processes whose working folder is outside this run (pgrep skips zombies: no cmdline).
 np=0; for p in $(pgrep -f '/\.venv/bin/pytest'); do
