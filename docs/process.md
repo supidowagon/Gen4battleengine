@@ -193,6 +193,12 @@ per day is the rate used for estimates.
   file, or the first failure when the brief asked for `--until first-failure`. No polling
   turns: the agent does not call `status.sh` while `wait.sh` runs. Only committed code runs
   on the pod.
+- **Exec bodies stay short.** No exec-pod body that an agent must reproduce carries more than
+  a short script (at most 1000 characters, `tools/ops/day/send_body.sh`; its only long token a
+  64-hex sha256): payloads, scripts included, travel by file transfer (`runpodctl send` on the
+  PC, `runpodctl receive` under a timeout on the pod), and the body starts them only after
+  their sha256 matches the PC's. Long base64 in a body arrives changed (21 Nov 2026: three
+  snapshot bodies in a row refused with `RUNSH_SHA_MISMATCH`).
 - **Run dispatcher session.** A standing Sonnet session (name `dispatch`, state file
   `_scratch/handoff/DISPATCH.md`; owner, 21 Nov 2026) handles the streams' run requests in
   place of the managing session: it takes each request (commit and test list), checks the
@@ -322,7 +328,9 @@ per day is the rate used for estimates.
   `tools/ops/day/pod/weights.txt` (every file any run measured, at its largest chunk and
   at least 4 GB, plus hand-kept per-test lines, each citing its run; `UNMEASURED_FILE_GB` 20 GB for a
   file never measured; a test that passed alone in a 1-id chunk at least 4 GB under its
-  file's line has its own line; a multi-id chunk weighs the max over its ids), raised to the list line's `<GB>G` field when that is larger. A
+  file's line has its own line; a multi-id chunk weighs the max over its ids), raised to the list line's `<GB>G` field when that is larger.
+  Refresh `weights.txt` (DAYBOX.md, Send a run step 2) after every merge wave and after any
+  change that moves a test's memory by more than 20%. A
   live chunk of a run packed before weights (no `out/<unit>.w`) counts `DEFAULT_WEIGHT_GB`
   12 GB: the 90th percentile of 7183 measured chunks, as those runs are mostly fast-tier
   chunks of measured files. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`, on cgroup v1

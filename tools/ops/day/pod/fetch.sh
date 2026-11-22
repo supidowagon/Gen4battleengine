@@ -5,10 +5,10 @@
 # tools/ops/day/collect.sh <run> <code>. --pack stops after results.tgz (notify.sh sends it);
 # without it, notify/taken_d and notify/stop are written as well.
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"
-bash bin/agg.sh > agg.txt 2>&1
+[ -f quick.rc ] || bash bin/agg.sh > agg.txt 2>&1   # a quick lane run wrote its own agg.txt
 # meta.env goes in without the beacon codes.
 grep -v '^WATCH_' meta.env > meta.nocodes.env
-tar -czf results.tgz --exclude='notify/*.err' --transform 's,^meta\.nocodes\.env$,meta.env,' agg.txt out col collected.txt setup.log runner.log notify.log notify meta.nocodes.env files.txt 2>/dev/null
+tar -czf results.tgz --exclude='notify/*.err' --transform 's,^meta\.nocodes\.env$,meta.env,' agg.txt out col collected.txt setup.log runner.log quick.log quick.pytest.log ids.txt notify.log notify meta.nocodes.env files.txt 2>/dev/null
 [ "${1:-}" = --pack ] && exit 0
 # Collected by hand: notify.sh stops offering and status.sh stops listing this run as (beacon).
 mkdir -p notify && touch notify/taken_d notify/stop
