@@ -11,7 +11,7 @@ CLI, for `tools.kaizo.*` runs and table builds:
     python tools/ops/ramgate.py --rom-ids [file ...]   (collect only; one ready command per file)
 prints `GO <w>` (exit 0) after any wait, `POD <w>` (exit 3, weight >= 8), or `TIMEOUT <w>`
 (exit 4, after NUZLINE_RAMGATE_TIMEOUT minutes, default 30). --build (table
-builds, weight 20 unless --weight) never prints POD: it only waits for RAM.
+builds: weight --weight, else the weights.txt line `tools/build_tables.py`, else 14) never prints POD: it only waits for RAM.
 """
 
 import ast
@@ -31,6 +31,8 @@ WEIGHTS = ROOT / "tools" / "ops" / "day" / "pod" / "weights.txt"
 DEFAULT_WEIGHT = 20.0
 POD_WEIGHT = 8.0
 RESERVE_GB = 6.0
+BUILD_KEY = "tools/build_tables.py"  # the weights.txt line a table build waits for
+BUILD_DEFAULT_WEIGHT = 14.0  # without that line: a build waits for > 6 + 14 = 20 GB free
 POLL_S = 60.0
 DEFAULT_TIMEOUT_MIN = 30.0
 
@@ -462,11 +464,11 @@ def main(
         argv = argv[:i] + argv[i + 2 :]
     if w is None:
         table = load_weights()
-        w = (
-            DEFAULT_WEIGHT
-            if build
-            else max((weight(a, table) for a in argv), default=DEFAULT_WEIGHT)
-        )
+        if build:
+            measured = lookup(BUILD_KEY, table)
+            w = BUILD_DEFAULT_WEIGHT if measured is None else measured
+        else:
+            w = max((weight(a, table) for a in argv), default=DEFAULT_WEIGHT)
     if not build and decide(w, 0.0, rom_gate) == "POD":
         say(f"POD {w:g}")
         return 3

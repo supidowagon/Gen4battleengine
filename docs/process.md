@@ -133,7 +133,8 @@ per day is the rate used for estimates.
   itself. The pod sets
   `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`), which skips the gate. `tools.kaizo.*` runs:
   `python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]` first (weight 8 or more prints
-  POD, exit 3). Table builds: `python tools/ops/ramgate.py --build [--weight GB]` (default 20)
+  POD, exit 3). Table builds: `python tools/ops/ramgate.py --build [--weight GB]` (default: the `tools/build_tables.py` line of
+  `weights.txt`, else 14, so it waits for more than 20 GB free)
   only waits for RAM and never prints POD.
 - **Quick lane (engine tests, a few ids):** send the managing session a request of at most 5
   test ids at your tip; run name `q-<stream>-<sha7>`. It starts at once on any pod with memory

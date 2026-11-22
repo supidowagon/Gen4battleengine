@@ -291,8 +291,11 @@ def test_cli_pod_rom_gate_and_build(monkeypatch):
     assert run(["tests/heavy.py"]) == 3 and out[-1] == "POD 30"
     assert run(["tests/heavy.py", "--rom-gate"]) == 0 and out[-1] == "GO 30"
     assert run(["tools.kaizo.x", "--weight", "9"]) == 3 and out[-1] == "POD 9"
-    # a build never goes to the pod: weight 20 by default, only the RAM wait applies
-    assert run(["--build"]) == 0 and out[-1] == "GO 20"
+    # a build never goes to the pod: 14 without a tools/build_tables.py line, only the RAM wait applies
+    assert run(["--build"]) == 0 and out[-1] == "GO 14"
+    assert run(["--build", "--weight", "12"]) == 0 and out[-1] == "GO 12"
+    monkeypatch.setattr(rg, "load_weights", lambda: {**TABLE, "tools/build_tables.py": 11.0})
+    assert run(["--build"]) == 0 and out[-1] == "GO 11"  # the measured weights.txt line
     assert run(["--build", "--weight", "12"]) == 0 and out[-1] == "GO 12"
 
 
@@ -305,20 +308,22 @@ def test_cli_weight_without_a_value_is_a_usage_error():
 
 def test_cli_honours_the_timeout_env(monkeypatch):
     monkeypatch.setenv(rg.ENV_TIMEOUT, "2")
+    monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
     clock = Clock()
     out = []
     code = rg.main(
         ["--build"], free=lambda: 1.0, sleep=clock.sleep, clock=clock.now, say=out.append
     )
-    assert code == 4 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 20"
+    assert code == 4 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 14"
 
 
-def test_cli_build_waits_for_ram():
-    seq = iter([10.0, 25.0, 26.5])
+def test_cli_build_waits_for_ram(monkeypatch):
+    monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
+    seq = iter([10.0, 19.0, 20.5])
     sleeps = []
     out = []
     code = rg.main(["--build"], free=lambda: next(seq), sleep=sleeps.append, say=out.append)
-    assert code == 0 and sleeps == [60.0, 60.0] and out[-1] == "GO 20"
+    assert code == 0 and sleeps == [60.0, 60.0] and out[-1] == "GO 14"
     assert not any(m.startswith("POD") for m in out)
 
 
