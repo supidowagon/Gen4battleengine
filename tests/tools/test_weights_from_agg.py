@@ -62,7 +62,7 @@ def test_file_lines_take_the_max_with_floor_and_skip_hand_kept_units(tmp_path):
         "u_001 2 20000 10 0 tests/a.py::test_1",        # 20000 MiB -> 21 GB
         "u_002 2 100 1 0 tests/b.py::test_1",           # 1 GB -> floor 4
         "u_003 1 80000 9 137 tests/h.py::test_big",     # only a hand-kept id: left out
-        "u_004 2 30000 9 0 tests/h.py::test_big",       # ids file adds an unlisted id: counts
+        "u_004 2 100000 9 0 tests/h.py::test_big",      # ids file adds an unlisted id, above the hand line: counts
         "u_005 2 50000 1 0 tests/f.py::test_1",         # file with a hand file-level line: not printed
         "u_006 1 0 1 0 tests/c.py::test_1",             # no measurement
     ], ids={"u_004": ["tests/h.py::test_big", "tests/h.py::test_small"]})
@@ -70,7 +70,22 @@ def test_file_lines_take_the_max_with_floor_and_skip_hand_kept_units(tmp_path):
     out = wfa.render(w, [a1, a2], [], report=[]).splitlines()
     # tests/f.py's units have only hand-kept ids: its hand line has no fresh measurement
     assert out[:4] == ["# head", "tests/h.py::test_big 90 r0", "tests/f.py 7 r0", wfa.MARK]
-    assert out[4:] == ["tests/a.py 32 run-b", "tests/h.py 32 run-a", "tests/old.py 9 x", "tests/b.py 4 run-a"]
+    assert out[4:] == ["tests/h.py 105 run-a", "tests/a.py 32 run-b", "tests/old.py 9 x", "tests/b.py 4 run-a"]
+
+
+def test_a_unit_whose_peak_a_hand_kept_line_carries_leaves_the_file_line_alone(tmp_path):
+    w = _table(tmp_path, "tests/h.py::test_big[1] 33 r0\n", "")
+    mixed = {"u_001": ["tests/h.py::test_big[1]", "tests/h.py::test_a", "tests/h.py::test_b"]}
+    a = _agg(tmp_path / "out", "run-a", [
+        "u_001 3 30000 10 0 tests/h.py::test_big[1]",   # 32 GB, under the hand-kept 33: left out
+        "u_002 2 10000 10 0 tests/h.py::test_c",        # 11 GB: the file line
+    ], ids=mixed)
+    assert wfa.render(w, [a], [], report=[]).splitlines()[2:] == ["tests/h.py 11 run-a"]
+    # a peak above the hand-kept weight, or a kernel kill (a lower bound), still counts
+    for rc, mib, want in (("0", 40000, "tests/h.py 42 run-b"), ("137", 30000, "tests/h.py 32 run-c")):
+        run = "run-b" if rc == "0" else "run-c"
+        b = _agg(tmp_path / "out", run, [f"u_001 3 {mib} 10 {rc} tests/h.py::test_big[1]"], ids=mixed)
+        assert wfa.render(w, [b], [], report=[]).splitlines()[2:] == [want]
 
 
 def test_an_agg_without_a_unit_table_uses_its_file_rows(tmp_path):

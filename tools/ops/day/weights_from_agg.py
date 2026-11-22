@@ -11,8 +11,9 @@ counted results (agg.txt per-unit table; ids from <agg dir>/out/<unit>.ids, else
 - a test's peak: the largest peak of the 1-id units that passed it (rc 0, its log
   <agg dir>/out/<unit>.log ends "1 passed", warnings allowed); a skipped test's peak is not its cost;
 - a file's peak: its largest unit peak (rc 137: a lower bound, counted), leaving out units killed
-  three times (rc 98) and units whose ids all have a hand-kept line or a test peak (each then has
-  its own line). An agg.txt without a per-unit table counts its per-file max_rss_MB.
+  three times (rc 98), units whose ids all have a hand-kept line or a test peak (each then has
+  its own line), and units (not rc 137) whose peak is at or under the largest hand-kept weight
+  among their ids (that line already carries the unit's peak). An agg.txt without a per-unit table counts its per-file max_rss_MB.
 New value of a line of GB g with fresh measurement m: m when m > g; else the larger of m's floor
 and nothing lower: floor(m) = ceil(m x 1.1) when m >= 40, else ceil(max(m x 1.25, m + 2)); a line
 moves down to floor(m) only when floor(m) < g. A line with no fresh measurement stays. Also stays:
@@ -277,6 +278,8 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
                 w.append(f"hand-kept ids peaked at {gb(u.mib)} GB{' (rc 137: at least)' if u.rc == '137' else ''}, "
                          f"above their largest hand-kept weight {max(covered)} GB: {u.run} {u.name} {u.ids[0]}")
             continue
+        if covered and u.rc != "137" and gb(u.mib) <= max(covered):
+            continue   # a hand-kept line of one of its ids already carries this unit's peak
         if not u.alone and all(_hand_covered(t, hand) or (t in test_m and _lineable(t)) for t in u.ids):
             continue
         d = low if u.rc == "137" else best

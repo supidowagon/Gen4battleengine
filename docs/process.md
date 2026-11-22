@@ -308,7 +308,9 @@ per day is the rate used for estimates.
   `tools/ops/day/pod/weights.txt` (every file any run measured, at its largest chunk and
   at least 4 GB, plus hand-kept per-test lines, each citing its run; `UNMEASURED_FILE_GB` 20 GB for a
   file never measured; a test that passed alone in a 1-id chunk at least 4 GB under its
-  file's line has its own line; a multi-id chunk weighs the max over its ids), raised to the list line's `<GB>G` field when that is larger. A
+  file's line has its own line; a multi-id chunk weighs the max over its ids), raised to the list line's `<GB>G` field when that is larger.
+  Refresh `weights.txt` (DAYBOX.md, Send a run step 2) after every merge wave and after any
+  change that moves a test's memory by more than 20%. A
   live chunk of a run packed before weights (no `out/<unit>.w`) counts `DEFAULT_WEIGHT_GB`
   12 GB: the 90th percentile of 7183 measured chunks, as those runs are mostly fast-tier
   chunks of measured files. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`, on cgroup v1
