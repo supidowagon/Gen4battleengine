@@ -2,7 +2,7 @@
 # Line: <test file or node id> <GB> <tag>. Longest matching key wins; an id with no line weighs 14 (ROM_UNMEASURED_GB).
 # GB = ceil(max(1.25 m, m + 2)), m = peak summed RSS of the pytest tree in GB (10^9 bytes), polled every 0.5 s,
 # one file's non-slow ROM-only ids per process (measuring harness tools/ops/ramgate_measure.py: NUZLINE_RAMGATE_NO_WAIT=1, watchdog at 4 GB free).
-# `pod-measure-needed`: the local run did not measure it (here: the probe save is absent, tests skip), weight 20.
+# `unmeasured-skipped-...`: the local run could not measure it (the probe save is absent, its tests skip): weight 14, as every unmeasured ROM-only line.
 # `unmeasured-slow`: a slow-marked ROM-only test, not measured locally, weight 14.
 
 tests/kaizo/test_extract_kaizo_docs.py 3 local-measure-c66b229-20261122
@@ -12,7 +12,7 @@ tests/kaizo/test_rows_tables.py 3 local-measure-c66b229-20261122
 tests/kaizo/test_rows_trainers.py 3 local-measure-c66b229-20261122
 tests/kaizo/test_sheet_unmapped.py 3 local-measure-c66b229-20261122
 tests/kaizo/test_trainer_map.py 3 local-measure-c66b229-20261122
-tests/saves/test_exp_boost.py 20 pod-measure-needed-skipped-probe-save-absent
+tests/saves/test_exp_boost.py 14 unmeasured-skipped-probe-save-absent
 tests/saves/test_kaizo_save.py 3 local-measure-d6c7d50-20261122
 tests/test_cli.py 3 local-measure-d6c7d50-20261122
 tests/test_trace_to_state.py 3 local-measure-d6c7d50-20261122
