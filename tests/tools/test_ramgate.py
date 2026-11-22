@@ -446,8 +446,13 @@ def test_cli_build_on_the_pod_or_off_windows_runs_the_command_directly(monkeypat
 
 POD_DIR = ROOT / "tools/ops/day/pod"
 _PYTEST_START = re.compile(
-    r"(-m\s+pytest\b|\buv\s+run(\s+--?[\w=-]+)*\s+pytest\b|(^|[\s;&|(])(\S*/)?pytest\s+-)"
+    r"-m\s+pytest\b"  # python -m pytest
+    r"|\buv\s+run(\s+--?[\w=-]+)*\s+pytest\b"  # uv run [opts] pytest
+    r"|(^|[;&|`]|\$\(|^\s*\(|\b(exec|then|do|else)\b)\s*(\w+=\S*\s+)*pytest(\s|$)"  # a command
+    r"|\S*/pytest(\s|[\"']|$)"  # a path to the binary: .venv/bin/pytest, "$repo"/.venv/bin/pytest
 )
+_SEARCHES = re.compile(r"\b(pgrep|pkill|grep|egrep|fgrep)\b[^;&|]*")  # a pattern, not a start
+_UNSETS = re.compile(r"\bunset\s+([\w\s]*\s)?NUZLINE_ON_POD\b|\benv\s+(-\S+\s+)*-u\s*NUZLINE_ON_POD\b|\benv\s+(-\S+\s+)*-i\b|\benv\s+--ignore-environment\b|\benv\s+--unset[= ]NUZLINE_ON_POD\b")
 _PY_SCRIPT = re.compile(r"\bpython3?\S*\"?\s+\"?[^\s\"]*?([\w-]+\.py)\b")
 _PY_INLINE = re.compile(r"\bpython3?\S*\"?\s+(-c\s|-\s|-$)|\"\$PY\"\s+-")
 _MARKER = "NUZLINE_ON_POD=1"
@@ -476,7 +481,8 @@ def _inline_block(lines, i):
 def pod_marker_problems(path, find_script=None):
     """Lines of a pod script that start pytest, or python importing the engine, while the pod
     marker is not in effect: neither an earlier top-level `export NUZLINE_ON_POD=1` nor the
-    marker on that line itself. find_script(name) -> text of a python script it runs, or None."""
+    marker on that line itself. Also every line that drops the marker (`unset NUZLINE_ON_POD`,
+    `env -u NUZLINE_ON_POD`, `env -i`). find_script(name) -> text of a python script it runs."""
     lines = path.read_text(encoding="utf-8").splitlines()
     exported_at = next(
         (n for n, ln in enumerate(lines) if re.match(r"export\s.*\b" + _MARKER + r"\b", _code(ln))),
@@ -487,7 +493,10 @@ def pod_marker_problems(path, find_script=None):
         code = _code(line)
         if not code.strip():
             continue
-        starts = bool(_PYTEST_START.search(code))
+        if _UNSETS.search(code):
+            bad.append(f"{path.name}:{n + 1}: drops the marker: {line.strip()[:100]}")
+            continue
+        starts = bool(_PYTEST_START.search(_SEARCHES.sub(" ", code)))
         if not starts and _PY_INLINE.search(code):
             starts = _imports_engine(_inline_block(lines, n))
         if not starts:
@@ -539,6 +548,50 @@ def test_the_pod_marker_check_catches_each_way_to_miss_it(tmp_path):
     assert not problems('python "$t/extract.py" a\n', {"extract.py": "import re\n"})
     assert not problems("python -c 'from nuzline.jaxcache import jax_version'\n")
     assert not problems('echo "pytest rc $PRC"\npgrep -f "/.venv/bin/pytest"\n')
+    assert not problems('grep -c pytest "$D/quick.pytest.log"\necho "outlived pytest: killed"\n')
+    assert not problems('echo "QUICK_FAIL rc=$RC (pytest rc $PRC) $SUM"\n')
+
+
+@pytest.mark.parametrize(
+    "start",
+    [
+        "pytest tests/test_x.py\n",
+        "  pytest -q tests\n",
+        "exec pytest tests\n",
+        "A=1 B=2 pytest tests/x.py::t\n",
+        "cd r && pytest tests\n",
+        "x=$(pytest --co -q tests)\n",
+        "(pytest tests)\n",
+        ".venv/bin/pytest tests\n",
+        '"$repo/.venv/bin/pytest" tests\n',
+        '"$repo"/.venv/bin/pytest\n',
+        "nice -n 5 /work/r/.venv/bin/pytest -x\n",
+    ],
+)
+def test_the_pod_marker_check_sees_every_way_to_start_pytest(tmp_path, start):
+    f = tmp_path / "x.sh"
+    f.write_text(start, encoding="utf-8")
+    assert pod_marker_problems(f)
+    f.write_text("export NUZLINE_ON_POD=1\n" + start, encoding="utf-8")
+    assert not pod_marker_problems(f)
+
+
+@pytest.mark.parametrize(
+    "drop",
+    [
+        "unset NUZLINE_ON_POD\n",
+        "unset A NUZLINE_ON_POD\n",
+        "env -u NUZLINE_ON_POD bash x.sh\n",
+        "env -uNUZLINE_ON_POD bash x.sh\n",
+        "env -i PATH=/usr/bin bash x.sh\n",
+        "env --ignore-environment bash x.sh\n",
+        "env --unset=NUZLINE_ON_POD bash x.sh\n",
+    ],
+)
+def test_a_pod_script_may_not_drop_the_marker(tmp_path, drop):
+    f = tmp_path / "x.sh"
+    f.write_text("export NUZLINE_ON_POD=1\n" + drop + "uv run pytest -q\n", encoding="utf-8")
+    assert any("drops the marker" in b for b in pod_marker_problems(f))
 
 
 def test_blocker_blocks_engine_imports_only():
