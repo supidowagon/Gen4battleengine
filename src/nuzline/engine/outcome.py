@@ -667,16 +667,17 @@ def _future_fields(tables: Tables, state: BattleState, actions, uses, effect) ->
 
 
 def future_thresholds(
-    tables: Tables, state: BattleState, actions, moves=None, **grid
+    tables: Tables, state: BattleState, actions, moves=None, *grid, **kw
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(bool[B, 101], bool[B])``: per defender battler ``d``, ``values[d, t]`` holds when ``t``
     (0-100) is a threshold ``_future_grid`` finds possible for its Future Sight hit (the grid's
     thresholds clipped to 0-100, as ``hit_class`` clips them), and ``loose`` as there. Only this
     set is read (``enumerate._future_hit``, the sampler's ``hit_class_mask``), so the grid, K
     values per row, is reduced here inside the jit and never leaves it (the laws output keeps
-    101 bools per defender, not K int32 and K bools). ``grid`` is ``_future_grid``'s other
-    arguments (the B = 4 ``dsets`` / ``targets`` of e2-d67 8fa1a6a2 go through it)."""
-    thresholds, possible, loose = _future_grid(tables, state, actions, moves, **grid)
+    101 bools per defender, not K int32 and K bools). ``grid`` and ``kw`` are ``_future_grid``'s
+    other arguments, by position or keyword (the B = 4 ``dsets`` / ``targets`` of e2-d67
+    8fa1a6a2 go through them)."""
+    thresholds, possible, loose = _future_grid(tables, state, actions, moves, *grid, **kw)
     clipped = jnp.clip(thresholds, 0, 100)
     reduce = jax.vmap(lambda t, p: jnp.zeros(101, _I32).at[t].max(p.astype(_I32)))
     return reduce(clipped, possible) > 0, loose

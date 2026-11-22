@@ -548,7 +548,6 @@ def test_future_sight_law_covers_a_corrupted_mask_that_loses_a_group(tables, nam
     Sandshrew then reads fog without sand (bcp.c:2927, :2934): its threshold is in the law
     (``outcome.future_thresholds``' none / sand / hail grid, each with and without the start's
     fog), and the step hits at it and misses above it."""
-
     from nuzline.engine.enumerate import outcome_laws
     from nuzline.engine.outcome import future_threshold
 

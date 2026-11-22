@@ -24,7 +24,13 @@ from nuzline.engine.outcome import (
 )
 from tests.engine.d2_states import four
 from tests.engine.test_batch8 import _future_due
-from tests.strategies import four_state, legal_action_pair, legal_actions_four, supported_state
+from tests.strategies import (
+    _draw_future_sight,
+    four_state,
+    legal_action_pair,
+    legal_actions_four,
+    supported_state,
+)
 
 ROLLS = np.arange(1, 101, dtype=np.int32)
 _grid = jax.jit(_future_grid)
@@ -83,8 +89,8 @@ def test_hand_state_with_no_future_sight(tables, names):
 
 
 def test_four_battlers_pending_and_not(tables, names):
-    """B = 4 (``future_thresholds`` without ``dsets``): a Future Sight of battler 2's on
-    battler 0, and none."""
+    """B = 4 (``future_thresholds`` without ``dsets``): a Future Sight of battler 1's on
+    battler 0 (``format.foe(1) == 0``, the grid's defender without ``dsets``), and none."""
     s = four(tables, names)
     acts = jnp.zeros(4, jnp.int32)
     _same(tables, s, acts)
@@ -92,10 +98,10 @@ def test_four_battlers_pending_and_not(tables, names):
         future_timer=s.future_timer.at[0].set(1),
         future_damage=s.future_damage.at[0].set(5),
         future_move=s.future_move.at[0].set(names.move("Future Sight")),
-        future_attacker=s.future_attacker.at[0].set(3),
+        future_attacker=s.future_attacker.at[0].set(2),
         future_sight=s.future_sight.at[0].set(1),
     )
-    _same(tables, pending, acts)
+    assert _same(tables, pending, acts) >= 1
 
 
 SEEDED = settings(
@@ -116,7 +122,37 @@ def test_drawn_states_b2(tables, names, data):
 @settings(SEEDED, max_examples=12)
 @given(data=st.data())
 def test_drawn_states_b4(tables, names, data):
-    """Drawn four-battler states, the commands' actions."""
+    """Drawn four-battler states, the commands' actions. ``four_state`` draws no Future Sight:
+    ``_draw_future_sight`` adds one on each living battler 0 and 1 (parties 0 and 1 in every
+    format; its attacker ``1 + (1 - side)`` is ``format.foe(side)``), pending in about a third."""
     s = data.draw(four_state(tables, names))
+    a = {name: np.asarray(getattr(s, name)).copy() for name in type(s)._fields}
+    for b in (0, 1):
+        active = int(a["active"][b])
+        if a["hp"][b, active] > 0:
+            _draw_future_sight(data.draw, tables, a, b, active, names)
+    s = type(s)(**{name: jnp.asarray(v) for name, v in a.items()})
     acts, _ = data.draw(legal_actions_four(tables, s))
     _same(tables, s, jnp.asarray(acts))
+
+
+@pytest.mark.parametrize(
+    "possible",
+    [
+        [True, False, True, False, True, True],
+        [False, True, False, True, False, False],
+        [True, True, False, False, False, True],
+        [False] * 6,
+        [True] * 6,
+    ],
+)
+def test_hit_class_mask_against_hit_class_at_the_clip_edges(possible):
+    """Synthetic, no tables: thresholds below 0, at 0, a repeat, at 100 and above 100, clipped to
+    0-100 into the mask as ``future_thresholds`` does; the same class for every roll 1-100."""
+    thresholds = jnp.asarray([-5, 0, 37, 37, 100, 150], jnp.int32)
+    ok = jnp.asarray(possible)
+    values = np.zeros(101, bool)
+    values[np.clip(np.asarray(thresholds), 0, 100)[np.asarray(possible)]] = True
+    want = np.asarray(hit_class(jnp.asarray(ROLLS), thresholds, ok))
+    got = np.asarray(hit_class_mask(jnp.asarray(ROLLS), jnp.asarray(values)))
+    assert np.array_equal(want, got)

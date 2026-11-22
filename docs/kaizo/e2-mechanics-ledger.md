@@ -620,6 +620,19 @@ Rules left out because another mechanic is missing; each closes when that mechan
 - Mid-turn takeover: a short list of alternatives per battler, each keyed by its event (two foes
   can Disable and Encore one battler in a turn).
 
+### Merge note: e2-d67 after claude/e4-future-values
+
+`outcome.future_thresholds` returns `(values bool[B, 101], loose)`; the grid is `_future_grid`,
+which takes e2-d67's `dsets=None, targets=None`. The wrapper forwards `*grid, **kw`. Who merges
+e2-d67 fixes these, which break with no textual conflict:
+- test_d6_future.py:49-50 (`hit_set`): `values, loose = future_thresholds(...)`, then
+  `np.flatnonzero(values[d])`.
+- test_d6_future.py:25, :90, :98: `hit_class(roll, thr[d], ok[d])` becomes
+  `hit_class_mask(roll, values[d])`.
+- test_d6_roar.py:307: call `_future_grid` (it reshapes `ok` by the slot axes).
+- outcome.py:3954 and enumerate.py:4602 (positional `dsets` / `defs8`) work through the wrapper;
+  their textual conflicts resolve to `future_values, future_loose = future_thresholds(...)`.
+
 ### Notes for E1 (AI owner)
 
 - Untranscribed AI scripts whose engine side is E2's: Copycat #242 (B5-1), Baton Pass #127,
