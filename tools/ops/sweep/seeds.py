@@ -42,9 +42,7 @@ def nodes(path: Path = NODES) -> list[tuple[str, str]]:
 
 
 def job_lines(night: str, n: int = 15, path: Path = NODES) -> list[str]:
-    return [
-        f"{node} {short} {s}" for node, short in nodes(path) for s in seeds(night, node, n)
-    ]
+    return [f"{node} {short} {s}" for node, short in nodes(path) for s in seeds(night, node, n)]
 
 
 def main(argv: list[str] | None = None) -> int:
