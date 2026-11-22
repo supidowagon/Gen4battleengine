@@ -8,6 +8,7 @@ import io
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -89,8 +90,11 @@ PYTEST_FAIL_OUT = (
 )
 # FAKE_PYTEST_HOLD=<file>: writes <file>.pid, then waits until <file> exists (a running unit).
 # FAKE_PYTEST_SKIP=1: every test skipped, rc 0. FAKE_PYTEST_RC=<n>: one failure, rc n.
+# FAKE_PYTEST_LEAVE=<file>: leaves a sleep in its process group, its pid in <file>.
 FAKE_PYTEST = (
     'echo "$@" > "$(dirname "$0")/pytest.args"\n'
+    'if [ -n "${FAKE_PYTEST_LEAVE:-}" ]; then sleep 300 < /dev/null > /dev/null 2>&1 &\n'
+    '  echo $! > "$FAKE_PYTEST_LEAVE"; fi\n'
     'if [ -n "${FAKE_PYTEST_HOLD:-}" ]; then echo $$ > "$FAKE_PYTEST_HOLD.pid"\n'
     '  while [ ! -f "$FAKE_PYTEST_HOLD" ]; do sleep 0.2; done; fi\n'
     "if [ \"${FAKE_PYTEST_SKIP:-}\" = 1 ]; then cat <<'EOF'\n"
@@ -1045,6 +1049,24 @@ def test_memory_at_kill_gb_kills_the_quick_units_group_with_rc_98(src, tmp_path)
 
 
 @linux
+def test_a_process_left_in_the_units_group_is_killed_before_out_run_q_goes(src, tmp_path):
+    _setup_lane(tmp_path, src)
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
+    left = tmp_path / "left.pid"
+    r = _quick(tmp_path, run, _cgroup(tmp_path), FAKE_PYTEST_LEAVE=_p(left))
+    pid = int(left.read_text(encoding="utf-8"))
+    try:
+        log = _log(run)
+        assert r.returncode == 0 and "QUICK_PASS" in log, log
+        assert re.search(r"^QUICK_LEFTOVER \d+ ", log, re.MULTILINE), log
+        assert not _alive(pid)
+        assert not (run / "out/run/q").exists()
+    finally:
+        if _alive(pid):
+            os.kill(pid, signal.SIGKILL)
+
+
+@linux
 def test_real_flock_the_stream_lock_and_the_gate_lock(src, tmp_path):
     repo = _setup_lane(tmp_path, src)
     cg = _cgroup(tmp_path)
@@ -1230,7 +1252,13 @@ def _lib(call: str) -> str:
 
 
 def test_the_body_env_holds_only_the_shape_knobs_set_on_the_pc():
-    assert _bash(_lib("pack_body_env")).stdout == ""
+    none = _bash(_lib("pack_body_env"))
+    assert none.stdout == "" and "WARNING" not in none.stderr
+    # a knob exported in the shell reaches normal bodies too: it is named on stderr
+    assert (
+        "WARNING pack.sh: MAXP:5 from the environment"
+        in _bash(_lib("pack_body_env"), {"MAXP": "5"}).stderr
+    )
     knobs = {"GATE_GB": "200", "KILL_GB": "236", "MAXP": "18"}
     assert (
         _bash(_lib("pack_body_env"), knobs).stdout
