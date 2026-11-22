@@ -84,17 +84,18 @@ the keep draws, where only moves with power update the super/not-very-effective 
 the party passes, which updates them for every move (``UpateMoveStatusForTypeMul``,
 :2781). Struggle sets no bit (:2573, :2687). Gravity lifts the Ground-on-Flying
 immunity in both (``BasicTypeMulApplies`` :2529, ``NoImmunityOverrides`` :2759). Mold
-Breaker only matters against Levitate, which is refused, and the AI bench's Wonder Guard
+Breaker hides Levitate (``Battler_IgnorableAbility``) and matters for the AI bench's Wonder Guard
 (above).
 
 Refused, never approximated (``switching_refusals`` names each one):
 
-* abilities on either side that change these masks: Levitate, Scrappy, Normalize; and on
+* abilities on either side that change these masks: Normalize (Levitate and Scrappy are read
+  since H-6: ``chart_flags``, ``calc_effectiveness_flags``); and on
   the AI's side step 7's Natural Cure (``AI_IsAsleepWithNaturalCure``), whose draws are not
   modelled (step 6, every absorb case, is: above). A state with more candidates than the
   layout's sites is refused (Wonder Guard, absorb and both passes together can exceed 60);
 * moves whose state the engine does not carry: none now (Miracle Eye's bit is read since E3-B2-10,
-  ``defender_chart_flags``); the variable-type moves are
+  ``chart_flags``); the variable-type moves are
   modelled (``TrainerAI_MoveType``, :3127, ``damage.ai_move_type`` for the AI's active and the
   player's ``moveHit``; ``Move_CalcVariableType``, battle_lib.c:8097, ``party_move_types`` for
   a bench member: Hidden Power, Natural Gift, Judgment, Weather Ball, B13-35), except Weather
@@ -134,13 +135,16 @@ from nuzline.engine.damage import (
     decomp_abilities,
     divide,
     hidden_power,
+    ignorable,
     iron_ball,
     judgment_type,
+    levitate_off,
+    levitated,
     on_damaging_turn,
     weather_ball_params,
 )
 from nuzline.engine.format import foe, format_of, party
-from nuzline.engine.ids import ItemId, Type
+from nuzline.engine.ids import AbilityId, ItemId, Type
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
@@ -187,6 +191,12 @@ SUPER_EFFECTIVE, NOT_VERY_EFFECTIVE, INEFFECTIVE = 1 << 1, 1 << 2, 1 << 3
 # MOVE_STATUS_MAGNET_RISE (moves.h:77): part of MOVE_STATUS_IMMUNE (:87); ApplyTypeChart's walk is
 # skipped for it, so no other bit of the chart is set (G-66).
 MAGNET_RISE = 1 << 20
+# MOVE_STATUS_LEVITATED (moves.h:68): ApplyTypeChart's Levitate immunity, also part of
+# MOVE_STATUS_IMMUNE (:87) and no part of INEFFECTIVE; the walk is skipped for it as for Magnet
+# Rise (battle_lib.c:2600-2603, H-6).
+LEVITATED = 1 << 11
+# The chart bits of MOVE_STATUS_IMMUNE (moves.h:87) less Wonder Guard's (``wonder_guard_bit``).
+IMMUNE_CHART = INEFFECTIVE | LEVITATED | MAGNET_RISE
 
 # Decomp ids, checked against the manifest by tests/ai/test_switching.py.
 MOVE_STRUGGLE = 165
@@ -195,6 +205,8 @@ ABILITY_IDS = {
     "Levitate": 26,
     "Wonder Guard": 25,
     "Scrappy": 113,
+    "Filter": 111,
+    "Solid Rock": 116,
     "Normalize": 96,
     "Shadow Tag": 23,
     "Arena Trap": 71,
@@ -217,8 +229,6 @@ MOVE_IDS = {
 }
 # Refused abilities: name -> what the decomp does with it that is not implemented.
 _ANY_SIDE_ABILITIES = {
-    "Levitate": "LEVITATED / INEFFECTIVE in ApplyTypeChart and CalcEffectiveness",
-    "Scrappy": "skips the Ghost immunities",
     "Normalize": "makes every move Normal",
 }
 _AI_SIDE_ABILITIES = {
@@ -291,6 +301,7 @@ def chart_multipliers(
     roosting=False,
     magnet=False,
     eyed=False,
+    levitated=False,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """The two ``ApplyTypeMultiplier`` factors (``int32`` tenths, 10 = no entry) of
     ``move``'s type against a defender of ``def_types`` (int8[2]), in the order
@@ -305,10 +316,12 @@ def chart_multipliers(
     ``turnFlags.roosting``) skips every Flying row, ``BasicTypeMulApplies`` (:2534-2543):
     ``ApplyTypeChart`` only; ``CalcEffectiveness``'s ``NoImmunityOverrides`` (:2759) has
     neither. ``magnet`` (the defender's Magnet Rise turns without Ingrain or an Iron Ball,
-    ``defender_chart_flags``): a Ground move skips the walk (:2605-2609): both factors are 10,
+    ``chart_flags``): a Ground move skips the walk (:2605-2609): both factors are 10,
     the value keeps only STAB. ``eyed`` (the defender's ``MOVE_EFFECT_MIRACLE_EYE``) skips the
     immune Dark rows (``BasicTypeMulApplies``, :2551-2555, E3-B2-10): ``ApplyTypeChart`` only,
-    like ``grounded``; ``CalcEffectiveness`` reads neither."""
+    like ``grounded``; ``CalcEffectiveness`` reads neither. ``levitated`` (the defender's Levitate
+    as the attacker sees it, ``chart_flags``): a Ground move skips the walk like Magnet Rise's
+    (:2600-2603, H-6)."""
     if move_type is None:
         move_type = tables.move_type[jnp.asarray(move, _I32)]
     move_type = jnp.asarray(move_type, _I32)
@@ -324,7 +337,9 @@ def chart_multipliers(
         dark = jnp.asarray(eyed, jnp.bool_) & (t == _TYPE_DARK) & (mul == 0)
         return jnp.where(lifted | skipped | dark, 10, mul)
 
-    ground = jnp.asarray(magnet, jnp.bool_) & (move_type == _TYPE_GROUND)
+    ground = (jnp.asarray(magnet, jnp.bool_) | jnp.asarray(levitated, jnp.bool_)) & (
+        move_type == _TYPE_GROUND
+    )
     m1 = jnp.where(ground, 10, entry(t1))
     m2 = jnp.where((t2 != t1) & ~ground, entry(t2), 10)
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
@@ -382,10 +397,13 @@ def apply_type_chart(
     ``move`` by ``atk_side``'s active Pokemon against the other side's: STAB x15/10
     (:2592), then each ``chart_multipliers`` factor through ``ApplyTypeMultiplier``'s
     ``BattleSystem_Divide(value * mul, 10)`` (:7547); Struggle returns ``value``
-    unchanged (:2573). The defender's Foresight, Ingrain / Iron Ball, roosting and Magnet Rise
-    flags are read (``chart_multipliers``); Wonder Guard sets a flag only (``wonder_guard_bit``),
-    the value is unchanged; the other type-chart modifiers (Adaptability, Normalize, Scrappy,
-    Levitate) are not implemented: ``policy.ai_refusals`` refuses them.
+    unchanged (:2573). The defender's Foresight, Ingrain / Iron Ball, roosting, Magnet Rise and
+    Levitate flags and the attacker's Scrappy are read (``chart_flags``); Wonder Guard sets a flag
+    only (``wonder_guard_bit``), the value is unchanged; a super-effective move with power
+    against Filter or Solid Rock (``Battler_IgnorableAbility``, ``damage.ignorable``) is
+    ``BattleSystem_Divide(value * 3, 4)`` (:2657-2660, H-6); the other type-chart modifiers
+    (Adaptability, Normalize, Tinted Lens, Expert Belt) are not implemented:
+    ``policy.ai_refusals`` refuses them.
     ``move_type`` is the caller's type for the move (``party_move_types``); by default the
     attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
     move = jnp.asarray(move, _I32)
@@ -397,34 +415,65 @@ def apply_type_chart(
         move_type = ai_move_type(tables, state, atk_side, move)  # TrainerAI_MoveType
     value = jnp.asarray(value, _I32)
     out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
-    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, def_side)
+    cf = chart_flags(tables, state, atk_side, def_side)
+    gravity = fcm.gravity_count(state)
     for mul in chart_multipliers(
-        tables,
-        move,
-        d_types,
-        fcm.gravity_count(state),
-        identified,
-        move_type,
-        grounded,
-        roosting,
-        magnet,
-        eyed,
+        tables, move, d_types, gravity, move_type=move_type, **cf._asdict()
     ):
         out = divide(out * mul, 10)
+    # MOVE_STATUS_SUPER_EFFECTIVE && movePower (:2657; ``type_chart_flags`` gates the bit by power)
+    # and Battler_IgnorableAbility(Filter) or (Solid Rock) (:2658-2660); no Wonder Guard bit then.
+    flags = type_chart_flags(tables, move, d_types, gravity, move_type=move_type, **cf._asdict())
+    seen = ignorable(state, atk_side, def_side)
+    filtered = (flags & SUPER_EFFECTIVE) != 0
+    filtered = filtered & ((seen == AbilityId.FILTER) | (seen == AbilityId.SOLID_ROCK))
+    out = jnp.where(filtered, divide(out * 3, 4), out)
     return jnp.where(move == MOVE_STRUGGLE, value, out)
 
 
-def defender_chart_flags(tables: Tables, state: BattleState, side) -> tuple:
-    """``(identified, grounded, roosting, magnet, eyed)`` of ``side``'s active battler as
-    ``BattleSystem_ApplyTypeChart`` reads them (``chart_multipliers``): Foresight
-    (battle_lib.c:2615), ``MOVE_EFFECT_INGRAIN`` or an Iron Ball (``Battler_HeldItemEffect``,
-    ruling G-56), ``turnFlags.roosting`` (``BasicTypeMulApplies``, :2534-2543), Magnet Rise
-    (``magnetRiseTurns`` without Ingrain or an Iron Ball, :2605-2606, G-66) and
-    ``MOVE_EFFECT_MIRACLE_EYE`` (:2551-2555, E3-B2-10)."""
-    grounded = (state.ingrain[side] != 0) | iron_ball(tables, state, side)
-    magnet = (state.magnet_rise_turns[side] != 0) & ~grounded
-    eyed = state.miracle_eye[side] != 0
-    return state.foresight[side] != 0, grounded, state.roosting[side] != 0, magnet, eyed
+class ChartFlags(NamedTuple):
+    """The defender's state ``BattleSystem_ApplyTypeChart`` reads (``chart_flags``), by the
+    keyword names of ``chart_multipliers`` and ``type_chart_flags``."""
+
+    identified: jnp.ndarray  # Foresight, or the attacker's Scrappy
+    grounded: jnp.ndarray  # Ingrain or an Iron Ball
+    roosting: jnp.ndarray
+    magnet: jnp.ndarray  # Magnet Rise turns without Ingrain or an Iron Ball
+    eyed: jnp.ndarray  # Miracle Eye
+    levitated: jnp.ndarray  # Levitate as the attacker sees it, without an Iron Ball
+
+
+def chart_flags(tables: Tables, state: BattleState, atk_side, def_side) -> ChartFlags:
+    """``BattleSystem_ApplyTypeChart``'s reads of ``def_side``'s active battler as ``atk_side``'s
+    active battler attacks it (``chart_multipliers``): Foresight (battle_lib.c:2615) or the
+    attacker's Scrappy (``Battler_Ability``, :2615-2616: Gastric Juice makes it none, no Mold
+    Breaker gate), ``MOVE_EFFECT_INGRAIN`` or an Iron Ball (``Battler_HeldItemEffect``, ruling
+    G-56), ``turnFlags.roosting`` (``BasicTypeMulApplies``, :2534-2543), Magnet Rise
+    (``magnetRiseTurns`` without Ingrain or an Iron Ball, :2605-2606, G-66),
+    ``MOVE_EFFECT_MIRACLE_EYE`` (:2551-2555, E3-B2-10) and Levitate through
+    ``Battler_IgnorableAbility`` (:2600-2603, H-6; ``damage.levitated``, which reads Gravity,
+    Ingrain, Gastric Juice and Mold Breaker as the decomp's ``Battler_Ability`` does)."""
+    grounded = (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side)
+    magnet = (state.magnet_rise_turns[def_side] != 0) & ~grounded
+    eyed = state.miracle_eye[def_side] != 0
+    scrappy = battler_decomp_ability(tables, state, atk_side) == ABILITY_IDS["Scrappy"]
+    return ChartFlags(
+        (state.foresight[def_side] != 0) | scrappy,
+        grounded,
+        state.roosting[def_side] != 0,
+        magnet,
+        eyed,
+        levitated(tables, state, atk_side, def_side, Type.GROUND),
+    )
+
+
+def seen_ability(tables: Tables, state: BattleState, battler) -> jnp.ndarray:
+    """``int32``: ``Battler_Ability`` (battle_lib.c:3088-3104) of ``battler`` in decomp ids:
+    ``battler_decomp_ability`` (Gastric Juice), and Levitate reads as none under Gravity or the
+    holder's Ingrain (:3095-3103, ``damage.levitate_off``, the engine-id twin's rule)."""
+    ability = battler_decomp_ability(tables, state, battler)
+    off = levitate_off(state, battler) & (ability == ABILITY_IDS["Levitate"])
+    return jnp.where(off, 0, ability)
 
 
 def _chart_flags(
@@ -439,17 +488,30 @@ def _chart_flags(
     roosting=False,
     magnet=False,
     eyed=False,
+    levitated=False,
 ) -> jnp.ndarray:
     move = jnp.asarray(move, _I32)
     first, second = chart_multipliers(
-        tables, move, def_types, gravity, identified, move_type, grounded, roosting, magnet, eyed
+        tables,
+        move,
+        def_types,
+        gravity,
+        identified,
+        move_type,
+        grounded,
+        roosting,
+        magnet,
+        eyed,
+        levitated,
     )
     mask = _apply_mul(_apply_mul(jnp.zeros((), _I32), first, update), second, update)
-    # MOVE_STATUS_MAGNET_RISE instead of the walk (:2605-2609): no other chart bit is set.
+    # MOVE_STATUS_LEVITATED (:2600-2603), else MOVE_STATUS_MAGNET_RISE (:2605-2609), instead of
+    # the walk: no other chart bit is set.
     if move_type is None:
         move_type = tables.move_type[move]
-    ground = jnp.asarray(magnet, jnp.bool_) & (jnp.asarray(move_type, _I32) == _TYPE_GROUND)
-    mask = jnp.where(ground, MAGNET_RISE, mask)
+    ground = jnp.asarray(move_type, _I32) == _TYPE_GROUND
+    mask = jnp.where(jnp.asarray(magnet, jnp.bool_) & ground, MAGNET_RISE, mask)
+    mask = jnp.where(jnp.asarray(levitated, jnp.bool_) & ground, LEVITATED, mask)
     return jnp.where(move == MOVE_STRUGGLE, 0, mask)
 
 
@@ -464,11 +526,13 @@ def type_chart_flags(
     roosting=False,
     magnet=False,
     eyed=False,
+    levitated=False,
 ) -> jnp.ndarray:
     """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_ApplyTypeChart`` leaves for
     ``move`` against a defender of ``def_types`` (int8[2]), identified by Foresight or
     not, grounded by Ingrain or not, roosting or not, magnet-risen or not, under Miracle Eye or
-    not (``defender_chart_flags``; a Ground move against Magnet Rise leaves ``MAGNET_RISE`` alone);
+    not, levitating or not (``chart_flags``; a Ground move against Magnet Rise leaves
+    ``MAGNET_RISE`` alone, against Levitate ``LEVITATED``);
     only a move with power updates the super/not-very-effective bits. ``move_type`` overrides the
     move's table type (``damage.ai_move_type``)."""
     power = tables.move_power[jnp.asarray(move, _I32)]
@@ -484,6 +548,7 @@ def type_chart_flags(
         roosting,
         magnet,
         eyed,
+        levitated,
     )
 
 
@@ -515,14 +580,45 @@ def wonder_guard_bit(
 
 
 def calc_effectiveness_flags(
-    tables: Tables, move, def_types, gravity, move_type=None, iron=False
+    tables: Tables,
+    move,
+    def_types,
+    gravity,
+    move_type=None,
+    iron=False,
+    atk_ability=0,
+    def_ability=0,
 ) -> jnp.ndarray:
     """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_CalcEffectiveness`` leaves
     for ``move`` against ``def_types`` (int8[2]), for any move, power or not.
     ``move_type`` overrides the move's table type (``damage.ai_move_type``). ``iron``: the
     caller's ``defenderItemEffect`` is ``HOLD_EFFECT_SPEED_DOWN_GROUNDED``, which lifts the
-    Flying immunity like Gravity (``NoImmunityOverrides``, battle_lib.c:2759-2764; G-56)."""
-    return _chart_flags(tables, move, def_types, gravity, True, move_type=move_type, grounded=iron)
+    Flying immunity like Gravity (``NoImmunityOverrides``, battle_lib.c:2759-2764; G-56).
+    ``atk_ability`` and ``def_ability`` are the caller's ability arguments (decomp ids): the
+    attacker's Scrappy breaks the walk at the Ghost immunities (:2708-2714, no Foresight test);
+    Levitate on the defender, with no Mold Breaker attacker, a Ground move, no Gravity and no
+    Iron Ball, leaves ``INEFFECTIVE`` alone (:2698-2703, H-6)."""
+    atk_ability = jnp.asarray(atk_ability, _I32)
+    flags = _chart_flags(
+        tables,
+        move,
+        def_types,
+        gravity,
+        True,
+        identified=atk_ability == ABILITY_IDS["Scrappy"],
+        move_type=move_type,
+        grounded=iron,
+    )
+    if move_type is None:
+        move_type = tables.move_type[jnp.asarray(move, _I32)]
+    floats = (
+        (atk_ability != _MOLD_BREAKER)
+        & (jnp.asarray(def_ability, _I32) == ABILITY_IDS["Levitate"])
+        & (jnp.asarray(move_type, _I32) == _TYPE_GROUND)
+        & (jnp.asarray(gravity) == 0)
+        & ~jnp.asarray(iron, jnp.bool_)
+    )
+    return jnp.where(floats & (jnp.asarray(move, _I32) != MOVE_STRUGGLE), INEFFECTIVE, flags)
 
 
 class _Layout(NamedTuple):
@@ -570,19 +666,10 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
 
     # Step 5 precondition and step 8: A's moves against D through ApplyTypeChart.
     a_moves = state.moves[1, a].astype(_I32)
-    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, 0)
+    cf = chart_flags(tables, state, 1, 0)
     a_flags = jax.vmap(
         lambda m: type_chart_flags(
-            tables,
-            m,
-            d_types,
-            gravity,
-            identified,
-            ai_move_type(tables, state, 1, m),
-            grounded,
-            roosting,
-            magnet,
-            eyed,
+            tables, m, d_types, gravity, move_type=ai_move_type(tables, state, 1, m), **cf._asdict()
         )
     )(a_moves)
     keep = (a_moves != 0) & ((a_flags & SUPER_EFFECTIVE) != 0)
@@ -604,16 +691,19 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     hit_type = ai_move_type(tables, state, 0, hit)
     # The bench member's own party item hold effect (:3774, BattleSystem_GetItemData).
     bench_iron = tables.item_effect[state.item[1]] == ItemId.IRON_BALL
+    # ai.c:3769-3777: attacker Battler_Ability(moveHitBattler), defender the bench member's raw
+    # MON_DATA_ABILITY (Levitate, H-6).
+    d_seen = seen_ability(tables, state, 0)
     hit_flags = jax.vmap(
-        lambda t, i: calc_effectiveness_flags(tables, hit, t, gravity, hit_type, i)
-    )(state.types[1], bench_iron)
+        lambda t, i, ab: calc_effectiveness_flags(tables, hit, t, gravity, hit_type, i, d_seen, ab)
+    )(state.types[1], bench_iron, ability[1])
     # CalcEffectiveness's Wonder Guard (battle_lib.c:2734-2739) with the bench Pokemon as the
     # defender (MON_DATA_ABILITY) and Battler_Ability(moveHitBattler), the player's active, as
     # the attacker: INEFFECTIVE unless Mold Breaker, a super-effective moveHit or one not on its
     # damaging turn (ruling G-23).
     bench_guard = (
         (ability[1] == _WONDER_GUARD)
-        & (d_ability != _MOLD_BREAKER)
+        & (d_seen != _MOLD_BREAKER)
         & on_damaging_turn(tables, hit)
         & ((hit_flags & SUPER_EFFECTIVE) == 0)
     )
@@ -623,9 +713,14 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     bench_types = party_move_types(tables, state).reshape(-1)
     # Battler_HeldItemEffect(moveHitBattler), the player's active (:3790).
     d_iron = iron_ball(tables, state, 0)
+    # :3786-3794: attacker the member's raw ability (Scrappy, Mold Breaker), defender
+    # Battler_Ability(moveHitBattler) (Levitate: none under Ingrain, Gravity, Gastric Juice).
+    bench_abilities = jnp.repeat(ability[1], MOVES)
     bench_flags = jax.vmap(
-        lambda m, k: calc_effectiveness_flags(tables, m, d_types, gravity, k, d_iron)
-    )(bench_moves, bench_types).reshape(SLOTS, MOVES)
+        lambda m, k, ab: calc_effectiveness_flags(
+            tables, m, d_types, gravity, k, d_iron, ab, d_seen
+        )
+    )(bench_moves, bench_types, bench_abilities).reshape(SLOTS, MOVES)
     bench_moves = bench_moves.reshape(SLOTS, MOVES)
     bench_se = (bench_moves != 0) & ((bench_flags & SUPER_EFFECTIVE) != 0)
     passes = [

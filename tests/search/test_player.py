@@ -109,14 +109,17 @@ def test_refusal_reason_replays_the_run(tables, names):
 @pytest.mark.slow
 @pytest.mark.fullset
 def test_refusal_reason_names_an_ai_refusal(tables, names):
+    # Normalize is reachable only artificially: no Kaizo Pokemon holds it, and vanilla
+    # Skitty's is engine-UNSUPPORTED (coverage would refuse the fight first). The AI reads its
+    # decomp id 96 (species_abilities_decomp), so the refusal named is the AI's, not the engine's.
     # test_playout.py::test_refusal_reason_names_the_refused_mechanic's state: the AI's
-    # Levitate refusal refuses the first turn (the player's choice and the AI's action).
-    s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
+    # Normalize refusal refuses the first turn (the player's choice and the AI's action).
+    s = roark_state(tables, names, player_species="Skitty", player_ability="Normalize")
     key = jax.random.PRNGKey(10)
     assert int(player_playout(tables, s, LINE, empty_line(), key, 40).refused) == 1
     reason, _, turns = _replay(tables, s, LINE, empty_line(), key, 40, VANILLA)
-    assert "Levitate" in reason and turns == 0
-    assert "Levitate" in refusal_reason(tables, s, LINE, empty_line(), key, 40)
+    assert "Normalize" in reason and turns == 0
+    assert "Normalize" in refusal_reason(tables, s, LINE, empty_line(), key, 40)
 
 
 def test_players_are_hashable():

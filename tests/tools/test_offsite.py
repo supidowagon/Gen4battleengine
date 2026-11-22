@@ -123,6 +123,7 @@ EXCLUDED = {
     "e1/Slot.SAV": "rom-save-archive-or-binary",
     # keys and credentials
     "e1/id.pem": "key-or-credential",
+    "e1/putty.ppk": "key-or-credential",
     "e1/k.key": "key-or-credential",
     "e1/.env.local": "key-or-credential",
     "e1/meta.env": "key-or-credential",
@@ -350,17 +351,26 @@ def test_refuses_unless_gh_confirms_private(proj, tmp_path):
         r = _off("--dry-run", env=env)  # the test switch never covers a network URL
         assert r.returncode == 2 and frag in r.stderr, (body, r.stderr)
         assert "== branches" not in r.stdout
-    # A gh the shell finds but cannot run (no execute bit) is named as such, not as a login problem.
-    # POSIX only, and only with no other gh on PATH: the shell would run that one instead.
-    if os.name != "nt" and shutil.which("gh", path=os.environ.get("PATH", "")) is None:
-        _shim(shim, "gh", "#!/bin/sh\necho true\n", executable=False)
-        r = _off("--dry-run", env=env)
-        assert r.returncode == 2 and "cannot be run (exit 126" in r.stderr, r.stderr
-        assert "== branches" not in r.stdout
     _git("remote", "set-url", "offsite", (tmp_path / "offsite.git").as_posix(), cwd=repo, env=env)
     env.pop("NUZLINE_OFFSITE_TEST_LOCAL")
     r = _off("--dry-run", env=env)
     assert r.returncode == 2 and "local path" in r.stderr
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("gh", path=os.environ.get("PATH", "")) is not None,
+                    reason="needs POSIX (an execute bit) and no other gh on PATH (the shell would run that one)")
+def test_refuses_naming_a_gh_that_cannot_be_run(proj, tmp_path):
+    """A gh the shell finds but cannot run (no execute bit, exit 126) is named as such, not as a
+    login problem."""
+    repo, _, env = proj
+    _git("remote", "set-url", "offsite", "https://github.com/someone/private.git", cwd=repo, env=env)
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    env = dict(env, PATH=str(shim) + os.pathsep + env["PATH"])
+    _shim(shim, "gh", "#!/bin/sh\necho true\n", executable=False)
+    r = _off("--dry-run", env=env)
+    assert r.returncode == 2 and "cannot be run (exit 126" in r.stderr, r.stderr
+    assert "== branches" not in r.stdout
 
 
 def test_refuses_mirror_and_push_refspec_and_a_scratch_state_branch(proj):

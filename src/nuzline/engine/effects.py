@@ -199,7 +199,9 @@ many are real). Decomp sources:
   (battle_script.c:5727-5742) fails silently (:60-65) on equal genders or a genderless
   battler, else the attacker falls in love with the holder (``infatuated``); its message
   (:17, ``TAG_NICKNAME_ABILITY_NICKNAME`` with ``BTLSCR_MSG_BATTLER_TEMP``, the holder)
-  reveals the holder's ability. Oblivious (:5) is an unsupported ability.
+  reveals the holder's ability. The attacker's own Oblivious (:5, ``CheckIgnorableAbility``; the
+  attacker is the side-effect battler, so no Mold Breaker pierces it) ends it silently
+  (:_055 -> :_082 -> :_117), H-2.
 * Attract (``ATTRACT``): ``effect_script_0120.s``, a direct TO_DEFENDER effect (no ON_HIT:
   ``BattleSystem_TriggerPrimaryEffect`` needs a living defender, battle_lib.c:1492-1505)
   running ``subscript_infatuate.s``: ``BtlCmd_TryAttract`` as above, failing on a target
@@ -240,8 +242,13 @@ another battler (``_foe_stage``, ``hooks.intimidate``).
 Leaf Guard and Synchronize (E1 Gardenia batch, rulings G-12..G-17): Leaf Guard in sun in
 ``_inflict``, ``_contact_ability`` and ``synchronize`` (Toxic Spikes, the status orbs and Yawn
 read it by decomp id); ``synchronize`` is AfterMoveEffects' step, run by ``step._use_move``.
-Unreachable branches are not modelled: Clear Body, Hyper Cutter, Immunity, Liquid Ooze,
-Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities
+Immunity, Water Veil, Magma Armor (``_inflict``, ``_contact_ability``), Own Tempo (the confusion
+effects) and Oblivious (``_attract``, ``_contact_ability``): E1 batch H, H-2; their cures are
+``hooks.recover_status_by_ability`` and ``step._restore_status_on_switch``. Color Change
+(``_contact_ability``) and Soundproof's uproar sleep test (``_inflict``) and Perish Song test
+(``perish_song_eligible``): H-3.
+Unreachable branches are not modelled: Clear Body, Hyper Cutter, Liquid Ooze,
+Magic Guard, Skill Link and Normalize are unsupported abilities
 (Grip Claw is E1 Batch D's, ``_trap``). Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
 (``outcome.secondary_chance``), Reckless on the damage (``damage.script_power_mul``),
@@ -550,8 +557,21 @@ def _inflict(
     # subscript_paralyze.s:5/_170: an ignorable Limber stops a paralysis before any other
     # check; "prevents paralysis" (TAG_NICKNAME_ABILITY) is printed for a direct effect only.
     limber = cond & (status == Status.PARALYSIS) & (h.target_ignorable == AbilityId.LIMBER)
+    # H-2: likewise an ignorable Immunity stops any poison (subscript_poison.s:13,
+    # subscript_badly_poison.s:31), Water Veil a burn (subscript_burn.s:20) and Magma Armor a
+    # freeze (subscript_freeze.s:5), each before any other check. A direct effect prints
+    # "prevents poisoning" (poison :_177 -> :_201, badly_poison :_249) or "prevents burns"
+    # (burn :_264), TAG_NICKNAME_ABILITY on BTLSCR_SIDE_EFFECT_MON (battle_script.c:11798-11810);
+    # an indirect one ends silently. Magma Armor's block prints the attack message only
+    # (subscript_freeze.s:_128): it never reveals.
+    poisons = (status == Status.POISON) | (status == Status.TOXIC)
+    immune = cond & poisons & (h.target_ignorable == AbilityId.IMMUNITY)
+    veil = cond & (status == Status.BURN) & (h.target_ignorable == AbilityId.WATER_VEIL)
+    magma = cond & (status == Status.FREEZE) & (h.target_ignorable == AbilityId.MAGMA_ARMOR)
     from nuzline.engine.hooks import (  # hooks imports this module
+        BURN_BLOCKED,
         PARALYSIS_BLOCKED,
+        POISON_BLOCKED,
         SLEEP_BLOCKED,
         STATUS_BLOCKED,
         reveal_ability,
@@ -559,8 +579,11 @@ def _inflict(
 
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
     state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
+    state = reveal_ability(state, h.target_side, h.target, POISON_BLOCKED, immune & direct)
+    state = reveal_ability(state, h.target_side, h.target, BURN_BLOCKED, veil & direct)
+    blocked = blocked | limber | immune | veil | magma
     # Leaf Guard in sun (ruling G-14), after the status's own ability test (Insomnia, Vital
-    # Spirit, Limber; Immunity and Water Veil are unsupported): ``CheckIgnoreWeather`` then
+    # Spirit, Limber, Immunity, Water Veil): ``CheckIgnoreWeather`` then
     # FIELD_CONDITION_SUNNY then an ignorable ABILITY_LEAF_GUARD (subscript_fall_asleep.s:23-25,
     # subscript_poison.s:14-16, subscript_badly_poison.s:32-34, subscript_burn.s:21-23,
     # subscript_paralyze.s:6-8; subscript_freeze.s has no such test). A direct effect prints the
@@ -577,15 +600,13 @@ def _inflict(
     leaf = (
         cond
         & ~blocked
-        & ~limber
         & guarded
         & _sunny(tables, state)
         & (h.target_ignorable == AbilityId.LEAF_GUARD)
     )
     state = reveal_ability(state, h.target_side, h.target, STATUS_BLOCKED, leaf & direct)
-    # Shield Dust, after Insomnia / Limber / Leaf Guard (Water Veil and the like in between are
-    # unsupported), for an indirect effect only.
-    blocked = blocked | limber | leaf | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
+    # Shield Dust, after the abilities above and Leaf Guard, for an indirect effect only.
+    blocked = blocked | leaf | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
     # Then CheckSubstitute on the side-effect battler (subscript_paralyze.s:21, burn :36,
     # freeze :19, poison :29, badly_poison :46, fall_asleep :40, before its uproar test at
     # :43): a direct effect prints "But it failed!", an indirect one stops silently. An
@@ -596,10 +617,12 @@ def _inflict(
     # indirect effect.
     blocked = blocked | (cond & (state.safeguard[side_of(h.target_side)] != 0))
     # subscript_fall_asleep.s:43-45 (:14-16 for a move effect): a target not asleep yet stays
-    # awake while FIELD_CONDITION_UPROAR is set (Soundproof, which skips it, is unsupported);
-    # a direct effect then ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an
-    # indirect one silently (:_292).
-    blocked = blocked | (cond & (status == Status.SLEEP) & fcm.uproar_any(state))
+    # awake while FIELD_CONDITION_UPROAR is set unless its own Soundproof skips the test
+    # (CheckAbility, :15, :44: Battler_Ability, Mold Breaker moot; H-3); a direct effect then
+    # ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an indirect one silently
+    # (:_292).
+    soundproof = battler_ability(state, h.target_side, h.target) == AbilityId.SOUNDPROOF
+    blocked = blocked | (cond & (status == Status.SLEEP) & fcm.uproar_any(state) & ~soundproof)
     cond = cond & ~blocked & can_have_status(tables, state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[party(fmt, h.target_side), h.target]
@@ -1203,22 +1226,31 @@ def _swagger(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     (effect_script_0166.s; subscript_flatter.s, the same script on Sp. Atk +1, B12-2): the stat
     (``move_param[m, 0]``) raised by ``move_param[m, 1]`` below +6 (``UPDATE_STAT_STAGE``), then
     subscript_confuse.s unless the defender is confused (:13, no message): ``Random 3, 2`` turns
-    (``outcome.duration``). Own Tempo and Safeguard (subscript_confuse.s:12, :26) come from
-    unsupported abilities and moves; the failure (``swagger_fails``, a substitute included) skips
-    AfterMoveEffects (``step``)."""
+    (``outcome.duration``). In subscript_confuse.s (a direct side effect) the defender's
+    ignorable Own Tempo comes first (:12 -> :_141): no confusion, "prevents confusion" (:73,
+    TAG_NICKNAME_ABILITY: the AI learns it), the raise kept (H-2); then Safeguard (:26). The
+    failure (``swagger_fails``, a substitute included) skips AfterMoveEffects (``step``)."""
     stat, stages = h.param[0], h.param[1]
     cond = (h.effect == _E.SWAGGER) & h.landed & _alive(state, h.target_side, h.target)
     cond = cond & ~swagger_fails(state, h.target_side, stat)
     below = state.stages[h.target_side, stat] < STAGE_MAX
     state = change_stage(state, h.target_side, stat, stages, cond & below)
-    # subscript_confuse.s (a direct side effect): the substitute is swagger_fails'; then Safeguard
-    # (:26, B10-7), after the raise.
-    confuse = (
-        cond
-        & (state.confusion[h.target_side] == 0)
-        & (state.safeguard[side_of(h.target_side)] == 0)
-    )
+    # subscript_confuse.s (a direct side effect): Own Tempo (:12, H-2), the substitute is
+    # swagger_fails'; then Safeguard (:26, B10-7), after the raise.
+    calls = cond & (state.confusion[h.target_side] == 0)
+    tempo = calls & (h.target_ignorable == AbilityId.OWN_TEMPO)
+    state = _reveal_confusion_block(state, h, tempo)
+    confuse = calls & ~tempo & (state.safeguard[side_of(h.target_side)] == 0)
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], confuse)
+
+
+def _reveal_confusion_block(state: BattleState, h: _Hit, cond) -> BattleState:
+    """subscript_confuse.s:12 -> :_141, :73: a direct confusion that an ignorable Own Tempo stops
+    prints "prevents confusion" (TAG_NICKNAME_ABILITY on BTLSCR_SIDE_EFFECT_MON,
+    battle_script.c:11798-11810), where ``cond`` (H-2)."""
+    from nuzline.engine.hooks import CONFUSION_BLOCKED, reveal_ability  # hooks imports this module
+
+    return reveal_ability(state, h.target_side, h.target, CONFUSION_BLOCKED, cond)
 
 
 # The two stats in move_param[m, 0..1], in order (Attack and Speed: Dragon Dance; Attack and
@@ -1796,7 +1828,7 @@ def primary_effect_fails(
         # subscript_lock_on.s:6, :33.
         | ((effect == _E.LOCK_ON) & lock_on_fails(state, target_side))
         # BtlCmd_TryPerishSong (battle_script.c:5482-5484): no battler eligible.
-        | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state)))
+        | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state, side)))
         # subscript_curse_ghost.s:22-24 (a Ghost user's Curse).
         | ((effect == _E.CURSE) & ghost_user(state, side) & curse_fails(state, target_side))
         # subscript_yawn.s's failures (``yawn_blocks``).
@@ -2158,10 +2190,14 @@ def _disable(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 
 def _confuse_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    # subscript_confuse.s:12 (H-2): an ignorable Own Tempo stops it before every other check and,
+    # a direct effect, reveals itself (:_141).
+    runs = (h.effect == _E.CONFUSE_FOE) & h.effective & _alive(state, h.target_side, h.target)
+    tempo = runs & (h.target_ignorable == AbilityId.OWN_TEMPO)
+    state = _reveal_confusion_block(state, h, tempo)
     cond = (
-        (h.effect == _E.CONFUSE_FOE)
-        & h.effective
-        & _alive(state, h.target_side, h.target)
+        runs
+        & ~tempo
         & (state.confusion[h.target_side] == 0)
         & ~h.shielded  # subscript_confuse.s:23
         & (state.safeguard[side_of(h.target_side)] == 0)  # :26 (B10-7)
@@ -2175,6 +2211,7 @@ def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & h.effective
         & h.proc
         & _alive(state, h.target_side, h.target)
+        & (h.target_ignorable != AbilityId.OWN_TEMPO)  # subscript_confuse.s:12, silent (H-2)
         & (state.confusion[h.target_side] == 0)
         & ~_shield_dust(h)
         & ~h.shielded  # the rolled-secondary gate (battle_lib.c:1580-1582); confuse :23
@@ -2337,6 +2374,8 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         shadow_form=put(
             state.shadow_form, side, jnp.where(fresh, state.form[own], state.shadow_form[side])
         ),
+        # formNum is in the copied bytes (battle_mon.h:79, :5346-5348), H-5.
+        form_num=put(state.form_num, side, state.form_num[foe]),
         shadow_stats=put(
             state.shadow_stats, side, jnp.where(fresh, state.stats[own], state.shadow_stats[side])
         ),
@@ -2405,7 +2444,8 @@ def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     (effect_script_0267.s:5, battle_lib.c:1520-1522), so the defender's Shield Dust as the
     attacker sees it stops it (subscript_confuse.s:14-15, ``CheckIgnorableAbility``: a Mold
     Breaker attacker ignores it), after the roll is drawn; then not confused :24, no Substitute
-    :23, no Safeguard :26 (G-70)."""
+    :23, no Safeguard :26 (G-70). Before them the defender's ignorable Own Tempo (:12 -> :_141)
+    ends it silently (H-2)."""
     fmt = format_of(state)
     chatot = (state.species[party(fmt, h.side), h.user] == SPECIES_CHATOT) & (
         state.transformed[h.side] == 0
@@ -2416,6 +2456,7 @@ def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & chatot
         & _alive(state, h.target_side, h.target)
         & (outcome.chatter[h.side] != 0)
+        & (h.target_ignorable != AbilityId.OWN_TEMPO)
         & (state.confusion[h.target_side] == 0)
         & ~_shield_dust(h)
         & ~h.shielded
@@ -2546,13 +2587,18 @@ def _lock_on(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 PERISH_SONG_TURNS = 3  # BtlCmd_TryPerishSong (battle_script.c:5478)
 
 
-def perish_song_eligible(state: BattleState) -> jnp.ndarray:
-    """``bool[2]``: the battlers ``BtlCmd_TryPerishSong`` marks (battle_script.c:5471-5479): no
-    MOVE_EFFECT_PERISH_SONG yet and HP left (Soundproof, the third test, is an unsupported
-    ability). Every battler, whatever its side (doubles convention 4)."""
+def perish_song_eligible(state: BattleState, user_side) -> jnp.ndarray:
+    """``bool[B]``: the battlers ``BtlCmd_TryPerishSong`` marks (battle_script.c:5471-5479) for
+    the Perish Song of battler ``user_side``: no MOVE_EFFECT_PERISH_SONG yet, HP left and no
+    ``Battler_IgnorableAbility(attacker, i, ABILITY_SOUNDPROOF)`` (:5474, H-3): a Soundproof user
+    skips itself, the user's Mold Breaker pierces another's. Every battler, whatever its side
+    (doubles convention 4). The "blocks" message tags BTLSCR_MSG_TEMP
+    (subscript_perish_song_start.s:12-19): no reveal (battle_script.c:11801-11802)."""
     fmt = format_of(state)
+    battlers = range(state.active.shape[0])
     sides = jnp.arange(state.active.shape[0])
-    return (state.perish_song == 0) & (state.hp[party(fmt, sides), state.active] > 0)
+    deaf = jnp.stack([ignorable(state, user_side, b) == AbilityId.SOUNDPROOF for b in battlers])
+    return (state.perish_song == 0) & (state.hp[party(fmt, sides), state.active] > 0) & ~deaf
 
 
 def _perish_song(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2560,7 +2606,7 @@ def _perish_song(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     move that connected; RANGE_FIELD, its own defender): ``BtlCmd_TryPerishSong`` gives every
     eligible battler (``perish_song_eligible``) the effect and a count of ``PERISH_SONG_TURNS``;
     with none eligible it fails (:5482-5484, MOVE_STATUS_FAILED: ``primary_effect_fails``)."""
-    eligible = perish_song_eligible(state)
+    eligible = perish_song_eligible(state, h.side)
     for battler in range(state.active.shape[0]):
         cond = (h.effect == _E.PERISH_SONG) & h.landed & eligible[battler]
         state = _set(state, "perish_song", battler, 1, cond)
@@ -2931,13 +2977,15 @@ def _attractable(state: BattleState, side, slot, foe_side, foe_slot) -> jnp.ndar
 
 
 def _attract(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    """Attract: the living target of the opposite gender falls in love with the user."""
-    cond = (
-        (h.effect == _E.ATTRACT)
-        & h.effective
-        & _alive(state, h.target_side, h.target)
-        & _attractable(state, h.target_side, h.target, h.side, h.user)
-    )
+    """Attract: the living target of the opposite gender falls in love with the user. The
+    target's ignorable Oblivious stops it first (subscript_infatuate.s:5 -> :_055): "prevents
+    romance" (:39, TAG_NICKNAME_ABILITY on BTLSCR_SIDE_EFFECT_MON: the AI learns it), H-2."""
+    runs = (h.effect == _E.ATTRACT) & h.effective & _alive(state, h.target_side, h.target)
+    oblivious = runs & (h.target_ignorable == AbilityId.OBLIVIOUS)
+    from nuzline.engine.hooks import ROMANCE_BLOCKED, reveal_ability  # hooks imports this module
+
+    state = reveal_ability(state, h.target_side, h.target, ROMANCE_BLOCKED, oblivious)
+    cond = runs & ~oblivious & _attractable(state, h.target_side, h.target, h.side, h.user)
     return _set(state, "infatuated", h.target_side, 1, cond)
 
 
@@ -2957,7 +3005,19 @@ def _struggle_recoil(state: BattleState, h: _Hit, struggling) -> BattleState:
     return hp_update(state, h.side, h.user, -cost, cost > 0)
 
 
-def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+def _contact_ability(
+    tables, state, h: _Hit, outcome: Outcome, move_type
+) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, sem_proc)``: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200-4371)
+    after hit ``h``; ``move_type`` is the action's ``battleCtx->moveType`` or the table type
+    (``move_type_of``), which Color Change reads. ``sem_proc``: a trigger that moved
+    ``sideEffectMon`` to the attacker before its subscript ran, whether or not that lands: Cute
+    Charm's (the attacker not in love, the roll; :4339-4350, H-4) and Static's, Poison Point's and
+    Flame Body's (an attacker with no status, the roll; :4214-4224, :4303-4313, :4321-4331, H-M2),
+    whose subscript may then stop on the attacker's Limber, Immunity, Water Veil, Leaf Guard in sun
+    or type (subscript_paralyze.s:5-8, subscript_poison.s:13-16, :34-37, subscript_burn.s:20-23,
+    :40-41); an ABILITY side effect skips the substitute (subscript_paralyze.s:20, poison :28, burn
+    :35) and Safeguard (paralyze :26, poison :39, burn :43)."""
     fmt = format_of(state)
     # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4200-4371): Battler_Ability.
     ability = battler_ability(state, h.target_side, h.target)
@@ -2978,20 +3038,26 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # subscript_paralyze.s:5: the attacker's own Limber (the side-effect battler is the
     # attacker itself, so no Mold Breaker can pierce it) ends Static's paralysis silently
     # (:_170 ends an ABILITY side effect with no message).
-    limber = (status == Status.PARALYSIS) & (
-        battler_ability(state, h.side, h.user) == AbilityId.LIMBER
+    own = battler_ability(state, h.side, h.user)
+    # Likewise its own Immunity stops Poison Point's poison (subscript_poison.s:13 -> :_177) and
+    # its own Water Veil Flame Body's burn (subscript_burn.s:20 -> :_264), silently (H-2).
+    own_block = (
+        ((status == Status.PARALYSIS) & (own == AbilityId.LIMBER))
+        | ((status == Status.POISON) & (own == AbilityId.IMMUNITY))
+        | ((status == Status.BURN) & (own == AbilityId.WATER_VEIL))
     )
     # Then the attacker's own Leaf Guard in sun (paralyze :6-8, poison :14-16, burn :21-23; ruling
     # G-14): an ABILITY side effect ends silently (:_170, :_177, :_264).
     leaf = _sunny(tables, state) & (battler_ability(state, h.side, h.user) == AbilityId.LEAF_GUARD)
-    cond = (
+    # The trigger itself (ATTACKING_MON.status == MON_CONDITION_NONE, the roll): sideEffectMon =
+    # the attacker (battle_lib.c:4224, :4313, :4331) before the subscript's blocks (H-M2).
+    status_proc = (
         (status != Status.NONE)
         & hit
         & h.contact_proc
-        & ~limber
-        & ~leaf
-        & can_have_status(tables, state, h.side, h.user, status)
+        & (state.status[party(fmt, h.side), h.user] == Status.NONE)
     )
+    cond = status_proc & ~own_block & ~leaf & can_have_status(tables, state, h.side, h.user, status)
     # Rough Skin (battle_lib.c:4257-4271): no roll; subscript_rough_skin.s takes
     # BattleSystem_Divide(maxHP, 8) from the attacker (it may faint).
     # battle_lib.c:4259: not on a Magic Guard attacker (Battler_Ability).
@@ -3025,13 +3091,56 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & hit
         & _alive(state, h.target_side, h.target)
         & h.contact_proc
+        # subscript_infatuate.s:5 -> :_082 -> :_117: the attacker's own Oblivious, silent (H-2).
+        & (own != AbilityId.OBLIVIOUS)
         & _attractable(state, h.side, h.user, h.target_side, h.target)
     )
     state = _set(state, "infatuated", h.side, 1, charm)
+    # The trigger itself (battle_lib.c:4339-4350): the same tests but the gender / Oblivious ones,
+    # which are subscript_infatuate.s's TryAttract and CheckIgnorableAbility, after sideEffectMon
+    # moved (H-4). SYSCTL_FIRST_OF_MULTI_TURN / _UTURN_ACTIVE hold no value in a hit that got here.
+    charm_proc = (
+        (ability == AbilityId.CUTE_CHARM)
+        & hit
+        & _alive(state, h.target_side, h.target)
+        & h.contact_proc
+        & (state.infatuated[h.side] == 0)
+    ) | charm
+    # Color Change (battle_lib.c:4232-4253, H-3): no contact or attacker test. The type is
+    # battleCtx->moveType when set, else the table's (``move_type``; the attacker's Normalize,
+    # :4235-4236, is an unsupported ability). The defender has HP, no MOVE_STATUS_NO_EFFECTS
+    # (``h.effective``), not Struggle, physical / specialDamageTaken from this hit's UpdateHP
+    # (bcp.c:3413-3424: ``h.dealt`` on the HP path; a substitute hit returned at :4209), no
+    # SYSCTL_UTURN_ACTIVE (the resumed U-turn tail never reaches here), table power, and neither
+    # BATTLEMON_TYPE is the type. Those are the raw types: a roosting defender's Flying reads as
+    # Mystery in ``state.types`` only for the chart's sake (``damage.chart_types``; no battler has
+    # Mystery otherwise). subscript_color_change.s:9-10 sets both; :6 tags the defender's ability.
+    types = state.types[party(fmt, h.target_side), h.target].astype(_I32)
+    roosting = state.roosting[h.target_side] != 0
+    raw = jnp.where(roosting & (types == Type.MYSTERY), Type.FLYING, types)
+    color = (
+        (ability == AbilityId.COLOR_CHANGE)
+        & _alive(state, h.target_side, h.target)
+        & h.effective
+        & (h.move != MOVE_STRUGGLE)
+        & (h.dealt > 0)
+        & ~h.sub_hit
+        & (tables.move_power[h.move] != 0)
+        & ~jnp.any(raw == move_type)
+    )
+    new_types = jnp.where(color, jnp.stack([move_type, move_type]), types)
+    state = state._replace(
+        types=state.types.at[party(fmt, h.target_side), h.target].set(
+            new_types.astype(state.types.dtype)
+        )
+    )
+    from nuzline.engine.hooks import TYPE_CHANGE
+
+    state = reveal_ability(state, h.target_side, h.target, TYPE_CHANGE, color)
     state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond | charm)
     # subscript_aftermath.s:6 tags BTLSCR_DEFENDER's ability (BattleMessage_AbilityTag).
     state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough | aftermath)
-    return _set_status(state, h.side, h.user, status, cond)
+    return _set_status(state, h.side, h.user, status, cond), charm_proc | status_proc
 
 
 SYNC_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
@@ -3054,11 +3163,12 @@ def sync_landed(before: BattleState, after: BattleState, side) -> jnp.ndarray:
 
 def synchronize(
     tables: Tables, state: BattleState, attacker, defender, flag, sem, cond, held=None
-) -> tuple[BattleState, jnp.ndarray, jnp.ndarray]:
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """``BattleSystem_SynchronizeStatus`` (battle_lib.c:4493-4534), the
     ``AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS`` step of ``AfterMoveEffects`` (bcp.c:3665-3670), where
     ``cond`` (the step runs: after every hit of a move whose AfterMoveEffects run). Returns
-    ``(state, flag, sem)``. ``flag``: ``SYSCTL_TRY_SYNCHRONIZE_STATUS``; ``sem``: the
+    ``(state, flag, sem, ran)``; ``ran``: a status script ran, which returns before the form change
+    and the knot (:4515-4532; ``sync_step``). ``flag``: ``SYSCTL_TRY_SYNCHRONIZE_STATUS``; ``sem``: the
     ``sideEffectMon`` (a battler; the side in singles). ``attacker`` / ``defender``: the action's
     battlers (the defender is the attacker itself for a self-defender move: Baton Pass).
 
@@ -3142,7 +3252,93 @@ def synchronize(
     )
     state = _set_status(state, receiver, r_mon, kind, lands & _alive(state, receiver, r_mon))
     state = reveal_ability(state, passer, p_mon, SYNCHRONIZED, lands)
-    return state, flag & ~lands, jnp.where(run, receiver, sem)
+    return state, flag & ~lands, jnp.where(run, receiver, sem), run & (kind != Status.NONE)
+
+
+def sync_step(
+    tables: Tables, state: BattleState, attacker, defender, flag, sem, loved, cond, held=None
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(state, flag, sem, loved, failed)``: the whole of ``BattleSystem_SynchronizeStatus``
+    (battle_lib.c:4493-4572) where ``cond``: ``synchronize``, which returns when a status script
+    ran; then ``BattleSystem_TriggerFormChange`` (:4536-4544), which returns when a form changes
+    (``form_change_pending``; the change itself runs at the later form-change checks, so the knot
+    of this hit is lost, H-4, H-5); then ``knot``. ``failed``: the knot's ``MOVE_STATUS_FAILED``."""
+    state, flag, sem, ran = synchronize(tables, state, attacker, defender, flag, sem, cond, held)
+    knots = jnp.asarray(cond, bool) & ~ran & ~form_change_pending(tables, state)
+    state, sem, loved, failed = knot(tables, state, attacker, defender, loved, sem, knots)
+    return state, flag, sem, loved, failed
+
+
+def form_change_pending(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_TriggerFormChange`` (battle_lib.c:6305-6451) would change a form
+    now: any of its four blocks (``hooks.form_change``: Castform's types, Cherrim's and Arceus's
+    ``form_num``, a Transformed Giratina-Origin's rebuild, which shows in ``form_num``), H-5. A
+    Giratina Origin that is not Transformed and lacks the Orb is refused by coverage: it can lack
+    it only from the battle's start, since no move takes the Orb (``hooks.form_change``)."""
+    from nuzline.engine.hooks import form_change  # hooks imports this module
+
+    new = form_change(tables, state)
+    return jnp.any(new.types != state.types) | jnp.any(new.form_num != state.form_num)
+
+
+def knot(
+    tables: Tables, state: BattleState, attacker, defender, loved, sem, cond
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(state, sem, loved, failed)``: the Destiny Knot half of ``BattleSystem_SynchronizeStatus``
+    (battle_lib.c:4546-4566) where ``cond``, the step reached it (``synchronize`` did not run a
+    status script and ``form_change_pending`` is false: both return first, :4515-4532, :4536-4544).
+    ``loved`` (``bool[B]``) is each battler's ``SELF_TURN_FLAG_INFATUATED``, set by
+    ``subscript_infatuate.s:29`` on a landed Attract, Cute Charm or knot, cleared at the action's
+    end (battle_lib.c:2013-2015); ``sem`` is ``sideEffectMon`` (a battler).
+
+    A defender (``Battler_HeldItemEffect``: Klutz / Embargo hide it) holding the knot that is
+    ``sem`` and flagged reflects to the attacker; else an attacker holding it that is ``sem`` and
+    flagged reflects to the defender (:4546-4559). ``sem`` becomes the receiver before the
+    script. ``subscript_infatuate.s`` (type ``HELD_ITEM``): the receiver's ignorable Oblivious
+    (:5, :98: no effect, the message names both, the AI learns the ability and the holder's item;
+    the receiver must have HP, ``BtlCmd_CheckIgnorableAbility`` :7716-7720); else
+    ``BtlCmd_TryAttract`` (bs:5727-5742: genders differ, neither genderless, the receiver not in
+    love), which on failure sets ``MOVE_STATUS_FAILED`` (:108-110: ``failed``, which the action's
+    ``NO_EFFECTS`` tests read: Conversion 2's record, the Metronome count); on success the
+    receiver's attract bit, the message (the AI learns the holder's item) and its flag (:29).
+    The missed branch (:6) is never met: the step runs after a hit that connected."""
+    from nuzline.engine.hooks import ROMANCE_BLOCKED, reveal_ability  # hooks imports this module
+
+    attacker = jnp.asarray(attacker, _I32)
+    defender = jnp.asarray(defender, _I32)
+    sem = jnp.asarray(sem, _I32)
+    loved = jnp.asarray(loved, bool)
+    a_mon, d_mon = state.active[attacker], state.active[defender]
+    on = jnp.asarray(cond, bool)
+    first = (
+        on
+        & (tables.item_effect[held_item(state, defender, d_mon)] == ItemId.DESTINY_KNOT)
+        & (sem == defender)
+        & loved[defender]
+    )
+    second = (
+        on
+        & ~first
+        & (tables.item_effect[held_item(state, attacker, a_mon)] == ItemId.DESTINY_KNOT)
+        & (sem == attacker)
+        & loved[attacker]
+    )
+    run = first | second
+    holder = jnp.where(first, defender, attacker)
+    receiver = jnp.where(first, attacker, defender)
+    h_mon, r_mon = state.active[holder], state.active[receiver]
+    oblivious = (
+        run
+        & (ignorable(state, attacker, receiver) == AbilityId.OBLIVIOUS)
+        & _alive(state, receiver, r_mon)
+    )
+    landed = run & ~oblivious & _attractable(state, receiver, r_mon, holder, h_mon)
+    failed = run & ~oblivious & ~landed
+    state = reveal_ability(state, receiver, r_mon, ROMANCE_BLOCKED, oblivious)
+    state = reveal_item(state, holder, h_mon, oblivious | landed)
+    state = _set(state, "infatuated", receiver, 1, landed)
+    loved = loved.at[receiver].set(loved[receiver] | landed)
+    return state, jnp.where(run, receiver, sem), loved, failed
 
 
 def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3368,6 +3564,17 @@ def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> Ba
     return _set(state, "hp", (side, mon), jnp.minimum(hp + heal, max_hp), on)
 
 
+def toxic_spikes_reached(tables: Tables, state: BattleState, side, layers) -> jnp.ndarray:
+    """``bool``: subscript_hazards_check.s reaches ``CheckToxicSpikes`` (:14) for ``side``'s active
+    Pokemon with ``layers`` (the side's count before an absorb) above 0: no Magic Guard (:5), and
+    ``damage.grounded`` (:6-11). ``BtlCmd_CheckToxicSpikes`` then makes it the sideEffectMon
+    (battle_script.c:7638-7641), poisoned or not (H-4)."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
+    return grounded(tables, state, side, mon) & ~guarded & (jnp.asarray(layers, _I32) > 0)
+
+
 def entry_hazards(tables: Tables, state: BattleState, side) -> tuple[BattleState, jnp.ndarray]:
     """subscript_hazards_check.s on ``side``'s active Pokemon as it switches in, skipped whole
     for a Magic Guard holder (:5, CheckAbility):
@@ -3392,10 +3599,10 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> tuple[BattleState
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
     guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
-    down = grounded(tables, state, side, mon) & ~guarded
     layers = state.toxic_spikes[side_of(side)].astype(_I32)
+    reached = toxic_spikes_reached(tables, state, side, layers)
     poison_type = jnp.any(state.types[party(fmt, side), mon] == Type.POISON)
-    absorbed = down & (layers > 0) & poison_type
+    absorbed = reached & poison_type
     state = _set(state, "toxic_spikes", side, 0, absorbed)
     ability = battler_decomp_ability(tables, state, side, mon)
     sun = _sunny(tables, state)
@@ -3407,7 +3614,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> tuple[BattleState
     blocks = (ability == ITEM_ABILITY_IDS["Immunity"]) | (
         sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     )
-    stopped = down & (layers > 0) & ~poison_type & blocks
+    stopped = reached & ~poison_type & blocks
     known = jnp.where(stopped & (party(fmt, side) == 0), ability, state.ai_ability_known[mon])
     state = state._replace(
         ai_ability_known=state.ai_ability_known.at[mon].set(
@@ -3415,8 +3622,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> tuple[BattleState
         )
     )
     poisoned = (
-        down
-        & (layers > 0)
+        reached
         & ~poison_type
         & ~blocks
         # subscript_poison.s:29 / subscript_badly_poison.s:46: CheckSubstitute after the ability
@@ -3482,6 +3688,9 @@ class MoveHit(NamedTuple):
     # trickRoomActivated (effect_script_0259.s:18; battle_script.c:7859-7866), so the action's
     # MoveEnd re-sorts the order (bcp.c:3989-3994; battle_lib.c:7276-7300), SF2 (k).
     trick_room: jnp.ndarray
+    # A contact-ability trigger passed on this hit (Cute Charm, H-4; Static, Poison Point, Flame
+    # Body, H-M2): sideEffectMon is the attacker, landed or not (``_contact_ability``).
+    sem_proc: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -4194,7 +4403,7 @@ def play_hit(
         # (BattleSystem_Defender, battle_lib.c:1665-1669): the foe's Shaymin is left as it is.
         on_foe = h.landed & ~targets_user(tables, move, ghost_user(state, side))
         state = shaymin_land(tables, state, target_side, on_foe)
-    state = _contact_ability(tables, state, h, outcome)
+    state, sem_proc = _contact_ability(tables, state, h, outcome, move_type)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)
     # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431; the substitute's share, :3361, :3366)
@@ -4219,4 +4428,5 @@ def play_hit(
         & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
         & ~((effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)),
         trick_room=trick_room_runs(h),
+        sem_proc=sem_proc,
     )

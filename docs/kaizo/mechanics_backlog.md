@@ -166,25 +166,25 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 19 | 19 | 19 |
-| Gardenia Split | 28 | 410 (65) | 19 | 19 | 0 |
-| Fantina Split | 38 | 463 (69) | 19 | 19 | 0 |
-| Maylene Split | 47 | 480 (73) | 19 | 19 | 0 |
-| Wake Split | 54 | 482 (71) | 19 | 19 | 0 |
-| Byron Split | 65 | 486 (72) | 19 | 19 | 0 |
-| Candice Split | 74 | 486 (72) | 19 | 19 | 0 |
-| Galactic Split | 100 | 493 (73) | 19 | 19 | 0 |
-| Volkner Split | 84 | 487 (73) | 19 | 19 | 0 |
-| Elite Four Split | 100 | 493 (73) | 19 | 19 | 0 |
-| **Whole game** | | | 19 | 19 | 19 |
+| Roark Split | 16 | 358 (64) | 1 | 1 | 1 |
+| Gardenia Split | 28 | 410 (65) | 1 | 1 | 0 |
+| Fantina Split | 38 | 463 (69) | 1 | 1 | 0 |
+| Maylene Split | 47 | 480 (73) | 1 | 1 | 0 |
+| Wake Split | 54 | 482 (71) | 1 | 1 | 0 |
+| Byron Split | 65 | 486 (72) | 1 | 1 | 0 |
+| Candice Split | 74 | 486 (72) | 1 | 1 | 0 |
+| Galactic Split | 100 | 493 (73) | 1 | 1 | 0 |
+| Volkner Split | 84 | 487 (73) | 1 | 1 | 0 |
+| Elite Four Split | 100 | 493 (73) | 1 | 1 | 0 |
+| **Whole game** | | | 1 | 1 | 1 |
 
-Of your 19 groups, 0 are also needed by opposing trainers and 19 are player-only.
+Of your 1 groups, 0 are also needed by opposing trainers and 1 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 4 | 1 | 9 | 5 | 0 | 0 | 19 |
+| Roark Split | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -194,31 +194,13 @@ Of your 19 groups, 0 are also needed by opposing trainers and 19 are player-only
 | Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **4** | **1** | **9** | **5** | **0** | **0** | **19** |
+| **Whole game** | **0** | **0** | **1** | **0** | **0** | **0** | **0** | **1** |
 
 ### Player-only groups
 
 | Kind | Group | First split |
 |---|---|---|
-| AI move effects | AI reads your ability: AI scoring: ability Filter changes IfMoveEffectivenessEquals and is not implemented: Filter | Roark Split |
-| AI move effects | AI reads your ability: AI scoring: ability Solid Rock changes IfMoveEffectivenessEquals and is not implemented: Solid Rock | Roark Split |
-| AI move effects | AI reads your ability: AI switching: ability Levitate (LEVITATED / INEFFECTIVE in ApplyTypeChart and CalcEffectiveness) is not implemented: Levitate | Roark Split |
-| AI move effects | AI reads your ability: AI switching: ability Scrappy (skips the Ghost immunities) is not implemented: Scrappy | Roark Split |
 | move effects | move effect #95: Sketch | Roark Split |
-| held items | held item effect #102: Quick Powder | Roark Split |
-| held items | held item effect #107: Full Incense | Roark Split |
-| held items | held item effect #108: Destiny Knot | Roark Split |
-| held items | held item effect #123: Shed Shell | Roark Split |
-| held items | held item effect #51: Exp. Share | Roark Split |
-| held items | held item effect #53: Soothe Bell | Roark Split |
-| held items | held item effect #54: Mental Herb | Roark Split |
-| held items | held item effect #63: Smoke Ball | Roark Split |
-| held items | held item effect #66: Lucky Egg | Roark Split |
-| abilities | ability: Color Change | Roark Split |
-| abilities | ability: Immunity | Roark Split |
-| abilities | ability: Marvel Scale | Roark Split |
-| abilities | ability: Own Tempo | Roark Split |
-| abilities | ability: Soundproof | Roark Split |
 
 ### Hold effects with no battle effect (not counted)
 
@@ -240,7 +222,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 3 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
+25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 1 missing groups, 0 not needed by any opposing trainer, 0 also not on your side.
 
 ## Roark split
 

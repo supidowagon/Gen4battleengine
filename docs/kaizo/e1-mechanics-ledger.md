@@ -928,6 +928,11 @@ of them, :2107-2115).
   (`enumerate.outcome_laws`). `damage.metronome_boost`, `effects.metronome_update` /
   `metronome_verify`, `step._use_move`; reference `_move_damage`, `_metronome_update`,
   `_metronome_verify`.
+  Ruling (manager, 2026-11-20): the status-check disruption decrement (NO_MORE_WORK sheet row C3:
+  CheckStatusDisruption sets MOVE_STATUS_NO_MORE_WORK, bcp.c:2750-2753, so VerifyMetronomeCount,
+  battle_lib.c:6184-6192, decrements a disrupted holder's count; the engine's `no_effects` needs
+  `succeeded` and never does) is E1's, built inside the NO_MORE_WORK group after D3 is in main and
+  merged into batch H.
 - G-61 (a reference fix found by the Batch D differential) The invokers (Metronome, Sleep Talk,
   Copycat, Assist) have `RANGE_SINGLE_TARGET_SPECIAL` (res/moves/*/data.json), whose
   `BattleSystem_Defender` is the user (battle_lib.c:1665-1669), so BeforeMove's HasNoTarget never
@@ -1803,7 +1808,8 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   Tests: `tests/engine/test_field_mask.py` (3.1's rows; the player's and the foe's Pursuit KO, a Life Orb
   recoil faint, Destiny Bond against a recoil with a spurious Uproar bit, U-turn's chase under Gravity; the
   first pursuer by index at B = 4; the Future Sight law on 0x8044). tests/engine/test_d3_pursuit.py does not
-  exist on this branch.
+  exist on this branch. Superseded by H-1: per-mask classes (the roll is no longer kept whole for Acid Rain at
+  B = 2; `acid_rain_reachable` no longer feeds `future_loose` there).
 - G-13 Manager ruling 7: E2's interim Acid Rain guard (SF2 (f) at B = 2, D3-9 at B = 4; the `acid_rain` field,
   its refusal and its `fullset` test) is not on main, so batch G touches no guard. When E2 merges main after
   G-12 lands, E2 drops the guard (the field, the refusal line, the `exp_refused`-style consumers, the backlog
@@ -2185,34 +2191,37 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   do not move there: they start `none` (data/kaizo/start_conditions.json; weather 16 has no battle effect,
   battle_lib.c:3700, manager ruling 4) and hold no weather refusal; any refusal of theirs is their own other
   source's.
-- G-44 Snapshot sampler drift (pod compare of 56cd9f4 vs main 08a57000): `sample_outcome` drew `starf` as
+- G-S1 Snapshot sampler drift (pod compare of 56cd9f4 vs main 08a57000): `sample_outcome` drew `starf` as
   `randint(fold_in(key, 48), (B, 2))` (08a57000 outcome.py:2076) and now `(B, 4)` from the same key
   (outcome.py:2139), which changes every entry, columns 0-1 too: all four columns of a fresh draw are sampler drift
   (`snap_compare.SAMPLED`); a saved `in_outcome` keeps columns 0-1 strict. No other draw's key, shape or bounds
   changed in `sample_outcome` (body diff: the starf line only); its state reads moved to `field_mask` (FCM).
-- G-45 Camouflage on `TERRAIN_UNKNOWN` (snapshot step / jitstep first diff `.camouflage[0]` 0 -> 1): batch G
+- G-S2 Camouflage on `TERRAIN_UNKNOWN` (snapshot step / jitstep first diff `.camouflage[0]` 0 -> 1): batch G
   dropped `terrain_known` from `effects._camouflage` (08a57000 effects.py:618-633), so terrain -1 reads row 0
   (`order.terrain_index` clip) and succeeds where main wrote nothing; the reference (`_terrain_row`) does the
   same. In a fight -1 never reaches it: `coverage.terrain_refusal` runs over the known moves plus
-  `fight_calls` (Metronome's calls) and the invokers' sources are known moves. The drawn states reach it:
-  `tests.strategies._draw_terrain` draws a terrain only when a Pokemon knows a reader, not when a Metronome (or a
-  drawn last move a caller copies) can call one (E2 owns the strategies). The game never holds an unknown:
+  `fight_calls` (Metronome's calls) and the invokers' sources are known moves. The drawn states reached it:
+  `tests.strategies._draw_terrain` drew a terrain only when a Pokemon knew a reader, not when a Metronome (or a
+  drawn last move a caller copies) could call one; since batch H's first commit it draws a terrain for every
+  state. The game never holds an unknown:
   `CalcTerrain` (field_battle_data_transfer.c:470-504) always gives a terrain and `BattleSystem_GetTerrain`
   (battle_system.c:375-381) maps an out-of-range value to TERRAIN_MAX, read as `min(terrain, TERRAIN_SPECIAL)`
   (battle_script.c:8007-8010). No engine change.
-- G-46 `enumerate._starf_reads` counted a plucked Starf Berry and the Pluck flag's second own eat as two
+- G-S3 `enumerate._starf_reads` counted a plucked Starf Berry and the Pluck flag's second own eat as two
   sources (`twice` & `plucked`): with the attacker's own Starf that read `starf[d, 3]` with no Roar newcomer, a
   third eat G-28 shows unreachable. A plucked Starf draws while a stat of the five is below +6 and its
   `subscript_held_item_sharply_raise_stat.s:21` PLUCK_CHECK clears the flag; with all five at +6 neither berry
-  draws (lib:5798-5817, :4850-4872); under Klutz / Embargo (lib:5838-5841) no own eat. `twice` now excludes
+  draws (lib:5798-5817, :4850-4872); under Klutz / Embargo no own eat (`Battler_HeldItem` gives ITEM_NONE,
+  lib:5352-5363, read by `BattleSystem_TriggerHeldItem` at :4580). `twice` now excludes
   `plucked`. The engine's step and the reference are unchanged (they already draw twice there:
   `test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer[Tackle]`).
-- G-47 The widened snapshot "rest" states (seed 165 turn 3: 160 -> 16000 rows, 2^2 * 5^2; seeds 22 / 64 / 120: the
-  width-cap text; seed 107 turn 3: SamplingOnly where main enumerated) come from batch G's later Starf reads
-  (G-29): factor 5 per read eat. Not reproduced locally (RAM gate); G-46's over-read is the only unreachable
-  read found in `_starf_reads`. Batch G's other enumerator changes: `weather_free` also on `acid`
-  (`outcome.acid_rain_reachable`, G-12, singles only with a nonzero mask), Shaymin and band reads narrowed.
-  The pod checked `test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer` (dropped: see G-S6).
+- G-S4 The widened snapshot "rest" states of batch G's pod compare (56cd9f4 vs main
+  08a57000) have three causes, each its own entry: seed 22 turn 4 and seed 165 turn 3 (160 -> 16000 rows) are
+  G-S5 (Future Sight's stored roll on a Pursuit meeting, G-12's acid law, not Starf); seed 64 turn 4 and seed 107
+  turn 3 (SamplingOnly where main enumerated) are G-S6 (the Pluck flag's over-read in `_starf_reads`); seed 120
+  turn 2 is G-S7 (Secret Power through Copycat on `TERRAIN_UNKNOWN`). Batch G's other enumerator changes:
+  `weather_free` also on `acid` (`outcome.acid_rain_reachable`, G-12, singles only with a nonzero mask), Shaymin
+  and band reads narrowed.
 - G-S5 (snapshot entry 5; explains a compare divergence of mechanic G-12) Future Sight's stored roll on a Pursuit
   meeting (pod compare e3-snap2-093367d vs main; seed 22 turn 4 segment 0, and seed 165 turn 3: `future_hit[0]` 0 -> 88,
   rest rows 160 -> 16000 = x100; both PURSUIT vs U_TURN with `acid` set):
@@ -2227,15 +2236,17 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   The enumerator's `future_hit` law grows to the 100 values and `weather_free` frees the end-speed weather points
   (enumerate.py:2365-2369, :3083-3093), which changes the width count. Same key, shape and bounds: not sampler drift,
   no UPGRADES row (encoding unchanged). The E1-only compare (56cd9f4) already diverged on rest at this seed and turn.
+  H-1 restores the seed 22 / 165 values (expected, confirm by print: ruling 2's script).
 - G-S6 Snapshot seeds 64 turn 4 / 107 turn 3: `_starf_reads` over-read `starf(0, 2)` through `twice` (the Pluck
   flag's second own Starf eat) whenever the Pluck / Bug Bite target held any item (Grip Claw, Micle Berry).
   `BattleSystem_PluckBerry` (battle_lib.c:5539-5850) sets SELF_TURN_FLAG_PLUCK_BERRY only for an eaten berry
   (`result == TRUE`: a listed PLUCK_EFFECT_* or Item_IsBerry, :5832-5835, :5846-5848), and every held-item
   subscript ends in PLUCK_CHECK (subscript_pluck_check.s clears it), so it stays only while `nextSeq` is 0.
   Leppa (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830,
-  subscript_held_item_temp_acc_up.s:12) always set `nextSeq`; Starf is `plucked` (G-46). `twice` now needs a foe
+  subscript_held_item_temp_acc_up.s:12) always set `nextSeq`; Starf is `plucked` (G-S3). `twice` now needs a foe
   item in `hooks.PLUCKABLE` minus Leppa / Micle / Starf; the other berries' conditions (full HP, no status, +6,
-  Focus Energy) are over-approximated. Klutz / Embargo (:5839-5845) keep the flag but make the own Starf inert.
+  Focus Energy) are over-approximated. Klutz / Embargo keep the flag (they zero only `scriptTemp`, :5840-5845;
+  the flag is set at :5848) but make the own Starf inert (`Battler_HeldItem`, :5352-5363).
   The read also takes a berry the foe Recycles before the Pluck (effect_script_0184.s:5-7: `hooks.pluck_berry`
   reads the live item), for `twice` (a `keeps` berry) and for `plucked` (a Starf Berry, index 0).
   The loose (brute-force) branch's `eats` is now `foes(anyone | recycled)`: a foe's Recycled Starf Berry is a
@@ -2249,7 +2260,7 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   redrew the snapshot seeds through the live strategies generator, which does not reproduce the compare's
   states, and their "third eat only with a Roar" rule is stale on the train (a flung Starf and a Recycle make three).
 - G-S7 Snapshot seed 120 turn 2 (rest: width-cap text, 262144 -> 524288 rows; one new 2-valued `secondary(1,0)`):
-  terrain-unknown class, the same root as seed 2's Camouflage line (G-45, renamed G-S2 in batch H). b1's Copycat
+  terrain-unknown class, the same root as seed 2's Camouflage line (G-S2). b1's Copycat
   copies Secret Power (290) when b1 moves first (`move_prev`, battle_script.c:7328-7341). 5da2dd49 (G-20..G-22)
   removed `terrain_known` from order.move_effects, so Secret Power on TERRAIN_UNKNOWN (-1) now resolves to row 0's
   secondary effect (terrain_index clips to 0; SECRET_POWER_EFFECTS) instead of PLAIN, and its 30% proc becomes a
@@ -2257,8 +2268,421 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   TERRAIN_SPECIAL), :8067-8070). In the game the terrain is never unknown (CalcTerrain
   field_battle_data_transfer.c:470-504; BattleSystem_GetTerrain battle_system.c:375-381), and real fights with a
   reachable terrain move are refused by coverage.terrain_refusal. The state is drawn only by
-  tests.strategies._draw_terrain, which batch H's first commit fixes: no TERRAIN_UNKNOWN when Nature Power, Secret
-  Power or Camouflage is reachable, directly or through a call move.
+  tests.strategies._draw_terrain; since batch H's first commit it draws a terrain for every state (no
+  TERRAIN_UNKNOWN), so Nature Power, Secret Power and Camouflage, directly or through a call move, never read one.
+- G-S8 (snapshot entry 8; explains a compare divergence of mechanic H-1) `future_loose` now holds only on a
+  battler whose Future Sight hit is due (count 1 now, table accuracy != 0; bcp.c:1767-1769, :2900-2902): a side
+  with a `loose` source (Trace, Embargo, Knock Off, Gravity used or ending, Transform, Worry Seed, Skill Swap,
+  Role Play, Gastro Acid, a Micle flag or berry) whose count is not 1 now stores the raw roll's class in
+  `sample` `.sample_outcome.future_hit[d]` instead of the raw roll (`hit_class` over `future_thresholds`, the
+  same `randint(fold_in(key, 28), (B,), 1, 101)`). The step reads that value only at a due hit, so no `step`
+  part changes from it; the enumerator's read is gated on a count of 1 already (enumerate.py `future_hit`
+  relevance), so no `rest` count changes from it. Same key, shape and bounds: not sampler drift, no UPGRADES
+  row (E1 ruling 3: the stored class, not 0).
+
+## Batch H
+
+- H-1 G-12 refinement: the Future Sight / Doom Desire hit's accuracy law per post-Acid-Rain mask (rule sheet
+  acid-future-law.md with its review applied; E1 rulings 1-5 of 20 Nov). Decomp: the hit runs in
+  SIDE_COND_CHECK_STATE_FUTURE_SIGHT (bcp.c:1758-1786) per battler in monSpeedOrder, skipping
+  battlersSwitchingMask (:1761-1764), only when `futureSightTurns != 0 && --futureSightTurns == 0 && curHP`
+  (:1767-1769); its subscript is loaded only then (:1782), and its CheckMoveHit
+  (subscript_future_sight_damage.s:8, battle_script.c:6115-6133, bcp.c:217-221) draws `RandNext() % 100 + 1`
+  (bcp.c:2976) unless the table accuracy is 0 (:2900-2902). The SYSCTL bits are clear at the turn end (bcp.c:3998).
+  Damage was fixed at use (battle_script.c:6065-6098): no crit or damage draw at the hit. Kaizo Future Sight and
+  Doom Desire are acc 100 (data/intermediate_kaizo/rom/moves.json 248, 353); neither can be Protected
+  (future_sight/data.json:21 flags [], doom_desire/data.json:21-23 HIDES_SHADOWS only). Acid Rain
+  (subscript_pursuit.s:100, :115, OPCODE_SUB_TO_ZERO battle_script.c:3282-3287) is reached only from a switch
+  (subscript_switch_pokemon.s:11) or U-turn (subscript_attack_then_switch_out.s:54); after it, in singles, no
+  action follows (the pursuer's action is MOVE_END, battle_script.c:6931; a U-turn user at 0 HP jumps to `_172`,
+  attack_then_switch_out.s:55, and stays in its slot at 0 HP: its count ends with no hit, bcp.c:1769); then the
+  newcomer's weather ability (clears fog, subscript_sand_stream.s:11-12 etc.), the field pass (Gravity
+  `-= 1 << 12`, Kaizo re-arm, bcp.c:1227-1238, G-67) and the hit. The hit reads the mask through sand, hail, deep
+  fog (bcp.c:2926-2937) and Gravity (:2972-2974) only.
+  Engine (`outcome`): `acid_rain_pairs` (bool[B, B], a loop over battler pairs of different sides;
+  `acid_rain_reachable` = any of it, still read by enumerate's `weather_free`). `future_thresholds`' weather axis
+  is now none / sand / hail x a field axis (Gravity off / on x fog off / on); `_future_fields` gives which are
+  possible: the start's Gravity with its fog or none, and at B = 2 for each reachable pair (b chased, x pursuer)
+  the mask `field.acid_rain` leaves for faintedMon b (b's Uproar bit cleared, x's too where b holds Destiny Bond
+  and switches: a U-turn user's Destiny Bond is gone at its move attempt, bcp.c:2425) and for faintedMon x (x's
+  Uproar bit kept for the subtraction), ticked by `field.gravity_tick`, with its fog or none. The classes are
+  over the union (`hit_class`, `hit_class_law` unchanged). Acid Rain no longer sets `loose` at B = 2; at B = 4 it
+  still does wherever any acid pair is reachable (a third battler can write the mask before the chase, two chases
+  compose; commented at the site: the exact B = 4 handling goes to the doubles milestone, E2). `loose` is masked
+  to a due hit: `over == 0 & future_timer == 1 & move_accuracy[future_move] != 0` (HP and the switching mask
+  over-approximated). Step and the reference are unchanged: both read the stored value against the live
+  threshold (`step._future_sight`, reference `_future_sight`); the class keeps that test exact.
+  Tests (tests/engine/test_e1_batch_h.py): T1 the switch / U-turn / Growl / zero-mask rows give the Growl law,
+  never loose (replaces test_field_mask.py's `test_future_sight_roll_is_kept_whole_only_where_acid_rain_can_write`);
+  T2 deep fog with the foe's switcher KO'd (0x7FFF, Gravity on): law over {a*6//10, a, a*10//6}, the step lands
+  every roll after the KO and only up to a*6//10 after a miss, each roll steps as its class, the newcomer survives
+  the hail; T2 mirror the player's switcher KO'd by a pursuer that falls to its Life Orb (faintedMon 1); T3 the
+  Kaizo Gravity rule on 0x1000 (a + 1 misses after the KO, lands without it); T4 an Embargo keeps the roll whole
+  only at a due hit (sampled values); T5 B = 4 pair [2, 3] only, loose with the Pursuit, not without.
+  Snapshot (expected, confirm by print): seed 165 turn 3 `future_hit[0]` back to main's 0 and `rest` rows back to
+  160; seed 22 turn 4 segment 0 `future_hit[0]` back to 1 (`rest` may still differ through `weather_free`); seed
+  107 unchanged (G-S6, ruling 1); other seeds: G-S8.
+  Owed D6-D7 (E2): Future Sight hit law exact per post-Acid-Rain mask at B = 4, enumerating the post-mask
+  variants over the battlers acting before the chase (sheet _scratch/e1/h-next/sheets/acid-future-law.md
+  section 4.6). Until then B = 4 keeps `loose` wherever a pair is reachable (unreachable before D11 lifts the
+  format refusal).
+- H-2 Immunity (17), Own Tempo (20), Water Veil (41), Magma Armor (40), Oblivious (12): rule sheets
+  ability-immunity.md, ability-own-tempo.md, ability-cure-veil-armor-oblivious.md; manager rulings of 19 Nov (Q3:
+  the switch-out cure for every ability of Ability_ForbidsStatus; the hp > 0 guard removed; Q2, the STATUS_CURE
+  reveals of Insomnia / Vital Spirit / Limber, not done here). New `AbilityId` IMMUNITY 97, OWN_TEMPO 98, WATER_VEIL
+  99, MAGMA_ARMOR 100, OBLIVIOUS 101 (`ABILITY_DECOMP_IDS`, tools/effect_map.py `DECOMP_ABILITY_TO_ID`); coverage
+  covers every AbilityId but UNSUPPORTED, so their holders are no longer refused (pool, prep, check_coverage).
+  Blocks (`effects._inflict`, reference `_inflict`), each before every other check of its subscript: an ignorable
+  Immunity stops any poison (subscript_poison.s:13, subscript_badly_poison.s:31), Water Veil a burn
+  (subscript_burn.s:20), Magma Armor a freeze (subscript_freeze.s:5); a DIRECT effect prints "prevents poisoning"
+  (:_177 -> :_201, :_249) / "prevents burns" (:_264), TAG_NICKNAME_ABILITY on BTLSCR_SIDE_EFFECT_MON
+  (battle_script.c:11798-11810): new reveal phases POISON_BLOCKED, BURN_BLOCKED; Magma Armor's :_128 prints only the
+  attack message (no reveal); an INDIRECT effect (secondaries, Tri Attack, a flung orb) ends silently. Psycho Shift
+  is direct (subscript_give_target_own_status.s:9-11). Own Tempo (`_confuse_foe`, `_secondary_confuse`, `_swagger`,
+  `_chatter`; reference `_move_effect`): subscript_confuse.s:12 -> :_141; Confuse Ray and Swagger/Flatter (after
+  the raise, subscript_swagger.s:10-16, only when the target is not confused) print "prevents confusion" (:73,
+  CONFUSION_BLOCKED); Psybeam-type secondaries and Chatter end silently. Oblivious (`_attract`): subscript_infatuate
+  .s:5 -> :_055 prints "prevents romance" (:39, ROMANCE_BLOCKED) for Attract. The attacker's own Immunity / Water
+  Veil stops Poison Point / Flame Body, its own Oblivious Cute Charm, silently (an ABILITY side effect: poison
+  :_322, burn :_264, infatuate :_082 -> :_117; `_contact_ability`, reference `_contact`); the Cute Charm roll is
+  C-level (battle_lib.c:4339-4355) and still drawn. Synchronize, Toxic Spikes, the status orbs and the disliked
+  berry already read Immunity / Water Veil / Own Tempo by decomp id (unchanged).
+  Cure: `hooks.recover_status_by_ability` / reference `_recover_status_by_ability` = BattleSystem_RecoverStatusByAbility
+  (battle_lib.c:4378-4452): `Battler_Ability` picks one case; `hooks.forbids_status` (Ability_ForbidsStatus's pairs,
+  :4454-4492, the same as the status cases :4383-4388, :4397-4424) clears the status and counter (:13 of
+  subscript_ability_forbids_status.s; the Nightmare clear only for sleep, :16-18, G-32), Own Tempo clears the
+  confusion (:4390-4395, msgTemp 5 -> :_045), Oblivious the infatuation (:4426-4431, msgTemp 6 -> :_052). No reveal
+  for the five (BTLSCR_MSG_TEMP, battle_script.c:11801-11802); Insomnia's, Vital Spirit's and Limber's STATUS_CURE is
+  kept until the Q2 group. Callers unchanged: MoveEnd attacker then defender (bcp.c:3965-3967) and the switch-in's
+  FORBIDDEN_STATUS (battle_lib.c:4135-4145).
+  No HP guard: lib.c:4378-4452 has no HP test; removed in both engines for every ability. The stored status of a
+  0-HP battler at the call sites: at MoveEnd the action's faint check has already zeroed the status and counter of
+  every newly fainted Pokemon (`step._faint_check`, reference `_faint_check`: the party copy, battle_controller.c:
+  1481-1486), so the cure finds 0 there; at a switch-in a newcomer that the entry hazards KO is not zeroed until
+  its action's faint check, but it cannot hold a status its ability forbids (blocked at infliction; under Gastro
+  Acid or after Skill Swap the switch-out or battle-won cure clears it; prep refuses those prestatus pairs,
+  `STATUS_BLOCKING_ABILITIES`) and its volatiles are fresh. So removing the guard changes no stored field on a
+  reachable board (no expected snapshot part from it). The decomp's BattleMon.status of a fainted battler is not
+  zeroed (only the party copy), but a status the ability forbids cannot be on it at 0 HP either: a secondary skips
+  a fainted target (battle_lib.c:1564-1566, :1580-1582).
+  Switch-out cure, all callers (Q3): `step._restore_status_on_switch` / reference `_restore_status_on_switch` =
+  BtlCmd_TryRestoreStatusOnSwitch (battle_script.c:9139-9160) and the subscript's status NONE after it: HP left
+  (:9147), raw BattleMon.ability Natural Cure (:9152) or Ability_ForbidsStatus on the party Pokemon's
+  MON_DATA_ABILITY (:9149, :9153; `_party_ability`: `party_ability` or the species row, not a Trace / Role Play /
+  Skill Swap copy) and the party status. Callers: subscript_switch_pokemon.s:5-6 (every switch now, before the
+  Pursuit at :11; `_send_out` no longer repeats it), subscript_baton_pass.s:7-8, subscript_attack_then_switch_out.s
+  :56-57, subscript_force_target_to_switch_or_flee.s:11-12 (Roar's drag, before `_send_out`), and
+  subscript_battle_won.s:6-11 (new: `_battle_won`, the player's battlers when the player wins; run after the last
+  action's MoveEnd cures on the battle abilities: `_faint_check(won_cure=False)` at the action's faint check and
+  `_move_end_head`, reference `_finish_action`; every other battle-ending faint check runs it itself, before the
+  battle end's `_restore_ability`). subscript_escape.s:5-10 and subscript_throw_pokeball.s:13 are wild-battle only.
+  The battle-won cure is new for Natural Cure too: a player's statused Natural Cure (or forbidding) battler now ends
+  a won battle clean (the next battle's carried party).
+  Enumerate: `status_blocked` gains Immunity / Water Veil / Magma Armor beside Limber, `tri_open` drops burn under
+  Water Veil and freeze under Magma Armor, `confused_blocked` the foe's ignorable Own Tempo, `attract_inflict` the
+  foe's ignorable Oblivious, `berry_confuse` the side's own Own Tempo (loose: unchanged); the five are in
+  `INPUT_NEUTRAL_ABILITIES`. AI: the readers are decomp-id reads (unchanged). Kaizo: no species or form has 12, 40 or
+  41; Zangoose and Spoink / Grumpig are player-side only (data/intermediate_kaizo/species.json).
+  Tests: tests/engine/test_e1_batch_h.py (H-2 block: blocks and reveals, Mold Breaker piercing then the MoveEnd cure
+  for Immunity, Water Veil, Magma Armor, Own Tempo, Oblivious; silent secondaries and contact abilities; Psycho
+  Shift; Skill Swap cures; the switch-out cure for Immunity, Limber, Water Veil, Magma Armor under Gastro Acid and
+  after Skill Swap; the battle-won cure); tests/engine/test_singles_followup2.py (the battle-ending MoveEnd cure gains
+  Immunity, Water Veil, Magma Armor; the two Limber boards that end the battle now end cured by the battle-won cure
+  and show no STATUS_CURE reveal); tests/engine/test_attract.py (Oblivious maps and is covered).
+  Snapshot (expected): generator drift for every seed that draws Camerupt, Glameow, Goldeen or Swinub
+  (tests/strategies.py M1_SPECIES: Magma Armor, Own Tempo, Water Veil, Oblivious become drawable slots); outcome
+  changes where a player's Natural Cure / forbidding holder ends a won battle with a status, and where a switch-out
+  meets a status the party ability forbids.
+- H-3 Color Change (16), Marvel Scale (63), Soundproof (43): rule sheets ability-color-change.md,
+  ability-marvel-scale.md, ability-soundproof.md. New `AbilityId` COLOR_CHANGE 102, MARVEL_SCALE 103, SOUNDPROOF 104
+  (`ABILITY_DECOMP_IDS`, tools/effect_map.py `DECOMP_ABILITY_TO_ID`, data/game_constants.py); their holders are no
+  longer refused. Kaizo holders (Kecleon 352, Milotic 350, Whismur / Loudred / Exploud 293-295) are player-side only.
+  Color Change (`effects._contact_ability`, reference `_color_change`): BattleSystem_TriggerAbilityOnHit's case
+  (battle_lib.c:4232-4253), the defender's own `Battler_Ability` (Mold Breaker moot; Gastro Acid NONE), no contact or
+  attacker test. Fires when the defender has HP, `h.effective` (no MOVE_STATUS_NO_EFFECTS), not Struggle, this hit's
+  physical / specialDamageTaken (`h.dealt > 0` on the HP path, bcp.c:3413-3424; a substitute hit returns at :4209),
+  table power != 0 (Seismic Toss's 1 counts) and neither raw type is the move type; the type is `move_type_of`
+  (battleCtx->moveType: Hidden Power, Weather Ball, Natural Gift, Judgment) else the table's. subscript_color_change.s
+  :9-10 set both types; :6 tags the holder (TAG_NICKNAME_ABILITY_TYPE): new reveal phase TYPE_CHANGE. SYSCTL_UTURN_ACTIVE
+  (:4247) is set only at U-turn's list (subscript_attack_then_switch_out.s:68), after its own call (:7): the resumed
+  tail has no contact-ability step in either engine. Raw types: a roosting holder's Flying is stored as Mystery while
+  the move's chart runs (`damage.chart_types`); Color Change reads it back as Flying (no battler has Mystery
+  otherwise), and the move end's roost restore keeps the new types (they differ from the stripped ones).
+  Normalize (:4235-4236) is an unsupported ability (as in TriggerImmunityAbility's absorbers): not modelled.
+  Manager order, Color Change on a multi-hit move: the decomp re-runs CHECK_TYPE_CHART every hit
+  (bcp.c:3272-3278; SYSCTL_MULTI_HIT_MOVE, system_control.h:87-93, sets no SYSCTL_SKIP_TYPE_CHART_CHECK; LoopMultiHit
+  re-runs TRY_MOVE, bcp.c:3780-3792; BattleSystem_SetupLoop clears moveStatusFlags, battle_lib.c:3357-3362). Finding:
+  both engines already do. The per-hit damage is `damage_for_roll` inside `effects.play_hit` (each `fori_loop` pass,
+  reading the carried `state.types`: STAB and the chart, ApplyTypeChart battle_lib.c:2592-2646), and the hit's
+  MOVE_STATUS_SUPER_EFFECTIVE (Enigma Berry, Expert Belt, Solid Rock) is recomputed per hit from the live types; the
+  reference's `_hit` likewise. `step._use_move`'s `chart` (computed once, before the hits) feeds only per-action reads
+  of hit 0's chart: the absorbers' `chart > 0`, Wonder Guard's test and moveFailFlags.noEffect. A Color Change between
+  hits sets the holder to the move's own type, which no Gen 4 chart row makes immune (type_chart[t, t] != 0 for every
+  t, read from the built tables), and a Color Change holder has none of those abilities; so no change was needed
+  there. Test: Double Kick on Normal Kecleon deals hit 1 at x2 and hit 2 at x1 (Fighting).
+  Marvel Scale (`damage._pre_random`, reference `_calc_move_damage`): after Guts, `d_ability_eff` (the Mold Breaker
+  view) == MARVEL_SCALE and the defender's status != NONE: Defense x150/100 (battle_lib.c:6797-6800), before the stage
+  scaling (a crit keeps it), Explosion's halving and Sp. Def (never). The confusion self-hit passes the battler as
+  defender (CALC_SELF_HIT, include/battle/common.h:35-46). The AI's estimate reads it through the same function
+  (`ai_damage_for_roll`, trainer_ai.c:3081-3091). No message: never revealed.
+  Soundproof (`step._use_move` `sound_block`, reference `_fight`): TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES
+  (bcp.c:3281-3286); the accuracy, override and chart states always go on (they return 0, bcp.c:2902-3043), and the
+  Soundproof script runs under MOVE_STATUS_DID_NOT_HIT too (:2791-2792): an ignorable Soundproof and a move with
+  MoveFlag.SOUND (sSoundMoves, battle_lib.c:3473-3486; moveCur, a called Snore as itself) on an acting user with a
+  target whose script did not fail. It reveals (subscript_blocked_by_soundproof.s:9, SOUND_BLOCKED) and sets
+  MOVE_STATUS_NO_MORE_WORK: CheckMoveFailure goes to LOOP_SPREAD_MOVES (bcp.c:3313-3314) before subscript_missed.s,
+  so a blocked miss or Protect has no unlock, no crash and no miss / protected event; no hit (no damage, no Roar
+  drag, no Uproar start, no Snore flinch), no AfterMoveEffects. Uproar (own `Battler_Ability`): the move-time wake
+  (bcp.c:2432-2433, `roused`) and the turn end's (`_uproar_check`, bcp.c:1509-1511) spare a Soundproof sleeper; the
+  uproar sleep block (subscript_fall_asleep.s:15, :44; `effects._inflict`, `kept_awake`) is skipped for a Soundproof
+  target. Perish Song (`effects.perish_song_eligible(state, user_side)`, reference `_perish_eligible`): each battler
+  also needs `ignorable(user, b) != SOUNDPROOF` (battle_script.c:5474; the user skips itself, its Mold Breaker pierces
+  a foe's), failing when none is eligible (:5482-5484); its "blocks" message tags BTLSCR_MSG_TEMP: no reveal. Rest,
+  Yawn and Heal Bell read Soundproof by decomp id (unchanged). AI: Basic_CheckSoundproof (built).
+  Enumerate: Soundproof in `INPUT_NEUTRAL_ABILITIES` and in `absorbs` (a sound move has no hit, no flinch); Color
+  Change and Marvel Scale in `INPUT_CLAUSE_ABILITIES`: the color-change clause (the side's holder hit first by a foe's
+  damaging move: its STAB; a later hit of the side's damaging move on a foe holder: the chart) and the marvel-scale
+  clause (a physical hit on a foe holder: any earlier foe move, and every later hit of the side's move).
+  Coverage: docs/kaizo/mechanics_backlog.md regenerated (tools/kaizo/backlog.py): the Color Change, Marvel Scale and
+  Soundproof rows close, and so do H-2's Immunity and Own Tempo rows (not regenerated then); one partner-row group
+  fewer.
+  Tests: tests/engine/test_e1_batch_h.py (H-3 block: Color Change's change, reveal, next hit and STAB; Double Kick per
+  hit; no change behind a substitute, for power 0, a KO, its own type, Struggle and Gastro Acid; Mold Breaker, Seismic
+  Toss and Hidden Power change it; the switch restores the species types; Marvel Scale on paralysis and sleep, not on
+  a healthy holder or a special move, not under Mold Breaker or Gastro Acid, kept on a crit and before Explosion's
+  halving, on a burned self-hit, on Twineedle's second hit after its poison, in the AI's estimate; Soundproof against
+  Hyper Voice and Mold Breaker, a missed or protected Supersonic, Roar, Uproar, sleep through its own uproar, Perish
+  Song three ways). tests/engine/test_ai_inputs.py and tests/engine/test_roar.py: Voltorb's Soundproof is no longer the
+  unsupported example (Lileep's Suction Cups). tests/test_damage_oracle.py: Soundproof joins departure 6 (the block is
+  step's; @smogon/calc returns 0).
+  Snapshot (expected): no divergence: tests/strategies.py's M1_SPECIES has no Color Change, Marvel Scale or Soundproof
+  holder (no generator drift), and the changed paths need one on the field.
+- H-4 Held items: Quick Powder (102), Full Incense (107), Shed Shell (123), Mental Herb (54), Destiny Knot (108), and the
+  items with no in-battle hook: Smoke Ball (63), Exp. Share (51), Soothe Bell (53), Lucky Egg (66). Manager rulings:
+  each item keeps its own id (`ItemId.QUICK_POWDER` .. `LUCKY_EGG`, 67-75; `tools/effect_map.HOLD_EFFECT_TO_ID`), one
+  shared set for the four with no hook (`ids.NO_IN_BATTLE_HOLD_EFFECT_ITEMS`: it lifts the coverage refusal and joins
+  `INPUT_NEUTRAL_ITEMS`), and the exp payout stays E2's (it reads the raw party hold effect in `levelup`; no payout code
+  here). Sheets: item-readers.md and item-*.md; where a sheet cites an older engine line, the grep at the build tip rules.
+  (a) Quick Powder: `BattleSystem_CompareBattlerSpeed` (battle_lib.c:1252-1255, :1318-1321): x2 for a holder whose
+  battler species is Ditto (a Transformed one is not: `state.species`), through `Battler_HeldItemEffect` (Klutz /
+  Embargo), after Choice Scarf and before Quick Feet / paralysis. `order.effective_speed`; reference `_effective_speed`;
+  the AI's compares go through `order.compare_speed` (trainer_ai.c:1109, :1121, :2081). `enumerate._end_speeds`' Embargo
+  clause (B13-31) covers it with the Scarf (a foe's Embargo hides it before the end-of-turn sort); a Transform at the
+  turn end is already kept by `xform_used`.
+  (b) Full Incense: hold effect PRIORITY_DOWN as Lagging Tail (battle_lib.c:1302-1304, :1368-1370, :1412-1421), an own
+  id read through `ids.PRIORITY_DOWN_ITEMS` in `order.compare_speed` and the reference `_player_second`.
+  Departure from the sheet: the sheet mapped it onto `ItemId.LAGGING_TAIL`; the manager's ruling (own ids) wins.
+  (c) Shed Shell: `Battler_IsTrapped` returns FALSE first (battle_lib.c:5514-5520), before Mean Look / Ingrain /
+  Shadow Tag / Magnet Pull / Arena Trap (:5522-5536); `actions.trapped` and the reference `_trapped`; Klutz and Embargo
+  hide it; a move lock (`locked_slot`) still blocks. No Run / Teleport case exists (`Battler_IsTrappedMsg`); the AI's
+  own trapping test reads no item (trainer_ai.c:3901-3913).
+  (d) Mental Herb: BattleSystem_TriggerHeldItem (battle_lib.c:4889-4894) and ..OnStatus (:5102-5107) test
+  VOLATILE_CONDITION_ATTRACT only (Gen 4: no Taunt / Encore / Disable); `hooks._restore` clears `infatuated`; the shared
+  `held_item_check` spends it (PLUCK_CHECK, subscript_held_item_heal_infatuation.s:11) into `item_consumed` /
+  `recycle_item` and forgets the AI's record; the message tag is BTLSCR_MSG_TEMP: no reveal. Not in `PLUCKABLE`.
+  Reference `_cure`. Fling's cure was E3's (`hooks.fling_effect`).
+  (e) Destiny Knot (`effects.knot`, `effects.sync_step`; reference `_knot`, `_sync_status`, `_synchronize`): the tail of
+  `BattleSystem_SynchronizeStatus` (battle_lib.c:4546-4566). A defender holding it (Klutz / Embargo hide it) that is
+  `sideEffectMon` with SELF_TURN_FLAG_INFATUATED reflects to the attacker, else an attacker likewise to the defender;
+  `sideEffectMon` becomes the receiver before the script. subscript_infatuate.s as HELD_ITEM: the receiver's ignorable
+  Oblivious with HP (:5, :98, BtlCmd_CheckIgnorableAbility battle_script.c:7716-7720: Mold Breaker of the attacker
+  hides it) shows "made the item ineffective" (reveals the receiver's ability and the holder's item, battle_script.c:
+  11516-11520, :11546-11548) and nothing else; else BtlCmd_TryAttract (battle_script.c:5727-5742: genders differ,
+  neither genderless, receiver not in love); a failure sets MOVE_STATUS_FAILED (:108-110), a landing sets the
+  receiver's attract bit to the holder, tags the holder's item (AI reveal) and flags the receiver (:29).
+  Rulings (manager: follow the decomp, departures are must-fix):
+  1. Order. A status script that ran returns first (:4515-4532: `synchronize` now returns `ran`); then
+  BattleSystem_TriggerFormChange returns when any form would change (:4536-4544), losing the hit's knot
+  (`effects.form_change_pending`: every block, H-5). Then the knot. The flag SYSCTL_TRY_SYNCHRONIZE_STATUS is not read by the knot.
+  2. Cute Charm moves `sideEffectMon` to the attacker BEFORE `subscript_infatuate` tries the infatuation
+  (battle_lib.c:4339-4350: tests `curHP`, the attacker not in love, no NO_EFFECTS, not FIRST_OF_MULTI_TURN / UTURN_ACTIVE,
+  damage taken, contact, defender HP, the 30 % roll), so a failed one (genders, Oblivious) still moves it:
+  `MoveHit.charm_proc`, `step`'s hit loop. The sem Attract sets (effect_script_0120.s: the defender) is the engine's
+  default `target_side`; the reference sets `sync_mon` at Attract.
+  3. SELF_TURN_FLAG_INFATUATED is per battler (`loved`, bool[B] in the hit loop, set when a hit takes a battler's
+  `infatuated` from 0 to non-0 = Attract or Cute Charm landing, and by a landed knot); cleared by BattleContext_Init at
+  the action's end (battle_lib.c:2013-2015), so kept across a multi-hit action and across U-turn's party list:
+  new scratch `ts_loved` (int8[B], STATE.md row `BattleContext.selfTurnFlags`; reference `turn.loved`, `ts_loved`).
+  4. U-turn pause (review 42bbeb89 must-fix 1): subscript_attack_then_switch_out.s:70 sets
+  BTLVAR_ATTACKER_SELF_TURN_STATUS_FLAGS (selfTurnFlags[attacker].statusFlags, battle_script.c:9623-9624) to
+  SELF_TURN_FLAG_CLEAR before SHOW_PARTY_LIST (:71), after the :7 Cute Charm that infatuated the user: the resumed tail's
+  attacker branch (battle_lib.c:4553-4556) never passes, whatever the newcomer holds. `ts_loved` keeps the attacker's slot
+  cleared where the user goes to the list (the head's write, and the MODE_PURSUIT tail where the user survived).
+  Pursuit (:54, before :70): its contact (subscript_pursuit.s:40; SYSCTL_UTURN_ACTIVE is set only at :68) can run the
+  U-turn user's Cute Charm on the pursuer: sideEffectMon = the pursuer (battle_lib.c:4351), its flag set
+  (subscript_infatuate.s:29); both survive the list unless the list's CheckToxicSpikes finds layers for the newcomer,
+  which makes it the sideEffectMon (subscript_hazards_check.s:5-14, battle_script.c:7638-7641), or the newcomer's
+  King's Rock test makes the defender it (bcp.c:4643). So the resumed knot's defender branch (battle_lib.c:4546-4552)
+  reflects the pursuer's knot onto the newcomer: `ts_loved[pursuer]` set in the Pursuit stage (`step._execute_actions`;
+  reference `_contact_ability` in `_pursuit`), the resumed `sync_sem` = the flagged slot unless `entry_toxic`
+  (`effects.toxic_spikes_reached`, `_act`; reference `_entry_hazards` sets `sync_mon`, `_resume` starts from the flagged
+  slot). A user felled by the Pursuit ends the script at :55, before :70: its MODE_PURSUIT tail reads its own flag
+  (`tail_fainted`), and its knot infatuates the pursuer (cleared again at its faint, battle_lib.c:2175-2176; the AI
+  reveal stays). `ts_loved` is therefore kept. A Castform newcomer in weather makes TriggerFormChange return at the
+  resumed step (battle_lib.c:6314-6340, :4536-4544; the switch-in effects come after, bcp.c:3672): the reachable case of
+  ruling 1's form-change skip.
+  5. FAILED: an unlanded knot sets MOVE_STATUS_FAILED, which is in MOVE_STATUS_DID_NOT_HIT / NO_EFFECTS
+  (moves.h:81-85): it clears UpdateFlagsWhenHit's conversion2 record (bcp.c:4512) and counts as a no-effect move for
+  BattleSystem_VerifyMetronomeCount (battle_lib.c:6184). The last hit's value stands (SetupLoop zeroes the flags per
+  hit, battle_lib.c:3359): `knot_failed` in the hit loop and `_Turn.knot_failed`; on the U-turn tail the conv2 record
+  clears likewise (`tail_knot_failed`). Nothing else reads the flag after the Synchronize step (grep of
+  MOVE_STATUS_NO_EFFECTS / DID_NOT_HIT in battle_controller_player.c, battle_lib.c).
+  6. Modelled in H-5. Unobservable in singles (review should-fix 3): the sideEffectMon a failed Cute Charm moves is read only
+  by the Synchronize step with SYSCTL_TRY_SYNCHRONIZE_STATUS set, which needs a status landed this action; with Cute
+  Charm the defender's ability, that is a secondary on the defender, which cannot then take the passed status.
+  Enumerate: `knot_love` (the foe's damaging contact move, a knot holder, a Cute Charm holder on `s` that can
+  infatuate its attacker) joins `infatuated_by_foe`, so a foe moving first reads `s`'s attract-check coin; the items are
+  in `INPUT_NEUTRAL_ITEMS` (infatuation is no damage input). Foe-side holders need Trick / Thief (unsupported).
+  (f) Smoke Ball, Exp. Share, Soothe Bell, Lucky Egg: no reader in a trainer battle outside the payout (the escape paths
+  of Smoke Ball are never reached: bcp.c:601-614, effect_script_0153.s:5, subscript_replace_fainted.s:6; the payout's
+  Exp. Share / Lucky Egg / Soothe Bell reads are the party item's raw hold effect, battle_script.c:2209, :9709, :9745,
+  :9749, :9857, E2's `levelup`). Item facts that still hold: Knock Off / Unburden, Fling power, Natural Gift failing.
+  Coverage: the nine ids lift the `UNSUPPORTED` refusal; docs/kaizo/mechanics_backlog.md regenerated (the nine held-item
+  rows close: 14 player-only groups become 5); coverage.py's header note no longer lists Mental Herb / Destiny Knot.
+  Tests: tests/engine/test_e1_batch_h.py (H-4 block: Quick Powder's order of terms, Full Incense against Lagging Tail,
+  Shed Shell against Mean Look / Ingrain / Klutz, Mental Herb's cure and keep, Destiny Knot on Attract, on a Cute Charm
+  hit, a failed reflection's MOVE_STATUS_FAILED (Conversion 2 record, Metronome count), the U-turn user's cleared flag,
+  the pursuer's flag at the resumed tail (plain, Toxic Spikes, Castform in rain), the Pursuit-felled user's knot, ids and
+  the shared set).
+  Snapshot (expected): `none` for every item here: the items were refused by coverage until now, so no snapshot team
+  can hold one (and tests/strategies.py's generators draw no such item).
+- H-5 BattleSystem_TriggerFormChange: Cherrim, Arceus, the Transformed Giratina-Origin (rule sheet form-change.md;
+  `hooks.form_change`, formerly `hooks.forecast`; reference `_form_change`). battle_lib.c:6305-6451, per battler in
+  `monSpeedOrder`, the first change writes and returns TRUE. Kaizo changes only relocate the function (rom_diff.md:678,
+  :674, :642, :461): every rule holds in both games. The sheet's cites were re-checked against the decomp; no departure.
+  New state: `form_num` (int8 per battler, `BattleMon.formNum`, battle_mon.h:79; STATE.md row `BattleMon.formNum`).
+  Writers (all of the decomp's): InitBattleMon (battle_lib.c:130-132: `initial_arrays` for the leads, `step._switch_in`
+  after `_restore_transform`, reference `_enter`), Transform (battle_script.c:5346-5348: the bytes up to `ability` carry
+  it; `effects._transform`, reference `_transform`), the Castform block (CASTFORM_FORM_* 0-3, forms.h:51-54; it had no
+  reader, now mirrored), Shaymin's revert (sub/subscript_check_shaymin_form.s:10), and the blocks below. Its only readers
+  are the Cherrim, Arceus and Giratina tests; `state.form` and its readers stay (Cherrim, Arceus and Castform have no data
+  form: `Pokemon_GetFormNarcIndex`, pokemon.c:4929-4960).
+  (a) Cherrim (:6366-6396): species and HP, no ability test (Gastro Acid is irrelevant; a Ditto copy of a Cherrim is
+  tested by species). The else-if chain and the Cloud Nine case reduce to one target: Sunshine (1) iff no alive Cloud Nine /
+  Air Lock (`NO_CLOUD_NINE`, common.h:63-64) and sun; else Overcast (0); sandstorm and fog count as no weather
+  (FIELD_CONDITION_CASTFORM, condition.h:140). Only formNum is written. Not reachable from a trainer's data (every
+  trainer Cherrim has form 0, the party's form is never updated: no SYSCTL_FORM_CHANGE or SYSCTL_RECALC_MON_STATS is set
+  for it), modelled by the rule all the same.
+  (b) Arceus (:6398-6410): species, HP and `Battler_Ability` Multitype; formNum := `Pokemon_GetArceusTypeOf` of the RAW
+  held item's hold effect (pokemon.c:4319-4377: the plate's type, Normal for any other item or none; Klutz and Embargo do
+  not hide it: `damage.judgment_type` on `state.item`). Reach: the plate and the ability cannot change in battle (Fling
+  effect_script_0233.s:5, Thief / Covet battle_script.c:5108, Knock Off subscript_knock_off.s:6, Trick
+  subscript_exchange_items.s:7-8, Embargo subscript_embargo_start.s:7; Role Play, Skill Swap, Worry Seed and Gastro Acid
+  skip Multitype, Trace skips it: battle_lib.c:7756-7776), so a change comes at a send-out whose party form (a trainer
+  Arceus gets no `Pokemon_SetArceusForm`, trainer_data.c:204-305) differs from its plate (a lead's check at the battle
+  start, a newcomer's after the knot step), or for a Transform copier whose own item's type differs from the copied formNum
+  (Kaizo Ditto 650 with a Spooky Plate).
+  (c) Giratina (:6412-6451): species, HP, formNum Origin and (Transformed or, without Distortion, no Griseous Orb). The
+  Transformed branch (:6419-6449) is built: the target is a singles foe (`msgBattlerTemp ^ 1`) or a doubles battler's
+  `chosen_target` (battlerActions[..][CHOOSE_TARGET], :6424-6425, read as data; a redirect can leave it on another
+  species); its party Pokemon (`hooks._party_mon`, reference `_party_pokemon`: the target's shadow while it is Transformed
+  itself) is copied with the item removed and form Altered set (:6431-6437). `Pokemon_SetGiratinaFormByHeldItem`
+  (pokemon.c:4380-4405) acts only on a Giratina (:4397-4404): Altered, the ability by `BoxPokemon_CalcAbility`
+  (pokemon.c:4746-4766: the personality's slot, `ability_slot`, slot 0 when the row's second is empty, as `shaymin_land`;
+  Pressure today), stats recalculated from the party Pokemon's IVs, EVs, level and nature; any other species keeps its party
+  stats and ability (`MON_DATA_FORM` is a plain write, pokemon.c:1608-1609; `party_ability` where a script wrote it). The
+  copier's Attack, Defense, Speed, Sp. Atk and Sp. Def and ability take those (:6441-6446), formNum := 0 (:6447);
+  `SYSCTL_FORM_CHANGE` (:6448) makes `BattleController_EmitUpdatePartyMon` (:6450, battle_controller.c:1461-1494) write
+  the copier's OWN party form 0 (battle_io_command.c:597-599: `shadow_form`; the copy `state.form` the Transformed slot
+  holds follows, which Beat Up reads); no `updateStats`, so the party's ability and stats stay; moves and PP are skipped
+  while Transformed (:581-587). `subscript_form_change` runs, not the Giratina subscript, but the AI learns the new
+  ability all the same (review 6567c627 must-fix 1): the rebuild happens at AfterMoveEffects' SYNCHRONIZE_STATUS
+  (`BattleSystem_SynchronizeStatus`, battle_lib.c:4536-4544; bcp.c:3665-3670), and Transform cleared
+  `moldBreakerAnnounced` / `pressureAnnounced` (battle_script.c:5357-5358), so TRIGGER_SWITCH_IN_EFFECTS (bcp.c:3672)
+  reaches the PRESSURE state (battle_lib.c:4096-4110) with Pressure: subscript_pressure.s tags BTLSCR_MSG_BATTLER_TEMP ->
+  `BattleMessage_AbilityTag` -> `BattleAI_SetAbility` (battle_script.c:11806). The engines run `form_change` before the
+  Transform's switch-in checks (`step._use_move`, reference `_move_effect`), so `reveal_ability` / `_know_ability` and
+  the Trace / weather / Intimidate / Download states see the rebuilt ability; the engine has no `pressureAnnounced`
+  (its only effect is that AI record, written at the same check). Types, stages, moves, PP, HP, `power_trick` /
+  `power_trick_desync` stay. Fixpoint (review should-fix 1): the rebuild writes an ability (a party Cloud Nine / Air Lock
+  added or removed), which Castform's and Cherrim's tests read, and the decomp re-runs the loop (:4115-4121); nothing
+  feeds a rebuild and it fires once, so `form_change` runs every rebuild first and the other blocks after. The
+  non-Transformed Origin without the Orb (:6450-6453, `subscript_giratina_form_change`) stays refused
+  (`coverage._check_form`: the Orb cannot leave in battle: Knock Off subscript_knock_off.s:7, Thief battle_script.c:5111,
+  Trick subscript_exchange_items.s:9-10, Fling effect_script_0233.s:6, Natural Gift effect_script_0178.s:6, Embargo
+  subscript_embargo_start.s:9). Reachable: Kaizo Cyrus 780 slot 0 (Origin with the Orb) against any Transform user, or a
+  Kaizo Ditto against the player's Origin. Not applied (review should-fix 2): `outcome.pivot_view` (outcome.py:1854) and
+  the speed variants of `enumerate` (enumerate.py:705) install an active without `form_num`, but neither state reaches
+  `form_change` / `form_change_pending` (only `effects.sync_step` and the step's own calls read them; the resumed U-turn
+  runs `step._switch_in`, which sets `form_num`), so no reader sees the stale value.
+  Callers (unchanged, renamed): `hooks.switch_in_effects`, `hooks.battle_start`, `step._move_end_tail`,
+  `step._turn_start_items` (battle_lib.c:4115-4121; reference engine.py:3358, :8567, :8628), and the Synchronize step (battle_lib.c:4536-4544): `effects.form_change_pending` is now `form_change`'s
+  types or `form_num` differing (reference `_form_pending`: run and undone), so a U-turn / Baton Pass newcomer whose form
+  is pending (a Cherrim in sun, an Arceus off its plate) loses that action's knot, as H-4 ruling 1 owed.
+  Coverage: no refusal added or lifted; coverage.py's header note lists the modelled blocks. Backlog: no row changes.
+  Tests: tests/engine/test_e1_batch_h.py (H-5 block: the Cherrim weather cases, Cloud Nine, Sunny Day and the battle start,
+  a send-out, the knot skip beside H-4's Castform case, the Arceus battle-start and Transform cases, `form_change_pending`
+  against `_form_pending`, a Destiny Knot reflection lost to a pending plate, the Transformed Giratina's rebuild with the
+  AI's Pressure record (one step: the switch-out restore is G-69's), the doubles rebuild from a chosen Golduck (party
+  stats, Cloud Nine, the Cherrim turned back in the same check) and from an odd-personality Giratina (Pressure, slot 0)
+  in both engines). Snapshot (expected): no output divergence (tests/strategies.py draws no Cherrim, Arceus or Castform;
+  its Giratina holds the Orb at form 0; every block is idle, the Transform pre-run included); the one new field is
+  `form_num` (`--allow-new form_num`), set from the active slot's form by the generator.
+  - H-5 review fix (merge-gate finding: "the Orb can leave by Knock Off / Trick, so Origin should revert"): finding
+    withdrawn, the decomp says the Orb cannot leave in battle. The C commands have no Orb test (TryKnockOff
+    battle_script.c:6608-6630, TrySwapItems :6336-6357), but the scripts that call them fail first on a held Griseous
+    Orb: subscript_knock_off.s:7 (-> :15 End; effect_script_0188.s:5), subscript_exchange_items.s:9-10 (attacker or
+    defender -> :49-50 MOVE_STATUS_FAILED; Trick / Switcheroo, effect_script_0177.s:5), Thief / Covet in the C
+    (TryStealItem :5111; an Origin attacker holds the Orb, so :5120 fails it too), Fling effect_script_0233.s:6, Embargo
+    subscript_embargo_start.s:9. Pluck / Bug Bite eat only a pluck-effect berry (BattleSystem_PluckBerry,
+    battle_lib.c:5539-5543; TryPluck battle_script.c:8116-8131); every other RemoveItem takes the holder's own consumed
+    item; Sticky Barb's transfer and Recycle need an empty hand (battle_lib.c:5389, :7379; effect_script_0184.s:5). So
+    the no-Orb branch of TriggerFormChange (battle_lib.c:6412-6418 -> subscript_giratina_form_change.s) is reachable
+    only from the battle's start (the Origin without the Orb that coverage refuses, `coverage._check_form`), and
+    `form_change_pending` has no missed early return before the Destiny Knot step. Both engines already model every
+    one of those script checks (`effects` Knock Off cond, Skill Swap / Role Play / Embargo / Fling / Thief tests;
+    reference engine.py:4825, :8352); Trick / Switcheroo are refused moves today, and their model must carry :9-10.
+    Change: no engine behaviour; the coverage.py form-change bullet, the `hooks.form_change` and
+    `effects.form_change_pending` docstrings now cite these checks. Test (slow, peak 8.52 GB cold):
+    `test_knock_off_leaves_giratina_origin_its_griseous_orb_and_its_form` (item, mark, `form_num` 1, stats, Levitate
+    kept, both engines); passed, and the H-5 block (21 tests) passed. No new field, no table input changed. Snapshot:
+    no part can meet it (no engine change; tests/strategies.py:385 draws Giratina with the Orb at form 0), so the
+    closing compare e1-close-h-5 stays valid.
+- H-6 The trainer AI's reads of Filter (111), Solid Rock (116), Levitate (26) and Scrappy (113) (rule sheets
+  ai-filter.md, ai-solid-rock.md, ai-levitate.md, ai-scrappy.md). AI only: the battle's own handling of the four was
+  built in `damage` earlier (`_finish`, `levitated`, `identified`); the engine, the reference and the tables are
+  untouched. Decomp (battle_lib.c): `BattleSystem_ApplyTypeChart` :2560-2679 -- Levitate through
+  `Battler_IgnorableAbility` + Ground + no Iron Ball sets MOVE_STATUS_LEVITATED (:2600-2603, moves.h:68, part of
+  MOVE_STATUS_IMMUNE :87, not of INEFFECTIVE) and skips the walk like Magnet Rise (:2604-2609); Scrappy of the
+  attacker (`Battler_Ability`, no Mold Breaker gate, Gastric Juice makes it none) or Foresight breaks the walk at the
+  0xFE separator (:2611-2616); a super-effective move with power against Filter or Solid Rock
+  (`Battler_IgnorableAbility`, :2657-2659) becomes `BattleSystem_Divide(damage * 3, 4)` (:2660, Divide :3599-3618),
+  no flag change, before Expert Belt and Tinted Lens. `BattleSystem_CalcEffectiveness` :2681-2741 -- Levitate in the
+  defender argument, attacker argument not Mold Breaker, Ground, no Gravity, defender item effect not Iron Ball
+  leaves INEFFECTIVE alone (:2698-2703); the attacker argument Scrappy breaks the walk (:2708-2714, no Foresight
+  test). The attacker/defender arguments are the callers': trainer_ai.c:3769-3777 (pass 1: the
+  player's `Battler_Ability(moveHitBattler)` against the bench member's raw MON_DATA_ABILITY), :3786-3794 (pass 2
+  and the Wonder Guard step: the member's raw ability against `Battler_Ability(moveHitBattler)`) and
+  battle_lib.c:8002-8010 (post-KO stage 1, same shape). `Battler_Ability` reads Levitate as none under Gravity,
+  Ingrain and Gastric Juice (:3088-3104). Built (src/nuzline/ai): `switching.chart_flags` (a `ChartFlags` tuple
+  replacing `defender_chart_flags`: adds the attacker's Scrappy to `identified` and `levitated`),
+  `chart_multipliers` / `_chart_flags` / `type_chart_flags` take `levitated` (LEVITATED bit, walk skipped),
+  `apply_type_chart` applies Filter / Solid Rock after the walk, `calc_effectiveness_flags` takes the two ability
+  arguments (`atk_ability`, `def_ability`), `seen_ability` is `Battler_Ability` of the player's active in decomp ids,
+  `IMMUNE_CHART` = INEFFECTIVE | LEVITATED | MAGNET_RISE. Callers: `effectiveness_class` (ai.c:1311-1346, IMMUNE
+  class 0; the Filter value 60 / 90 / 180 hits no class, x4 non-STAB 160 -> 120 -> DOUBLE), `if_has_super_effective_move`
+  (ai.c:2176-2184), `_layout` (the keep draws, AI_CannotDamageWonderGuard, pass 1 and 2 with the abilities above),
+  `replacement._stage_2_score` (:8055-8075, IMMUNE_CHART) and `_post_ko` stage 1. `AI_OnlyIneffectiveMoves` still
+  tests INEFFECTIVE only (ai.c:3397), so a Ground move into Levitate counts as damaging, and a Normal / Fighting
+  move by a Scrappy attacker into a Ghost no longer reads INEFFECTIVE. Refusals lifted: switching
+  `_ANY_SIDE_ABILITIES` is Normalize only (game_constants.py `_ANY_SIDE_ABILITIES`), policy `_DEFENDER_ABILITIES`
+  is gone and `_ATTACKER_ABILITIES` is Normalize, Adaptability, Tinted Lens; the AI side's Expert Belt stays
+  refused. Weather Ball's AI type keeps its refusal (manager ruling). Departures from the sheets: none against the
+  decomp. One consequence the sheet only raised as an open question is taken: pass 1's Wonder Guard step reads the
+  player's `Battler_Ability` for Mold Breaker (trainer_ai.c:3772) instead of the raw ability, so a Gastric-Juiced
+  Mold Breaker no longer hides a Wonder Guard bench member. `damage.levitate_off` holds `Battler_Ability`'s Levitate
+  rule (Gravity, Ingrain; battle_lib.c:3095-3103) once, for `damage.ignorable` and `switching.seen_ability`. Tests:
+  tests/ai/test_type_chart_abilities.py (classes, the post-KO stage 2 pick with the u8 wrap, the Expert_HighCritical
+  :2836 and EvalAttack :6383 paths on Kaizo, the three Scrappy CalcEffectiveness reads); the tests that used
+  Levitate, Scrappy, Filter or Solid Rock as the refused example now use Normalize (test_current_ability,
+  test_policy, test_switching, test_kaizo_outcome, test_k3b_abilities, test_pool, tests/search), which is
+  reachable only artificially (no Kaizo holder; vanilla Skitty's is engine-UNSUPPORTED: the AI names it from the
+  decomp id); test_batch3_review's Trace copy of Mr. Mime's Filter is now kept, Tinted Lens stays the AI side's
+  refused copy. Expected snapshot divergence: none. The random-state parts (step, jitstep, sample, rest) never
+  import nuzline.ai; the ai part and roark.rank run vanilla Roark against the sample party, which holds none of
+  the four; the Kaizo golden party holds none either, Kaizo Roark's Solid Rock holders (Lileep, Corsola, Shuckle)
+  are on the AI side, which the AI's chart reads never take as the defender, and no party holds Wonder Guard. No
+  new field: `--allow-new` is empty.
 - MF-1 (claude/e1-main-fix 65aebee5) `order.compare_speed` takes BattleSystem_CompareBattlerSpeed's dead-battler
   short-circuit (battle_lib.c:1204-1211): a battler with no HP against one with HP is SLOWER, before Quick Claw,
   Lagging Tail, Trick Room and speed. The reference had it (`_player_second`), and so had `hooks.order_swaps`
@@ -2273,6 +2697,170 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `end_speed_tie` / `quick_claw` branches of such a turn now lead to identical child states and may merge (the
   decomp draws no tie bit there). Owed (cleanup): `hooks.order_swaps`' own dead-battler line (hooks.py:412-413)
   is now redundant with `player_second`; drop it in a later cleanup.
+- H-M1 (merge of main 7698de58, D3, into batch H; 2df0a922) Built, B = 4 only: the U-turn tail's sideEffectMon after
+  several pursuers. Writes between the U-turn hit and the list: U-turn's own secondary, MOVE_SIDE_EFFECT_ON_HIT
+  (effect_script_0228.s:5), whose MapSideEffectToSubscript sets sideEffectMon = 0 (battle_lib.c:7521-7522) before
+  subscript_attack_then_switch_out.s runs; then the target's contact trigger on the U-turn hit
+  (subscript_attack_then_switch_out.s:7, battle_lib.c:4224, :4313, :4331, :4350: the user) and each Pursuit hit's
+  (subscript_pursuit.s:40, :86; BtlCmd_TryPursuit takes the pursuers in index order, battle_script.c:6899-6934): the
+  U-turn user's trigger sets sideEffectMon = that pursuer whether or not its subscript lands (:4350 before
+  subscript_infatuate.s:7 TryAttract). No other command in subscript_pursuit.s, its called subscripts or
+  attack_then_switch_out.s:52-69 writes it (BattleSystem_SetupLoop, battle_lib.c:3357, does not); Toxic Spikes'
+  CheckToxicSpikes (battle_script.c:7638-7641) and King's Rock (bcp.c:4643) come after the list. Readers: the
+  Synchronize step (its flag cleared at :69, set again only by the list's Toxic Spikes, `entry_toxic`) and the knot
+  step (battle_lib.c:4546-4566), which needs the defender (or attacker) to be the sideEffectMon and flagged
+  INFATUATED (subscript_infatuate.s:29; the only reader of that flag). The secondary's battler 0 (with no trigger
+  after it) is never read: at the resume the Synchronize flag is clear (:69) and Toxic Spikes sets flag and
+  sideEffectMon together, the attacker's INFATUATED flag is cleared (:70), and any flagged pursuer means a trigger
+  ran and moved sideEffectMon; on the felled tail every flag likewise comes from a trigger (both engines take the
+  user / target there instead of 0). The U-turn user has one ability, so with any
+  flagged pursuer every pursuer trigger is Cute Charm. Rule: the sideEffectMon at the list is the last pursuer
+  whose Cute Charm trigger passed. Built in `ts_loved` (no new field): 1 = flagged and the sideEffectMon, 2 =
+  flagged but a later pursuer's trigger moved sideEffectMon off it (the flag stays: King's Rock in the tail can make
+  the defender the sideEffectMon again). Engine: `_pursuit_hit` returns `MoveHit.charm_proc`; the Pursuit pass
+  turns 1 into 2 on a trigger and marks a charmed pursuer 1; `pre_list` reads `ts_loved == 1`; the MODE_PURSUIT
+  tail's `pursuit_sync` sideEffectMon also moves on the trigger (a charmed pursuer stays sideEffectMon when a later
+  pursuer fells the user: a fainting hit passes no Cute Charm trigger, :4347; Static, Poison Point and Flame Body
+  have no defender-HP test, H-M2). Reference: the pause writes 1 / 2 from
+  the live `turn.sync_mon`; `_resume` takes the 1 slot. Tests (test_e1_batch_h.py):
+  `test_the_resumed_knot_reads_the_last_pursuers_cute_charm_trigger` (4 cases: superseded by a failed or a landed
+  later trigger, the last charmed is the knot holder, only the second charmed),
+  `test_a_u_turn_user_felled_by_a_later_pursuer_keeps_the_charmed_one_as_side_effect_mon`. Snapshot class: B = 2
+  none from H-M1 itself (one pursuer: only `ts_loved` 1 occurs, and its felling hit passes no Cute Charm trigger);
+  the felled tail's status-trigger case is H-M2's. If a later rule needs the sideEffectMon at the list itself, add
+  `ts_sem` (1 + battler) rather than more `ts_loved` codes.
+- H-M2 (found building H-M1) Built, all B: a blocked Static / Poison Point / Flame Body trigger still moves
+  sideEffectMon. BattleSystem_TriggerAbilityOnHit sets sideEffectMon = attacker once the trigger passes (battle_lib.c:
+  4214-4224 Static, :4303-4313 Poison Point, :4321-4331 Flame Body: attacker HP, attacker status NONE, no
+  MOVE_STATUS_NO_EFFECTS, no FIRST_OF_MULTI_TURN / UTURN_ACTIVE, damage taken, contact, the roll; a substitute hit
+  returns first, :4209), before the subscript, which then stops silently on the attacker's own Limber / Immunity /
+  Water Veil, Leaf Guard in sun, or type (subscript_paralyze.s:5-8, subscript_poison.s:13-16, :34-37,
+  subscript_burn.s:20-23, :40-41; an ABILITY side effect skips the substitute, paralyze :20, poison :28, burn :35, and
+  Safeguard, paralyze :26, poison :39, burn :43; a status already is excluded by the trigger itself). Only a landing toggles SYSCTL_TRY_SYNCHRONIZE_STATUS
+  (subscript_paralyze.s:50-56 and the like). Effect Spore (:4273-4300) is the same shape but the ability is not
+  modelled (dropped in batch F, no Kaizo holder). Built: engine `effects._contact_ability` returns `sem_proc` (Cute
+  Charm's trigger, H-4, or the status trigger; `MoveHit.charm_proc` renamed `sem_proc`), which `_use_move`'s
+  `sync_sem` and the Pursuit pass (H-M1: `ts_loved`, `pursuit_sync`) read; reference `_contact_ability` sets
+  `turn.sync_mon` at the trigger, before the blocks. B = 2 is visible on the MODE_PURSUIT tail (review 5408d448
+  finding 1): the three triggers have no defender-HP test (only Cute Charm's, :4347), so a Pursuit hit that fells the
+  U-turn user still runs them (subscript_pursuit.s:84-87). A Destiny Knot + Poison Point (Flame Body) user charmed by
+  the target's Cute Charm on its U-turn hit (sideEffectMon = user, :4350) and felled by that Cute Charm foe's Pursuit
+  passes the trigger on the felling hit (sideEffectMon = the pursuer) though the pursuer's Poison / Steel (Fire) type
+  stops it (subscript_poison.s:34-37, burn :40-41): the tail's knot attacker branch (battle_lib.c:4553-4558) then
+  fails, where both engines used to infatuate the pursuer. Snapshot class: B = 2 outputs change in that corner only
+  (correctly). Elsewhere at B = 2 no later step can tell (the Synchronize attacker branch passes the attacker's own
+  status, none by the trigger's test; the defender branch needs a Synchronize defender, whose ability is the contact
+  one; the knot needs an INFATUATED flag, which only that Cute Charm case sets). Kaizo: unreachable from species
+  data: the Cute Charm holders are Cleffa, Igglybuff, Skitty and Delcatty, all Normal (data/intermediate_kaizo/
+  species.json, ability 56; vanilla adds the Clefairy and Jigglypuff lines and Lopunny, all Normal,
+  data/intermediate/species.json); only a type change in battle could reach it. B = 4 visible on the MODE_PURSUIT
+  tail: a Synchronize pursuer burned earlier in the chain no longer passes its burn (and its Synchronize reveal) to the
+  user a later pursuer felled. Tests (test_e1_batch_h.py, both slow, each fails on the old code):
+  `test_singles_a_blocked_poison_point_trigger_on_the_felling_pursuit_stops_the_knot`,
+  `test_a_blocked_flame_body_trigger_moves_side_effect_mon_off_a_synchronize_pursuer`. Same shape, not reachable: a
+  damaging move's secondary sets sideEffectMon at MapSideEffectToSubscript (battle_lib.c:7511-7523; the probabilistic
+  branch :1551-1566 writes even when the roll fails) before its subscript's blocks, and both engines move it only on a
+  landing (`def_landed`). To be read it must follow, in the same action, a landing that set the Synchronize flag or a
+  Cute Charm flag: ONE_HIT runs the secondary (bcp.c:3484) before the ability (:3514), so a trigger overrides it;
+  MULTI_HIT puts hit k+1's secondary after hit k's ability, and the only multi-hit move with a secondary is
+  Twineedle (effect 77, effect_script_0077.s:5), no contact, whose own poison landing sets sideEffectMon = defender
+  either way; neither the Pursuit nor the U-turn tail runs a damaging secondary. Kaizo the same: Twineedle is the
+  only multi-hit move with a secondary (data/intermediate_kaizo/moves.json: effects 29, 44, 77, 104), be_seq 77 is
+  unchanged (e2 ledger :1965; rom/changed_scripts.json be_seq 48, 88, 104, 141, 182), and the changed multi-hit
+  scripts 88 / 104 only change Triple Kick's power step (data/kaizo/rom_diff.toml be_seq 88, 104).
+
+- H-S1 Batch H gate compare `snapcmp-e1h-5cdbaee` (tip 5cdbaeef vs the main 7698de58 capture, 200 seeds, 122 parts):
+  COMPARE_RC=1, 82 ok, 20 diverged, 20 generator drift, 0 error, 0 sampler drift; allow-new `form_num,ts_loved`
+  (H-5, H-4; `_scratch/e1/tmp/nt_fields.py`). Log: `_scratch/rent/out/snapcmp-e1h-5cdbaee/compare.log`. Every failed
+  part is one of two classes; no `step`, `jitstep`, `rest`, `ai`, `roark.trace` or `roark.rank` part changed.
+  - Diverged, class A (H-1 / G-S8): the 20 `sample` parts (seed blocks 0-9 ... 190-199), first diff each
+    `.sample_outcome.future_hit[d]` at turn 1 or 2: seeds 0 (71 -> 0), 10 (23 -> 0), 20 (72 -> 0), 30 (4 -> 1),
+    40 (d 1: 65 -> 1), 50 (34 -> 1), 60 (74 -> 0), 70 (21 -> 0), 80 (69 -> 0), 90 (d 1: 76 -> 1), 100 (d 1: 51 -> 1),
+    110 (83 -> 0), 120 (7 -> 1), 130 (46 -> 0), 140 (95 -> 0), 150 (57 -> 0), 160 (d 1: 29 -> 1), 170 (88 -> 76),
+    180 (5 -> 1), 190 (59 -> 51). Cause: H-1 (7074311e) narrowed `future_thresholds`' loose flag to a due hit
+    (`loose & due`, outcome.py:866-867; due = live, `future_timer == 1`, table accuracy != 0). The decomp draws the
+    hit roll only there: the Future Sight check runs when `futureSightTurns` drops to 0 with HP left
+    (battle_controller_player.c:1767-1769), its CheckMoveHit returns before the draw on accuracy 0 (:2900-2902) and
+    draws `RandNext() % 100 + 1` (:2976). So a side with a loose source and no due hit now stores the class
+    (`hit_class` over `future_thresholds`, outcome.py:2145-2146) where main stored the raw roll; same key
+    (`fold_in(key, 28)`), shape and bounds. The step reads the value only at a due hit, so no `step` part moved.
+    The single change a closing compare reverts: outcome.py:867 `loose & due` -> `loose`.
+  - Generator drift, class B (G-S2 / G-S7, 25fcebb5): the 20 `gen` parts, first diff each at turn 0
+    `.in_state.terrain[0]` -1 -> 0. Cause: `tests/strategies.py` `_draw_terrain` draws a TERRAIN_* id for every
+    state and never TERRAIN_UNKNOWN (-1), because the game never holds an unknown terrain (CalcTerrain
+    field_battle_data_transfer.c:470-504; BattleSystem_GetTerrain battle_system.c:375-381 maps any out-of-range
+    value to TERRAIN_MAX, never -1). Generator only: no engine default or engine read changed. The single change
+    a closing compare reverts: the `_draw_terrain` hunk of 25fcebb5 in tests/strategies.py.
+  - 1405cbb2 (after the compare) changes only tests/engine/test_attract.py (two fullset tests), which no snapshot
+    part runs: the compare holds for 1405cbb2.
+  - First closing compare `snapcmp-e1closeh6-462ce77`: branch `e1-close-h-6` (462ce77b) = tip 507220df (after the
+    train merge) with the class A and class B reverts, against the train-tip 38099359 capture (82e54463 plus an
+    off-site test change). COMPARE_RC=1, 101 ok, 1 diverged, 20 generator drift. Log
+    `_scratch/rent/out/snapcmp-e1closeh6-462ce77/fetch-1795303179/compare.log`. With the terrain drift reverted, the
+    two classes it hid showed up:
+  - Diverged, class C (H-1, Acid Rain at B = 2): `130-139.sample` seed 136 turn 3 `.sample_outcome.future_hit[0]`
+    53 -> 47 (and [1] 53 -> 1). Cause: H-1 grids the masks an Acid Rain write leaves (`_future_fields`) and so drops
+    the B = 2 loose source (`acid = acid_rain_reachable(...) if fmt.B > 2 else False`, outcome.py:844). Where a
+    Pursuit can chase a U-turn or switch (subscript_pursuit.s:100, :115; battle_script.c:6899-6916) the class
+    `hit_class(53, {46, 85})` = 47 is stored where main stored the raw 53. Seed 136: Pursuit against U-turn, with
+    Gravity on. Every reachable mask gives the thresholds {46, 85}, so the class decides the hit exactly as the roll
+    does. The hit is not due (timer 2, battle_controller_player.c:1767-1769), so no `step` part moved. Intended
+    mechanic, sound. The single change a closing compare reverts: outcome.py:844 back to
+    `acid = acid_rain_reachable(state, actions, uses, effect)`. Report: `_scratch/e1/h-next/close-h6-diverge-report.md`.
+  - Generator drift, class D (H-2 / H-3, new abilities): all 20 `gen` parts, first diffs such as `.in_state.ability`
+    25 -> 99, 24 -> 101, 28 -> 98, and the ability slots, actions and speeds that follow from them. Cause:
+    `supported_pokemon` (tests/strategies.py:623) draws every ability slot that is not `AbilityId.UNSUPPORTED`, and
+    batch H implements eight more abilities: AbilityId 97-104, Immunity, Own Tempo, Water Veil, Magma Armor,
+    Oblivious (H-2) and Color Change, Marvel Scale, Soundproof (H-3). Generator only. Batch H adds no move effect and
+    no M1 item. The single change a closing compare reverts: the slot filter keeps ids below `AbilityId.IMMUNITY`.
+  - Closing compare: branch `e1-close-h-7` = 507220df with the class A, B, C and D reverts, against the 38099359
+    capture with the same allow-new. Expected: COMPARE_RC=0. (`e1-close-h-5`, cut before the train merge, was
+    cancelled.)
+  - Result `snapcmp-e1closeh7-5ba6b5b` (5ba6b5bc): `compare: ok`, COMPARE_RC=0, 102 ok, 0 diverged, 0 error, 0 sampler
+    drift, 20 generator drift. Log `_scratch/rent/out/snapcmp-e1closeh7-5ba6b5b/fetch-1795307088/compare.log`. All
+    step, jitstep, sample, rest, ai, roark.trace and roark.rank parts are identical, so batch H's gate holds.
+  - The 20 gen parts of close-h-7 still drift; class D (above) and class E (below) account for all of it. A gen
+    part passes as generator drift when every differing entry is an input `tests/strategies.py` draws
+    (`classify_gen`, tools/snap_compare.py:172-179). That alone does not make it harmless: some drawn inputs
+    come from engine functions (`legal_action_pair` draws from `engine.actions.legal_actions`,
+    strategies.py:2313-2324; the strategies also call `hooks.battle_start` and `calc_stats`), so a legality or
+    switch-in change would show only as drift. Each gen class is therefore named and reverted, and the gate
+    is a closing compare with gen drift 0. With class D reverted, the first drift still appears in all 20 gen parts. In 16 of them
+    it comes at a later seed or turn than in close-h-6, and in 4 (seeds 20, 100, 150, 170) it is unchanged (for example seed 3 turn 4 `speed_rec`, seed 11 turn 4 `in_actions`, seed 32
+    turn 2 `curled`, seed 81 turn 2 `in_outcome.call`). Six still drift at turn 1: seeds 20, 100, 150, 161, 170 and
+    185. Seed 20's `speed_rec[1]` 167 -> 236 is the same as in close-h-6, and `speed_rec` is a raw `st.integers`
+    draw (tests/strategies.py:2174), so the stream moves before it within that example.
+  - Generator drift, class E (H-5, 6567c627, the literal 421): the cause of all 20 remaining gen drifts. Hypothesis
+    6.170.13 keeps a pool of "local constants". On about 5% of integer and float choices,
+    `HypothesisProvider._maybe_draw_constant` (hypothesis/internal/conjecture/providers.py:775-827) returns a
+    literal from that pool instead of a random value. The pool is every int literal with |v| >= 100, plus floats,
+    strings and bytes, taken from every imported non-test module (`_get_local_constants`, providers.py:325-380;
+    `ConstantVisitor`, hypothesis/internal/constants_ast.py:105-180). H-5 adds one new such literal, 421
+    (`SPECIES_CHERRIM`, engine/ids.py:1309, and its `Constant` row, data/game_constants.py:602). That changes which
+    constant a constant draw takes. The first one changed is `speed_rec` (strategies.py:2174, 167 -> 236): the
+    turn-1 drift of seeds 20, 100, 150, 161, 170 and 185. Seed 81's `call` 426 -> 421 is the literal itself.
+    Draw-only: on both commits every draw makes the same choice types under the same constraints, and only the
+    values at constant draws differ. No engine function in the draw path (`legal_actions`, `battle_start`,
+    `calc_stats`) gives a different result, and the Cherrim rule (battle_lib.c:6366) never runs during
+    generation. Windows runs do not show it: there Hypothesis counts the uv-managed stdlib as local, so the pool is
+    about 1044 ints. With the pod's pool copied (`_scratch/e1/tmp/podsite/sitecustomize.py`), close-h-7 reproduces
+    the pod's first drift for seeds 3, 11, 20, 32, 81 and 100. Writing the value as `420 + 1` makes all six
+    identical. The single change a closing compare reverts: 421 written as `420 + 1` in those two lines.
+    Report: `_scratch/e1/h-next/close-h7-gen-report.md`. Every new int literal of 100 or more, float or short string
+    in an imported `src/` or `tools/` module shifts gen draws the same way. Turning the pool off in `draw_inputs`
+    would stop that, but it changes every draw once and needs a fresh main capture: a process item for the
+    manager.
+  - Final closing compare: branch `e1-close-h-8` (e50e2349) = `e1-close-h-7` plus the class E revert, so classes A
+    to E are all reverted. It runs against the 38099359 capture with the same allow-new. Expected: `compare: ok`
+    with 0 generator drift.
+  - Result `snapcmp-e1closeh8-e50e234`: `compare: ok`, COMPARE_RC=0, 122 ok, 0 diverged, 0 error, 0 sampler drift,
+    0 generator drift, seeds 0-199, all groups. Log `_scratch/rent/out/snapcmp-e1closeh8-e50e234/fetch-1795310785/compare.log`.
+    Classes A to E account for every difference between batch H and the train tip.
+  - Baseline: the closing compares of the merged tip use the train-tip capture 38099359 (82e54463, the
+    `train/e3-slowfix-nmw` tip, plus an off-site test change), not main. 507220df contains that train
+    (merge c592ddf9), which merges into main before batch H. Against main, the compare would also show the train's
+    own changes. Against the train tip, every difference is batch H's.
+  - Should-fix `REVEALS_ON` (Insomnia / Vital Spirit / Limber on `STATUS_CURE`) is batch I group I-6 (`_scratch/e1/i-next/sheets/ability-status-cure-reveals.md`).
 
 ## Stream state (restart point, 2026-11-19)
 

@@ -433,6 +433,15 @@ three structs has a row.
   reloads the battler's own stats, level and HP, not its moves (battle_lib.c:169-194):
   `levelup.party_identity`. `ai_ability_known` is `battlerAbilities`: the decomp id the AI
   recorded, 0 none, -1 known but not named by the engine (settled to its id by a Transform).
+- **formNum -> `form_num`** (H-5, per battler, `BattleMon.formNum`, battle_mon.h:79): the party's form at the
+  send-out (`BattleSystem_InitBattleMon`, battle_lib.c:132: `initial_arrays` for the leads, `step._switch_in`
+  after the Transform restore), copied by Transform with the BattleMon bytes (battle_script.c:5346-5348),
+  written by `hooks.form_change` (`BattleSystem_TriggerFormChange`, battle_lib.c:6305-6451: Castform 0-3,
+  Cherrim Overcast 0 / Sunshine 1, Arceus its plate's type, a Transformed Giratina-Origin back to Altered 0)
+  and by Shaymin's revert (`subscript_check_shaymin_form.s:10`). Not cleared by a switch (the send-out
+  overwrites it), not Baton-passed. Read only by that function's Cherrim, Arceus and Giratina tests; `form`
+  (the party's, per slot) and its readers stay (Beat Up, personal rows): the two differ only for a Castform,
+  Cherrim or Arceus (their personal rows ignore the form) and the Giratina rebuild writes both.
 - **chatotCries -> `chatot_cry`** (E1 trial batch, G-70): `BattleSystem.chatotCries[battler]` as
   Chatter's parameter 0 / 1 / 2 (`ids.CHATTER_CHANCES`, sound_chatot.c:193-213), a battle constant
   like `terrain`: every enemy's is 0 (`ChatotCry_New` is invalid, field_battle_data_transfer.c:97,
@@ -599,8 +608,15 @@ three structs has a row.
   read by CalcMoveDamage (battle_lib.c:6694-6696), Future Sight's setup (battle_script.c:
   6092-6094) and Beat Up (:6214-6216), cleared by `CleanupFaintedMon` (battle_lib.c:2190-2193)
   and the turn's end (D3 fix B); `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
-  battler, the only self turn flag kept across a U-turn's list (`BattleContext_Init` clears the rest at the
-  action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `ts_grudge`: per battler, the battler fainted in the paused
+  battler (`hooks.intimidate` reads it, F-4), and `ts_loved`: the paused action's `selfTurnFlags.statusFlags &
+  SELF_TURN_FLAG_INFATUATED` per battler slot (H-4: set by a landed Cute Charm, subscript_infatuate.s:29). The
+  attacker's slot is cleared before the list (subscript_attack_then_switch_out.s:70, battle_script.c:9623-9624), so
+  the resumed tail sees only a pursuer flagged by the U-turn user's Cute Charm during the Pursuit (:54,
+  subscript_pursuit.s:40); a user felled by the Pursuit ends the script at :55 and its MODE_PURSUIT tail reads its
+  own flag. Both feed the tail's Destiny Knot step (battle_lib.c:4546-4566). Value 1: flagged and the
+  sideEffectMon at the list; 2 (B = 4 only, H-M1): flagged, but a later pursuer's Cute Charm trigger made that
+  pursuer the sideEffectMon (battle_lib.c:4350), so the resumed tail reads the 1 slot (or none) as sideEffectMon. The two self turn flags kept across a
+  U-turn's list (`BattleContext_Init` clears the rest at the action's end, bcp.c:3998); `ts_grudge`: per battler, the battler fainted in the paused
   action holding `MOVE_EFFECT_GRUDGE`: its `battleStatusMask` SYSCTL_MON_FAINTED bit and `moveEffectsMask` survive the
   U-turn's list (battle_script.c:1770-1771, :1799; battle_lib.c:2166), so the resumed action's LOOP_FAINTED runs
   TryGrudge on the newcomer (review b2 #5); `focusItemActivated` and
@@ -670,7 +686,7 @@ three structs has a row.
 | `BattleMon.weight` | — | not needed because it is constant per species in Gen 4; read from `tables.species_weight` |
 | `BattleMon.type1` | `types` | mapped |
 | `BattleMon.type2` | `types` | mapped |
-| `BattleMon.formNum` | `form`, `shadow_form` | mapped |
+| `BattleMon.formNum` | `form`, `shadow_form`, `form_num` | mapped |
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
 | `BattleMon.ability` | `ability`, `ability_slot`, `ability_form`, `party_ability` | mapped |
@@ -867,7 +883,7 @@ three structs has a row.
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | `roosting`, `ts_assurance`, `magic_coat`, `ts_helping_hand` | mapped |
-| `BattleContext.selfTurnFlags` | `ts_sub_hit` | mapped |
+| `BattleContext.selfTurnFlags` | `ts_sub_hit`, `ts_loved` | mapped |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

@@ -585,18 +585,19 @@ def test_exact_equals_loose(kaizo_tables, kaizo_roark_party, data):
 
 @pytest.mark.parametrize(
     ("species", "abilities", "name"),
-    [("Whismur", [113, SOUNDPROOF], "Scrappy"), ("Magnezone", [26, 42], "Levitate")],
+    [("Whismur", [96, SOUNDPROOF], "Normalize")],
 )
 @pytest.mark.fullset
 def test_loose_is_nan_on_a_switching_refusal(
     kaizo_tables, kaizo_names, kaizo_roark_party, species, abilities, name
 ):
     """Review I1: a player ability the switch check does not implement
-    (``switching.PLAYER_ABILITY_REFUSALS``): Whismur's Scrappy, and Magnezone's Levitate
-    (species 462, the full suite's failing draw). The exact distribution is NaN and the
+    (``switching.PLAYER_ABILITY_REFUSALS``): Whismur edited to Normalize (Kaizo has no
+    Normalize holder; Scrappy and Levitate are read since H-6). The exact distribution is NaN and the
     loose oracle is NaN too, rather than raising ``UnsupportedSwitching``."""
     t, n = kaizo_tables, kaizo_names
     sp = n.species(species)
+    t = t._replace(species_abilities_decomp=t.species_abilities_decomp.at[sp, 0].set(96))
     assert np.asarray(t.species_abilities_decomp)[sp].tolist() == abilities
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, LEER, 0, 0))
     s = _bulky(_with_player(t, s, sp, 0))

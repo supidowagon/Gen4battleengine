@@ -576,7 +576,7 @@ def test_a_battle_start_berry_takes_entry_zero_and_a_recycled_one_the_next(table
 
 @pytest.mark.slow
 def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
-    """``enumerate._starf_reads`` (G-29, G-46): ``starf[d, 2]`` where two eats can meet on battler
+    """``enumerate._starf_reads`` (G-29, G-S3): ``starf[d, 2]`` where two eats can meet on battler
     ``d``, ``[d, 3]`` where three can; five values for a fresh Roar newcomer, all 60 for the same
     battler's Recycle (``_STARF_STAGE_JUMPS``); none with one eat source."""
     from nuzline.engine.enumerate import _starf, outcome_laws

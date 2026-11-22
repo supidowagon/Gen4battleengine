@@ -85,7 +85,7 @@ INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
 # The M1 species set: the sample team plus Roark's and the route-encounter species, a
 # holder of each weather ability (Swift Swim, Sand Veil, Snow Cloak), and of Rough Skin
 # (Carvanha), Flame Body (Magby), Limber (Glameow), Adaptability (Eevee) and Solid Rock
-# (Camerupt): their other slot is empty or unimplemented, so these are always drawn.
+# (Camerupt). Each species draws only its implemented ability slots (``supported_pokemon``).
 M1_SPECIES = (
     "Chatot",  # E1 trial batch (G-70): Chatter's only confuser
     "Monferno",
@@ -491,7 +491,7 @@ SHARED_MOVES = (
     "Double Team",
     "Thunder Fang",
     # K3b2 Task 10: the terrain moves (status moves: the damage oracle's damaging pools are
-    # unchanged); supported_state draws a terrain whenever one is known.
+    # unchanged); every drawn state has a terrain (``_draw_terrain``).
     "Nature Power",
     "Camouflage",
     # K3b2 Task 11: Roar and Whirlwind (status moves: the damaging pools are unchanged).
@@ -666,19 +666,19 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
     return party, active
 
 
-# Every TERRAIN_* id (nuzline.data.trainer.TERRAIN_NAMES, 0-24). TERRAIN_UNKNOWN with a move that
-# reads it is refused before the engine (coverage.terrain_refusal, ledger G-21).
+# Every TERRAIN_* id (nuzline.data.trainer.TERRAIN_NAMES, 0-24). Every drawn state gets one:
+# the game never holds an unknown terrain (CalcTerrain, field_battle_data_transfer.c:470-504;
+# BattleSystem_GetTerrain, battle_system.c:375-381), and TERRAIN_UNKNOWN with a reachable
+# terrain move (Nature Power, Secret Power, Camouflage, directly or through Metronome, Copycat,
+# Mirror Move, Sleep Talk, Assist or Me First) is refused before the engine
+# (coverage.terrain_refusal, ledger G-21, G-S2, G-S7).
 TERRAINS = tuple(range(len(TERRAIN_NAMES)))
 
 
-def _draw_terrain(draw, tables: Tables, a: dict) -> None:
-    """A terrain (``TERRAINS``) when any Pokemon knows a move that reads it (Nature Power,
-    Secret Power, Camouflage); otherwise the state keeps ``make_state``'s ``TERRAIN_UNKNOWN``
-    (nothing reads it)."""
-    effect = np.asarray(tables.move_effect)[a["moves"]]
-    readers = (EffectId.NATURE_POWER, EffectId.CAMOUFLAGE, EffectId.SECRET_POWER)
-    if np.isin(effect, readers).any():
-        a["terrain"][...] = draw(st.sampled_from(TERRAINS))
+def _draw_terrain(draw, a: dict) -> None:
+    """A terrain (``TERRAINS``) for every drawn state, never ``make_state``'s
+    ``TERRAIN_UNKNOWN``: a call move can reach a terrain reader the side does not know."""
+    a["terrain"][...] = draw(st.sampled_from(TERRAINS))
 
 
 def _draw_battle_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -2251,7 +2251,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     # A temporary weather (a weather move's: 1-8 turns left) or a permanent one (0).
     timed = weather not in (Weather.NONE, Weather.FOG)
     timer = draw(st.integers(0, 8)) if timed else 0
-    _draw_terrain(draw, tables, a)
+    _draw_terrain(draw, a)
     trick_room = draw(st.integers(0, _TIMER_MAX))
     # E1 trial batch (G-67): Gravity up (0-5 turns), mostly off.
     gravity = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
@@ -2276,6 +2276,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
     a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
     a["weather_turns"][...] = timer
+    # BattleMon.formNum (H-5): the active slot's form (a Transform copies it with the rest).
+    for side in (0, 1):
+        a["form_num"][side] = a["form"][side, a["active"][side]]
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 
@@ -2921,5 +2924,5 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
         if draw(st.integers(0, 3)) == 0:
             a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
     _draw_standoff(draw, a, draw(st.integers(0, 1)))  # G-25: an armed Trace holder's copy
-    _draw_terrain(draw, tables, a)  # a LAW_MOVES terrain move needs one too
+    _draw_terrain(draw, a)  # a LAW_MOVES terrain move needs one too
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})

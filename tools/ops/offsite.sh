@@ -73,7 +73,7 @@ hard_reason() {
   case "$b" in
     *.nds|*.sav|*.dsv|*.ds[0-9]|*.srm|*.gba|*.gbc|*.gb|*.sgm|*.zip|*.7z|*.rar|*.tar|*.tar.*|*.tgz|*.txz|*.gz|*.xz|*.npz|*.npy|*.pkl|*.pickle|*.bin|*.exe|*.dll)
       REASON=rom-save-archive-or-binary; return ;;
-    *.key|*.pem|*.p12|*.pfx|*.crt|*.asc|*.gpg|.env|.env.*|*.env|local.toml|id_rsa*|id_ed25519*|id_ecdsa*|.netrc|.git-credentials|credentials*|*.b64)
+    *.key|*.pem|*.ppk|*.p12|*.pfx|*.crt|*.asc|*.gpg|.env|.env.*|*.env|local.toml|id_rsa*|id_ed25519*|id_ecdsa*|.netrc|.git-credentials|credentials*|*.b64)
       REASON=key-or-credential; return ;;
     .gitignore|.gitattributes|.gitmodules)
       REASON=git-control-file; return ;;  # would change what the state clone tracks or how

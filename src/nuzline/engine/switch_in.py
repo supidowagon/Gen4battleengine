@@ -32,7 +32,7 @@ from nuzline.engine.hooks import (
     SWITCH_IN,
     after_damage_items,
     download,
-    forecast,
+    form_change,
     intimidate,
     recover_status_by_ability,
     reveal_ability,
@@ -80,7 +80,7 @@ def run_states(
 ) -> BattleState:
     """``BattleSystem_TriggerEffectOnSwitch``'s states (battle_lib.c:3712-4165) at B = 4 over one
     ``monSpeedOrder``: Trace, the weather abilities, Intimidate, Download, the switch-in
-    announcements (Mold Breaker, Pressure), the Castform form change, the forbidden-status check
+    announcements (Mold Breaker, Pressure), the form changes (H-5), the forbidden-status check
     and the held-item check, each a static loop over the positions ``k`` of ``order``, battler
     ``order[k]``. ``order``: ``int32[4]``. ``fresh``: ``bool[4]``, the battlers whose announced flags
     are clear (a newcomer since its entry); a battler that traced acts in the later states too
@@ -111,7 +111,7 @@ def run_states(
         mon = state.active[b]
         alive = state.hp[party(fmt, b), mon] > 0
         state = reveal_ability(state, b, mon, SWITCH_IN, act[b] & alive)
-    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115-4121), F-6
+    state = form_change(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115-4121), F-6, H-5
     for k in range(fmt.B):  # SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS (:4135-4149); arms Unburden
         state = recover_status_by_ability(state, order[k])
     for k in range(fmt.B):  # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (:4151-4165)
