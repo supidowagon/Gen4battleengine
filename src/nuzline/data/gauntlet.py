@@ -253,6 +253,9 @@ class GauntletFacts:
     locked_gaps: tuple[int, ...]
     locked_gaps_source: str
     partner: Partner | None = None
+    # Per order, the map header each fight starts on (tools/kaizo/gauntlet_map.py); empty: not
+    # recorded.
+    fight_headers: tuple[tuple[int, ...], ...] = ()
 
     def __post_init__(self):
         if len(self.leave_gaps) != len(self.orders):
@@ -280,6 +283,7 @@ class GauntletFacts:
             partner=None
             if p is None
             else Partner(p["trainer"], tuple(p["join_before"]), p["source"]),
+            fight_headers=tuple(tuple(h) for h in d.get("fight_headers", ())),
         )
 
     def to_dict(self) -> dict:
@@ -303,6 +307,7 @@ class GauntletFacts:
             "partner": None
             if p is None
             else {"trainer": p.trainer, "join_before": list(p.join_before), "source": p.source},
+            "fight_headers": [list(h) for h in self.fight_headers],
         }
 
     def _index(self, order: Order) -> int:

@@ -23,8 +23,9 @@ Tables (keys are ROM trainer ids unless said otherwise):
   list for every order, one list per order, or ``"all"``), ``escape`` (bool), ``pc_gaps``,
   ``heal_gaps``, ``locked_gaps`` (a list of gaps or ``"all"``) and, optional, ``partner``
   (``trainer``, ``join_before``: the one fight before which the game makes the partner join,
-  as a one-item list; ``source``). Gap k follows the k-th fight of an order. Each fact
-  has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
+  as a one-item list; ``source``) and ``fight_headers`` (the map header each fight starts on:
+  one integer for every fight, or one list per order; it takes ``orders_source``). Gap k follows
+  the k-th fight of an order. Each fact has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
   read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
 - ``[sheet_unmapped."<sheet cite>"]``: ``kind`` and ``reason`` for a split-sheet header that
@@ -315,6 +316,7 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
     else:
         leave = (_gaps(entry, "leave_gaps", raw_leave, n),) * len(orders)
     p = t.get("partner")
+    heads = _fight_headers(entry, t.get("fight_headers"), sizes)
 
     def source(key: str) -> str:
         return _fact_source(entry, t, f"{key}_source", orders_source)
@@ -335,7 +337,22 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
         locked_gaps=_gaps(entry, "locked_gaps", t["locked_gaps"], n),
         locked_gaps_source=source("locked_gaps"),
         partner=None if p is None else _partner(entry, p, n, orders_source),
+        fight_headers=heads,
     )
+
+
+def _fight_headers(entry: str, raw: object, sizes: list[int]) -> tuple[tuple[int, ...], ...]:
+    """``fight_headers``: absent (not recorded), one header for every fight, or one list of
+    headers per order (as long as the order)."""
+    if raw is None:
+        return ()
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return tuple((raw,) * s for s in sizes)
+    if isinstance(raw, list) and len(raw) == len(sizes) and all(isinstance(h, list) for h in raw):
+        out = tuple(_ints(entry, "fight_headers", h) for h in raw)
+        if [len(h) for h in out] == sizes:
+            return tuple(tuple(h) for h in out)
+    raise OverridesError(f"{entry}: fight_headers is one header or one list per order")
 
 
 def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
@@ -345,7 +362,7 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
         if isinstance(t, dict) and isinstance(t.get("name"), str):
             entry = f"gauntlet {t['name']!r}"
         src = _source(entry, t)
-        _keys(entry, t, ("name", "trainers", "partner", *FACT_KEYS, *FACT_SOURCES))
+        _keys(entry, t, ("name", "trainers", "partner", "fight_headers", *FACT_KEYS, *FACT_SOURCES))
         if not isinstance(t.get("name"), str) or not t["name"]:
             raise OverridesError(f"{entry}: name must be a non-empty string")
         trainers = _ints(entry, "trainers", t.get("trainers"))

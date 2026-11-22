@@ -97,6 +97,7 @@ UNRESOLVED_FILE = "rom_unresolved.json"
 FIELD_EFFECTS_FILE = "rom_field_effects.json"
 TRAINER_MAPS_FILE = "rom_trainer_maps.json"  # Kaizo: trainer id -> map headers (sight pairs)
 MAP_WEATHER_FILE = "rom_map_weather.json"  # Kaizo: weather byte of each map header, by header id
+MAP_LABELS_FILE = "rom_map_labels.json"  # Kaizo: mapLabelTextID of each map header, by header id
 # Kaizo: the script weather (command 0x9C) before a battle and left on a map (ledger G-23, G-24;
 # maps.script_weathers): {"battles": {...}, "windows": {...}}.
 SCRIPT_WEATHER_FILE = "rom_script_weather.json"
@@ -424,6 +425,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             _write(stage / FIELD_EFFECTS_FILE, _report_kaizo(tables["trainers"], effects))
             _write(stage / TRAINER_MAPS_FILE, {str(t): h for t, h in where.items()})
             _write(stage / MAP_WEATHER_FILE, [w for _, _, w in map_header_rows(rom, smap)])
+            _write(stage / MAP_LABELS_FILE, map_header_labels(rom, smap))
             _write(stage / SCRIPT_WEATHER_FILE, scripted)
         fresh = stage / "decomp"
         extract_static(decomp, fresh)
@@ -447,6 +449,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             sources[FIELD_EFFECTS_FILE] = "rom: map weather through the battle weather switch"
             sources[TRAINER_MAPS_FILE] = "rom: trainer -> map header join (map scripts, events)"
             sources[MAP_WEATHER_FILE] = "rom: map header weather byte (the raw id, per header)"
+            sources[MAP_LABELS_FILE] = "rom: map header mapLabelTextID (d_test.narc byte 18)"
             sources[SCRIPT_WEATHER_FILE] = "rom: script weather command 0x9C over the map scripts"
             sources[INPUTS_KEY] = kaizo_input_hashes(move_lists)
         _write(stage / "rom_sources.json", sources)

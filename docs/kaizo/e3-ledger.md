@@ -2202,6 +2202,7 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Kaizo: only Byron 250 has two (7, 119; headers 2 and 34); 261-264, 267 have none (any header: open). Not joined yet, so their labels stay open:
   `GauntletFacts` holds no header per fight (`src/nuzline/data/gauntlet.py`; the group header is only in `orders_source` text and in
   `tools/kaizo/gauntlet_map.py`), and `[area.<id>] map_header` (a user's placement answer, `tools/kaizo/overrides.py`) is not applied to `map_labels`.
+  (Superseded by the walk-fix round below: `fight_headers` and the placement answers now narrow `map_labels` in `tools/kaizo/resolve.py`.)
   No Gym, E4 or Champion trainer is a gauntlet member with several labels (E4 + Champion 866-870: label 15 each) or has a `map_header` answer.
   (b) Open label: `battle_start_bounds` gives (low, high), the raise without and with the egg-location +1 (`src/pokemon.c:2668-2670`; high only when
   the egg location is one of the labels or no label is known). `fight_friendship` gives each member the bound its readers take:
@@ -2219,3 +2220,50 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/prep/test_gauntlet_start.py (open vs fixed label, bounds with Soothe Bell, each reader's bound, readers from moves and callers,
   party and `setup_specs`: a Frustration user takes the high bound, a Return user and no reader the low one, a fixed label one value).
   Docs: `docs/gauntlet-design.md` rule 2 (evolve-domination) now states `growth.evolve_dominates`' exact conditions.
+
+- E3-B3-W1 fix (areas review, must-fix 1): two seers are one double (VS2) (`tools/kaizo/gauntlet_map.py` `Walker._fight`, `encounters`; `Walk.spot` keyed by fight). No table input changed by this alone.
+  The first seer in object order fights; with two live Pokemon or a partner set (`field_control.c:181-186`) a singles seer and the next one fight as one
+  `APPROACH_TYPE_VS2` battle (`trainer_encounter.c:94-106`). A double-battle trainer (trdata battle type, `read_double_trainers`) fights with both objects,
+  and with one live Pokemon not at all, by sight (`:108-118`) or by talk (`res/field/scripts/scripts_battles.s:19-22`). `runs` refuses a fight that mixes
+  members with non-members. Kaizo: only the Wayward pairs share sight tiles; the pairs are re-derived, unchanged.
+  Tests: tests/kaizo/test_gauntlet_map.py `test_two_trainers_on_one_sight_tile_are_one_double_battle`, `test_a_double_battle_trainer_fights_once_with_both_objects_or_not_at_all`,
+  `test_rom_shared_sight_tiles_are_only_the_wayward_pairs`.
+- E3-B3-W2 fix (areas review, must-fix 2): field-move objects need their badge (`tools/kaizo/gauntlet_map.py` `FieldMoves`, `MapObject.cleared`). Table input changed (overrides.toml).
+  Cut tree (script 10000) needs Forest, Rock Smash rock (10001) Coal (`scripts_field_moves.s:134`), Strength boulder (10002) Mine; the badges are those of
+  the splits before the group's own (`SPLIT_BADGES`, `GROUP_SPLITS`; the gym GiveBadge scripts are checked against the ROM, Kaizo moved Relic to scr 96/101).
+  Oreburgh Mine (Roark split, no Coal Badge): [[195],[196]] leave [1] -> [[196],[195]] leave [] (with W3's ledge).
+  Tests: `test_a_rock_before_the_coal_badge_blocks`, `test_field_move_objects_block_until_the_badge_and_move_remove_them`, `test_the_split_badges_follow_the_split_order`, `test_rom_gym_scripts_give_the_split_badges`,
+  `test_rom_group_splits_match_the_committed_sources`, `test_oreburgh_fights_196_over_the_ledge_then_195_with_no_leave`.
+- E3-B3-W3 fix (areas review, must-fix 3): tile behaviours (`tools/kaizo/gauntlet_map.py` `Walker._player_collision`, `_step`, `_forced`, `sight_tiles`). Table input changed (overrides.toml).
+  Ledges 0x38-0x3B jump two tiles one way; water needs Surf (Fen Badge, no partner: `field_control.c:690`, `scripts_field_moves.s:302-303`); directional
+  tiles 0x30-0x37, 0x49, 0x4A block one side for the walk and for sight (`map_object_move.c:706-737`); spin tiles 0x40-0x43 carry the player with no field
+  input (`ov5_021E1154.c`), the trainer check of the step onto the tile still runs first (`field_control.c:187` before `:200`); ice 0x20; Rock Climb and
+  Waterfall by badge; bridges 0x70-0x7D. Route 213 (Wake split, no Surf): 120 orders, heal at every gap -> 2 orders (lobby end, west end), heal_gaps [].
+  Kinds in the gauntlet headers: ledges in 199, 346, 256; water and Rock Climb in 373; no directional, spin, ice, bridge or waterfall tile.
+  Tests: `test_a_ledge_is_one_way`, `test_water_needs_surf`, `test_a_directional_tile_blocks_one_side`, `test_a_spin_tile_carries_the_player_past_a_sight_line`,
+  `test_ice_slides_until_a_step_collides`, `test_the_surfable_set_matches_the_decomp`, `test_rom_tile_kinds_in_the_gauntlet_headers`,
+  `test_route_213_without_surf_is_a_beach_line_from_either_end`.
+- E3-B3-W4 fix (manager brief): heights (`tools/kaizo/gauntlet_map.py` `bdhc_heights`, `Area.plate`, `grid_y`). No table input changed.
+  The plate nearest the current height is the next height (`bdhc.c CalculateObjectHeight`); a step 20 or more apart collides
+  (`terrain_collision_manager.c:249-305`); sight and talk need the same height unit. Kaizo: no walkable gauntlet tile holds two plates; header 73's floors
+  are 0, 8, 24. Tests: `test_tiles_on_different_floors_are_not_connected`, `test_bdhc_heights_reads_the_plates_of_a_tile`, `test_rom_heights_of_the_gauntlet_headers` (the floors read
+  from the BDHC independently of the walk).
+- E3-B3-W5 fix (areas review, should-consider): a var-0 coord runs only when its value is 0 (`tools/kaizo/gauntlet_map.py` `literal_coord`, `coord_matches`). No table input changed.
+  `FieldSystem_TryGetVar` returns a var below 0x4000 itself (`script_manager.c:432-433`). The Eterna Gym coords are var 0, value 0: unchanged.
+  Test: `test_a_var_zero_coord_runs_only_when_its_value_is_zero`.
+- E3-B3-W6 fix (areas review, should-consider): a turning trainer can be passed or fought (`tools/kaizo/gauntlet_map.py` `Walker.encounters` over subsets of the turning seers). No table input changed.
+  `sub_020645C0` faces a random direction of the type's set every 16-64 frames (`unk_0206450C.c`): the timing is the player's choice. Kaizo: unchanged.
+  Tests: `test_a_turning_trainer_can_be_passed_or_fought`, `test_a_turning_and_a_fixed_trainer_on_one_tile`.
+- E3-B3-W7 fix (areas review, should-consider): ESCAPE_HEADERS removed (`tools/kaizo/gauntlet_map.py` `group_escape` from the fight headers). No table input changed.
+  Buildings #2 and #3 are both header 74 in the ROM (events 73 objs 0, 1, 2, 4; header 75 has no trainer). Test: `test_rom_buildings_2_and_3_are_both_header_74`.
+- E3-B3-W8 (areas review, Tests): every rule above has a hand-built map test; the ROM tests state the tile kinds, floors and shared sight tiles they meet.
+- E3-B3-W9 fix (manager brief, E1 approved): `fight_headers` (`src/nuzline/data/gauntlet.py` field only; `tools/kaizo/overrides.py` reads one header or one
+  list per order; `tools/kaizo/gauntlet_map.py` emits it). Table input changed: overrides.toml gives every group's header (199, 346, 256, 67, 73, 74, 74, 373, 284).
+  Friendship: `tools/kaizo/resolve.py` `fixed_map_header` + `narrowed_map_labels` narrow a trainer's `map_labels` to the label of the header its fight
+  starts on (labels from the new `rom_map_labels.json`, `tools/extract_rom.py`), so `prep/friendship.py fight_label` gets one label; friendship.py unchanged.
+  Wayward 749/750: labels [29, 65] (headers 380, 284) -> [65]. A placement answer (`[area.<id>] map_header`) narrows the same way: Rosalind 509 -> [71]
+  (header 307). Fixed twice raises; a header that is not one of the trainer's raises.
+  Tests: tests/kaizo/test_resolve.py `test_a_fixed_fight_header_narrows_the_map_labels_to_its_one_label`, `test_a_placement_answer_narrows_the_map_labels_too`;
+  tests/kaizo/test_overrides.py `test_gauntlet_fight_headers_one_header_or_one_list_per_order`.
+  Open: object hidden flags; two live Pokemon assumed; a return visit after the group's split (its badges would widen the walk); Roark's rock removal
+  (after both fights only).

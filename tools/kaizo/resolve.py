@@ -61,6 +61,7 @@ from tools.kaizo.overrides import (
 )
 from tools.kaizo.overrides import (
     UNKNOWN_FORMAT,
+    AreaOverride,
     Mappings,
     Overrides,
     _row_claims,
@@ -171,6 +172,9 @@ class Sources:
     # Each map header's weather byte (rom/rom_map_weather.json, by header id): the fog
     # headers a fog fight can clear with field Defog (``fog_headers``, ledger G-15).
     map_weather: tuple[int, ...] = ()
+    # Each map header's mapLabelTextID (rom/rom_map_labels.json, by header id): the one label of
+    # a fight whose header is fixed (``fixed_map_header``).
+    map_labels: tuple[int, ...] = ()
     # rom/rom_script_weather.json (maps.script_weathers, ledger G-23, G-24): the script
     # weather before a battle ("battles") and the one a script leaves on a map ("windows").
     script_weather: Mapping[str, Any] | None = None
@@ -201,6 +205,7 @@ def load_sources(inter: Path) -> Sources:
         pkcalc=pkcalc,
         docs=docs,
         map_weather=tuple(_read(rom_dir / "rom_map_weather.json")),
+        map_labels=tuple(_read(rom_dir / "rom_map_labels.json")),
         script_weather=_read(rom_dir / "rom_script_weather.json"),
     )
 
@@ -432,6 +437,47 @@ def bare_tags(rows: list[tuple[dict, dict]]) -> frozenset[str]:
                 if tags.get("trick_room"):
                     out.add("trick_room")
     return frozenset(out)
+
+
+def fixed_map_header(
+    tid: int, facts: Mapping[str, Any] | None, area: AreaOverride | None
+) -> tuple[int, str] | None:
+    """The one map header trainer ``tid``'s fight starts on where a source fixes it, with that
+    source: the gauntlet facts' ``fight_headers`` (the header of the trainer's fight, the same
+    in every order; ``tools/kaizo/gauntlet_map.py``) or a user's placement answer
+    (``[area.<id>] map_header``). Two that disagree raise."""
+    found: dict[int, str] = {}
+    if facts is not None and facts.get("fight_headers"):
+        heads = {
+            h
+            for order, row in zip(facts["orders"], facts["fight_headers"], strict=True)
+            for fight, h in zip(order, row, strict=True)
+            if tid in fight
+        }
+        if len(heads) == 1:
+            found[heads.pop()] = f"gauntlet {facts['name']!r} fight_headers"
+    if area is not None and area.map_header is not None:
+        found.setdefault(area.map_header, f"overrides area.{tid} map_header ({area.source})")
+    if len(found) > 1:
+        raise ResolveError(f"trainer {tid}: the fight's header is fixed twice: {found}")
+    return next(iter(found.items()), None)
+
+
+def narrowed_map_labels(
+    tid: int, fixed: tuple[int, str], headers: list[int], map_labels: tuple[int, ...]
+) -> list[int]:
+    """The one map label of a fight whose header is fixed: the battle's ``mapLabelTextID`` is
+    that header's (``battleSys->mapHeader = dto->mapLabelTextID``,
+    src/field_battle_data_transfer.c:263; src/battle/battle_main.c:1054)."""
+    header = fixed[0]
+    if header not in headers:
+        raise ResolveError(
+            f"trainer {tid}: fixed header {header} ({fixed[1]}) is not one of its map headers "
+            f"{sorted(headers)}"
+        )
+    if header >= len(map_labels):
+        raise ResolveError(f"map header {header} has no label (rom_map_labels.json)")
+    return [map_labels[header]]
 
 
 def fog_headers(headers: list[int], map_weather: tuple[int, ...]) -> list[int]:
@@ -677,6 +723,16 @@ def trainer_record(
     sources["map_labels"] = (
         f"rom: map label text id (d_test.narc byte 18) of the trainer's map headers (headers {where})"
     )
+    g = ctx.gauntlets.get(tid)
+    fixed = fixed_map_header(tid, None if g is None else g[2], overrides.area.get(tid))
+    if fixed is not None:
+        out["map_labels"] = narrowed_map_labels(
+            tid, fixed, src.trainer_maps.get(tid, []), src.map_labels
+        )
+        sources["map_labels"] = (
+            f"rom: map label text id (d_test.narc byte 18) of header {fixed[0]}, the one the "
+            f"fight starts on ({fixed[1]})"
+        )
     if len([x for x in t.get("terrains", ()) if x != TERRAIN_UNKNOWN]) > 1:
         # Manager ruling 1 (ledger G-18): several start-tile terrains are the run's route;
         # the other two sources were checked and hold no terrain.

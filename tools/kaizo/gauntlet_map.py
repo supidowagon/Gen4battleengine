@@ -2,50 +2,104 @@
 
 A Python port of the Node oracle in ``_scratch/e3/b3rules`` (``rom.js``, ``dump.js``, ``bfs2.js``,
 ``chain.js``, ``gym.js``, ``wayward2.js``, ``wayward_nomira.js``, ``wayward_talk.js``) on
-``tools.rom.nds.RomFiles``. The build does not run it: its values are written to
-``data/kaizo/overrides.toml`` with their ``rom:`` sources, and a ROM-backed test re-derives and
-compares them (``tests/kaizo/test_gauntlet_map.py``).
+``tools.rom.nds.RomFiles``, extended by the walk-fix round (E3-B3 review of 22 Nov). The build
+does not run it: its values are written to ``data/kaizo/overrides.toml`` with their ``rom:``
+sources, and a ROM-backed test re-derives and compares them (``tests/kaizo/test_gauntlet_map.py``).
 
 Method (every rule cited to the decomp; paths relative to ``external/pokeplatinum``):
 
 - Map header ``debug/cb_edit/d_test.narc``: u16 matrix @2, scripts @4, events @16, flags @22 (map
-  type bits 0-6, escape bit 14; ``include/map_header.h:10-31``). Land data attributes at 0x10,
-  32 x 32 u16, bit 15 collision, low byte tile behaviour (``include/constants/field/map.h:9``,
-  ``:17``, ``:22``). Zone events: ``tools/jsoncnv/event.py:51-69`` (object), ``:84-91`` (warp),
+  type bits 0-6, escape bit 14; ``include/map_header.h:10-31``). Land data: four u32 sizes
+  (attributes, props, model, BDHC; ``LandDataHeader_Load``, ``src/overlay005/land_data.c:457-478``),
+  attributes at 0x10, 32 x 32 u16, bit 15 collision, low byte tile behaviour
+  (``include/constants/field/map.h:9``, ``:17``, ``:22``). Zone events:
+  ``tools/jsoncnv/event.py:51-69`` (object, its fx32 y at byte 28), ``:84-91`` (warp),
   ``:107-118`` (coord). Trainer id = script - 3000 + 1 (``include/script_manager.h:93-95``).
+- Height (BDHC, ``src/overlay005/bdhc.c``): a tile's height is the plate through the tile centre
+  (``CalculateObjectHeight`` :152-235: the strip by binary search on z, its access list in order,
+  at most 10 plates whose box holds the point, the one nearest the current height). A step whose
+  new height differs from the current by 20 or more is a collision (``GetVerticalDirection``,
+  ``src/terrain_collision_manager.c:249-276``, ``:278-305``); with no plate the height reads 0 for
+  that test and the object keeps its height (``GetHeight`` :47-136,
+  ``MapObject_RecalculatePositionHeight``, ``src/map_object_move.c:1036-1047``). The player starts
+  a map at height 0 (``PlayerAvatar_New`` takes x and z only, ``src/player_avatar.c:39-57``), an
+  object at its event y (``src/map_object.c:709-716``), both then on the nearest plate.
+- Movement (``PlayerAvatar_CheckCollision``, ``src/player_move.c:1865-1907``; walking,
+  ``PlayerAvatar_SetMovement_NormalOverworld`` :1016-1081): a step is blocked by terrain collision
+  or height (above), by a directional tile (``sub_02064004``, ``src/map_object_move.c:706-737``:
+  ``TileBehavior_BlocksMovement*`` of the current tile in the step direction, of the target in the
+  opposite one), by an object within 2 height units (``sub_02063F00`` :616-672), by a water tile
+  (``PLAYER_COLLISION_WATER``; ``MapObject_IsOnWater`` :739-750) and, on an elevated bridge, by a
+  bike bridge (:2116-2160). A jump tile in the step direction jumps two tiles
+  (``PlayerAvatar_WillJump`` :1956-1999, ``MOVEMENT_ACTION_JUMP_FAR``): one-way. Surfing, a step is
+  allowed with no collision or only water (:1058). Surf starts facing water with the Fen Badge and
+  a party Surf user, not on an elevated bridge, never with a partner (``Field_TileBehaviorToScript``,
+  ``src/overlay005/field_control.c:686-694``; ``PlayerAvatar_CanUseSurf``,
+  ``src/overlay005/ov5_021DFB54.c:641-655``; ``res/field/scripts/scripts_field_moves.s:299-303``).
+  Rock Climb tiles are climbed along their axis with the Icicle Badge, no partner
+  (``field_control.c:682-684``; ``scripts_field_moves.s:246-288``), a waterfall with the Beacon
+  Badge (``src/field_move_tasks.c:584-598``). Spin tiles (``SLIDE_*``) carry the player tile by
+  tile, turning on each spin tile, until a step collides, with no field input on the way
+  (``ov5_021E1154``, ``src/overlay005/ov5_021E1154.c:35-152``, called from ``Field_ProcessStep``,
+  ``field_control.c:712``); ice slides on in the step direction until a step collides
+  (``PlayerAvatar_TileMove_Ice``, ``player_move.c:544-604``). The elevated-bridge state turns on
+  at a bridge start and off off a bridge (``MapObject_DetermineElevatedBridgeStatus``,
+  ``map_object_move.c:562-569``). Walking only: cycling is not part of the walk, and no gauntlet
+  header holds a bike tile (ROM test).
+- Field-move objects (``res/field/scripts/scripts_field_moves.s``): a Cut tree (script 10000)
+  needs the Forest Badge (:29), a Rock Smash rock (10001) the Coal Badge (:134;
+  ``FieldMoves_CheckRockSmash``, ``src/field_move_tasks.c:545``), a Strength boulder (10002) the
+  Mine Badge (:191; ``src/field_move_tasks.c:463``); without it the object blocks. The badges held
+  at a group are those of the splits before the group's split (``FieldMoves.for_split``).
 - Sight (``src/trainer_encounter.c:166-181``, ``:182-229``, ``:240-306``, ``:310-344``): a NORMAL
-  trainer (FACE_* and SPIN_* count as NORMAL) looks along the directions its movement type faces,
-  a VIEW_ALL_DIRECTIONS trainer along all four; the player is spotted at distance <= range when
-  no tile before the player's has terrain or object collision and the player's own tile holds only
-  the object bit. Walking movement types (``generated/movement_types.txt``: wander 3-5, walk
-  20-44) move the trainer and its sight line: the tool does not model them. It raises for a group
-  member with one; a non-member with one is taken as beaten before the group (the player can fight
-  it first, and a beaten trainer only frees tiles). Route 213's trainers 107 and 108 (types 41, 43)
-  are such non-members; its facts are already the widest possible (every order, every gap a leave
-  and heal gap), so the assumption cannot change them.
-- ``FieldInput_Process`` runs ``FieldSystem_CheckForTrainersWantingBattle`` on every field-input
-  frame (``src/overlay005/field_control.c:181-188``; ``src/trainer_encounter.c:84-100``): the sight
-  check runs on every tile entered, on the arrival tile of every warp and on the start tile. A
-  walk may not enter an undefeated trainer's sight tile, or arrive on one, except to start that
-  fight.
+  trainer (FACE_* and SPIN_* count as NORMAL) looks along its current facing, a
+  VIEW_ALL_DIRECTIONS trainer along all four. The player is spotted at distance <= range when no
+  tile before the player's collides for the trainer (terrain and height from the trainer's own
+  height, a directional tile, an object at its height) and the player's own tile holds only the
+  player within 2 height units (``IsPathInterrupted`` keeps only the object bit). A LOOK_* or
+  ROTATE_* movement type turns the trainer: every 16 to 64 frames it faces a random direction of its
+  type's set (``sub_020645C0``, ``src/unk_0206450C.c:221-243``, timers ``Unk_020EEA88`` :1482-1488);
+  only a running player in its range makes it face him (``sub_0206537C`` :1271-1335). So whether a
+  turning trainer faces the player when he crosses its line is the player's choice of timing: the
+  walk takes both, the fight and the pass. A fixed facing (one direction) is always forced.
+  Walking movement types (``generated/movement_types.txt``: wander 3-5, walk 20-44) move the trainer
+  and its sight line: the tool does not model them. It raises for a group member with one; a
+  non-member with one is taken as beaten before the group (the player can fight it first, and a
+  beaten trainer only frees tiles). Route 213's trainers 107 and 108 (types 41, 43) are such
+  non-members.
+- Who fights (``FieldSystem_CheckForTrainersWantingBattle``, ``src/trainer_encounter.c:84-131``):
+  the first undefeated trainer in object order that sees the player
+  (``FindUndefeatedTrainerInSight`` :133-155, ``MapObjectMan_FindObjectWithStatus``,
+  ``src/map_object.c:857-881``). A double-battle trainer (trainer data battle type,
+  ``Script_IsTrainerDoubleBattle``, ``src/script_manager.c:512-515``) fights with its partner object
+  when the party has two live Pokemon, and does not fight at all otherwise (:113-118). A singles
+  trainer fights together with the next undefeated trainer in object order that also sees the
+  player, as one double battle (``APPROACH_TYPE_VS2``), when the party has two live Pokemon or a
+  partner (``src/overlay005/field_control.c:181-186``), else alone (:98-106). The walk takes a party
+  with two live Pokemon (``Walker.two_alive``).
+- ``FieldInput_Process`` runs the sight check on every field-input frame (``field_control.c:
+  181-196``): on every tile entered, on the arrival tile of every warp and on the start tile, not on
+  the tiles a spin crosses. A walk may not enter a tile where a fixed-facing undefeated trainer
+  spots the player, or arrive on one, except to start that fight.
 - Warps: a collision tile with behaviour 0x69 ``TILE_BEHAVIOR_DOOR`` that holds a warp is entered
-  by walking into it (``Field_CheckMapTransition``, ``src/overlay005/field_control.c:572-592``;
+  by walking into it (``Field_CheckMapTransition``, ``field_control.c:572-592``;
   ``include/constants/field/map_tile_behaviors.h:116``); the player never stands on it, so no
   sight check applies there. A directional entrance or stairs tile moves the player after a push
   in its direction (``:600-620``, ``:812-815``); a push is always possible once the player stands
   on the tile, so a warp tile is a step into the warp, as in the oracle. Intra-map warp panels
   are followed.
 - Talking: the object in front of the player, or across a tile with behaviour 0x80
-  ``TILE_BEHAVIOR_TABLE`` the object behind it (``sub_0203C9D4``, ``src/unk_0203C954.c:58-80``).
-- Coord events: one whose var is 0 always matches (``sub_0203CC14``, ``src/unk_0203C954.c:218``;
-  ``FieldSystem_TryGetVar``, ``src/script_manager.c:432-433``, ``:447-448``); another matches when
-  the caller's ``vars`` say so. A matching coord on a tile walked in a ``strict`` header (the
-  group's own) raises unless the caller's ``coord_rule`` models it; in another header, or when
-  the caller does not know the var, it is recorded in ``Walk.crossed``.
-- Removable: item balls (scripts 7000-7999), Rock Smash rocks (10001) and Strength boulders (10002;
-  ``include/script_manager.h:112``) where Strength is usable (``FieldMoves_CheckStrength``,
-  ``src/field_move_tasks.c:457-470``).
-- The matrix is masked to the group's header: a tile outside is a wall.
+  ``TILE_BEHAVIOR_TABLE`` the object behind it, at the player's height unit
+  (``sub_0203C9D4``, ``sub_0203C9B0``, ``src/unk_0203C954.c:47-80``).
+- Coord events: one runs when ``FieldSystem_TryGetVar(var) == value`` (``sub_0203CC14``,
+  ``src/unk_0203C954.c:208-223``). A var below ``VARS_START`` (0x4000) reads as the number itself
+  (``FieldSystem_TryGetVar``, ``src/script_manager.c:428-452``), so a coord on var 0 runs only when
+  its value is 0. Another var matches when the caller's ``vars`` say so. A matching coord on a tile
+  walked in a ``strict`` header (the group's own) raises unless the caller's ``coord_rule`` models
+  it; in another header, or when the caller does not know the var, it is recorded in
+  ``Walk.crossed``.
+- Item balls (scripts 7000-7999) can be picked up; the matrix is masked to the group's header: a
+  tile outside is a wall.
 
 ``derive_groups`` returns per group the facts of ``data/kaizo/overrides.toml``.
 """
@@ -57,6 +111,8 @@ import struct
 from collections import deque
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
+from fractions import Fraction
+from itertools import combinations
 from pathlib import Path
 from typing import NamedTuple
 
@@ -78,6 +134,7 @@ from tools.rom.readers.maps import (
     command_table,
     script_entries,
 )
+from tools.rom.readers.trainers import TRDATA_NARC
 from tools.terrain import TerrainError, parse_matrix
 
 # --- tile and object constants ------------------------------------------------------------
@@ -88,23 +145,62 @@ TILES_PER_SIDE = 32  # MAP_TILES_COUNT_X / _Z, :9-10
 COLLISION = 0x8000  # TERRAIN_ATTRIBUTES_COLLISION_MASK, :22
 BEHAVIOUR_MASK = 0xFF  # TERRAIN_ATTRIBUTES_TILE_BEHAVIOR_MASK, :27
 INVALID_LAND = 0xFFFF  # INVALID_LAND_DATA_ID, :14
+# Tile behaviours (enum TileBehavior, include/constants/field/map_tile_behaviors.h:10-267).
+ICE = 0x20
+BLOCK_E, BLOCK_W, BLOCK_N, BLOCK_S = 0x30, 0x31, 0x32, 0x33
+BLOCK_NE, BLOCK_NW, BLOCK_SE, BLOCK_SW = 0x34, 0x35, 0x36, 0x37
+JUMP_E, JUMP_W, JUMP_N, JUMP_S = 0x38, 0x39, 0x3A, 0x3B
+SLIDE_E, SLIDE_W, SLIDE_N, SLIDE_S = 0x40, 0x41, 0x42, 0x43
+BLOCK_NS, BLOCK_EW = 0x49, 0x4A
+ROCK_CLIMB_NS, ROCK_CLIMB_EW = 0x4B, 0x4C
+JUMP_TWICE = frozenset({0x5A, 0x5B, 0x5C, 0x5D})  # Distortion World only (player_move.c:2001-2035)
+WATERFALL = 0x13
 WARP_ENTRANCE_SOUTH = 0x65  # TILE_BEHAVIOR_WARP_ENTRANCE_SOUTH, map_tile_behaviors.h:112
-DOOR = 0x69  # TILE_BEHAVIOR_DOOR, include/constants/field/map_tile_behaviors.h:116
+DOOR = 0x69  # TILE_BEHAVIOR_DOOR, :116
+BRIDGE_START = 0x70
+BRIDGES = frozenset(range(0x71, 0x7E))  # TileBehavior_IsBridge, src/map_tile_behavior.c:659-674
+BIKE_BRIDGES = frozenset({0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D})  # :695-709
+BRIDGE_OVER_WATER = frozenset({0x73, 0x78, 0x7C})  # TileBehavior_IsBridgeOverWater :676-681
+# TILE_BEHAVIOR_FLAG_SURFABLE in sTileBehaviorFlags (src/map_tile_behavior.c:13-140; the test
+# re-reads the table from the decomp).
+SURFABLE = frozenset(
+    {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x19, 0x22, 0x2A, 0x50, 0x51, 0x52, 0x53, 0x73, 0x78, 0x7C}
+)
 TABLE = 0x80  # TILE_BEHAVIOR_TABLE, :139
 PC_TILE = 0x83  # TILE_BEHAVIOR_PC, :142
 NO_WARP = 0xFFFF
 ESCAPE_BIT = 14  # isEscapeRopeAllowed, include/map_header.h:28
 MAP_TYPE_MASK = 0x7F  # mapType : 7
 CAVE_MAP_TYPE = 3  # MapHeader_IsCave: rom header 199 / 284 map type 3 (facts-final)
-ROCK_SMASH_SCRIPT = 10001  # field-move scripts start at 10000, include/script_manager.h:112
+CUT_SCRIPT = 10000  # field-move scripts start at 10000, include/script_manager.h:112
+ROCK_SMASH_SCRIPT = 10001
 STRENGTH_SCRIPT = 10002
+VARS_START = 0x4000  # generated/vars_flags.txt:4107
 
 DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))  # N S W E, MapObject_GetDxFromDir order
+OPPOSITE = (1, 0, 3, 2)
+JUMP = (JUMP_N, JUMP_S, JUMP_W, JUMP_E)  # the jump tile of each step direction
+SLIDE = {SLIDE_N: 0, SLIDE_S: 1, SLIDE_W: 2, SLIDE_E: 3}
+# TileBehavior_BlocksMovement{North,South,West,East}ward (src/map_tile_behavior.c:574-604).
+BLOCKS = (
+    frozenset({BLOCK_N, BLOCK_NE, BLOCK_NW, BLOCK_NS}),
+    frozenset({BLOCK_S, BLOCK_SE, BLOCK_SW, BLOCK_NS}),
+    frozenset({BLOCK_W, BLOCK_NW, BLOCK_SW, BLOCK_EW}),
+    frozenset({BLOCK_E, BLOCK_NE, BLOCK_SE, BLOCK_EW}),
+)
+ROCK_CLIMB = (ROCK_CLIMB_NS, ROCK_CLIMB_NS, ROCK_CLIMB_EW, ROCK_CLIMB_EW)  # by step direction
+
+FX32_ONE = 4096
+HEIGHT_STEP = 20 * FX32_ONE  # GetVerticalDirection, src/terrain_collision_manager.c:270
+TILE_FX = 16 * FX32_ONE  # MAP_OBJECT_TILE_SIZE
+BDHC_CANDIDATES = 10  # BDHC_NEW_OBJECT_HEIGHT_CANDIDATES_ARRAY_SIZE, bdhc.c:12
+
 TRAINER_NORMAL = 1  # TRAINER_TYPE_NORMAL
 TRAINER_ALL_DIRECTIONS = 2  # TRAINER_TYPE_VIEW_ALL_DIRECTIONS
 TRAINER_FACE_FIRST, TRAINER_FACE_LAST = 4, 8  # FACE_SIDES .. SPIN_CLOCKWISE count as NORMAL
-# Movement type -> the directions a trainer looks along (generated/movement_types.txt, 0-based;
-# 0 NONE keeps the initial direction).
+# Movement type -> the directions a trainer faces over time (generated/movement_types.txt,
+# 0-based; the sets of Unk_020EEB08, src/unk_0206450C.c:1758-1798). Another type keeps the
+# initial direction.
 LOOK = {
     2: (0, 1, 2, 3),
     6: (0, 2),
@@ -126,6 +222,28 @@ LOOK = {
 }
 MOVING = frozenset({3, 4, 5, *range(20, 45)})  # wander and walk types
 
+# Badge ids (generated/badges.txt, 0-based; the bit TrainerInfo_HasBadge tests).
+COAL, FOREST, COBBLE, FEN, RELIC, MINE, ICICLE, BEACON = range(8)
+# The splits in game order (tools/extract_kaizo_docs.py SPLITS) and the badge each split's last
+# fight gives: res/field/scripts/scripts_oreburgh_city_gym.s:28 (Coal), scripts_eterna_city_gym.s:76
+# (Forest), scripts_hearthome_city_gym_leader_room.s:71 (Relic), scripts_veilstone_city_gym.s:34
+# (Cobble), scripts_pastoria_city_gym.s:58 (Fen), scripts_canalave_city_gym.s:31 (Mine),
+# scripts_snowpoint_city_gym.s:35 (Icicle), scripts_sunyshore_city_gym_room_3.s:41 (Beacon); the
+# Kaizo files hold the same GiveBadge (ROM test: scr 52, 73, 137, 125, 38, 176, 160; the Relic
+# Badge moved to Kaizo's rebuilt Hearthome Gym, scr 96 and 101).
+SPLIT_BADGES = (
+    ("Roark", COAL),
+    ("Gardenia", FOREST),
+    ("Fantina", RELIC),
+    ("Maylene", COBBLE),
+    ("Wake", FEN),
+    ("Byron", MINE),
+    ("Candice", ICICLE),
+    ("Galactic", None),
+    ("Volkner", BEACON),
+    ("Elite Four", None),
+)
+
 
 class MapReadError(ValueError):
     """The ROM holds a map the read cannot model."""
@@ -137,9 +255,55 @@ class Pos(NamedTuple):
     z: int
 
 
+def grid_y(height: int) -> int:
+    """The height unit of a map object: ``(pos.y >> 3) / FX32_ONE`` (``sub_020630DC``,
+    ``src/map_object.c:2147-2153``; C division truncates toward zero)."""
+    q = height >> 3
+    return q // FX32_ONE if q >= 0 else -((-q) // FX32_ONE)
+
+
 @dataclass(frozen=True)
-class MapObject:
-    """One object event (``tools/jsoncnv/event.py:51-69``)."""
+class FieldMoves:
+    """The field moves the walk may use: a badge held and no partner where the script refuses
+    one (``res/field/scripts/scripts_field_moves.s``; the party knowing the move is the player's
+    choice: HM06 Rock Smash ``scripts_oreburgh_gate_1f.s:30``, HM03 Surf
+    ``scripts_celestic_town_cave.s:129``, HM04 Strength ``scripts_iron_island.s:98``)."""
+
+    cut: bool = False
+    rock_smash: bool = False
+    strength: bool = False
+    surf: bool = False
+    rock_climb: bool = False
+    waterfall: bool = False
+
+    @classmethod
+    def from_badges(cls, badges: Collection[int], partner: bool = False) -> FieldMoves:
+        b = set(badges)
+        return cls(
+            cut=FOREST in b,  # scripts_field_moves.s:29; field_move_tasks.c:332
+            rock_smash=COAL in b,  # :134; field_move_tasks.c:545
+            strength=MINE in b,  # :191; field_move_tasks.c:463
+            surf=FEN in b and not partner,  # field_control.c:690; :302-303 no partner
+            rock_climb=ICICLE in b and not partner,  # :251, :253-254 no partner
+            waterfall=BEACON in b,  # field_move_tasks.c:590
+        )
+
+    @classmethod
+    def for_split(cls, split: str, partner: bool = False) -> FieldMoves:
+        """The field moves of a group in ``split``: the badges of every earlier split (the split
+        ends with the fight that gives its badge, ``SPLIT_BADGES``)."""
+        names = [s for s, _ in SPLIT_BADGES]
+        if split not in names:
+            raise MapReadError(f"unknown split {split!r}")
+        held = [b for s, b in SPLIT_BADGES[: names.index(split)] if b is not None]
+        return cls.from_badges(held, partner)
+
+
+NO_FIELD_MOVES = FieldMoves()
+
+
+class MapObject(NamedTuple):
+    """One object event (``tools/jsoncnv/event.py:51-69``; ``y`` the fx32 event height)."""
 
     index: int
     local_id: int
@@ -150,6 +314,7 @@ class MapObject:
     sight: int
     x: int
     z: int
+    y: int = 0
 
     @property
     def trainer(self) -> int | None:
@@ -159,15 +324,15 @@ class MapObject:
             return self.script - base + 1
         return None
 
-    @property
-    def removable(self) -> bool:
-        """An item ball or a Rock Smash rock."""
-        in_items = VISIBLE_ITEM_SCRIPTS <= self.script < VISIBLE_ITEM_SCRIPTS + 1000
-        return in_items or self.script == ROCK_SMASH_SCRIPT
-
-    @property
-    def boulder(self) -> bool:
-        return self.script == STRENGTH_SCRIPT
+    def cleared(self, moves: FieldMoves) -> bool:
+        """An item ball (picked up) or a field-move object the player can remove."""
+        if VISIBLE_ITEM_SCRIPTS <= self.script < VISIBLE_ITEM_SCRIPTS + 1000:
+            return True
+        return (
+            (self.script == CUT_SCRIPT and moves.cut)
+            or (self.script == ROCK_SMASH_SCRIPT and moves.rock_smash)
+            or (self.script == STRENGTH_SCRIPT and moves.strength)
+        )
 
 
 class Warp(NamedTuple):
@@ -191,9 +356,20 @@ class Coord(NamedTuple):
         return self.x <= x < self.x + self.width and self.z <= z < self.z + self.length
 
 
+def literal_coord(coord: Coord) -> bool | None:
+    """Whether a coord on a var below ``VARS_START`` runs: the var reads as its own number
+    (``FieldSystem_TryGetVar``, ``src/script_manager.c:444-452``; ``sub_0203CC14``,
+    ``src/unk_0203C954.c:218``). None for a real var."""
+    if coord.var < VARS_START:
+        return coord.var == coord.value
+    return None
+
+
 @dataclass
 class Area:
-    """The tiles and events of one map header (``tiles``: (x, z) -> terrain attribute u16)."""
+    """The tiles and events of one map header (``tiles``: (x, z) -> terrain attribute u16;
+    ``heights``: (x, z) -> the fx32 heights of the BDHC plates through the tile centre, in the
+    order ``CalculateObjectHeight`` meets them; a tile with none has no plate)."""
 
     header: int
     tiles: Mapping[tuple[int, int], int]
@@ -202,11 +378,30 @@ class Area:
     coords: tuple[Coord, ...] = ()
     map_type: int = 0
     escape_bit: bool = False
+    heights: Mapping[tuple[int, int], tuple[int, ...]] = field(default_factory=dict)
     object_at: dict = field(init=False, repr=False, default_factory=dict)
     _pc: frozenset | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self):
-        self.object_at = {(o.x, o.z): o for o in self.objects}
+        self.object_at = {}
+        for o in self.objects:
+            self.object_at.setdefault((o.x, o.z), []).append(o)
+
+    def behaviour(self, x: int, z: int) -> int | None:
+        a = self.tiles.get((x, z))
+        return None if a is None else a & BEHAVIOUR_MASK
+
+    def plate(self, x: int, z: int, current: int) -> int | None:
+        """The height ``CalculateObjectHeight`` gives an object at ``current`` on the tile: the
+        first candidate nearest ``current`` (``bdhc.c:206-224``), None with no plate."""
+        cands = self.heights.get((x, z), ())
+        if not cands:
+            return None
+        return min(cands, key=lambda h: abs(h - current))
+
+    def object_height(self, o: MapObject) -> int:
+        h = self.plate(o.x, o.z, o.y)
+        return o.y if h is None else h
 
     def warp_at(self, x: int, z: int) -> Warp | None:
         return next((w for w in self.warps if (w.x, w.z) == (x, z)), None)
@@ -260,13 +455,100 @@ def parse_events(
     for i, r in enumerate(records[1]):
         v = struct.unpack_from("<8H", r)  # id gfx movement trainer-type flag script dir data0
         x, z = struct.unpack_from("<2H", r, 24)
-        objects.append(MapObject(i, v[0], v[2], v[3], v[5], v[6], v[7], x, z))
+        (y,) = struct.unpack_from("<i", r, 28)
+        objects.append(MapObject(i, v[0], v[2], v[3], v[5], v[6], v[7], x, z, y))
     warps = [Warp(i, *struct.unpack_from("<4H", r)) for i, r in enumerate(records[2])]
     coords = []
     for r in records[3]:
         script, x, z, w, length, _y, value, var = struct.unpack_from("<8H", r)
         coords.append(Coord(script, x, z, w, length, value, var))
     return tuple(objects), tuple(warps), tuple(coords)
+
+
+def _fx_mul(a: int, b: int) -> int:
+    return (a * b + 0x800) >> 12  # FX_Mul: rounded fx32 product
+
+
+def _fx_div(a: int, b: int) -> int:
+    q = Fraction(a * FX32_ONE, b)  # FX_Div: the fx32 quotient, rounded to nearest
+    return int(q + Fraction(1, 2)) if q >= 0 else -int(-q + Fraction(1, 2))
+
+
+def bdhc_heights(member: bytes, land: int = 0) -> list[tuple[int, ...]]:
+    """Per tile (row-major 32 x 32) the candidate plate heights of a land data member's BDHC
+    (``BDHC_LoadHeader`` and the load order, ``src/overlay005/bdhc.c:239-330``; the tile centre at
+    ``(c * 16 + 8 - 256, r * 16 + 8 - 256)`` relative to the land, ``GetHeight``,
+    ``src/terrain_collision_manager.c:78-85``)."""
+    sizes = struct.unpack_from("<4I", member, 0)
+    off = 0x10 + sizes[0] + sizes[1] + sizes[2]
+    b = member[off : off + sizes[3]]
+    if b[:4] != b"BDHC":
+        raise MapReadError(f"land data {land}: no BDHC section")
+    n_pts, n_nrm, n_cst, n_pl, n_st, n_acc = struct.unpack_from("<6H", b, 4)
+    pos = 16
+    pts = [struct.unpack_from("<2i", b, pos + 8 * i) for i in range(n_pts)]
+    pos += 8 * n_pts
+    nrm = [struct.unpack_from("<3i", b, pos + 12 * i) for i in range(n_nrm)]
+    pos += 12 * n_nrm
+    cst = [struct.unpack_from("<i", b, pos + 4 * i)[0] for i in range(n_cst)]
+    pos += 4 * n_cst
+    plates = [struct.unpack_from("<4H", b, pos + 8 * i) for i in range(n_pl)]
+    pos += 8 * n_pl
+    strips = [struct.unpack_from("<iHH", b, pos + 8 * i) for i in range(n_st)]
+    pos += 8 * n_st
+    access = struct.unpack_from(f"<{n_acc}H", b, pos)
+
+    def strip_index(scan: int) -> int | None:
+        # BDHC_FindStripIndexByScanline, bdhc.c:113-150, step for step
+        if n_st == 0:
+            return None
+        if n_st == 1:
+            return 0
+        low, high = 0, n_st - 1
+        mid = high // 2
+        while True:
+            if strips[mid][0] > scan:
+                if high - 1 > low:
+                    high = mid
+                    mid = (low + high) // 2
+                else:
+                    return mid
+            elif low + 1 < high:
+                low = mid
+                mid = (low + high) // 2
+            else:
+                return mid + 1
+
+    out: list[tuple[int, ...]] = []
+    for r in range(TILES_PER_SIDE):
+        z = (r * 16 + 8 - 256) * FX32_ONE
+        si = strip_index(z)
+        for c in range(TILES_PER_SIDE):
+            x = (c * 16 + 8 - 256) * FX32_ONE
+            cands: list[int] = []
+            if si is not None and si < n_st:
+                _, count, start = strips[si]
+                for i in range(count):
+                    p1, p2, ni, ci = plates[access[start + i]]
+                    (x1, z1), (x2, z2) = pts[p1], pts[p2]
+                    if min(x1, x2) <= x <= max(x1, x2) and min(z1, z2) <= z <= max(z1, z2):
+                        nx, ny, nz = nrm[ni]
+                        h = _fx_div(-(_fx_mul(nx, x) + _fx_mul(nz, z) + cst[ci]), ny)
+                        cands.append(h)
+                        if len(cands) >= BDHC_CANDIDATES:
+                            break
+            out.append(tuple(cands))
+    return out
+
+
+def read_double_trainers(files: RomFiles) -> frozenset[int]:
+    """The trainers whose trainer data battle type is not singles (u32 at 16 of a
+    ``trdata.narc`` member; ``Script_IsTrainerDoubleBattle``, ``src/script_manager.c:512-515``)."""
+    out = set()
+    for tid, head in enumerate(files.narc(TRDATA_NARC)):
+        if len(head) >= 20 and struct.unpack_from("<I", head, 16)[0] != 0:
+            out.add(tid)
+    return frozenset(out)
 
 
 class RomMaps:
@@ -278,7 +560,7 @@ class RomMaps:
         self._matrices = files.narc(MATRIX_NARC)
         self._lands = files.narc(LAND_DATA_NARC)
         self._cache: dict[tuple[int, bool], Area] = {}
-        self._land_cache: dict[int, tuple[int, ...]] = {}
+        self._land_cache: dict[int, tuple[tuple[int, ...], list[tuple[int, ...]]]] = {}
 
     def header(self, header: int) -> MapHeader:
         try:
@@ -293,14 +575,13 @@ class RomMaps:
             header, matrix, scripts, events, flags & MAP_TYPE_MASK, bool((flags >> ESCAPE_BIT) & 1)
         )
 
-    def _land(self, land: int) -> tuple[int, ...]:
+    def _land(self, land: int) -> tuple[tuple[int, ...], list[tuple[int, ...]]]:
         if land not in self._land_cache:
             member = self._lands[land]
             if struct.unpack_from("<I", member, 0)[0] != ATTRIBUTES_SIZE:
                 raise MapReadError(f"land data {land}: terrain attribute size is not 0x800")
-            self._land_cache[land] = struct.unpack_from(
-                f"<{ATTRIBUTES_SIZE // 2}H", member, ATTRIBUTES_OFFSET
-            )
+            attrs = struct.unpack_from(f"<{ATTRIBUTES_SIZE // 2}H", member, ATTRIBUTES_OFFSET)
+            self._land_cache[land] = (attrs, bdhc_heights(member, land))
         return self._land_cache[land]
 
     def area(self, header: int, masked: bool = True) -> Area:
@@ -314,6 +595,7 @@ class RomMaps:
             matrix = parse_matrix(self._matrices[h.matrix], h.matrix)
             objects, warps, coords = parse_events(self._events[h.events])
             tiles: dict[tuple[int, int], int] = {}
+            heights: dict[tuple[int, int], tuple[int, ...]] = {}
             for k, land in enumerate(matrix.lands):
                 if land == INVALID_LAND:
                     continue
@@ -321,11 +603,15 @@ class RomMaps:
                     continue
                 x0 = (k % matrix.width) * TILES_PER_SIDE
                 z0 = (k // matrix.width) * TILES_PER_SIDE
-                for i, a in enumerate(self._land(land)):
-                    tiles[(x0 + i % TILES_PER_SIDE, z0 + i // TILES_PER_SIDE)] = a
+                attrs, plates = self._land(land)
+                for i, a in enumerate(attrs):
+                    p = (x0 + i % TILES_PER_SIDE, z0 + i // TILES_PER_SIDE)
+                    tiles[p] = a
+                    if plates[i]:
+                        heights[p] = plates[i]
         except (IndexError, struct.error, TerrainError) as e:
             raise MapReadError(f"map header {header}: {e}") from e
-        area = Area(header, tiles, objects, warps, coords, h.map_type, h.escape_bit)
+        area = Area(header, tiles, objects, warps, coords, h.map_type, h.escape_bit, heights)
         self._cache[key] = area
         return area
 
@@ -339,80 +625,114 @@ def escape(maps, header: int) -> bool:
 
 # --- the walk ---------------------------------------------------------------------------------
 
+Fight = tuple[int, ...]
+
 
 class Sighting(NamedTuple):
-    """Where the player stands when a trainer starts the fight: ``how`` is ``"sight"`` (a tile in
-    the trainer's line), ``"arrival"`` (a warp arrival or the start tile) or ``"talk"``."""
+    """Where the player stands when a fight starts: ``how`` is ``"sight"`` (a tile in a
+    trainer's line), ``"arrival"`` (a warp arrival or the start tile) or ``"talk"``; ``y`` the
+    player's height there."""
 
     pos: Pos
     how: str
+    y: int = 0
+
+
+class Seer(NamedTuple):
+    """An undefeated trainer object that sees a tile: ``turning`` when its facing changes."""
+
+    index: int
+    trainer: int
+    turning: bool
 
 
 @dataclass
 class Walk:
-    """The result of one walk: the tiles reached (tile -> the tile before it), the undefeated
-    trainers that can start a fight, the objects that can be talked to (``(header, local id)``
-    -> the player's tile) and the coord events crossed."""
+    """The result of one walk: the tiles reached (tile -> the tile before it), the fights that
+    can start (a fight is a tuple of trainer ids, one or two, in the game's object order), the
+    objects that can be talked to (``(header, local id)`` -> the player's tile) and the coord
+    events crossed."""
 
     seen: dict[Pos, Pos | None]
-    spot: dict[int, Sighting] = field(default_factory=dict)
+    spot: dict[Fight, Sighting] = field(default_factory=dict)
     talk: dict[tuple[int, int], Pos] = field(default_factory=dict)
     crossed: list[tuple[Pos, Coord]] = field(default_factory=list)
 
     def headers(self) -> set[int]:
         return {p.header for p in self.seen}
 
+    def trainers(self) -> set[int]:
+        """Every trainer of a fight that can start."""
+        return {t for f in self.spot for t in f}
+
 
 CoordRule = Callable[[int, Coord, "bool | None"], "str | None"]
+
+
+class _State(NamedTuple):
+    pos: Pos
+    y: int
+    bridge: bool
 
 
 class Walker:
     """The walk rules over ``maps`` (an object with ``area(header) -> Area``).
 
     ``members``: the trainer ids of the group (a member with a walking movement type raises).
-    ``strength``: Strength boulders can be pushed away. ``ignore(header, obj)``: an object that
-    never blocks and never sees (the partner who follows the player). ``vars``: the known values
-    of coord variables. ``coord_rule(header, coord, matches)``: ``"pass"``, ``"block"`` (the
-    script takes the player: the tile is not entered) or None for the default (a matching coord
-    raises when its header is in ``strict``, every header when None; elsewhere it is recorded: the
-    walk beyond a group's own headers only has to show where the player can go)."""
+    ``moves``: the field moves the walk may use (``FieldMoves``). ``ignore(header, obj)``: an
+    object that never blocks and never sees (the partner who follows the player). ``vars``: the
+    known values of coord variables. ``coord_rule(header, coord, matches)``: ``"pass"``,
+    ``"block"`` (the script takes the player: the tile is not entered) or None for the default (a
+    matching coord raises when its header is in ``strict``, every header when None; elsewhere it
+    is recorded: the walk beyond a group's own headers only has to show where the player can go).
+    ``doubles``: the double-battle trainers (``read_double_trainers``). ``two_alive``: the party
+    has two live Pokemon or a partner (``field_control.c:181-186``)."""
 
     def __init__(
         self,
         maps,
         members: Collection[int] = (),
         *,
-        strength: bool = False,
+        moves: FieldMoves = NO_FIELD_MOVES,
         ignore: Callable[[int, MapObject], bool] | None = None,
         vars: Mapping[int, int] | None = None,
         coord_rule: CoordRule | None = None,
         strict: Collection[int] | None = None,
+        doubles: Collection[int] = (),
+        two_alive: bool = True,
     ):
         self.maps = maps
         self.members = frozenset(members)
-        self.strength = strength
+        self.moves = moves
         self.ignore = ignore
         self.vars = dict(vars or {})
         self.coord_rule = coord_rule
         self.strict = None if strict is None else frozenset(strict)
-        self._sight: dict[tuple, dict[tuple[int, int], list[int]]] = {}
+        self.doubles = frozenset(doubles)
+        self.two_alive = two_alive
+        self._sight: dict[tuple, dict[tuple[int, int], list[tuple[Seer, int]]]] = {}
         self._walks: dict[tuple, Walk] = {}
 
     # -- terrain and objects
 
-    def _blocked(self, area: Area, x: int, z: int) -> bool:
-        a = area.tiles.get((x, z))
-        return a is None or bool(a & COLLISION)
+    def _ignored(self, header: int, o: MapObject) -> bool:
+        return self.ignore is not None and self.ignore(header, o)
 
-    def _obj_blocks(self, area: Area, x: int, z: int, removable: bool) -> bool:
-        o = area.object_at.get((x, z))
-        if o is None:
-            return False
-        if removable and o.removable:
-            return False
-        if self.strength and o.boulder:
-            return False
-        return not (self.ignore is not None and self.ignore(area.header, o))
+    def _object_at(self, area: Area, x: int, z: int, y: int, removable: bool) -> MapObject | None:
+        """An object on the tile within 2 height units of ``y`` that blocks (``sub_02063F00``)."""
+        for o in area.object_at.get((x, z), ()):
+            if removable and o.cleared(self.moves):
+                continue
+            if self._ignored(area.header, o):
+                continue
+            if abs(grid_y(area.object_height(o)) - grid_y(y)) < 2:
+                return o
+        return None
+
+    def _collides(self, area: Area, frm: tuple[int, int], y: int, d: int) -> bool:
+        """``MAP_OBJ_COLLISION_WILL_COLLIDE`` of a step from ``frm`` at height ``y`` in ``d``."""
+        dx, dz = DIRS[d]
+        return self._collides_from(area, frm, (frm[0] + dx, frm[1] + dz), y, d)
 
     def _inert(self, obj: MapObject) -> bool:
         """A non-member trainer with a walking movement type: taken as beaten before the group."""
@@ -427,37 +747,62 @@ class Walker:
 
     # -- sight
 
+    def facing(self, obj: MapObject) -> tuple[tuple[int, ...], bool] | None:
+        """The directions a trainer object looks along and whether it turns (several facings
+        over time), or None for no sight."""
+        tt = obj.trainer_type
+        if tt == TRAINER_ALL_DIRECTIONS:
+            return (0, 1, 2, 3), False
+        if tt == TRAINER_NORMAL or TRAINER_FACE_FIRST <= tt <= TRAINER_FACE_LAST:
+            if self._inert(obj):
+                return None
+            dirs = LOOK.get(obj.movement) or (obj.direction,)
+            return dirs, len(dirs) > 1
+        return None
+
     def sight_tiles(
         self, header: int, obj: MapObject, removable: bool = True
     ) -> list[tuple[int, int, int, int]]:
-        """The tiles ``(x, z, direction, distance)`` where ``obj`` spots the player
-        (``GetTrainerDistToPlayer`` :182-229, ``IsPathInterrupted`` :310-344)."""
+        """The tiles ``(x, z, direction, distance)`` where ``obj`` can spot the player
+        (``GetTrainerDistToPlayer`` :182-229, ``IsPathInterrupted`` :310-344): every tile up to
+        the range that does not collide for the trainer, before the first that does or that
+        holds another object at its height."""
         if obj.trainer is None:
             return []
-        area = self.maps.area(header)
-        tt = obj.trainer_type
-        if tt == TRAINER_ALL_DIRECTIONS:
-            dirs: tuple[int, ...] = (0, 1, 2, 3)
-        elif tt == TRAINER_NORMAL or TRAINER_FACE_FIRST <= tt <= TRAINER_FACE_LAST:
-            if self._inert(obj):
-                return []
-            dirs = LOOK.get(obj.movement) or (obj.direction,)
-        else:
+        look = self.facing(obj)
+        if look is None:
             return []
+        area = self.maps.area(header)
+        h = area.object_height(obj)
         out = []
-        for d in dirs:
+        for d in look[0]:
             dx, dz = DIRS[d]
             for k in range(1, obj.sight + 1):
                 x, z = obj.x + dx * k, obj.z + dz * k
-                if self._blocked(area, x, z) or self._obj_blocks(area, x, z, removable):
+                # every tile is tested from the trainer's own tile and height (sub_02063E94)
+                if self._collides_from(area, (obj.x, obj.z), (x, z), h, d):
+                    break
+                if self._object_at(area, x, z, h, removable) is not None:
                     break
                 out.append((x, z, d, k))
         return out
 
-    def sight_at(
-        self, header: int, x: int, z: int, defeated: frozenset[int], removable: bool = True
-    ) -> list[int]:
-        """The undefeated trainers that spot the player standing on ``(x, z)``."""
+    def _collides_from(
+        self, area: Area, origin: tuple[int, int], tile: tuple[int, int], y: int, d: int
+    ) -> bool:
+        """``MAP_OBJ_COLLISION_WILL_COLLIDE`` of an object on ``origin`` at height ``y`` facing
+        ``d`` for ``tile``: no tile (the null behaviour), a height step of 20 or more, the
+        collision bit, or a directional tile (``sub_02063E18``, ``map_object_move.c:577-604``;
+        ``sub_02064004`` :706-722 tests the object's own tile)."""
+        attr = area.tiles.get(tile)
+        if attr is None:
+            return True
+        h = area.plate(*tile, y)
+        if abs((0 if h is None else h) - y) >= HEIGHT_STEP or attr & COLLISION:
+            return True
+        return area.behaviour(*origin) in BLOCKS[d] or attr & BEHAVIOUR_MASK in BLOCKS[OPPOSITE[d]]
+
+    def _sight_table(self, header: int, defeated: frozenset[int], removable: bool):
         key = (header, defeated, removable)
         table = self._sight.get(key)
         if table is None:
@@ -465,21 +810,80 @@ class Walker:
             area = self.maps.area(header)
             for o in area.objects:
                 t = o.trainer
-                if t is None or t in defeated:
+                if t is None or t in defeated or self._ignored(header, o):
                     continue
-                if self.ignore is not None and self.ignore(header, o):
+                look = self.facing(o)
+                if look is None:
                     continue
+                seer = Seer(o.index, t, look[1])
+                gy = grid_y(area.object_height(o))
                 for sx, sz, _, _ in self.sight_tiles(header, o, removable):
-                    table.setdefault((sx, sz), []).append(t)
+                    table.setdefault((sx, sz), []).append((seer, gy))
             self._sight[key] = table
-        return table.get((x, z), [])
+        return table
+
+    def sight_at(
+        self,
+        header: int,
+        x: int,
+        z: int,
+        defeated: frozenset[int],
+        removable: bool = True,
+        y: int = 0,
+    ) -> list[Seer]:
+        """The undefeated trainers that can spot the player standing on ``(x, z)`` at height
+        ``y``, in object order (``sub_02063F00``: the player within 2 height units)."""
+        table = self._sight_table(header, frozenset(defeated), removable)
+        seers = [s for s, gy in table.get((x, z), ()) if abs(grid_y(y) - gy) < 2]
+        return sorted(set(seers))
+
+    def encounters(self, seers: list[Seer]) -> tuple[set[Fight], bool]:
+        """The fights the tile can start and whether the player can stand on it unspotted: each
+        set of turning seers that faces the player (fixed ones always do) gives the game's fight
+        (``FieldSystem_CheckForTrainersWantingBattle``, ``trainer_encounter.c:84-131``)."""
+        fixed = [s for s in seers if not s.turning]
+        turning = [s for s in seers if s.turning]
+        fights: set[Fight] = set()
+        passable = False
+        for r in range(len(turning) + 1):
+            for chosen in combinations(turning, r):
+                f = self._fight(sorted([*fixed, *chosen]))
+                if f is None:
+                    passable = True
+                else:
+                    fights.add(f)
+        return fights, passable
+
+    def _fight(self, seeing: list[Seer]) -> Fight | None:
+        if not seeing:
+            return None
+        first = seeing[0]
+        if first.trainer in self.doubles:  # :108-118: both objects, or no fight
+            return (first.trainer,) if self.two_alive else None
+        second = next((s for s in seeing[1:] if s.trainer != first.trainer), None)
+        if self.two_alive and second is not None:  # :98-106, APPROACH_TYPE_VS2
+            return (first.trainer, second.trainer)
+        return (first.trainer,)
+
+    def _spotted(
+        self, walk: Walk, pos: Pos, y: int, how: str, defeated: frozenset[int], removable: bool
+    ) -> bool:
+        """Record the fights the tile starts; True when the player cannot stand on it."""
+        fights, passable = self.encounters(
+            self.sight_at(pos.header, pos.x, pos.z, defeated, removable, y)
+        )
+        for f in fights:
+            walk.spot.setdefault(f, Sighting(pos, how, y))
+        return not passable
 
     # -- coords
 
     def coord_matches(self, coord: Coord) -> bool | None:
-        """Whether a coord event runs: var 0 always; else by the known ``vars`` (None: unknown)."""
-        if coord.var == 0:
-            return True
+        """Whether a coord event runs: a literal var by its number (``literal_coord``); else by
+        the known ``vars`` (None: unknown)."""
+        literal = literal_coord(coord)
+        if literal is not None:
+            return literal
         if coord.var in self.vars:
             return self.vars[coord.var] == coord.value
         return None
@@ -491,6 +895,8 @@ class Walker:
             if not c.covers(pos.x, pos.z):
                 continue
             matches = self.coord_matches(c)
+            if matches is False:
+                continue
             action = self.coord_rule(pos.header, c, matches) if self.coord_rule else None
             if action is None:
                 if matches and (self.strict is None or pos.header in self.strict):
@@ -504,66 +910,213 @@ class Walker:
             walk.crossed.append((pos, c))
         return True
 
+    # -- movement
+
+    def _water(self, behaviour: int | None, bridge: bool) -> bool:
+        """``MapObject_IsOnWater`` (``map_object_move.c:739-750``)."""
+        if behaviour is None:
+            return False
+        if behaviour in BRIDGE_OVER_WATER:
+            return not bridge
+        return behaviour in SURFABLE
+
+    def _land(self, area: Area, x: int, z: int, y: int, bridge: bool) -> tuple[int, bool]:
+        """The height and elevated-bridge state after the player arrives on ``(x, z)``."""
+        h = area.plate(x, z, y)
+        b = area.behaviour(x, z)
+        if b == BRIDGE_START:
+            bridge = True
+        elif bridge and b not in BRIDGES:
+            bridge = False
+        return (y if h is None else h), bridge
+
+    def _player_collision(self, area: Area, s: _State, d: int, removable: bool) -> set[str]:
+        """The ``PLAYER_COLLISION_*`` kinds of a step (``PlayerAvatar_CheckCollision``)."""
+        dx, dz = DIRS[d]
+        x, z = s.pos.x + dx, s.pos.z + dz
+        out = set()
+        if self._collides(area, (s.pos.x, s.pos.z), s.y, d):
+            out.add("collide")
+        if self._object_at(area, x, z, s.y, removable) is not None:
+            out.add("object")
+        b = area.behaviour(x, z)
+        if b == JUMP[d]:
+            out.add("jump")
+        if b in JUMP_TWICE:
+            out.add("jump_twice")
+        if self._water(b, s.bridge):
+            out.add("water")
+        if s.bridge and b in BIKE_BRIDGES:
+            out.add("collide")
+        return out
+
+    def _step(self, area: Area, s: _State, d: int, removable: bool) -> list[_State] | None:
+        """The tiles a step in ``d`` puts the player on, in order (the last is where he stops;
+        a field-move traverse and a jump skip the tiles between), or None when he stays (the
+        caller then tries talking). Doors are handled by the caller."""
+        dx, dz = DIRS[d]
+        x, z = s.pos.x + dx, s.pos.z + dz
+        hit = self._player_collision(area, s, d, removable)
+        surfing = self._water(area.behaviour(s.pos.x, s.pos.z), s.bridge)
+        b = area.behaviour(x, z)
+        if surfing:
+            if hit <= {"water"}:
+                return [self._at(area, s, x, z)]
+            if b == WATERFALL and self.moves.waterfall:
+                return self._traverse(area, s, d, {WATERFALL})
+            return None
+        if "jump" in hit:  # JUMP_FAR: two tiles, landing not tested (player_move.c:1024-1026)
+            lx, lz = x + dx, z + dz
+            if (lx, lz) not in area.tiles:
+                return None
+            return [self._at(area, s, lx, lz)]
+        if "jump_twice" in hit:
+            raise MapReadError(f"header {area.header}: a Distortion World jump tile at {(x, z)}")
+        if not hit:
+            return [self._at(area, s, x, z)]
+        if hit == {"water"} or (hit == {"water", "collide"} and b in SURFABLE):
+            on_bridge = area.behaviour(s.pos.x, s.pos.z) in BRIDGES | {BRIDGE_START}
+            if self.moves.surf and not (on_bridge and s.bridge):
+                return [self._at(area, s, x, z)]  # the surf mount jumps one tile (ov5:707-716)
+            return None
+        if b == ROCK_CLIMB[d] and self.moves.rock_climb and "object" not in hit:
+            return self._traverse(area, s, d, {ROCK_CLIMB[d]})
+        return None
+
+    def _at(self, area: Area, s: _State, x: int, z: int) -> _State:
+        y, bridge = self._land(area, x, z, s.y, s.bridge)
+        return _State(Pos(area.header, x, z), y, bridge)
+
+    def _traverse(self, area: Area, s: _State, d: int, kinds: set[int]) -> list[_State] | None:
+        """A field-move script that carries the player over the run of ``kinds`` tiles in ``d``
+        to the first other tile."""
+        dx, dz = DIRS[d]
+        cur = s
+        x, z = s.pos.x, s.pos.z
+        while True:
+            x, z = x + dx, z + dz
+            if (x, z) not in area.tiles:
+                return None
+            cur = self._at(area, cur, x, z)
+            if area.behaviour(x, z) not in kinds:
+                return [cur]
+
+    def _forced(self, area: Area, s: _State, d: int, removable: bool) -> list[_State]:
+        """The tiles a spin or ice tile then carries the player over (empty: none)."""
+        out: list[_State] = []
+        b = area.behaviour(s.pos.x, s.pos.z)
+        if b in SLIDE:
+            d = SLIDE[b]
+            seen = set()
+            cur = s
+            # the first move is made without a collision test (ov5_021E1154.c:91-99)
+            dx, dz = DIRS[d]
+            if (cur.pos.x + dx, cur.pos.z + dz) not in area.tiles:
+                return out
+            cur = self._at(area, cur, cur.pos.x + dx, cur.pos.z + dz)
+            out.append(cur)
+            while True:
+                nb = area.behaviour(cur.pos.x, cur.pos.z)
+                d = SLIDE.get(nb, d)
+                if (cur.pos, d) in seen:
+                    raise MapReadError(f"header {area.header}: an endless spin at {cur.pos}")
+                seen.add((cur.pos, d))
+                if self._player_collision(area, cur, d, removable):
+                    return out
+                dx, dz = DIRS[d]
+                cur = self._at(area, cur, cur.pos.x + dx, cur.pos.z + dz)
+                out.append(cur)
+        if b == ICE:
+            cur = s
+            while area.behaviour(cur.pos.x, cur.pos.z) == ICE:
+                if self._player_collision(area, cur, d, removable):
+                    break
+                dx, dz = DIRS[d]
+                cur = self._at(area, cur, cur.pos.x + dx, cur.pos.z + dz)
+                out.append(cur)
+        return out
+
     # -- the walk
 
-    def walk(self, start: Pos, defeated: Iterable[int] = (), removable: bool = True) -> Walk:
-        """Breadth-first walk from ``start`` with ``defeated`` trainers beaten (``bfs2.js``
-        ``run``): sight is checked on the start tile, every tile entered and every warp arrival."""
+    def arrival_height(self, pos: Pos) -> int:
+        """The height of the player arriving on a map at ``pos`` (from 0, then the plate)."""
+        h = self.maps.area(pos.header).plate(pos.x, pos.z, 0)
+        return 0 if h is None else h
+
+    def walk(
+        self,
+        start: Pos,
+        defeated: Iterable[int] = (),
+        removable: bool = True,
+        y: int | None = None,
+    ) -> Walk:
+        """Breadth-first walk from ``start`` (at height ``y``, an arrival when None) with
+        ``defeated`` trainers beaten (``bfs2.js`` ``run``): sight is checked on the start tile,
+        every tile entered and every warp arrival."""
         defeated = frozenset(defeated)
-        key = (start, defeated, removable)
+        if y is None:
+            y = self.arrival_height(start)
+        key = (start, y, defeated, removable)
         if key in self._walks:
             return self._walks[key]
         walk = Walk({start: None})
         self._walks[key] = walk
-        arrival = self.sight_at(start.header, start.x, start.z, defeated, removable)
-        if arrival:
-            for t in arrival:
-                walk.spot[t] = Sighting(start, "arrival")
+        if self._spotted(walk, start, y, "arrival", defeated, removable):
             return walk
-        queue = deque([start])
+        a0 = self.maps.area(start.header)
+        s0 = _State(start, y, a0.behaviour(start.x, start.z) == BRIDGE_START)
+        states = {s0}
+        queue = deque([s0])
         while queue:
-            pos = queue.popleft()
-            area = self.maps.area(pos.header)
-            for dx, dz in DIRS:
-                nx, nz = pos.x + dx, pos.z + dz
-                attr = area.tiles.get((nx, nz))
+            s = queue.popleft()
+            area = self.maps.area(s.pos.header)
+            for d, (dx, dz) in enumerate(DIRS):
+                nx, nz = s.pos.x + dx, s.pos.z + dz
                 warp = area.warp_at(nx, nz)
-                blocks = self._obj_blocks(area, nx, nz, removable)
-                is_door = (
-                    not blocks
+                attr = area.tiles.get((nx, nz))
+                door = (
+                    warp is not None
                     and attr is not None
                     and attr & BEHAVIOUR_MASK == DOOR
-                    and warp is not None
+                    and self._object_at(area, nx, nz, s.y, removable) is None
                 )
-                if not is_door and (self._blocked(area, nx, nz) or blocks):
-                    self._talk(area, pos, dx, dz, defeated, walk)
+                path = [self._at(area, s, nx, nz)] if door else self._step(area, s, d, removable)
+                if path is None:
+                    self._talk(area, s, dx, dz, defeated, walk)
                     continue
-                here = Pos(pos.header, nx, nz)
-                sighted = self.sight_at(pos.header, nx, nz, defeated, removable)
-                if sighted:
-                    for t in sighted:
-                        walk.spot.setdefault(t, Sighting(here, "sight"))
+                here = path[-1]
+                if not door and self._spotted(walk, here.pos, here.y, "sight", defeated, removable):
                     continue
+                if not door:
+                    forced = self._forced(self.maps.area(here.pos.header), here, d, removable)
+                    if forced:
+                        for f in forced[:-1]:
+                            walk.seen.setdefault(f.pos, s.pos)
+                        walk.seen.setdefault(here.pos, s.pos)
+                        here = forced[-1]
+                        if self._spotted(walk, here.pos, here.y, "sight", defeated, removable):
+                            continue
                 target = here
+                warp = self.maps.area(here.pos.header).warp_at(here.pos.x, here.pos.z)
                 if warp is not None and warp.dest != NO_WARP:
                     landing = self._arrival(warp)
                     if landing is not None:
-                        target = landing
-                        sighted = self.sight_at(
-                            target.header, target.x, target.z, defeated, removable
-                        )
-                        if sighted:
-                            for t in sighted:
-                                walk.spot.setdefault(t, Sighting(target, "arrival"))
+                        ly = self.arrival_height(landing)
+                        if self._spotted(walk, landing, ly, "arrival", defeated, removable):
                             continue
-                if target in walk.seen:
+                        la = self.maps.area(landing.header)
+                        target = _State(
+                            landing, ly, la.behaviour(landing.x, landing.z) == BRIDGE_START
+                        )
+                if target in states:
                     continue
-                if not self._coord_step(target, walk):
+                if not self._coord_step(target.pos, walk):
                     continue
-                walk.seen[target] = pos
+                states.add(target)
+                walk.seen.setdefault(target.pos, s.pos)
                 queue.append(target)
-                if warp is not None:
-                    walk.seen[here] = pos
+                if target is not here:
+                    walk.seen.setdefault(here.pos, s.pos)
         return walk
 
     def _arrival(self, warp: Warp) -> Pos | None:
@@ -578,21 +1131,25 @@ class Walker:
         return Pos(warp.dest, w.x, w.z)
 
     def _talk(
-        self, area: Area, pos: Pos, dx: int, dz: int, defeated: frozenset[int], walk: Walk
+        self, area: Area, s: _State, dx: int, dz: int, defeated: frozenset[int], walk: Walk
     ) -> None:
-        """The player on ``pos`` faces ``(dx, dz)``: the object in front, or across a table tile
-        the one behind it, can be talked to."""
+        """The player on ``s`` faces ``(dx, dz)``: the object in front, or across a table tile
+        the one behind it, at the player's height unit, can be talked to."""
+        pos = s.pos
         tx, tz = pos.x + dx, pos.z + dz
-        front = area.tiles.get((tx, tz))
-        if front is not None and front & BEHAVIOUR_MASK == TABLE:
+        if area.behaviour(tx, tz) == TABLE:
             tx, tz = tx + dx, tz + dz
-        o = area.object_at.get((tx, tz))
-        if o is None:
+        for o in area.object_at.get((tx, tz), ()):
+            if grid_y(area.object_height(o)) != grid_y(s.y):
+                continue
+            walk.talk.setdefault((area.header, o.local_id), pos)
+            t = o.trainer
+            # a double-battle trainer talked to with one live Pokemon only prints a message
+            # (res/field/scripts/scripts_battles.s:19-22, Battles_NotEnoughPokemonMessage)
+            lone = t in self.doubles and not self.two_alive
+            if t is not None and t not in defeated and not self._inert(o) and not lone:
+                walk.spot.setdefault((t,), Sighting(pos, "talk", s.y))
             return
-        walk.talk.setdefault((area.header, o.local_id), pos)
-        t = o.trainer
-        if t is not None and t not in defeated and not self._inert(o):
-            walk.spot.setdefault(t, Sighting(pos, "talk"))
 
     def talk_tiles(
         self,
@@ -602,8 +1159,8 @@ class Walker:
         defeated: Iterable[int] = (),
         removable: bool = True,
     ) -> list[tuple[int, int]]:
-        """The tiles, reached from ``start`` without entering any sight line, from which
-        ``member`` can be talked to (next to it, or two tiles away across a table tile)."""
+        """The tiles, reached from ``start`` without being spotted, from which ``member`` can
+        be talked to (next to it, or two tiles away across a table tile)."""
         area = self.maps.area(header)
         obj = next((o for o in area.objects if o.trainer == member), None)
         if obj is None:
@@ -612,8 +1169,7 @@ class Walker:
         out = []
         for dx, dz in DIRS:
             near = (obj.x + dx, obj.z + dz)
-            tile = area.tiles.get(near)
-            if tile is not None and tile & BEHAVIOUR_MASK == TABLE:
+            if area.behaviour(*near) == TABLE:
                 far = (obj.x + 2 * dx, obj.z + 2 * dz)
                 if Pos(header, *far) in seen:
                     out.append(far)
@@ -645,30 +1201,37 @@ class ChainSpec:
 
 
 class Run(NamedTuple):
-    """One full sequence of the chain and the walk after each prefix: ``states[k]`` is the walk
-    from the tile of the k-th fight with the first k fights beaten (k = 0..n)."""
+    """One full sequence of the chain's fights, the walk after each prefix (``states[k]`` is the
+    walk from the tile of the k-th fight with the first k fights beaten, k = 0..n) and the map
+    header of each fight (where the player stands when it starts)."""
 
-    sequence: tuple[int, ...]
+    sequence: tuple[Fight, ...]
     states: tuple[Walk, ...]
+    headers: tuple[int, ...] = ()
 
 
 def runs(walker: Walker, spec: ChainSpec) -> list[Run]:
-    """Every full sequence of ``spec.members`` the walk allows (``chain.js`` ``rec``)."""
+    """Every full sequence of fights over ``spec.members`` the walk allows (``chain.js``
+    ``rec``). A fight that mixes members and other trainers raises: the group is wrong."""
     out: list[Run] = []
     members = frozenset(spec.members)
 
-    def rec(pos: Pos, done: frozenset[int], seq: tuple[int, ...], states: tuple[Walk, ...]):
-        w = walker.walk(pos, done)
+    def rec(s: Sighting | None, pos: Pos, done, seq, states, headers):
+        w = walker.walk(pos, done, y=None if s is None else s.y)
         states = (*states, w)
         if done == members:
-            out.append(Run(seq, states))
+            out.append(Run(seq, states, headers))
             return
-        for t, s in list(w.spot.items()):
-            if t in members and t not in done:
-                rec(s.pos, done | {t}, (*seq, t), states)
+        for f, sight in list(w.spot.items()):
+            fs = set(f)
+            if not fs & members or fs & done:
+                continue
+            if not fs <= members:
+                raise MapReadError(f"fight {f} mixes the chain {sorted(members)} with others")
+            rec(sight, sight.pos, done | fs, (*seq, f), states, (*headers, sight.pos.header))
 
     for e in spec.entries:
-        rec(e, frozenset(), (), ())
+        rec(None, e, frozenset(), (), (), ())
     return out
 
 
@@ -682,16 +1245,26 @@ def chain_facts(
     pc_headers: Collection[int] = (),
 ) -> dict:
     """The facts of the trainers ``group`` of a chain: the group's orders (each full sequence
-    restricted to the group), per order the gaps where every run can leave the chain's headers,
-    and the gaps where every run reaches a healer or a PC. ``orders``, ``leave_gaps`` (one list
-    per order), ``heal_gaps`` and ``pc_gaps`` (one list)."""
+    restricted to the group's fights), per order the gaps where every run can leave the chain's
+    headers, the gaps where every run reaches a healer or a PC, and per order the map header of
+    each fight. ``orders``, ``leave_gaps``, ``fight_headers`` (one list per order),
+    ``heal_gaps`` and ``pc_gaps`` (one list)."""
     members = frozenset(group)
-    leave: dict[tuple[int, ...], set[int]] = {}
+    leave: dict[tuple[Fight, ...], set[int]] = {}
+    where: dict[tuple[Fight, ...], tuple[int, ...]] = {}
     heal: set[int] | None = None
     pcs: set[int] | None = None
     for run in runs(walker, spec):
-        idx = [i for i, t in enumerate(run.sequence) if t in members]
+        idx = []
+        for i, f in enumerate(run.sequence):
+            if set(f) & members:
+                if not set(f) <= members:
+                    raise MapReadError(f"fight {f} mixes the group {sorted(members)} with others")
+                idx.append(i)
         order = tuple(run.sequence[i] for i in idx)
+        heads = tuple(run.headers[i] for i in idx)
+        if where.setdefault(order, heads) != heads:
+            raise MapReadError(f"order {order}: a fight starts on two map headers")
         gaps_leave: set[int] = set()
         gaps_heal: set[int] = set()
         gaps_pc: set[int] = set()
@@ -710,8 +1283,9 @@ def chain_facts(
         raise MapReadError(f"no full sequence of {group}")
     orders = sorted(leave)
     return {
-        "orders": [[[t] for t in o] for o in orders],
+        "orders": [[list(f) for f in o] for o in orders],
         "leave_gaps": [sorted(leave[o]) for o in orders],
+        "fight_headers": [list(where[o]) for o in orders],
         "pc_gaps": sorted(pcs or ()),
         "heal_gaps": sorted(heal or ()),
     }
@@ -765,7 +1339,12 @@ def b2b_facts(maps: RomMaps, scripts: ScriptReader, header: int) -> dict:
             released = False
         elif const == "SCRCMD_RELEASEALL":
             released = True
-    return {"orders": [[[t] for t in fights]], "leave_gaps": [[]], "locked_gaps": locked}
+    return {
+        "orders": [[[t] for t in fights]],
+        "leave_gaps": [[]],
+        "locked_gaps": locked,
+        "fight_headers": [[header] * len(fights)],
+    }
 
 
 # --- Eterna Gym (gym.js) ---------------------------------------------------------------------
@@ -818,6 +1397,13 @@ class GymReach(NamedTuple):
     coords: dict  # coord script -> its tile
 
 
+def _gym_coord_runs(coord: Coord) -> bool:
+    runs_ = literal_coord(coord)
+    if runs_ is None:
+        raise MapReadError(f"Eterna Gym coord {coord.script} reads var {coord.var:#x}")
+    return runs_
+
+
 def gym_reach(
     area: Area,
     tables: tuple[list[list[int]], list[list[int]]],
@@ -828,8 +1414,9 @@ def gym_reach(
     """The tiles, talkable objects and coord events reachable in clock ``state`` from ``start``
     (``gym.js`` ``reach``): the clock and fountain collision and the hour-hand jump tile.
 
-    A coord tile runs its script when entered (var 0 always matches, ``sub_0203CC14``,
-    ``src/unk_0203C954.c:218``): one whose script is not in ``passed`` starts its fight there,
+    A coord tile runs its script when entered and its var condition holds (``literal_coord``:
+    the gym's coords are on var 0 with value 0, so they run): one whose script is not in
+    ``passed`` starts its fight there,
     so it is recorded and the walk does not go on from it (``gym.js`` follows the same rule and
     gives the same reach: start and leave on the south warp entrance, stop at an unwon coord). A
     script in ``passed`` (its fight won) is a message only, neither recorded nor a stop: scr 73 entry 7 fights while 0x40AE <= 1 (@475-481), entry 8 while <= 2
@@ -863,14 +1450,18 @@ def gym_reach(
                 if collide(nx, nz):
                     continue
             elif collide(nx, nz):
-                o = area.object_at.get((nx, nz))
-                if o is not None:
-                    talk.setdefault(o.local_id, (x, z))
+                objs = area.object_at.get((nx, nz))
+                if objs:
+                    talk.setdefault(objs[0].local_id, (x, z))
                 continue
             if (nx, nz) in seen:
                 continue
             seen.add((nx, nz))
-            fights = [c.script for c in area.coords if c.covers(nx, nz) and c.script not in passed]
+            fights = [
+                c.script
+                for c in area.coords
+                if c.covers(nx, nz) and c.script not in passed and _gym_coord_runs(c)
+            ]
             for script in fights:
                 coords.setdefault(script, (nx, nz))
             if not fights:
@@ -935,6 +1526,7 @@ def gym_facts(maps: RomMaps, decomp: Path) -> dict:
     return {
         "orders": [[[t] for t in o] for o in keys],
         "leave_gaps": [[k for k, d in enumerate(orders[o][:-1], 1) if d] for o in keys],
+        "fight_headers": [[GYM_HEADER] * len(o) for o in keys],
     }
 
 
@@ -954,14 +1546,16 @@ WAYWARD_WALKOUT = 6
 # Every coord script of the header takes the player: a fight, a warp back, or the walk-out.
 WAYWARD_TAKES = (WAYWARD_EXIT_ROW, WAYWARD_BACK_ROW, WAYWARD_WALKOUT)
 WAYWARD_LAST = (749, 750)
+WAYWARD_SPLIT = "Galactic"  # Galactic Split:105
 
 
-def _wayward_walker(maps, joined: bool) -> Walker:
-    """The walk with the partner following (she neither blocks nor sees; 0x4091 = 1) or still
-    standing at (72, 13) as an obstacle (0x4091 = 0). Each coord runs by its var condition, as
-    the field does (``coord_matches``): a running coord of ``WAYWARD_TAKES`` takes the player,
-    so its tiles are not walked through; a coord whose var does not match is walked over; any
-    other running coord raises (not modelled)."""
+def _wayward_walker(maps, joined: bool, doubles: Collection[int] = ()) -> Walker:
+    """The walk with the partner following (she neither blocks nor sees; 0x4091 = 1; the field
+    then counts two live Pokemon, ``field_control.c:183-185``, and refuses Surf and Rock Climb)
+    or still standing at (72, 13) as an obstacle (0x4091 = 0). Each coord runs by its var
+    condition, as the field does (``coord_matches``): a running coord of ``WAYWARD_TAKES`` takes
+    the player, so its tiles are not walked through; a coord whose var does not match is walked
+    over; any other running coord raises (not modelled)."""
 
     def ignore(header: int, obj: MapObject) -> bool:
         return joined and header == WAYWARD_HEADER and obj.local_id == WAYWARD_MIRA
@@ -978,64 +1572,73 @@ def _wayward_walker(maps, joined: bool) -> Walker:
     return Walker(
         maps,
         members={t for pair in WAYWARD_PAIRS for t in pair},
-        strength=True,
+        moves=FieldMoves.for_split(WAYWARD_SPLIT, partner=joined),
         ignore=ignore,
         vars={WAYWARD_PARTNER_VAR: 1 if joined else 0},
         strict={WAYWARD_HEADER},
         coord_rule=rule,
+        doubles=doubles,
     )
 
 
-def _wayward_next(walker: Walker, pos: Pos, done: frozenset[int]) -> tuple[Walk, dict]:
-    """The walk and the pairs it can start: pair -> the first sighting (``wayward2.js`` step)."""
-    w = walker.walk(pos, done)
-    nxt: dict[tuple[int, int], Sighting] = {}
-    for t, s in w.spot.items():
-        pair = next((p for p in WAYWARD_PAIRS if t in p), None)
-        if pair is not None and pair not in nxt:
-            nxt[pair] = s
+def _wayward_next(
+    walker: Walker, pos: Pos, done: frozenset[int], y: int | None = None
+) -> tuple[Walk, dict[Fight, Sighting]]:
+    """The walk and the fights of pair members it can start (fight -> its sighting)."""
+    w = walker.walk(pos, done, y=y)
+    members = {t for pair in WAYWARD_PAIRS for t in pair}
+    nxt: dict[Fight, Sighting] = {}
+    for f, s in w.spot.items():
+        fs = set(f)
+        if not fs & members or fs & done:
+            continue
+        if not fs <= members:
+            raise MapReadError(f"Wayward Cave: fight {f} mixes pair members with others")
+        nxt[f] = s
     return w, nxt
 
 
-def wayward_facts(maps: RomMaps, scripts: ScriptReader) -> dict:
-    """Wayward Cave: the fight lists, the partner's join points and the split of 459 + 460."""
+def wayward_facts(maps: RomMaps, scripts: ScriptReader, doubles: Collection[int] = ()) -> dict:
+    """Wayward Cave: every fight sequence the walk with the partner allows up to the exit, the
+    partner's join points and the partner's trainer id."""
     area = maps.area(WAYWARD_HEADER)
     mira = next((o for o in area.objects if o.local_id == WAYWARD_MIRA), None)
     if mira is None:
         raise MapReadError("Wayward Cave has no partner object")
-    joined = _wayward_walker(maps, True)
-    alone = _wayward_walker(maps, False)
+    joined = _wayward_walker(maps, True, doubles)
+    alone = _wayward_walker(maps, False, doubles)
     rows = [c for c in area.coords if c.script == WAYWARD_EXIT_ROW]
     if len(rows) != 1:
         raise MapReadError("Wayward Cave: expected one exit coord row")
     row = rows[0]
     exits = {(x, row.z - 1) for x in range(row.x, row.x + row.width)}
+    members = frozenset(t for pair in WAYWARD_PAIRS for t in pair)
 
-    sequences: list[tuple] = []
+    sequences: dict[tuple[Fight, ...], frozenset[int]] = {}
 
-    def with_partner(pos: Pos, done: frozenset[int], seq: tuple):
-        w, nxt = _wayward_next(joined, pos, done)
+    def with_partner(pos: Pos, y: int | None, done: frozenset[int], seq: tuple[Fight, ...]):
+        w, nxt = _wayward_next(joined, pos, done, y)
         if any(Pos(WAYWARD_HEADER, x, z) in w.seen for x, z in exits):
-            sequences.append(seq)
-        for pair, s in nxt.items():
-            with_partner(s.pos, done | set(pair), (*seq, pair))
+            sequences[seq] = done
+        for f, s in nxt.items():
+            with_partner(s.pos, s.y, done | set(f), (*seq, f))
 
-    with_partner(WAYWARD_START, frozenset(), ())
-    if len(sequences) != 1 or sorted(sequences[0]) != sorted(WAYWARD_PAIRS):
-        raise MapReadError(f"Wayward Cave: the exit is reachable after {sequences}")
-    order = sequences[0]
+    with_partner(WAYWARD_START, None, frozenset(), ())
+    short = {seq for seq, done in sequences.items() if done != members}
+    if not sequences or short:
+        raise MapReadError(f"Wayward Cave: the exit is reachable after {sorted(short)}")
 
     reached: dict[int, bool] = {}
 
-    def without_partner(pos: Pos, done: frozenset[int], seq: tuple):
-        w, nxt = _wayward_next(alone, pos, done)
+    def without_partner(pos: Pos, y: int | None, done: frozenset[int], seq: tuple):
+        w, nxt = _wayward_next(alone, pos, done, y)
         near = [(mira.x + dx, mira.z + dz) for dx, dz in DIRS]
         ok = any(Pos(WAYWARD_HEADER, x, z) in w.seen for x, z in near)
         reached[len(seq) + 1] = reached.get(len(seq) + 1, True) and ok
-        for pair, s in nxt.items():
-            without_partner(s.pos, done | set(pair), (*seq, pair))
+        for f, s in nxt.items():
+            without_partner(s.pos, s.y, done | set(f), (*seq, f))
 
-    without_partner(WAYWARD_START, frozenset(), ())
+    without_partner(WAYWARD_START, None, frozenset(), ())
     # Without the partner the walk-out coord (0x4091 == 0) closes the start pocket: no pair is
     # reached and her tile is, so the game makes her join before fight 1 and the walk-out
     # never runs at a gap. A fight reached without her would make the join point a choice.
@@ -1043,24 +1646,8 @@ def wayward_facts(maps: RomMaps, scripts: ScriptReader) -> dict:
     if join_before != [1]:
         raise MapReadError(f"Wayward Cave: the partner's join points are {reached}, not fight 1")
 
-    # the split: a pair member with a talk tile outside both sight lines is fought alone
-    orders = [[list(p) for p in order]]
-    pos, done = WAYWARD_START, frozenset()
-    for i, pair in enumerate(order):
-        _, nxt = _wayward_next(joined, pos, done)
-        for a, b in (pair, pair[::-1]):
-            tiles = joined.talk_tiles(pos, WAYWARD_HEADER, a, done)
-            if not tiles:
-                continue
-            tx, tz = tiles[0]
-            if b not in joined.walk(Pos(WAYWARD_HEADER, tx, tz), done | {a}).spot:
-                raise MapReadError(f"Wayward Cave: {b} is not reached after {a} alone")
-            before = [list(p) for p in order[:i]]
-            after = [list(p) for p in order[i + 1 :]]
-            orders.append([*before, [a], [b], *after])
-        pos, done = nxt[pair].pos, done | set(pair)
-    orders = [[*o, list(WAYWARD_LAST)] for o in orders]
-
+    keys = sorted(sequences, key=lambda s: (len(s), s))  # the all-pairs order first
+    orders = [[*(list(f) for f in seq), list(WAYWARD_LAST)] for seq in keys]
     trace = scripts.trace(maps.header(WAYWARD_HEADER).scripts, 2)
     partner = [
         v for _, c, v in trace if c == "SCRCMD_SETVARFROMVALUE" and v[0] == WAYWARD_PARTNER_ID_VAR
@@ -1070,6 +1657,7 @@ def wayward_facts(maps: RomMaps, scripts: ScriptReader) -> dict:
     return {
         "orders": orders,
         "leave_gaps": [[] for _ in orders],
+        "fight_headers": [[WAYWARD_HEADER] * len(o) for o in orders],
         "partner": {"trainer": partner[0][1], "join_before": join_before},
     }
 
@@ -1105,6 +1693,7 @@ def league_facts(maps: RomMaps) -> dict:
         "orders": [[[t] for t in LEAGUE_TRAINERS]],
         "leave_gaps": [[]],
         "pc_gaps": pc_gaps,
+        "fight_headers": [rooms],
         "escape_header": rooms[0],
     }
 
@@ -1128,23 +1717,35 @@ ROUTE_204 = ChainSpec(members=(15, 13, 14), headers=(346,), entries=(Pos(346, 18
 ROUTE_213_HEALERS = ((376, 1),)
 B2B_HEADER = 256
 
-ESCAPE_HEADERS = {
-    "Oreburgh Mine": 199,
-    "Route 204 North": 346,
-    "Route 204 North B2B": B2B_HEADER,
-    "Eterna Gym gym trainers": GYM_HEADER,
-    "Team Galactic Eterna Building #1": 73,
-    "Team Galactic Eterna Building #2": 74,
-    "Team Galactic Eterna Building #3": 74,
-    "Route 213": 373,
-    "Wayward Cave": WAYWARD_HEADER,
+# The split of each group: the sheet section that lists it (the [[gauntlet]] ``source`` of
+# data/kaizo/overrides.toml; the ROM test checks the two agree).
+GROUP_SPLITS = {
+    "Oreburgh Mine": "Roark",  # Roark Split:227
+    "Route 204 North": "Gardenia",  # Gardenia Split:57
+    "Route 204 North B2B": "Gardenia",
+    "Eterna Gym gym trainers": "Gardenia",  # Gardenia Split:451
+    "Team Galactic Eterna Building #1": "Fantina",  # Fantina Split:5
+    "Team Galactic Eterna Building #2": "Fantina",
+    "Team Galactic Eterna Building #3": "Fantina",
+    "Route 213": "Wake",  # Wake Split:192
+    "Wayward Cave": WAYWARD_SPLIT,  # Galactic Split:105
 }
 
 
-def _facts(orders, leave_gaps, escape_, **more) -> dict:
+def group_escape(maps, fight_headers: Iterable[Iterable[int]]) -> bool:
+    """Escape Rope and Dig (``escape``) on the map headers the group's fights start on; the
+    headers must agree."""
+    values = {escape(maps, h) for heads in fight_headers for h in heads}
+    if len(values) != 1:
+        raise MapReadError(f"the group's fight headers disagree on escape: {values}")
+    return values.pop()
+
+
+def _facts(orders, leave_gaps, fight_headers, escape_, **more) -> dict:
     return {
         "orders": orders,
         "leave_gaps": leave_gaps,
+        "fight_headers": fight_headers,
         "escape": escape_,
         "pc_gaps": [],
         "heal_gaps": [],
@@ -1156,21 +1757,28 @@ def _facts(orders, leave_gaps, escape_, **more) -> dict:
 
 def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
     """The facts of every gauntlet group, read from the ROM: ``orders`` (a list of orders, each
-    a list of fights, each a list of trainer ids), ``leave_gaps`` (one list per order),
-    ``escape``, ``pc_gaps``, ``heal_gaps``, ``locked_gaps`` and ``partner`` (None, or
-    ``{"trainer", "join_before"}``)."""
+    a list of fights, each a list of trainer ids), ``leave_gaps`` and ``fight_headers`` (one
+    list per order), ``escape``, ``pc_gaps``, ``heal_gaps``, ``locked_gaps`` and ``partner``
+    (None, or ``{"trainer", "join_before"}``)."""
     maps = RomMaps(files)
     scripts = ScriptReader(files, decomp)
+    doubles = read_double_trainers(files)
     out: dict[str, dict] = {}
 
     def chain(name: str, spec: ChainSpec, group: tuple[int, ...], **kw) -> None:
-        facts = chain_facts(
-            maps, Walker(maps, spec.members, strict=spec.headers), spec, group, **kw
+        walker = Walker(
+            maps,
+            spec.members,
+            moves=FieldMoves.for_split(GROUP_SPLITS[name]),
+            strict=spec.headers,
+            doubles=doubles,
         )
+        facts = chain_facts(maps, walker, spec, group, **kw)
         out[name] = _facts(
             facts["orders"],
             facts["leave_gaps"],
-            escape(maps, ESCAPE_HEADERS[name]),
+            facts["fight_headers"],
+            group_escape(maps, facts["fight_headers"]),
             pc_gaps=facts["pc_gaps"],
             heal_gaps=facts["heal_gaps"],
         )
@@ -1188,15 +1796,26 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
 
     b2b = b2b_facts(maps, scripts, B2B_HEADER)
     out["Route 204 North B2B"] = _facts(
-        b2b["orders"], b2b["leave_gaps"], escape(maps, B2B_HEADER), locked_gaps=b2b["locked_gaps"]
+        b2b["orders"],
+        b2b["leave_gaps"],
+        b2b["fight_headers"],
+        group_escape(maps, b2b["fight_headers"]),
+        locked_gaps=b2b["locked_gaps"],
     )
     gym = gym_facts(maps, decomp)
     out["Eterna Gym gym trainers"] = _facts(
-        gym["orders"], gym["leave_gaps"], escape(maps, GYM_HEADER)
+        gym["orders"],
+        gym["leave_gaps"],
+        gym["fight_headers"],
+        group_escape(maps, gym["fight_headers"]),
     )
-    way = wayward_facts(maps, scripts)
+    way = wayward_facts(maps, scripts, doubles)
     out["Wayward Cave"] = _facts(
-        way["orders"], way["leave_gaps"], escape(maps, WAYWARD_HEADER), partner=way["partner"]
+        way["orders"],
+        way["leave_gaps"],
+        way["fight_headers"],
+        group_escape(maps, way["fight_headers"]),
+        partner=way["partner"],
     )
     return out
 

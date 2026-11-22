@@ -204,6 +204,21 @@ def test_gauntlet_facts_refused(tmp_path, old, new, match):
         load_overrides(write(tmp_path, gauntlet_text(facts=FACTS.replace(old, new))))
 
 
+def test_gauntlet_fight_headers_one_header_or_one_list_per_order(tmp_path):
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=FACTS))).gauntlets[0].facts
+    assert f.fight_headers == ()  # not recorded
+    one = FACTS + "fight_headers = 284\n"
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=one))).gauntlets[0].facts
+    assert f.fight_headers == ((284, 284),)
+    per = FACTS + "fight_headers = [[284, 380]]\n"
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=per))).gauntlets[0].facts
+    assert f.fight_headers == ((284, 380),) and f.to_dict()["fight_headers"] == [[284, 380]]
+    for bad in ("[[284]]", "[284, 380]", '"284"'):
+        text = gauntlet_text(facts=FACTS + f"fight_headers = {bad}\n")
+        with pytest.raises(OverridesError, match="fight_headers"):
+            load_overrides(write(tmp_path, text))
+
+
 def test_missing_file_is_empty(tmp_path):
     assert load_overrides(tmp_path / "absent.toml") == Overrides()
 
@@ -718,7 +733,8 @@ def test_committed_facts_recorded():
     wayward = next(g for g in o.gauntlets if g.name == "Wayward Cave")
     assert len(wayward.facts.orders) == 2 and wayward.facts.partner.trainer == 612
     route = next(g for g in o.gauntlets if g.name == "Route 213")
-    assert len(route.facts.orders) == 120
+    assert len(route.facts.orders) == 2  # no Surf before the Fen Badge (walk-fix round)
+    assert all(len(g.facts.fight_headers) == len(g.facts.orders) for g in o.gauntlets)
 
 
 def test_elite_four_and_champion_run_through_coverage(kaizo_names, kaizo_trainers):

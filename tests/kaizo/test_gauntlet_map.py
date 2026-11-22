@@ -3,6 +3,8 @@ skips without the Kaizo ROM and the decomp), the tool's output for every group a
 in ``data/kaizo/overrides.toml``."""
 
 import os
+import re
+import struct
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,8 @@ from tools.kaizo.gauntlet_map import (
     CLOCK_SIDE,
     CLOCK_STATES,
     FOUNTAIN_WIDTH,
+    SPLIT_BADGES,
+    SURFABLE,
     WAYWARD_HEADER,
     WAYWARD_PARTNER_VAR,
     WAYWARD_START,
@@ -18,14 +22,17 @@ from tools.kaizo.gauntlet_map import (
     Area,
     ChainSpec,
     Coord,
+    FieldMoves,
     MapObject,
     MapReadError,
     Pos,
+    Sighting,
     StaticMaps,
     Walker,
     Warp,
     _wayward_next,
     _wayward_walker,
+    bdhc_heights,
     chain_facts,
     eterna_clock_tables,
     gym_reach,
@@ -36,15 +43,27 @@ from tools.rom.inputs import REPO_ROOT
 
 # --- synthetic maps ---------------------------------------------------------------------------
 
-TILE = {".": 0, "#": 0x8000, "D": 0x8069, "T": 0x8080, "P": 0x8083, "W": 0x8000}
+TILE = {
+    ".": 0,
+    "#": 0x8000,
+    "D": 0x8069,
+    "T": 0x8080,
+    "P": 0x8083,
+    "W": 0x8000,
+    "v": 0x803B,  # JUMP_SOUTH with the collision bit, as the ROM's ledges (header 199)
+    "~": 0x15,  # WATER_SEA
+    "e": 0x30,  # BLOCK_EASTWARD
+    "n": 0x42,  # SLIDE_NORTHWARD (a spin tile)
+    "i": 0x20,  # ICE
+}
 EAST, SOUTH, WEST, NORTH = 3, 1, 2, 0
 
 
-def area(header, rows, objects=(), warps=(), coords=()):
+def area(header, rows, objects=(), warps=(), coords=(), heights=None):
     """An area from ASCII rows (z down, x across): ``.`` free, ``#`` wall, ``D`` door (collision,
     behaviour 0x69), ``T`` table, ``P`` PC; a space is no tile."""
     tiles = {(x, z): TILE[c] for z, row in enumerate(rows) for x, c in enumerate(row) if c != " "}
-    return Area(header, tiles, tuple(objects), tuple(warps), tuple(coords))
+    return Area(header, tiles, tuple(objects), tuple(warps), tuple(coords), heights=heights or {})
 
 
 def trainer(tid, x, z, facing, sight, movement=0, trainer_type=1):
@@ -90,7 +109,7 @@ def test_a_two_trainer_corridor_forces_the_order():
     maps = StaticMaps([a])
     spec = ChainSpec((1, 2), (1,), (Pos(1, 11, 1),))
     found = runs(Walker(maps, spec.members), spec)
-    assert [r.sequence for r in found] == [(2, 1)]
+    assert [r.sequence for r in found] == [((2,), (1,))]
     facts = chain_facts(maps, Walker(maps, spec.members), spec, (1, 2))
     assert facts["orders"] == [[[2], [1]]] and facts["leave_gaps"] == [[]]
 
@@ -116,14 +135,29 @@ def test_a_self_loop_warp_is_a_step_not_a_loop():
     assert Pos(1, 3, 0) in seen and Pos(1, 7, 0) in seen
 
 
-def test_rocks_and_boulders_block_until_removed():
+def test_field_move_objects_block_until_the_badge_and_move_remove_them():
     rock, boulder = npc(5, 3, 0, script=10001), npc(6, 3, 0, script=10002)
+    tree = npc(7, 3, 0, script=10000)
     far = Pos(1, 6, 0)
     a, b = area(1, ["......."], [rock]), area(1, ["......."], [boulder])
-    assert far in Walker(StaticMaps([a])).walk(Pos(1, 0, 0)).seen
-    assert far not in Walker(StaticMaps([a])).walk(Pos(1, 0, 0), removable=False).seen
-    assert far not in Walker(StaticMaps([b])).walk(Pos(1, 0, 0)).seen
-    assert far in Walker(StaticMaps([b]), strength=True).walk(Pos(1, 0, 0)).seen
+    c = area(1, ["......."], [tree])
+    smash = FieldMoves(rock_smash=True)
+    assert far in Walker(StaticMaps([a]), moves=smash).walk(Pos(1, 0, 0)).seen
+    assert far not in Walker(StaticMaps([a]), moves=smash).walk(Pos(1, 0, 0), removable=False).seen
+    assert far not in Walker(StaticMaps([b]), moves=smash).walk(Pos(1, 0, 0)).seen
+    assert far in Walker(StaticMaps([b]), moves=FieldMoves(strength=True)).walk(Pos(1, 0, 0)).seen
+    assert far not in Walker(StaticMaps([c]), moves=smash).walk(Pos(1, 0, 0)).seen
+    assert far in Walker(StaticMaps([c]), moves=FieldMoves(cut=True)).walk(Pos(1, 0, 0)).seen
+
+
+def test_a_rock_before_the_coal_badge_blocks():
+    # Oreburgh Mine comes before Roark: no Coal Badge, so a Rock Smash rock is a wall
+    # (FieldMoves_CheckRockSmash, field_move_tasks.c:545; scripts_field_moves.s:134).
+    a = area(1, ["......."], [npc(5, 3, 0, script=10001)])
+    roark = Walker(StaticMaps([a]), moves=FieldMoves.for_split("Roark"))
+    assert Pos(1, 6, 0) not in roark.walk(Pos(1, 0, 0)).seen
+    after = Walker(StaticMaps([a]), moves=FieldMoves.for_split("Gardenia"))
+    assert Pos(1, 6, 0) in after.walk(Pos(1, 0, 0)).seen
 
 
 def test_a_warp_into_a_sight_line_starts_that_fight():
@@ -131,20 +165,20 @@ def test_a_warp_into_a_sight_line_starts_that_fight():
     here = area(1, ["........"], warps=[Warp(0, 3, 0, 2, 0)])
     there = area(2, ["........"], [trainer(7, 6, 0, WEST, 4)], [Warp(0, 2, 0, 1, 0)])
     w = Walker(StaticMaps([here, there])).walk(Pos(1, 0, 0))
-    assert w.spot[7].how == "arrival" and w.spot[7].pos == Pos(2, 2, 0)
+    assert w.spot[(7,)].how == "arrival" and w.spot[(7,)].pos == Pos(2, 2, 0)
     assert all(p.header == 1 for p in w.seen)  # the walk never stands in header 2
 
 
 def test_the_start_tile_is_checked_too():
     a = area(1, ["......"], [trainer(1, 4, 0, WEST, 3)])
     w = Walker(StaticMaps([a])).walk(Pos(1, 2, 0))
-    assert w.spot == {1: (Pos(1, 2, 0), "arrival")} and set(w.seen) == {Pos(1, 2, 0)}
+    assert w.spot == {(1,): Sighting(Pos(1, 2, 0), "arrival")} and set(w.seen) == {Pos(1, 2, 0)}
 
 
 def test_a_defeated_trainer_no_longer_sees():
     a = area(1, ["......"], [trainer(1, 5, 0, WEST, 4)])
     w = Walker(StaticMaps([a]))
-    assert 1 in w.walk(Pos(1, 0, 0)).spot
+    assert (1,) in w.walk(Pos(1, 0, 0)).spot
     assert w.walk(Pos(1, 0, 0), {1}).spot == {} and Pos(1, 4, 0) in w.walk(Pos(1, 0, 0), {1}).seen
 
 
@@ -169,7 +203,7 @@ def test_an_object_behind_a_table_tile_can_be_talked_to():
 def test_a_trainer_behind_a_table_starts_a_talk_fight():
     a = area(1, ["..T.."], [trainer(9, 3, 0, SOUTH, 0, trainer_type=0)])
     w = Walker(StaticMaps([a])).walk(Pos(1, 1, 0))
-    assert w.spot[9] == (Pos(1, 1, 0), "talk")
+    assert w.spot[(9,)] == Sighting(Pos(1, 1, 0), "talk")
     assert Walker(StaticMaps([a])).talk_tiles(Pos(1, 0, 0), 1, 9) == [(1, 0)]
 
 
@@ -181,7 +215,7 @@ def test_a_walking_member_raises_and_a_walking_non_member_is_taken_as_beaten():
     other = Walker(StaticMaps([a]), members={4})
     assert other.sight_tiles(1, walker) == [] and other.sight_at(1, 1, 0, frozenset()) == []
     assert Pos(1, 5, 0) in other.walk(Pos(1, 4, 0)).seen
-    assert 3 not in other.walk(Pos(1, 4, 0)).spot  # not even talked to
+    assert (3,) not in other.walk(Pos(1, 4, 0)).spot  # not even talked to
 
 
 def test_a_matching_coord_raises_unless_the_caller_models_it():
@@ -238,7 +272,7 @@ def test_a_var_gated_coord_closes_the_only_way_out():
     alone = _wayward_walker(maps, False).walk(start)
     assert alone.spot == {} and set(alone.seen) == {Pos(WAYWARD_HEADER, x, 0) for x in range(3)}
     joined = _wayward_walker(maps, True).walk(start)
-    assert 383 in joined.spot and Pos(WAYWARD_HEADER, 3, 0) in joined.seen
+    assert (383,) in joined.spot and Pos(WAYWARD_HEADER, 3, 0) in joined.seen
 
 
 def test_an_unknown_running_wayward_coord_raises():
@@ -249,6 +283,167 @@ def test_an_unknown_running_wayward_coord_raises():
     assert (
         Pos(WAYWARD_HEADER, 5, 0)
         in _wayward_walker(maps, True).walk(Pos(WAYWARD_HEADER, 0, 0)).seen
+    )
+
+
+# --- the walk-fix round (review of 22 Nov): each rule on a hand-built map -----------------------
+
+
+def test_two_trainers_on_one_sight_tile_are_one_double_battle():
+    # 1 (object 0) looks south, 2 (object 1) looks west; both see (2, 2), the only way east.
+    rows = ["##.###", "##.###", "......", "##.###"]
+    a = area(1, rows, [trainer(1, 2, 0, SOUTH, 2), trainer(2, 4, 2, WEST, 2)])
+    w = Walker(StaticMaps([a])).walk(Pos(1, 0, 2))
+    assert set(w.spot) == {(1, 2)} and w.spot[(1, 2)].pos == Pos(1, 2, 2)  # one VS2 fight
+    alone = Walker(StaticMaps([a]), two_alive=False).walk(Pos(1, 0, 2))
+    assert set(alone.spot) == {(1,)}  # one live Pokemon: the first in object order, alone
+    maps = StaticMaps([a])
+    spec = ChainSpec((1, 2), (1,), (Pos(1, 0, 2),))
+    facts = chain_facts(maps, Walker(maps, spec.members), spec, (1, 2))
+    assert facts["orders"] == [[[1, 2]]] and facts["fight_headers"] == [[1]]
+
+
+def test_a_double_battle_trainer_fights_once_with_both_objects_or_not_at_all():
+    twins = [trainer(5, 5, 0, WEST, 3), MapObject(1, 1, 0, 1, 5000 + 5 - 1, WEST, 3, 4, 0)]
+    a = area(1, ["......"], twins)
+    w = Walker(StaticMaps([a]), doubles={5}).walk(Pos(1, 0, 0))
+    assert set(w.spot) == {(5,)}
+    one = Walker(StaticMaps([a]), doubles={5}, two_alive=False).walk(Pos(1, 0, 0))
+    assert one.spot == {} and Pos(1, 3, 0) in one.seen  # no fight: the player walks on
+
+
+def test_a_ledge_is_one_way():
+    a = area(1, ["...", "#v#", "..."])
+    down = Walker(StaticMaps([a])).walk(Pos(1, 1, 0)).seen
+    assert Pos(1, 1, 2) in down and Pos(1, 1, 1) not in down  # jumped over the ledge
+    up = Walker(StaticMaps([a])).walk(Pos(1, 1, 2)).seen
+    assert set(up) == {Pos(1, x, 2) for x in range(3)}  # no way back north
+
+
+def test_water_needs_surf():
+    a = area(1, [".~~."])
+    assert Pos(1, 3, 0) not in Walker(StaticMaps([a])).walk(Pos(1, 0, 0)).seen
+    surf = Walker(StaticMaps([a]), moves=FieldMoves(surf=True)).walk(Pos(1, 0, 0)).seen
+    assert Pos(1, 3, 0) in surf
+    # the Fen Badge gives Surf; a partner refuses it (scripts_field_moves.s:302-303)
+    assert FieldMoves.for_split("Byron").surf and not FieldMoves.for_split("Wake").surf
+    assert not FieldMoves.for_split("Galactic", partner=True).surf
+
+
+def test_a_directional_tile_blocks_one_side():
+    # BLOCK_EASTWARD on (1, 0): leaving it eastward is blocked, and so is entering it westward
+    a = area(1, [".e."])
+    assert Pos(1, 2, 0) not in Walker(StaticMaps([a])).walk(Pos(1, 0, 0)).seen
+    assert Pos(1, 0, 0) in Walker(StaticMaps([a])).walk(Pos(1, 1, 0)).seen
+    assert Pos(1, 1, 0) not in Walker(StaticMaps([a])).walk(Pos(1, 2, 0)).seen
+    # a trainer's line stops at it too
+    b = area(1, [".e..."], [trainer(1, 4, 0, WEST, 4)])
+    assert [t[0] for t in Walker(StaticMaps([b])).sight_tiles(1, b.objects[0])] == [3, 2]
+
+
+def test_a_spin_tile_carries_the_player_past_a_sight_line():
+    # stepping north onto the spin tile (1, 3) carries the player to (1, 0); trainer 1 looks
+    # at (1, 2) only, which the player crosses during the spin (no field input: the trainer
+    # check, field_control.c:187, runs on the frame before the spin starts, :200 -> :712)
+    rows = ["...", "#n#", "#n#", "#n#", "..."]
+    a = area(1, rows, [trainer(1, 2, 2, WEST, 1)])
+    w = Walker(StaticMaps([a])).walk(Pos(1, 1, 4))
+    assert Pos(1, 1, 0) in w.seen and (1,) not in w.spot
+    # a spin tile entered by a step is checked first: a line onto (1, 3) spots the player
+    b = area(1, rows, [trainer(1, 2, 3, WEST, 1)])
+    assert (1,) in Walker(StaticMaps([b])).walk(Pos(1, 1, 4)).spot
+
+
+def test_ice_slides_until_a_step_collides():
+    a = area(1, [".iii#"])
+    assert Pos(1, 3, 0) in Walker(StaticMaps([a])).walk(Pos(1, 0, 0)).seen
+
+
+def test_tiles_on_different_floors_are_not_connected():
+    # (0, 0)-(1, 0) at height 0, (2, 0) at 20: adjacent but 20 apart (GetVerticalDirection)
+    up = 20 * 4096
+    floors = {(0, 0): (0,), (1, 0): (0,), (2, 0): (up,), (3, 0): (up,)}
+    a = area(1, ["...."], heights=floors)
+    assert Pos(1, 2, 0) not in Walker(StaticMaps([a])).walk(Pos(1, 0, 0)).seen
+    slope = {(0, 0): (0,), (1, 0): (19 * 4096,), (2, 0): (up + 18 * 4096,)}
+    b = area(1, ["..."], heights=slope)
+    assert Pos(1, 2, 0) in Walker(StaticMaps([b])).walk(Pos(1, 0, 0)).seen
+    # a trainer on the upper floor does not see the player below on a two-plate bridge row
+    t = MapObject(0, 0, 0, 1, 3000, WEST, 3, 3, 0, up)
+    c = area(1, ["...."], [t], heights={**floors, (1, 0): (0, up), (2, 0): (0, up)})
+    w = Walker(StaticMaps([c])).walk(Pos(1, 0, 0))
+    assert w.spot == {} and Pos(1, 2, 0) in w.seen
+
+
+def test_a_var_zero_coord_runs_only_when_its_value_is_zero():
+    # FieldSystem_TryGetVar(0) is 0 (script_manager.c:444-452)
+    zero = area(1, ["......"], coords=[Coord(7, 3, 0, 1, 1, 0, 0)])
+    with pytest.raises(MapReadError, match="not modelled"):
+        Walker(StaticMaps([zero])).walk(Pos(1, 0, 0))
+    never = area(1, ["......"], coords=[Coord(7, 3, 0, 1, 1, 5, 0)])
+    w = Walker(StaticMaps([never])).walk(Pos(1, 0, 0))
+    assert Pos(1, 5, 0) in w.seen and w.crossed == []
+    assert Walker(StaticMaps([never])).coord_matches(Coord(7, 0, 0, 1, 1, 0x10, 0x10))
+
+
+def test_a_turning_trainer_can_be_passed_or_fought():
+    # 1 turns north and west (LOOK_NORTH_AND_WEST, 6): the player crosses its west line when it
+    # faces north, or is spotted. A fixed trainer (LOOK_WEST, 16) always spots him.
+    rows = ["#.#..", "....."]
+    turning = area(1, rows, [trainer(1, 4, 1, WEST, 4, movement=6)])
+    w = Walker(StaticMaps([turning])).walk(Pos(1, 1, 0))
+    assert (1,) in w.spot and Pos(1, 0, 1) in w.seen
+    fixed = area(1, rows, [trainer(1, 4, 1, WEST, 4, movement=16)])
+    w = Walker(StaticMaps([fixed])).walk(Pos(1, 1, 0))
+    assert (1,) in w.spot and Pos(1, 0, 1) not in w.seen
+
+
+def test_a_turning_and_a_fixed_trainer_on_one_tile():
+    # object 0 turns, object 1 is fixed: the tile starts 2 alone or the double, never a pass
+    rows = ["##.##", "##.##", "....."]
+    a = area(1, rows, [trainer(1, 2, 0, SOUTH, 2, movement=10), trainer(2, 4, 2, WEST, 2)])
+    w = Walker(StaticMaps([a]))
+    fights, passable = w.encounters(w.sight_at(1, 2, 2, frozenset()))
+    assert fights == {(1, 2), (2,)} and not passable
+
+
+def test_bdhc_heights_reads_the_plates_of_a_tile():
+    # one land with two flat plates: x tiles 0-15 at height 0, 16-31 at height 32
+    fx = 4096
+    pts = [(-256 * fx, -256 * fx), (0, 256 * fx), (0, -256 * fx), (256 * fx, 256 * fx)]
+    body = b"BDHC" + struct.pack("<6H", len(pts), 1, 2, 2, 1, 2)
+    body += b"".join(struct.pack("<2i", *p) for p in pts)
+    body += struct.pack("<3i", 0, fx, 0)
+    body += struct.pack("<2i", 0, -32 * fx)
+    body += struct.pack("<4H", 0, 1, 0, 0) + struct.pack("<4H", 2, 3, 0, 1)
+    body += struct.pack("<iHH", 256 * fx, 2, 0)
+    body += struct.pack("<2H", 0, 1)
+    member = struct.pack("<4I", 0x800, 0, 0, len(body)) + bytes(0x800) + body
+    h = bdhc_heights(member)
+    assert h[0] == (0,) and h[31] == (32 * fx,) and h[5 * 32 + 20] == (32 * fx,)
+
+
+def test_the_surfable_set_matches_the_decomp(decomp):
+    src = (decomp / "src" / "map_tile_behavior.c").read_text(encoding="utf-8")
+    hdr = decomp / "include" / "constants" / "field" / "map_tile_behaviors.h"
+    body = hdr.read_text(encoding="utf-8").split("enum TileBehavior {")[1]
+    names = re.findall(r"^\s+(TILE_BEHAVIOR_\w+)", body, re.MULTILINE)
+    value = {n: i for i, n in enumerate(names)}
+    flags = re.findall(r"\[(TILE_BEHAVIOR_\w+)\]\s*=\s*(TILE_BEHAVIOR_FLAG_\w+)", src)
+    assert {value[n] for n, f in flags if "SURFABLE" in f} == SURFABLE
+    assert value["TILE_BEHAVIOR_JUMP_SOUTH"] == 0x3B
+    assert value["TILE_BEHAVIOR_SLIDE_EASTWARD"] == 0x40
+    assert value["TILE_BEHAVIOR_BLOCK_EAST_AND_WEST"] == 0x4A
+
+
+def test_the_split_badges_follow_the_split_order():
+    from tools.extract_kaizo_docs import SPLITS
+
+    assert [s for s, _ in SPLIT_BADGES] == list(SPLITS)
+    assert FieldMoves.for_split("Roark") == FieldMoves()
+    assert FieldMoves.for_split("Wake") == FieldMoves(cut=True, rock_smash=True)
+    assert FieldMoves.for_split("Galactic", partner=True) == FieldMoves(
+        cut=True, rock_smash=True, strength=True
     )
 
 
@@ -382,6 +577,9 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
         f.heal_gaps,
         f.locked_gaps,
     )
+    assert {_fights(o): tuple(h) for o, h in zip(d["orders"], d["fight_headers"], strict=True)} == {
+        _fights(o): h for o, h in zip(f.orders, f.fight_headers, strict=True)
+    }
     if f.partner is None:
         assert d["partner"] is None
     else:
@@ -393,9 +591,13 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
 
 
 @pytest.mark.slow
-def test_oreburgh_fights_195_then_196_and_can_leave_after_195(derived):
+def test_oreburgh_fights_196_over_the_ledge_then_195_with_no_leave(derived):
+    # Before the Coal Badge the Rock Smash rocks (19,28)-(19,29) close the east way; the only
+    # way west is the ledge (2-4,19) (JUMP_SOUTH), one-way, then 196's line at row 24, then
+    # 195's tile (10,29). Roark's talk removes rock 1 only after both fights.
     d = derived["Oreburgh Mine"]
-    assert d["orders"] == [[[195], [196]]] and d["leave_gaps"] == [[1]] and d["escape"] is True
+    assert d["orders"] == [[[196], [195]]] and d["leave_gaps"] == [[]] and d["escape"] is True
+    assert d["fight_headers"] == [[199, 199]]
 
 
 @pytest.mark.slow
@@ -414,10 +616,15 @@ def test_building_3_is_forced_412_422_with_no_leave_gap(derived):
 
 
 @pytest.mark.slow
-def test_route_213_leaves_and_heals_at_every_gap(derived):
+def test_route_213_without_surf_is_a_beach_line_from_either_end(derived):
+    # The Wake split holds no Fen Badge: no Surf, so the beach is one line, walked from the
+    # lobby end or the west end; the lobby healer is reached at every gap only from the lobby end
     d = derived["Route 213"]
-    assert len(d["orders"]) == 120
-    assert d["leave_gaps"] == [[1, 2, 3, 4]] * 120 and d["heal_gaps"] == [1, 2, 3, 4]
+    assert {tuple(t for f in o for t in f) for o in d["orders"]} == {
+        (106, 103, 105, 111, 110),
+        (110, 111, 105, 103, 106),
+    }
+    assert d["leave_gaps"] == [[1, 2, 3, 4]] * 2 and d["heal_gaps"] == []
 
 
 @pytest.mark.slow
@@ -454,7 +661,8 @@ def test_wayward_order_join_points_and_the_459_talk_tiles(rom_files, derived):
     pos, done = WAYWARD_START, frozenset()
     for pair in ((383, 443), (380, 458), (450, 496)):
         _, nxt = _wayward_next(joined, pos, done)
-        pos, done = nxt[pair].pos, done | set(pair)
+        (sight,) = [s for f, s in nxt.items() if set(f) == set(pair)]
+        pos, done = sight.pos, done | set(pair)
     assert joined.talk_tiles(pos, 284, 459, done) == [(34, 28), (35, 27)]
     assert joined.talk_tiles(pos, 284, 460, done) == []
 
@@ -483,6 +691,117 @@ def test_elite_four_pc_gaps_are_the_four_lifts(rom_files):
     d = league_facts(maps)
     assert d["orders"] == [[[866], [867], [868], [869], [870]]] and d["pc_gaps"] == [1, 2, 3, 4]
     assert escape(maps, d["escape_header"]) is False
+
+
+GAUNTLET_HEADERS = (199, 346, 72, 73, 74, 75, 373, 284, 256)
+
+
+@pytest.mark.slow
+def test_rom_tile_kinds_in_the_gauntlet_headers(rom_files):
+    # What the walk meets in the Kaizo gauntlet headers. Kinds absent here are modelled anyway
+    # (the synthetic tests above): directional, spin, ice, bridge, bike and waterfall tiles.
+    from tools.kaizo.gauntlet_map import (
+        BLOCKS,
+        BRIDGE_START,
+        BRIDGES,
+        ICE,
+        JUMP,
+        JUMP_TWICE,
+        ROCK_CLIMB_EW,
+        ROCK_CLIMB_NS,
+        SLIDE,
+        WATERFALL,
+        RomMaps,
+    )
+
+    maps = RomMaps(rom_files)
+    kinds = {h: {a & 0xFF for a in maps.area(h).tiles.values()} for h in GAUNTLET_HEADERS}
+    every = set().union(*kinds.values())
+    absent = set().union(*BLOCKS, SLIDE, JUMP_TWICE, BRIDGES, {ICE, WATERFALL, BRIDGE_START})
+    assert every & absent == set()
+    assert {h for h, k in kinds.items() if k & set(JUMP)} == {199, 346, 256}  # ledges
+    assert {h for h, k in kinds.items() if k & SURFABLE} == {373}  # water
+    assert {h for h, k in kinds.items() if k & {ROCK_CLIMB_NS, ROCK_CLIMB_EW}} == {373}
+
+
+@pytest.mark.slow
+def test_rom_heights_of_the_gauntlet_headers(rom_files):
+    # No walkable tile of a gauntlet header holds two plates (no floor over another; some
+    # collision tiles do), every tile the building walk reaches has a plate, and header 73
+    # climbs from 0 over 8 to 24 (steps < 20).
+    from tools.kaizo.gauntlet_map import BUILDINGS, FieldMoves, RomMaps
+
+    maps = RomMaps(rom_files)
+    for h in GAUNTLET_HEADERS:
+        area = maps.area(h)
+        walkable = [p for p, t in area.tiles.items() if not t & 0x8000]
+        assert all(len(area.heights.get(p, ())) <= 1 for p in walkable), h
+    w = Walker(maps, BUILDINGS.members, moves=FieldMoves.for_split("Fantina"), strict=(72,))
+    seen = w.walk(Pos(72, 11, 14), frozenset(BUILDINGS.members)).seen
+    assert all(maps.area(p.header).heights.get((p.x, p.z)) for p in seen if p.header in (72, 73))
+    floors = {maps.area(73).heights[(p.x, p.z)][0] // 4096 for p in seen if p.header == 73}
+    assert floors == {0, 7, 8, 23, 24}
+
+
+@pytest.mark.slow
+def test_rom_shared_sight_tiles_are_only_the_wayward_pairs(rom_files):
+    # Two members that can spot the player on one tile fight as one double (VS2). In the Kaizo
+    # gauntlet headers only the Wayward pairs share sight tiles; no other group has one.
+    from tools.kaizo.gauntlet_map import BUILDINGS, OREBURGH, ROUTE_204, ROUTE_213, RomMaps
+
+    maps = RomMaps(rom_files)
+    for spec in (OREBURGH, ROUTE_204, BUILDINGS, ROUTE_213):
+        w = Walker(maps, spec.members)
+        for h in spec.headers:
+            for o in maps.area(h).objects:
+                if o.trainer in spec.members:
+                    tiles = {(x, z) for x, z, _, _ in w.sight_tiles(h, o)}
+                    for p in maps.area(h).objects:
+                        if p.trainer in spec.members and p.trainer != o.trainer:
+                            assert not tiles & {(x, z) for x, z, _, _ in w.sight_tiles(h, p)}
+
+
+@pytest.mark.slow
+def test_rom_buildings_2_and_3_are_both_header_74(rom_files):
+    # ESCAPE_HEADERS gave both 74 by hand (review); the escape now comes from the fight headers,
+    # and the ROM places 410, 423, 412 and 422 in header 74 (events 73 objects 0, 1, 2, 4).
+    from tools.kaizo.gauntlet_map import RomMaps
+
+    maps = RomMaps(rom_files)
+    in74 = {o.trainer for o in maps.area(74).objects if o.trainer is not None}
+    assert {410, 423, 412, 422} <= in74
+    assert not {o.trainer for o in maps.area(75).objects} - {None}
+
+
+@pytest.mark.slow
+def test_rom_gym_scripts_give_the_split_badges(rom_files, decomp):
+    import struct as st
+
+    from tools.kaizo.gauntlet_map import COAL, FOREST, ICICLE, MINE
+    from tools.rom.readers.maps import SCRIPTS_NARC, command_table
+
+    table = command_table(decomp)
+    give = table.constants.index("SCRCMD_GIVEBADGE")
+    check = table.constants.index("SCRCMD_CHECKBADGEACQUIRED")
+    scr = rom_files.narc(SCRIPTS_NARC)
+    members = {"Roark": (52,), "Gardenia": (73,), "Fantina": (96, 101), "Maylene": (137,),
+               "Wake": (125,), "Byron": (38,), "Candice": (176,), "Volkner": (160,)}  # fmt: skip
+    for split, badge in SPLIT_BADGES:
+        if badge is None:
+            continue
+        found = [m for m in members[split] if st.pack("<HH", give, badge) in scr[m]]
+        assert found, (split, badge)
+    # the field-move scripts (scr 409) check Coal, Forest, Mine and Icicle
+    for badge in (COAL, FOREST, MINE, ICICLE):
+        assert st.pack("<HH", check, badge) in scr[409]
+
+
+@pytest.mark.slow
+def test_rom_group_splits_match_the_committed_sources():
+    from tools.kaizo.gauntlet_map import GROUP_SPLITS
+
+    for name, g in _committed().items():
+        assert g.facts.source.startswith(f"{GROUP_SPLITS[name]} Split:")
 
 
 def test_a_matching_coord_outside_the_strict_headers_is_only_recorded():

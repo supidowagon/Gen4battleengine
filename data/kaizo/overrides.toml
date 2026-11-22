@@ -479,23 +479,28 @@ source = "Elite Four Split:298"
 # --- Gauntlets (game facts: tools/kaizo/gauntlet_map.py reads them from the ROM) ----------
 # orders: each order is a list of fights, each fight one or two trainer ids (a two-trainer
 # fight is one battle); gap k follows the k-th fight. The first order is the one the sheet's
-# fight ids come from (a fight's id is its first trainer id). A ROM-backed test
+# fight ids come from (a fight's id is its first trainer id). fight_headers: the map header
+# each fight starts on (one header for every fight here). Field moves follow the badges of
+# the splits before the group's split (FieldMoves.for_split). A ROM-backed test
 # (tests/kaizo/test_gauntlet_map.py) re-derives every value below.
 
 # Worker Mason (Gauntlet Start)*; Worker Colin (Gauntlet End)*
 # rows: Roark Split:229=196, Roark Split:239=195
-# 195 is fought first, not the sheet's 196 (game data vs the sheet).
+# 196 is fought first, as the sheet lists it: before the Coal Badge the Rock Smash rocks
+# (19,28)-(19,29) close the east way (scripts_field_moves.s:134), so the only way west is the
+# ledge row (2-4,19) (JUMP_SOUTH, one-way), into 196's line at row 24, then 195's tile (10,29).
 [[gauntlet]]
 name = "Oreburgh Mine"
 trainers = [196, 195]
 source = "Roark Split:229"
-orders = [[[195], [196]]]
-leave_gaps = [1]
+orders = [[[196], [195]]]
+leave_gaps = []
 escape = true
 pc_gaps = []
 heal_gaps = []
 locked_gaps = []
-orders_source = "rom:header 199 events 197 objs 5, 6; stairs warp (15,1)"
+fight_headers = 199
+orders_source = "rom:header 199 events 197 objs 1, 2 (rocks), 5, 6; ledges (2-4,19) behaviour 0x3B; stairs warp (15,1)"
 escape_source = "rom:header 199 map type 3 escape bit 1"
 
 # Twins Liv & Liz (DOUBLE) (Gauntlet Start)*; Bug Catcher Brandon (Gauntlet)*; Aroma Lady Taylor (Gauntlet End)*
@@ -511,6 +516,7 @@ escape = false
 pc_gaps = []
 heal_gaps = []
 locked_gaps = []
+fight_headers = 346
 orders_source = "rom:header 346 events 332; warp (180,698) -> header 254"
 
 # Galactic Mercury (B2B With Galactic Terra); GalacticfTerra (B2B With Galactic Mercury)
@@ -525,6 +531,7 @@ escape = false
 pc_gaps = []
 heal_gaps = []
 locked_gaps = [1]
+fight_headers = 256
 orders_source = "rom:scr 277 entry 2 LockAll @36, battles @44 @73, ReleaseAll @106"
 
 # Lass Caroline; Aroma Lady Jenna; Artist Angel
@@ -539,6 +546,7 @@ escape = false
 pc_gaps = []
 heal_gaps = []
 locked_gaps = []
+fight_headers = 67
 orders_source = "rom:header 67 events 66; scr 73 entries 7, 8, 5; clock states 0-3"
 
 # Galactic Amalthia (Gauntlet Start)*; Scientist Galileo (Gauntlet End)*
@@ -553,6 +561,7 @@ escape = false
 pc_gaps = []
 heal_gaps = []
 locked_gaps = []
+fight_headers = 73
 orders_source = "rom:header 73 events 72 objs 0, 2; header 72 warps 1 (14,6), 3 (20,6)"
 
 # Galactic Callisto (Gauntlet Start)*; Galactic Europa (Gauntlet End)*
@@ -567,6 +576,7 @@ escape = false
 pc_gaps = []
 heal_gaps = []
 locked_gaps = []
+fight_headers = 74
 orders_source = "rom:header 74 events 73 objs 0, 1; header 73 warp 1 (16,3) -> (9,11)"
 
 # Galactic Ganymede (Gauntlet Start)*; Galactic Io (Gauntlet End)*
@@ -581,6 +591,7 @@ escape = false
 pc_gaps = []
 heal_gaps = []
 locked_gaps = []
+fight_headers = 74
 orders_source = "rom:header 74 events 73 obj 2; warp 4 (25,20) and the panels leading to it"
 
 # SwimmerF Mary (GAUNTLET START)*; Swimmer Sheltin (GAUNTLET)*; SwimmerF Haley (GAUNTLET)*; Fisherman Kenneth (GAUNTLET)*; Sailor Paul (GAUNTLET END)*
@@ -589,14 +600,20 @@ orders_source = "rom:header 74 events 73 obj 2; warp 4 (25,20) and the panels le
 name = "Route 213"
 trainers = [106, 103, 105, 111, 110]
 source = "Wake Split:215"
-orders = { permutations = [[106], [103], [105], [111], [110]] }
+# No Surf before the Fen Badge (field_control.c:690): the beach is one line, walked from the
+# lobby end or from the west end. The lobby healer (scr 462 entry 2 HealParty @74) is reached
+# at every gap from the lobby end only, so no gap heals in every order.
+orders = [
+  [[106], [103], [105], [111], [110]],
+  [[110], [111], [105], [103], [106]],
+]
 leave_gaps = "all"
 escape = false
 pc_gaps = []
-heal_gaps = "all"
+heal_gaps = []
 locked_gaps = []
-orders_source = "rom:header 373 events 359; door (706,818) -> header 376"
-heal_gaps_source = "rom:scr 462 entry 2 HealParty @74"
+fight_headers = 373
+orders_source = "rom:header 373 events 359; water behaviour 0x15 without Surf (Wake split); door (706,818) -> header 376"
 
 # Collector Gerald (MULTI BATTLE with Clown Bob, GAUNTLET)*; Clown Bob (MULTI BATTLE with Collector Gerald, GAUNTLET); Camper Parker (MULTI BATTLE with Picknicker Tori, GAUNTLET); Picknicker Tori (MULTI BATTLE with Camper Parker, GAUNTLET); Bug Catcher Adalbert (MULTI BATTLE with Camper Mike, GAUNTLET); Camper Mike (MULTI BATTLE with Bug Catcher Adalbert, GAUNTLET); Lass Cassidy (MULTI BATTLE with Youngster Butch, GAUNTLET); Youngster Butch (MULTI BATTLE with Lass Cassidy, GAUNTLET); Hiker Reginald (MULTI BATTLE with Hiker Lorenzo, GAUNTLET); Hiker Lorenzo (MULTI BATTLE with Hiker Reginald, GAUNTLET); Castle Valet Darach (MULTI BATTLE with Lady Caitlin, GAUNTLET END); Lady Caitlin (MULTI BATTLE with Castle Valet Darach, GAUNTLET END)
 # rows: Galactic Split:117=443, Galactic Split:127=383, Galactic Split:137=380, Galactic Split:147=458, Galactic Split:157=459, Galactic Split:167=460, Galactic Split:177=450, Galactic Split:187=496, Galactic Split:197=454, Galactic Split:207=455, Galactic Split:217=749, Galactic Split:227=750
@@ -626,6 +643,7 @@ escape = true
 pc_gaps = []
 heal_gaps = []
 locked_gaps = []
+fight_headers = 284
 partner = { trainer = 612, join_before = [1], source = "rom:scr 318 entry 2 @152 0x4091 = 1, @171 SetHasPartner; coord script 6 (85,8)-(85,10) var 0x4091 value 0 closes the start pocket" }
 orders_source = "rom:header 284 events 273; scr 318 entries 2, 4, 5, 6; split: obj 459 talk tiles (34,28), (35,27)"
 leave_gaps_source = "rom:scr 318 entry 6 @271-311, @399 Warp 350 (310,608); coord (85,8)-(85,10) runs only while 0x4091 == 0, i.e. before fight 1"
