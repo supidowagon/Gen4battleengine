@@ -479,8 +479,7 @@ class OutcomeLaws(NamedTuple):
     branch_ok: jnp.ndarray  # bool[2]: the speed_tie branches this call is consistent with
     call_pending: jnp.ndarray  # bool[]: an invoker is used but no call was given
     # E2 batch 5: the Future Sight hit of this turn's end (outcome.future_thresholds), per defender.
-    future_thresholds: jnp.ndarray  # int32[B, K]
-    future_possible: jnp.ndarray  # bool[B, K]
+    future_values: jnp.ndarray  # bool[B, 101]: the thresholds 0-100 its hit can have
     future_loose: jnp.ndarray  # bool[B]: every roll its own class
     # E2 batch 12 (B12-9): Acupressure's draw, per side: the count of its user's stats below +6
     # at the turn start, and whether that count can change before the move (every residue class
@@ -3063,7 +3062,7 @@ def outcome_laws(
     thresholds, possible, later_thr = hit_threshold_pair(tables, state, actions, moves)
     later_ok = possible
     sec_thr, sec_ok = secondary_thresholds(tables, state, actions, moves)
-    future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
+    future_values, future_loose = future_thresholds(tables, state, actions, moves)
     if loose:
         # The brute force: the hit law cut at every threshold variant, possible or not
         # (an extra cut only splits a class), and the Future Sight roll whole.
@@ -3111,8 +3110,7 @@ def outcome_laws(
         call=call,
         branch_ok=branch_ok,
         call_pending=call_pending,
-        future_thresholds=future_thr,
-        future_possible=future_ok,
+        future_values=future_values,
         future_loose=future_loose,
         acupressure_count=acu_count,
         acupressure_loose=acu_loose,
@@ -3408,8 +3406,7 @@ def _future_hit(laws: OutcomeLaws, side: int) -> _Law:
     Rain write's included, H-1), or every roll 1-100 where ``future_loose`` (a due hit only)."""
     if bool(laws.future_loose[side]):
         return list(range(1, 101)), [1] * 100, 100
-    possible = np.asarray(laws.future_possible[side], bool)
-    thresholds = np.asarray(laws.future_thresholds[side])[possible]
+    thresholds = np.flatnonzero(np.asarray(laws.future_values[side], bool))
     if thresholds.size == 0:  # no hit this turn can read it
         return [1], [1], 1
     return hit_class_law(thresholds)

@@ -129,8 +129,6 @@ def test_future_sight_law_reads_the_lock_after_the_countdown(tables, names):
     (:3016-3018). A lock at 1 with the hit due this turn is gone at the hit: the law must hold the
     unlocked threshold, taken here from the live threshold step reads (``future_threshold``) on
     the state as it stands at the hit, not from ``future_thresholds``."""
-    import numpy as np
-
     from nuzline.engine.enumerate import outcome_laws
     from nuzline.engine.outcome import future_threshold
 
@@ -154,8 +152,7 @@ def test_future_sight_law_reads_the_lock_after_the_countdown(tables, names):
     live = int(future_threshold(tables, at_hit, 1))
     assert live < 100
     laws = outcome_laws(tables, s, jnp.asarray([0, 0]))
-    ts = np.asarray(laws.future_thresholds[1])[np.asarray(laws.future_possible[1], bool)]
-    assert live in set(int(t) for t in ts)
+    assert bool(laws.future_values[1][min(live, 100)])
     # And the step itself misses on a roll above the live threshold.
     o = O._replace(future_hit=jnp.asarray([1, live + 1], jnp.int8))
     out = assert_matches_reference(tables, s, (0, 0), o)
@@ -182,8 +179,6 @@ def test_future_sight_law_follows_a_haze_this_turn(tables, names):
     before the turn end's hit (bcp.c:1758-1783). With the attacker's accuracy +2 and the
     target's evasion +1 the sum after Haze is 6, neither the kept (7) nor the reset (5) one:
     the law must hold the live threshold the hit reads."""
-    import numpy as np
-
     from nuzline.engine.enumerate import outcome_laws
     from nuzline.engine.ids import Stat
     from nuzline.engine.outcome import future_threshold
@@ -194,8 +189,7 @@ def test_future_sight_law_follows_a_haze_this_turn(tables, names):
     live = int(future_threshold(tables, at_hit, 1))
     assert live < 100
     laws = outcome_laws(tables, s, jnp.asarray([0, 0]))
-    ts = np.asarray(laws.future_thresholds[1])[np.asarray(laws.future_possible[1], bool)]
-    assert live in {int(t) for t in ts}
+    assert bool(laws.future_values[1][min(live, 100)])
     for roll, hits in ((live, True), (live + 1, False)):
         o = O._replace(future_hit=jnp.asarray([1, roll], jnp.int8))
         out = assert_matches_reference(tables, s, (0, 0), o)
@@ -210,7 +204,7 @@ def test_future_sight_roll_is_kept_whole_around_gravity_and_transform(tables, na
     from nuzline.engine.outcome import future_thresholds
 
     def loose(t, s):
-        return bool(future_thresholds(t, s, jnp.asarray([0, 0]))[2][1])
+        return bool(future_thresholds(t, s, jnp.asarray([0, 0]))[1][1])
 
     assert not loose(tables, _future_due(tables, names, "Growl"))
     for move in ("Gravity", "Transform", "Knock Off"):
