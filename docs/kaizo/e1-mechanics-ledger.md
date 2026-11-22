@@ -1604,7 +1604,8 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     `enumerate.call_laws` offers `CALL_SEALED` only when no foe imprisons at the turn start (`can_seal`,
     enumerate.py:3701-3706) and `_split_events` sees only an Imprison landing (`sealed_at_move`, step.py:903). Needs a
     hypothetical state of the foe's moves after the copy and a step event of the sealed set at the action: not a
-    bounded change, left for the next batch. A third copy source since I-3: an imprisoning player Sketch user that
+    bounded change, left for the next batch. A third copy source since I-3: an imprisoning Sketch user (either side: `can_sketch` and `sketched_events` take
+    both; only the coverage grading is player-side) that
     moves first puts the Sleep Talk user's `moveSketched` into its Sketch slot (bs:4868; the copy is the move shown
     last, kept through sleep turns, bcp.c:3952-3954), which Move_Imprisoned then seals (lib.c:3316-3338, bs:4927).
     Built by the batch I gate fix: `CALL_SKETCHED` = 7 * `SLEEP_TALK_VALUES` (84), `CallLaws.sketched` /
