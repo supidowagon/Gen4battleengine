@@ -214,6 +214,27 @@ def test_render_shows_the_sampled_node_count(roark, names):
     assert "1.2 % (3)" in lines[2]
 
 
+def test_render_rounds_win_chances_down_and_interval_highs_and_losses_up(roark, names):
+    state, result = roark
+    rows = [
+        dataclasses.replace(
+            r,
+            estimate=0.9996,
+            ci_low=0.9989,
+            ci_high=0.9991,
+            lower_bound=0.9996,
+            unexplored=0.0001,
+            refused=0.0001,
+            failed=0.0001,
+            sampled=0.0,
+        )
+        for r in result.ranking
+    ]
+    row = render(dataclasses.replace(result, ranking=rows), names, 0, root=state)[2]
+    assert " 99.9 % [99.8, 100.0]" in row, row
+    assert row.count("99.9 %") == 2 and row.count("  0.1 %") == 3, row
+
+
 def test_depth0_prints_no_plan_and_labels_its_leaves(tables, names, monkeypatch):
     """At depth 0 (Stage A) ``render`` shows no plan under the best action, and the JSON
     leaves say what they are: every foe reply, valued by Stage A's AI-driven playouts."""

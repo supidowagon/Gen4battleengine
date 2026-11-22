@@ -724,10 +724,67 @@ def decomp():
 
 
 @pytest.fixture(scope="module")
-def derived(rom_files, decomp):
+def derived_and_reached(rom_files, decomp):
     from tools.kaizo.gauntlet_map import derive_groups
 
-    return derive_groups(rom_files, decomp)
+    reached: dict[str, set[int]] = {}
+    return derive_groups(rom_files, decomp, reached), reached
+
+
+@pytest.fixture(scope="module")
+def derived(derived_and_reached):
+    return derived_and_reached[0]
+
+
+def _persisted_feature_commands(decomp) -> set[str]:
+    """The script commands that set the persisted map feature id: the ``ScrCmd_*`` handlers of
+    ``src/scrcmd.c`` whose body calls a ``PersistedMapFeatures_InitFor*`` (``:4710-4782``,
+    ``:5325``, ``:5699``), by their ``include/data/scripts/scrcmd.h`` constant."""
+    src = (decomp / "src" / "scrcmd.c").read_text(encoding="utf-8")
+    handlers = set()
+    for chunk in src.split("\nstatic BOOL ")[1:]:
+        name = chunk.split("(", 1)[0]
+        body = chunk.split("\n}\n", 1)[0]
+        if "{" in body and "PersistedMapFeatures_InitFor" in body:
+            handlers.add(name)
+    table = (decomp / "include" / "data" / "scripts" / "scrcmd.h").read_text(encoding="utf-8")
+    constants = {
+        h: c for c, h in re.findall(r"^ScriptCommand\((\w+),\s*(\w+)\)", table, re.MULTILINE)
+    }
+    return {constants[h] for h in handlers}
+
+
+@pytest.mark.slow
+def test_no_header_a_walk_reaches_sets_a_persisted_map_feature(
+    rom_files, decomp, derived_and_reached
+):
+    # Dynamic collision (DynamicMapFeatures_CheckCollision, dynamic_map_features.c:88-103) and
+    # the dynamic height plates act only while the persisted feature id is set; a warp resets it
+    # (field_map_change.c:268-269, :325-326) and only these commands set it. The walk models
+    # none of them, so no reached header's script may run one, except the Eterna Gym's own
+    # (gym_facts models its clock).
+    from tools.kaizo.gauntlet_map import GYM_HEADER, RomMaps
+    from tools.rom.readers.maps import SCRIPTS_NARC, _walk, command_table
+
+    ten = _persisted_feature_commands(decomp)
+    assert len(ten) == 10, sorted(ten)
+    eterna = "SCRCMD_INITPERSISTEDMAPFEATURESFORETERNAGYM"
+    assert eterna in ten
+    _, reached = derived_and_reached
+    headers = set().union(*reached.values())
+    # the leave targets and the healer's header (docs/gauntlet-design.md section 3 tables)
+    assert {198, 254, 65, 376, GYM_HEADER} <= headers, sorted(headers)
+    maps = RomMaps(rom_files)
+    scripts = rom_files.narc(SCRIPTS_NARC)
+    table = command_table(decomp)
+    found = {}
+    for h in sorted(headers):
+        member = maps.header(h).scripts
+        decoded, _, _ = _walk(scripts[member], table, f"scr_seq {member}")
+        used = {table.constants[op] for op, _, _ in decoded.values()} & ten
+        if used != ({eterna} if h == GYM_HEADER else set()):
+            found[h] = sorted(used)
+    assert found == {}
 
 
 def _committed():
@@ -988,14 +1045,44 @@ def test_rom_group_splits_match_the_committed_sources():
         assert g.facts.source.startswith(f"{GROUP_SPLITS[name]} Split:")
 
 
-def test_a_matching_coord_outside_the_strict_headers_is_only_recorded():
+def test_a_matching_coord_outside_the_strict_headers_blocks():
+    # its script may take the player: the tile is not entered, nothing beyond it is reached
     here = area(1, ["......"], warps=[Warp(0, 3, 0, 2, 0)])
     there = area(2, ["....."], warps=[Warp(0, 0, 0, 1, 0)], coords=[Coord(7, 2, 0, 1, 1, 0, 0)])
     maps = StaticMaps([here, there])
     w = Walker(maps, strict=[1]).walk(Pos(1, 0, 0))
-    assert Pos(2, 4, 0) in w.seen and [(p.header, c.script) for p, c in w.crossed] == [(2, 7)]
+    assert Pos(2, 1, 0) in w.seen and Pos(2, 2, 0) not in w.seen and Pos(2, 4, 0) not in w.seen
+    assert w.crossed == []
     with pytest.raises(MapReadError):
         Walker(maps).walk(Pos(1, 0, 0))
+    # the caller's rule still decides
+    passed = Walker(maps, strict=[1], coord_rule=lambda h, c, m: "pass").walk(Pos(1, 0, 0))
+    assert Pos(2, 4, 0) in passed.seen
+
+
+def _healer_maps(coords):
+    # header 1 (the group's) warps into header 2, a corridor to a healer (obj 5 at (4, 0))
+    # behind a coord at (2, 0) on var 0x4100
+    here = area(1, ["......"], warps=[Warp(0, 3, 0, 2, 0)])
+    there = area(2, ["....."], [npc(5, 4, 0)], [Warp(0, 0, 0, 1, 0)], coords)
+    return StaticMaps([here, there])
+
+
+def test_a_foreign_coord_on_an_unknown_var_blocks_the_healers_talk_tile():
+    maps = _healer_maps([Coord(7, 2, 0, 1, 1, 1, 0x4100)])
+    w = Walker(maps, strict=[1]).walk(Pos(1, 0, 0))
+    assert (2, 5) not in w.talk and Pos(2, 3, 0) not in w.seen
+    # in a strict header (the healer's header is strict in derive_groups) it passes
+    strict = Walker(maps, strict=[1, 2]).walk(Pos(1, 0, 0))
+    assert strict.talk == {(2, 5): Pos(2, 3, 0)}
+
+
+def test_a_foreign_coord_with_a_non_matching_var_does_not_block():
+    maps = _healer_maps([Coord(7, 2, 0, 1, 1, 1, 0x4100)])
+    w = Walker(maps, strict=[1], vars={0x4100: 0}).walk(Pos(1, 0, 0))
+    assert w.talk == {(2, 5): Pos(2, 3, 0)}
+    with pytest.raises(MapReadError, match="not modelled"):
+        Walker(maps, strict=[1, 2], vars={0x4100: 1}).walk(Pos(1, 0, 0))
 
 
 # --- hidden flags, the live count and the B2B operands (manager rulings of 22 Nov) -------------

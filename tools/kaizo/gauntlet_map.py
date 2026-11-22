@@ -100,9 +100,21 @@ Method (every rule cited to the decomp; paths relative to ``external/pokeplatinu
   (``FieldSystem_TryGetVar``, ``src/script_manager.c:428-452``), so a coord on var 0 runs only when
   its value is 0. Another var matches when the caller's ``vars`` say so. Only the first matching
   coord of a tile, in event order, runs (:217-221). A matching coord on a tile
-  walked in a ``strict`` header (the group's own) raises unless the caller's ``coord_rule`` models
-  it; in another header, or when the caller does not know the var, it is recorded in
-  ``Walk.crossed``.
+  walked in a ``strict`` header (the group's own, and the Route 213 healer's) raises unless the
+  caller's ``coord_rule`` models it; one whose var the caller does not know is passed and
+  recorded in ``Walk.crossed``. In another header a coord that matches or whose var is not known
+  blocks: its script may take the player, so no heal, PC or leave beyond it is granted (fewer
+  player paths only).
+- Dynamic collision and height plates (``DynamicMapFeatures_CheckCollision``,
+  ``src/dynamic_map_features.c:88-103``, from ``terrain_collision_manager.c:316``; the plates of
+  ``src/overlay008/gym_features.c:656``, ``src/platform_lift.c:200``) act only while the persisted
+  feature id is set. It is reset on every warp (``src/field_map_change.c:268-269``, ``:325-326``)
+  and set only by ten script commands (``src/scrcmd.c:4710-4782``, ``:5325``, ``:5699``). The
+  land height offset is non-zero only in the Distortion World (``src/overlay005/fieldmap.c:782-788``,
+  ``land_data.c:2492-2498``); matrix altitudes move only the rendering (``land_data.c:1555-1575``),
+  not ``GetHeight`` (``terrain_collision_manager.c:47-125``). The walk models neither; the ROM test
+  requires that no header a group's walk reaches runs one of the ten, except the Eterna Gym's
+  own (``gym_facts``).
 - Item balls (scripts 7000-7999) can be picked up; the matrix is masked to the group's header: a
   tile outside is a wall.
 
@@ -699,9 +711,10 @@ class Walker:
     ``moves``: the field moves the walk may use (``FieldMoves``). ``ignore(header, obj)``: an
     object that never blocks and never sees (the partner who follows the player). ``vars``: the
     known values of coord variables. ``coord_rule(header, coord, matches)``: ``"pass"``,
-    ``"block"`` (the script takes the player: the tile is not entered) or None for the default (a
-    matching coord raises when its header is in ``strict``, every header when None; elsewhere it
-    is recorded: the walk beyond a group's own headers only has to show where the player can go).
+    ``"block"`` (the script takes the player: the tile is not entered) or None for the default: in
+    a ``strict`` header (every header when None) a matching coord raises and one on an unknown var
+    passes; in another header a matching or unknown-var coord blocks, so the walk beyond the
+    group's own headers grants nothing a coord script could take away.
     ``doubles``: the double-battle trainers (``read_double_trainers``). ``two_alive``: the party
     has two live Pokemon (``Party_HasTwoAliveMons``); ``partner``: the partner flag is set. Sight
     takes two when either holds (``field_control.c:182-186``); a talk reads the party only
@@ -742,6 +755,10 @@ class Walker:
         self.on_enter = {h: frozenset(f) for h, f in (on_enter or {}).items()}
         self._sight: dict[tuple, dict[tuple[int, int], list[tuple[Seer, int]]]] = {}
         self._walks: dict[tuple, Walk] = {}
+
+    def reached_headers(self) -> set[int]:
+        """Every header a walk of this walker has reached."""
+        return {h for w in self._walks.values() for h in w.headers()}
 
     # -- terrain and objects
 
@@ -966,12 +983,15 @@ class Walker:
                 continue
             action = self.coord_rule(pos.header, c, matches) if self.coord_rule else None
             if action is None:
-                if matches and (self.strict is None or pos.header in self.strict):
+                if self.strict is not None and pos.header not in self.strict:
+                    action = "block"
+                elif matches:
                     raise MapReadError(
                         f"coord event script {c.script} at {pos} runs (var {c.var:#x}) and is "
                         "not modelled"
                     )
-                action = "pass"
+                else:
+                    action = "pass"
             if action == "block":
                 return False
             walk.crossed.append((pos, c))
@@ -1744,13 +1764,15 @@ def gym_reach(
     return GymReach(frozenset(seen), talk, coords)
 
 
-def gym_facts(maps: RomMaps, decomp: Path, flags: Collection[int] = ()) -> dict:
+def gym_facts(
+    maps: RomMaps, decomp: Path, flags: Collection[int] = (), reached: set[int] | None = None
+) -> dict:
     """The Eterna Gym trainers (E3-B3-2.c): the orders the clock states allow and the gaps where
     the door can be reached. State 0 from the door offers only the guide; each fight changes the
     reach as the clock advances (after the first win over 324 and after 260). ``flags``: the
     hidden flags set (``object_hidden``). The fights are coord scripts and talks of singles
     trainers (no gym trainer is a double-battle trainer: ROM test), so the live count changes
-    nothing here."""
+    nothing here. ``reached`` (when given) gains the gym and the door's destination."""
     area = maps.area(GYM_HEADER, masked=False)
     tables = eterna_clock_tables(decomp)
     # The way in and out: the south warp entrance (11, 27), rom header 67 warp 0 -> header 65,
@@ -1768,6 +1790,8 @@ def gym_facts(maps: RomMaps, decomp: Path, flags: Collection[int] = ()) -> dict:
     if door is None:
         raise MapReadError("the gym has no south warp entrance")
     start = front = (door.x, door.z)
+    if reached is not None:
+        reached |= {GYM_HEADER, door.dest}
     r0 = gym_reach(area, tables, 0, start, (), flags)
     fight_objects = {obj for _, obj, _ in GYM_FIGHTS.values() if obj is not None}
     if r0.coords or fight_objects & set(r0.talk):
@@ -1887,9 +1911,11 @@ def wayward_facts(
     scripts: ScriptReader,
     doubles: Collection[int] = (),
     two_alive: bool = True,
+    headers: set[int] | None = None,
 ) -> dict:
     """Wayward Cave: every fight sequence the walk with the partner allows up to the exit, the
-    partner's join points and the partner's trainer id."""
+    partner's join points and the partner's trainer id. ``headers`` (when given) gains every
+    header the walks reach."""
     area = maps.area(WAYWARD_HEADER)
     mira = next((o for o in area.objects if o.local_id == WAYWARD_MIRA), None)
     if mira is None:
@@ -1934,6 +1960,8 @@ def wayward_facts(
     join_before = sorted(k for k, ok in reached.items() if ok)
     if join_before != [1]:
         raise MapReadError(f"Wayward Cave: the partner's join points are {reached}, not fight 1")
+    if headers is not None:
+        headers |= joined.reached_headers() | alone.reached_headers()
 
     keys = sorted(sequences, key=lambda s: (len(s), s))  # the all-pairs order first
     orders = [[*(list(f) for f in seq), list(WAYWARD_LAST)] for seq in keys]
@@ -2183,7 +2211,9 @@ def gap_fields(facts: Mapping, live_next: list[dict] | None) -> dict:
     return out
 
 
-def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
+def derive_groups(
+    files: RomFiles, decomp: Path, reached: dict[str, set[int]] | None = None
+) -> dict[str, dict]:
     """The facts of every gauntlet group, read from the ROM: ``orders`` (a list of orders, each
     a list of fights, each a list of trainer ids), ``leave_gaps`` and ``fight_headers`` (one
     list per order), ``escape``, ``pc_gaps``, ``heal_gaps``, ``locked_gaps``, ``partner``
@@ -2197,8 +2227,12 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
     The facts above are the two-live ones; ``live_next`` is the next-fight table by the count
     (``live_table``), or None when the walk does not depend on it. With a table,
     ``leave_gaps``, ``heal_gaps`` and ``pc_gaps`` are None where its gap facts depend on the
-    order or the count (``gap_fields``). The planner picks by the party."""
+    order or the count (``gap_fields``). The planner picks by the party.
+
+    ``reached`` (when given) gains, per group, every header its walks reach (the ROM test of
+    the persisted map features reads it)."""
     maps = RomMaps(files)
+    seen: dict[str, set[int]] = {} if reached is None else reached
     scripts = ScriptReader(files, decomp)
     doubles = read_double_trainers(files)
     out: dict[str, dict] = {}
@@ -2209,7 +2243,8 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
                 maps,
                 spec.members,
                 moves=FieldMoves.for_split(GROUP_SPLITS[name]),
-                strict=spec.headers,
+                # the healer's header too: a coord there decides whether the heal is reached
+                strict=(*spec.headers, *(h for h, _ in kw.get("healers", ()))),
                 doubles=doubles,
                 two_alive=c == 2,
                 flags=GROUP_FLAGS[name],
@@ -2219,6 +2254,7 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
         }
         facts = chain_facts(maps, walkers[2], spec, group, **kw)
         live_next = chain_live_next(maps, walkers, spec, group, doubles, **kw)
+        seen.setdefault(name, set()).update(*(w.reached_headers() for w in walkers.values()))
         gaps = gap_fields(facts, live_next)
         out[name] = _facts(
             facts["orders"],
@@ -2244,6 +2280,7 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
     # B2B: two scripted single battles (b2b_facts); the gym: coord scripts and talks of singles
     # trainers (gym_facts). Neither reads the count: live_next None.
     b2b = b2b_facts(maps, scripts, B2B_HEADER)
+    seen["Route 204 North B2B"] = {B2B_HEADER}  # one script entry: no walk
     out["Route 204 North B2B"] = _facts(
         b2b["orders"],
         b2b["leave_gaps"],
@@ -2251,7 +2288,12 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
         group_escape(maps, b2b["fight_headers"]),
         locked_gaps=b2b["locked_gaps"],
     )
-    gym = gym_facts(maps, decomp, GROUP_FLAGS["Eterna Gym gym trainers"])
+    gym = gym_facts(
+        maps,
+        decomp,
+        GROUP_FLAGS["Eterna Gym gym trainers"],
+        seen.setdefault("Eterna Gym gym trainers", set()),
+    )
     out["Eterna Gym gym trainers"] = _facts(
         gym["orders"],
         gym["leave_gaps"],
@@ -2260,8 +2302,9 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
     )
     # Wayward Cave: the partner joins before fight 1 and counts two at every fight; the walk
     # under either party count must give the same facts.
-    way = wayward_facts(maps, scripts, doubles, True)
-    if wayward_facts(maps, scripts, doubles, False) != way:
+    way_headers = seen.setdefault("Wayward Cave", set())
+    way = wayward_facts(maps, scripts, doubles, True, way_headers)
+    if wayward_facts(maps, scripts, doubles, False, way_headers) != way:
         raise MapReadError("Wayward Cave: the facts depend on the party's live count")
     out["Wayward Cave"] = _facts(
         way["orders"],
