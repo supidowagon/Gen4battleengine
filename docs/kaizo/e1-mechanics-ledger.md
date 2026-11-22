@@ -3021,6 +3021,10 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
   - OWED (batch 4): where the gauntlet walk fixes the fight tile (E3 batch 3's map facts, read by batch 4's planner), a
     mixed trainer's terrain follows from that tile; the run input `--terrain` is needed only for fights outside a walked
     group. To be built in batch 4.
+  - OWED (D11, the doubles enumeration): `enumerate.sketched_events` and `sample_outcome`'s alternative build
+    `order.sketched_state(state, _foe(side), side)`, the Sketch aimed at the sleeper. At B = 4 the Smeargle may
+    Sketch the sleeper's partner; the seen mask then misses `after`, the side reads `CALL_KEEP` and the KEEP row keeps
+    wrong weights silently. Needs the Sketch's chosen target and every imprisoning foe (the `TODO(D2)` at both calls).
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

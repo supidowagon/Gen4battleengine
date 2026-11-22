@@ -4279,6 +4279,9 @@ def sketched_events(state: BattleState, events) -> jnp.ndarray:
     out = []
     for side in range(fmt.B):
         start = sealed_mask(state, side)
+        # TODO(D2): at B = 4 the Smeargle may Sketch the sleeper's partner, not ``side``: ``after``
+        # then misses the seen mask, ``seen`` falls to CALL_KEEP and that row keeps wrong weights
+        # silently. Needs the Sketch's chosen target (and every imprisoning foe) (D11).
         after = sealed_mask(sketched_state(state, _foe(side), side), side)
         out.append(imprisoning_foe(state, side) & (seen[side] != start) & (seen[side] == after))
     return jnp.stack(out)

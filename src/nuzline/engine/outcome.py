@@ -2451,6 +2451,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                 sealed_state(state, mine),
                 encored_state(tables, state, mine),
                 heavy,
+                # TODO(D2): at B = 4 the Sketch may target the sleeper's partner (see
+                # ``enumerate.sketched_events``): the hypothesis needs the chosen target (D11).
                 sketched_state(state, _foe(side), side),
             )
             options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
