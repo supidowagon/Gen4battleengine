@@ -1,0 +1,8 @@
+# Tests the local gate (tools/ops/ramgate.py) refuses on the PC whatever they import: they run JAX
+# compiles, or collect engine test modules, without importing nuzline.engine in their own module.
+# Line: <test file or node id> <reason>. The id and every id under it ("::", "[" or "/") count.
+# Manager ruling of 22 Nov 2026 on review a217982f, SHOULD 8. Send them to the quick lane.
+
+tests/test_spike_step.py jit-of-benchmarks.spike_step
+tests/test_jaxcache.py cached-jax-exports
+tests/tools/test_ramgate_collect.py collects-the-engine-test-modules
