@@ -362,7 +362,7 @@ def _talker_under_sketch(tables, names, order):
     )
 
 
-@pytest.mark.slow  # pod e1-igf-a4fe340: 701 s, 46 GB peak
+@pytest.mark.slow  # pod e1-igf-a4fe340: 46 GB peak; slow without compile (701 s warm)
 def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names):
     """The decomp's draw: the Smeargle's Sketch puts Ember in its first slot (battle_script.c:
     4868), Sleep Talk then flags every move an imprisoner knows (BtlCmd_TrySleepTalk, :4927;
@@ -384,7 +384,7 @@ def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names)
     assert seen.count(names.move("Tackle")) == 6 and seen.count(names.move("Thunder")) == 6
 
 
-@pytest.mark.slow  # pod e1-igf-a4fe340: 545 s + 374 s, 16 GB peak
+@pytest.mark.slow  # pod e1-igf-a4fe340: 545 s + 374 s, 16 GB peak; slow pending a warm re-measure
 @pytest.mark.parametrize("order", ["player", "opp"])
 def test_the_call_law_follows_an_imprisoners_sketch(tables, names, order):
     """``enumerate_turn`` gives the decomp's weights: after a faster imprisoner's Sketch of Ember
@@ -512,6 +512,28 @@ def test_a_metronome_reads_the_terrain_through_its_calls(tables, names):
     assert line is not None and "Secret Power" in line
     assert terrain_refusal(tables, names, unplaced, [names.move("Tackle")]) is None
     assert terrain_refusal(tables, names, roark_trainer(), [names.move("Metronome")]) is None
+
+
+@pytest.mark.fullset  # pod pending
+def test_the_trainers_of_unknown_terrain_are_counted():
+    """The trainers ``terrain_refusal`` refuses for a terrain-reading move today: ``terrain`` ==
+    ``TERRAIN_UNKNOWN`` in the built ``trainers.json`` (mixed start tiles or no placing map,
+    tools/terrain.py). A Metronome reaches Secret Power, Nature Power and Camouflage
+    (``reached_moves``), so prep refuses a Metronome candidate against each of them. The count
+    must become 0 when E3's batch 3 (ROM terrain and map labels per trainer) merges; whoever
+    merges batch 3 sets it to 0. A trainer still unknown then is a data gap to fill from the
+    ROM, then the calc repo, then the docs sheet, not a standing refusal. ``fullset``: the
+    count goes stale as the data grows; skipped where a game's intermediates are not built."""
+    from nuzline.data.games import GAMES, KAIZO, VANILLA
+    from nuzline.data.trainer import TERRAIN_UNKNOWN, load_trainers
+
+    expected = {VANILLA: 456, KAIZO: 522}
+    for game, count in expected.items():
+        dir = GAMES[game].intermediate_dir
+        if not (dir / "trainers.json").exists():
+            pytest.skip(f"{dir}/trainers.json not built")
+        unknown = [t.id for t in load_trainers(dir) if t.terrain == TERRAIN_UNKNOWN]
+        assert len(unknown) == count, (game, len(unknown))
 
 
 def test_a_gained_metronomes_calls_stay_on_the_holders_lines(tables, names, monkeypatch):

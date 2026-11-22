@@ -3010,6 +3010,14 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
     terrain is unknown is now refused (Secret Power, Nature Power and Camouflage are calls). Tests:
     `test_a_known_metronomes_calls_reach_the_rom_change_check[player|opp]`,
     `test_a_metronome_reads_the_terrain_through_its_calls`.
+  - Refused trainers today (built intermediates of 22 Nov, `trainers.json` field `terrain` == `TERRAIN_UNKNOWN`, the
+    input `terrain_refusal` reads; `terrains` from tools/terrain.py): vanilla 456 of 928 (215 mixed, 241 unplaced),
+    Kaizo 522 of 928 (209 mixed, 313 unplaced). The 161 Kaizo trainers with a split are all mixed (Roark Split: Lass
+    Natalie 3, Youngster Michael 4, Lass Samantha 11, Bug Catcher Sebastian 356, ...); no split trainer is unplaced.
+    This refusal must be empty once E3's batch 3 (ROM terrain and map labels per trainer) is in main. A trainer still
+    unknown after that is a data gap, filled from the ROM, then the calc repo, then the docs sheet, never a standing
+    refusal. Pin: `test_the_trainers_of_unknown_terrain_are_counted` (`fullset`, pod pending); whoever merges batch 3
+    sets its counts to 0.
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
