@@ -328,6 +328,9 @@ class _Turn:
     met_immune: bool = False
     charge_strike: bool = False  # SYSCTL_LAST_OF_MULTI_TURN by subscript_charge_move_cleanup.s:7
     bide_ended: bool = False  # likewise by subscript_bide_end.s
+    # subscript_bide_end.s:9 cleared VOLATILE_CONDITION_MOVE_LOCKED this turn: the release
+    # turn's move went ahead (bcp.c:2694-2722), whatever the move script then did (ref_step).
+    bide_release: bool = False
     # E2 batch 6: the turn's actions, picks and order as chosen, the position acting, the
     # battler whose action a Pursuit ended (1 + battler), the slot a Roar dragged in per side
     # (1 + slot), powerMul at a U-turn's party list, the search's turn powerMul.
@@ -5963,6 +5966,7 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
                 return DISRUPTED
             turn.defender = picked
             turn.target_side = picked if picked != side else _foe(side)
+            turn.bide_release = True
     # CHECK_STATUS_STATE_SELF_THAW (bcp.c:2728).
     if still_frozen:
         mon.status = Status.NONE
@@ -7274,7 +7278,6 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         struggling,
     )
     if unleash:  # the unleash script spent the Bide counter (bcp.c:2702, subscript_bide_end.s)
-        _unlock(s.battlers[side])
         record = move
     return record
 
@@ -9038,7 +9041,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             turn.shell_dealt = 0
             turn.reflected = False
             turn.met_reached = turn.met_worked = turn.met_immune = False
-            turn.charge_strike = turn.bide_ended = False
+            turn.charge_strike = turn.bide_ended = turn.bide_release = False
             rollout0 = s.battlers[side].rollout_count
             try:
                 record = _fight(
@@ -9047,6 +9050,12 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 )  # fmt: skip
             finally:
                 _unstrip_roost(turn, s)
+            # subscript_bide_end.s:9 clears the lock before the move script runs, so an early
+            # failure of the move (an Encore takeover's Future Sight, a Metronome call, ...)
+            # releases it too; the move itself still saw it locked (effect_script_0026.s:5-6).
+            # Engine: step._use_move's ``_unlock(state, side, bide_ends & head_on)``.
+            if turn.bide_release:
+                _unlock(s.battlers[side])
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
             no_effects = turn.met_reached and not (
                 turn.met_worked and not turn.met_immune and not turn.knot_failed
