@@ -362,6 +362,7 @@ def _talker_under_sketch(tables, names, order):
     )
 
 
+@pytest.mark.slow  # pod e1-igf-a4fe340: 701 s, 46 GB peak
 def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names):
     """The decomp's draw: the Smeargle's Sketch puts Ember in its first slot (battle_script.c:
     4868), Sleep Talk then flags every move an imprisoner knows (BtlCmd_TrySleepTalk, :4927;
@@ -383,6 +384,7 @@ def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names)
     assert seen.count(names.move("Tackle")) == 6 and seen.count(names.move("Thunder")) == 6
 
 
+@pytest.mark.slow  # pod e1-igf-a4fe340: 545 s + 374 s, 16 GB peak
 @pytest.mark.parametrize("order", ["player", "opp"])
 def test_the_call_law_follows_an_imprisoners_sketch(tables, names, order):
     """``enumerate_turn`` gives the decomp's weights: after a faster imprisoner's Sketch of Ember
