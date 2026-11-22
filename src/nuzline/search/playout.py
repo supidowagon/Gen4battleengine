@@ -95,7 +95,7 @@ from nuzline.engine.hooks import (
     weather_war,
 )
 from nuzline.engine.ids import AbilityId, Stat
-from nuzline.engine.order import action_order, is_switch, used_move
+from nuzline.engine.order import action_order, is_switch, used_move, with_selection
 from nuzline.engine.outcome import (
     empty_outcome,
     hit_threshold,
@@ -213,7 +213,9 @@ def _move_odds(tables: Tables, state: BattleState, side, actions, hit):
     """``(P(KO), expected fraction of the target's HP removed)`` of ``side``'s action."""
     action = actions[side]
     target = _facing(state, 1 - side, actions[1 - side])
-    move = used_move(tables, state, side, action)  # Nature Power: its call
+    # Nature Power: its call; Me First reads this turn's TEMP_VALUE (E2-ML-8, review 5), so the
+    # state as the selection leaves it (``with_selection``, idempotent).
+    move = used_move(tables, with_selection(tables, state, actions), side, action)
     damage = damage_table(tables, target, side, move, False)  # [16] non-critical rolls
     hp = target.hp[1 - side, target.active[1 - side]].astype(_I32)
     hp_ = jnp.maximum(hp, 1).astype(_F32)

@@ -3631,8 +3631,12 @@ def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.nd
     sees (``post_ko_switch_in``'s ``power_mul``): ``PURSUIT_POWER_MUL`` when the player's
     switch met Pursuit (``pursuit_fires`` on the turn-start ``state``, with each side's
     move fixed when chosen), else ``NORMAL_POWER_MUL``. The one source for playouts
-    (``playout._play``) and exact expansion (``expand._turn``), which must agree."""
+    (``playout._play``) and exact expansion (``expand._turn``), which must agree. It reads the
+    state as this turn's selection leaves it (``with_selection``, idempotent): TryPursuit's
+    ``Battler_SelectedMove`` reads this turn's TEMP_VALUE (E2-ML-8), never the previous turn's
+    a raw turn-start state carries (review 5, Must fix 1)."""
     fmt = format_of(state)
+    state = with_selection(tables, state, actions)
     picks = [selected_move(tables, state, side, actions[side]) for side in range(fmt.B)]
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
     pursued = pursuit_fires(tables, state, 0, actions, choices)

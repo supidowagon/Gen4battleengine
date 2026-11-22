@@ -4479,6 +4479,8 @@ def call_consistent(
     )
     listed_ok = ~listing | ((call >= CALL_GRAVITY) == landed)
     view, view_actions = pivot_view(tables, state, actions)
+    # As the laws' entry points read it: the selection's moveSlot and TEMP_VALUE (E2-ML-5, E2-ML-8).
+    view = with_selection(tables, view, view_actions)
     can_take = jnp.stack(
         [takeover_possible(tables, view, view_actions, side, _foe(side)) for side in range(fmt.B)]
     )
