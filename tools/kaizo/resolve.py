@@ -558,7 +558,9 @@ def trainer_record(
     fields = overrides.fields.get(tid, {})
     fsrc = f"overrides fields.{tid} ({overrides.sources.get(f'fields.{tid}', '?')})"
     sources: dict[str, str] = {"party": "rom: trainer party (trainers.json)"}
-    out = {k: v for k, v in t.items() if k != "party"}
+    # The ROM row's fog_headers (maps.trainer_fog_headers) live in area_condition, rebuilt
+    # below from the same join so an overrides weather can add or drop the fog.
+    out = {k: v for k, v in t.items() if k not in ("party", "fog_headers")}
 
     party = []
     learnsets = src.rom["learnsets"]
@@ -646,11 +648,17 @@ def trainer_record(
                 out["split_order"] = None
                 sources["split_order"] = fsrc + "; no sheet position for the corrected split"
 
+    def fog() -> list[int]:
+        return fog_headers(src.trainer_maps.get(tid, []), src.map_weather)
+
+    if t["start_condition"] == "fog" and t["fog_headers"] != fog():
+        raise ResolveError(
+            f"trainer {tid}: trainers.json fog_headers {t['fog_headers']} disagree with the "
+            f"trainer -> map join's fog headers {fog()} (rom_trainer_maps.json, "
+            "rom_map_weather.json)"
+        )
     start, area = _area(
-        t["start_condition"],
-        overrides.area.get(tid),
-        bare_tags(sheet.get(tid, [])),
-        lambda: fog_headers(src.trainer_maps.get(tid, []), src.map_weather),
+        t["start_condition"], overrides.area.get(tid), bare_tags(sheet.get(tid, [])), fog
     )
     out["start_condition"], out["area_condition"] = start, area
     where = ", ".join(map(str, sorted(src.trainer_maps.get(tid, [])))) or "none"

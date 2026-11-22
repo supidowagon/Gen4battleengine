@@ -91,10 +91,14 @@ def read_trainers(
     symbols: SymbolMap,
     charmap: dict[int, str],
     start_conditions: list[str],
+    fog_headers: list[list[int]],
     *,
     layout: str = "vanilla",
 ) -> list[dict]:
-    """``trainers.json`` rows. ``start_conditions[id]`` is supplied by the caller.
+    """``trainers.json`` rows. ``start_conditions[id]`` and ``fog_headers[id]`` are supplied
+    by the caller (``maps.trainer_start_conditions``, ``maps.trainer_fog_headers``): a row
+    keeps its fog headers only when it starts in fog, as ``extract_decomp.extract_trainers``
+    writes them (ledger G-15).
 
     ``format`` is the header's ``battleType``, overridden with ``opponent_2``, ``partner``
     and ``walking_partner`` by the battle structures of the map scripts (``rom_battle_structures``,
@@ -113,6 +117,8 @@ def read_trainers(
     item_n = len(_constants(decomp, "items", "ITEM_"))
     if len(start_conditions) != len(ids):
         raise ReaderError(f"{len(start_conditions)} start conditions for {len(ids)} trainers")
+    if len(fog_headers) != len(ids):
+        raise ReaderError(f"{len(fog_headers)} fog header lists for {len(ids)} trainers")
     headers = rom.narc(TRDATA_NARC)
     parties = rom.narc(TRPOKE_NARC)
     if len(headers) != len(ids) or len(parties) != len(ids):
@@ -194,6 +200,7 @@ def read_trainers(
                 "party": party,
                 **structure_fields(structures.get(tid), "double" if battle_type else "single"),
                 "start_condition": start_conditions[tid],
+                "fog_headers": fog_headers[tid] if start_conditions[tid] == "fog" else [],
             }
         )
     lone_walk_formats(out)

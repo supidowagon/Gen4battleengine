@@ -1786,6 +1786,33 @@ def rom_terrain_rules(rom: RomFiles, symbols: SymbolMap, decomp: Path):
     return terrain_rules(decomp, list(flags), by_background)
 
 
+def trainer_fog_headers(
+    rom: RomFiles,
+    decomp: Path,
+    symbols: SymbolMap,
+    where: dict[int, list[int]],
+    n_trainers: int,
+) -> list[list[int]]:
+    """Per trainer id, the sorted map headers of the trainer -> map join ``where``
+    (``trainer_start_conditions``' ``maps``) whose ROM weather byte (``map_header_rows``,
+    MapHeader.weather, include/map_header.h:10-31) is OVERWORLD_WEATHER_FOG
+    (include/constants/overworld_weather.h:18), as ``extract_decomp.extract_trainers`` lists
+    them from include/data/map_headers.h: the one weather FLAG_DEFOG_ACTIVE turns clear
+    (src/field_map_change.c:273-277; deep fog 15 is not), ``AreaCondition.fog_headers``,
+    ledger G-15. ``read_trainers`` keeps them only for a fight that starts in fog."""
+    fog = _weather_id(Path(decomp), "OVERWORLD_WEATHER_FOG")
+    weathers = [w for _, _, w in map_header_rows(rom, symbols)]
+    out: list[list[int]] = [[] for _ in range(n_trainers)]
+    for tid, headers in where.items():
+        if not 0 <= tid < n_trainers:
+            raise ReaderError(f"trainer -> map join names trainer {tid}; {n_trainers} trainers")
+        for h in headers:
+            if h >= len(weathers):
+                raise ReaderError(f"trainer {tid}: map header {h} past {len(weathers)} headers")
+        out[tid] = sorted(h for h in headers if weathers[h] == fog)
+    return out
+
+
 def trainer_terrain_rows(
     rom: RomFiles,
     decomp: Path,
