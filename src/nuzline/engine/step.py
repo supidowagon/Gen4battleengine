@@ -1625,13 +1625,14 @@ def _use_move(
     # A Counter-family command that passes (its script's first command, effect_script_0089.s,
     # _0144.s, _0227.s) runs BattleSystem_DecPPForPressure on its new defender, the last
     # attacker (battle_script.c:4646, :4699, :7180; battle_lib.c:7390-7397): one more PP from
-    # the user's chosen slot (moveSlot: an invoker's when the invoker called it) while that slot
-    # has PP left and the defender has Pressure, ruling G-9.
+    # the user's moveSlot[attacker] (``chosen_slot``: the selection's, an invoker's when the
+    # invoker called it; a mid-turn Encore takeover changes moveTemp, not moveSlot, bcp.c:1869-1873;
+    # review 5, Must fix 3) while that slot has PP left and the defender has Pressure, ruling G-9.
     counter_pressure = (
         can_act & has_target & counter & counter_ok & pressure_holder(state, counter_def)
-    ) & (state.pp[party(fmt, side), user, slot] > 0)
+    ) & (state.pp[party(fmt, side), user, chosen_slot] > 0)
     state = state._replace(
-        pp=state.pp.at[party(fmt, side), user, slot].add(
+        pp=state.pp.at[party(fmt, side), user, chosen_slot].add(
             jnp.where(counter_pressure, -1, 0).astype(state.pp.dtype)
         )
     )
@@ -2582,16 +2583,17 @@ def _use_move(
     # The script powers read from the action, not the hit's state (CalcMoveDamage's inPower):
     # Gyro Ball's monSpeedValues come from BranchActions' speed sort at the action's start
     # (bcp.c:888, battle_lib.c:1372-1373), before the status checks (a Quick Feet user's wake-up
-    # or thaw) and the Custap Berry (Unburden), B13-14; Trump Card reads ppCur of moveSlot (the
-    # invoker's slot for a called move) after the PP decrement above (battle_script.c:7237),
-    # B13-15.
+    # or thaw) and the Custap Berry (Unburden), B13-14; Trump Card reads ppCur[ATTACKER_MOVE_SLOT]
+    # (``chosen_slot``: the selection's moveSlot, the invoker's for a called move, never changed by
+    # an Encore takeover, bcp.c:1869-1873; review 5, Must fix 3) after the PP decrement above
+    # (battle_script.c:7237), B13-15.
     used_effect = tables.move_effect[used]
     in_power = jnp.where(
         used_effect == EffectId.GYRO_BALL,
         gyro_ball_speeds_power(tables, state_in, side, target_side),
         jnp.where(
             used_effect == EffectId.TRUMP_CARD,
-            trump_card_power(state.pp[party(fmt, side), user, slot]),
+            trump_card_power(state.pp[party(fmt, side), user, chosen_slot]),
             # Fling's movePower is the flung item's power (BattleSystem_FlingItem, lib.c:5859).
             jnp.where(used_effect == EffectId.FLING, fling_power, 0),
         ),
@@ -2687,7 +2689,9 @@ def _use_move(
             script_calc=script_calc,
             fling=fling_removed,
             fling_pick=fling_pick,
-            coat_slot=slot,
+            # The reflection's DecPPForPressure reads moveSlot[holder] (bcp.c:3083, battle_lib.c:
+            # 7390-7395), which only the selection writes: the selection's slot (review 5).
+            coat_slot=chosen_slot,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect

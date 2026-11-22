@@ -359,14 +359,14 @@ class _Turn:
     # turnFlags.assuranceDamageMask != 0 per battler (subscript_update_hp.s:18-19; cleared by
     # SetupNextTurn and CleanupFaintedMon), B13-17.
     assurance: list[bool] = field(default_factory=lambda: [False, False])
-    # The acting move's script inputs from its action: Gyro Ball's monSpeedValues power at the
-    # action's start (BranchActions' sort, bcp.c:888), and moveSlot (Trump Card's PP), B13-14,
-    # B13-15.
+    # The acting move's script input from its action: Gyro Ball's monSpeedValues power at the
+    # action's start (BranchActions' sort, bcp.c:888), B13-14.
     gyro_power: int = 0
-    move_slot: int = 0
     # ATTACKER_MOVE_SLOT (common.h:8): moveSlot[attacker], written only at selection (bcp.c:445,
     # :526; ``RefBattler.move_slot``, E2-ML-5); FightCommand's Encore takeover (bcp.c:1868-1872)
-    # leaves it, so TryGrudge reads the selected slot, not ``move_slot`` (review b2-fix #2).
+    # leaves it. Its readers: TryGrudge (battle_script.c:6753, review b2-fix #2), Trump Card
+    # (:7237, B13-15), DecPPForPressure (battle_lib.c:7390-7395: Counter's family, :4646, :4699,
+    # :7180; the Magic Coat reflection, bcp.c:3083), review 5.
     chosen_slot: int = 0
     # The running action's moveTemp (FightCommand, bcp.c:1861-1898), kept at a party-list pause
     # (``ts_move_temp``) for its tail's UpdateMoveBuffers (E2-ML-4).
@@ -4677,8 +4677,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             _know_ability(s, side)
             _know_ability(s, target)
     elif effect == EffectId.MAGIC_COAT and landed and _waiting(turn, s, side) > 1:
-        # TrySetMagicCoat (battle_script.c:6459-6478), E3-B2-6: 1 + the user's moveSlot.
-        s.battlers[side].magic_coat = 1 + turn.move_slot
+        # TrySetMagicCoat (battle_script.c:6459-6478), E3-B2-6: 1 + the user's moveSlot, the
+        # selection's (the reflection's DecPPForPressure reads it, bcp.c:3083; review 5).
+        s.battlers[side].magic_coat = 1 + turn.chosen_slot
     elif effect == EffectId.ROLE_PLAY and landed:
         # subscript_copy_ability.s:5-15 (E3-B2-5): fails on a miss or a semi-invulnerable miss (:5,
         # ``landed`` covers it), the defender's raw Wonder Guard (:6), Multitype (:7) or no ability
@@ -5463,7 +5464,7 @@ def _script_power(turn: _Turn, s: RefState, side: int, defender: int, move: int)
     if effect == EffectId.GYRO_BALL:
         return turn.gyro_power
     if effect == EffectId.TRUMP_CARD:
-        return TRUMP_CARD_POWER[min(_active(s, side).pp[turn.move_slot], 4)]
+        return TRUMP_CARD_POWER[min(_active(s, side).pp[turn.chosen_slot], 4)]
     if effect == EffectId.FLING:  # BattleSystem_FlingItem's movePower (lib.c:5859)
         return turn.fling_power
     if effect == EffectId.ASSURANCE:
@@ -6375,8 +6376,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     None when the foe is not the defender."""
     tables, o = turn.tables, turn.outcome
     mon = _active(s, side)
-    # moveSlot (Trump Card, B13-15).
-    turn.move_slot = min(action, MOVE_ACTIONS - 1)
+    # moveSlot[attacker] (ATTACKER_MOVE_SLOT, common.h:8): the selection's (bcp.c:445, :526),
+    # never changed by an Encore takeover (bcp.c:1869-1873). Trump Card (battle_script.c:7237,
+    # B13-15), TryGrudge (:6753), DecPPForPressure (battle_lib.c:7390-7395) read it (review 5).
     turn.chosen_slot = 0 if reflect_pass else s.battlers[side].move_slot
     turn.gift = 0
     turn.fling = turn.fling_power = 0
@@ -6788,10 +6790,12 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         turn.defender = turn.target_side = picked
         _strip_roost(turn, s, picked)
         # BattleSystem_DecPPForPressure on the new defender (script.c:4646, :4699, :7180;
-        # lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an invoker's when it called
-        # the move), while it has PP left, ruling G-9.
-        if _ability(s, _active(s, picked)) == AbilityId.PRESSURE and mon.pp[action] > 0:
-            mon.pp[action] -= 1
+        # lib.c:7390-7397): one more PP from moveSlot, the selection's slot (an invoker's when it
+        # called the move; never an Encore takeover's, bcp.c:1869-1873), while it has PP left,
+        # ruling G-9.
+        slot = turn.chosen_slot
+        if _ability(s, _active(s, picked)) == AbilityId.PRESSURE and mon.pp[slot] > 0:
+            mon.pp[slot] -= 1
         if special_counter:
             record = move
     snore = effect == EffectId.FLINCH and _t(tables, "move_param", move, 2) == SNORE_PARAM
