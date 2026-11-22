@@ -150,7 +150,7 @@ def test_a_paused_state_is_no_turn_start_for_the_invariant(tables, names):
     # an armed Trace there may face a traceable foe, which it copies at the next MoveEnd, and a
     # copied accuracy ability keeps the hit whole (outcome.ability_whole). At a turn start the
     # invariant says no such holder exists: no copy, the roll keeps its classes.
-    s = roark_state(tables, names, player_species="Sandshrew")
+    s = roark_state(tables, names, player_species="Sandshrew", player_moves=("Scratch",))
     s = s._replace(
         ability=s.ability.at[0, 0].set(AbilityId.TRACE).at[1, 0].set(AbilityId.COMPOUNDEYES)
     )
