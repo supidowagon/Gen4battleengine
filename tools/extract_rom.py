@@ -335,6 +335,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     from tools.rom.readers.learnsets import read_learnsets
     from tools.rom.readers.maps import (
         map_header_rows,
+        trainer_fog_headers,
         trainer_start_conditions,
         trainer_terrain_rows,
     )
@@ -396,7 +397,15 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "tutor_moves": tutors,
             "tutor_learnsets": tutor_learnsets(rom, smap, len(tutors)),
             "exp_tables": read_exp_tables(rom),
-            "trainers": read_trainers(rom, decomp, smap, charmap, starts, layout=game),
+            "trainers": read_trainers(
+                rom,
+                decomp,
+                smap,
+                charmap,
+                starts,
+                trainer_fog_headers(rom, decomp, smap, where, len(starts)),
+                layout=game,
+            ),
         }
         terrains = trainer_terrain_rows(rom, decomp, smap, where, len(starts))
         tables["trainers"] = [{**t, **terrains[t["id"]]} for t in tables["trainers"]]
