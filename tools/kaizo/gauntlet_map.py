@@ -653,12 +653,24 @@ Fight = tuple[int, ...]
 class Sighting(NamedTuple):
     """Where the player stands when a fight starts: ``how`` is ``"sight"`` (a tile in a
     trainer's line), ``"arrival"`` (a warp arrival or the start tile) or ``"talk"``; ``y`` the
-    player's height there; ``flags`` the flags set then (``Walker.flags`` and ``on_enter``)."""
+    player's height there; ``flags`` the flags set then (``Walker.flags`` and ``on_enter``);
+    ``bridge`` the elevated-bridge state. A battle keeps the field's map objects
+    (``FieldTask_Encounter`` runs ``FieldTransition_FinishMap``, ``src/encounter.c:173-175``,
+    ``src/field_transition.c:70-80``; objects are deleted only on a map change,
+    ``FieldMapChange_DeleteObjects``, ``src/field_map_change.c:355-360``), so the player's
+    status bit ``MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE`` (``include/constants/map_object.h:43``)
+    holds after the fight: the walk after it starts in this state."""
 
     pos: Pos
     how: str
     y: int = 0
     flags: frozenset = frozenset()
+    bridge: bool = False
+
+    @property
+    def state(self) -> tuple:
+        """The start state the walk after the fight depends on (``how`` aside)."""
+        return (self.pos, self.y, self.bridge, self.flags)
 
 
 class Seer(NamedTuple):
@@ -674,10 +686,15 @@ class Walk:
     """The result of one walk: the tiles reached (tile -> the tile before it), the fights that
     can start (a fight is a tuple of trainer ids, one or two, in the game's object order), the
     objects that can be talked to (``(header, local id)`` -> the player's tile) and the coord
-    events crossed."""
+    events crossed. ``spot`` keeps the first sighting of each fight; ``starts`` every distinct
+    one: sight is checked on every field-input frame before movement
+    (``src/overlay005/field_control.c:188`` < :198), so every tile of a trainer's line the
+    player can stand on, and every talk tile, starts the fight with its own height, bridge
+    state and flags, and the walk after the fight depends on which."""
 
     seen: dict[Pos, Pos | None]
     spot: dict[Fight, Sighting] = field(default_factory=dict)
+    starts: dict[Fight, set[Sighting]] = field(default_factory=dict)
     talk: dict[tuple[int, int], Pos] = field(default_factory=dict)
     crossed: list[tuple[Pos, Coord]] = field(default_factory=list)
     # held: the start tile starts a fight on every facing, so the player has no input there
@@ -692,6 +709,11 @@ class Walk:
     def trainers(self) -> set[int]:
         """Every trainer of a fight that can start."""
         return {t for f in self.spot for t in f}
+
+    def sighted(self, f: Fight, sight: Sighting) -> None:
+        """Record a start of ``f``."""
+        self.spot.setdefault(f, sight)
+        self.starts.setdefault(f, set()).add(sight)
 
 
 CoordRule = Callable[[int, Coord, "bool | None"], "str | None"]
@@ -946,13 +968,14 @@ class Walker:
         defeated: frozenset[int],
         removable: bool,
         flags: frozenset,
+        bridge: bool,
     ) -> bool:
         """Record the fights the tile starts; True when the player cannot stand on it."""
         fights, passable = self.encounters(
             self.sight_at(pos.header, pos.x, pos.z, defeated, removable, y, flags)
         )
         for f in fights:
-            walk.spot.setdefault(f, Sighting(pos, how, y, flags))
+            walk.sighted(f, Sighting(pos, how, y, flags, bridge))
         return not passable
 
     # -- coords
@@ -1139,25 +1162,28 @@ class Walker:
         removable: bool = True,
         y: int | None = None,
         flags: Collection[int] | None = None,
+        bridge: bool | None = None,
     ) -> Walk:
         """Breadth-first walk from ``start`` (at height ``y``, an arrival when None) with
         ``defeated`` trainers beaten and ``flags`` set (``Walker.flags`` when None; ``bfs2.js``
-        ``run``): sight is checked on the start tile, every tile entered and every warp
+        ``run``), on the elevated bridge when ``bridge`` (when None: the start tile is a bridge
+        start): sight is checked on the start tile, every tile entered and every warp
         arrival."""
         defeated = frozenset(defeated)
         flags = self.flags if flags is None else frozenset(flags)
         if y is None:
             y = self.arrival_height(start)
-        key = (start, y, defeated, removable, flags)
+        if bridge is None:
+            bridge = self.maps.area(start.header).behaviour(start.x, start.z) == BRIDGE_START
+        key = (start, y, bridge, defeated, removable, flags)
         if key in self._walks:
             return self._walks[key]
         walk = Walk({start: None})
         self._walks[key] = walk
-        if self._spotted(walk, start, y, "arrival", defeated, removable, flags):
+        if self._spotted(walk, start, y, "arrival", defeated, removable, flags, bridge):
             walk.held = True
             return walk
-        a0 = self.maps.area(start.header)
-        s0 = _State(start, y, a0.behaviour(start.x, start.z) == BRIDGE_START, flags)
+        s0 = _State(start, y, bridge, flags)
         walk.states.add(s0)
         return self._bfs(walk, deque([s0]), defeated, removable)
 
@@ -1176,7 +1202,7 @@ class Walker:
         self._walks[key] = walk
         queue: deque[_State] = deque()
         for s in sorted(seeds):
-            if not self._spotted(walk, s.pos, s.y, "sight", defeated, removable, s.flags):
+            if not self._spotted(walk, s.pos, s.y, "sight", defeated, removable, s.flags, s.bridge):
                 walk.states.add(s)
                 queue.append(s)
         return self._bfs(walk, queue, defeated, removable)
@@ -1204,7 +1230,7 @@ class Walker:
                     continue
                 here = path[-1]
                 if not door and self._spotted(
-                    walk, here.pos, here.y, "sight", defeated, removable, here.flags
+                    walk, here.pos, here.y, "sight", defeated, removable, here.flags, here.bridge
                 ):
                     continue
                 if not door:
@@ -1215,8 +1241,9 @@ class Walker:
                         walk.seen.setdefault(here.pos, s.pos)
                         here = forced[-1]
                         if self._spotted(
-                            walk, here.pos, here.y, "sight", defeated, removable, here.flags
-                        ):
+                            walk, here.pos, here.y, "sight", defeated, removable, here.flags,
+                            here.bridge,
+                        ):  # fmt: skip
                             continue
                 target = here
                 warp = self.maps.area(here.pos.header).warp_at(here.pos.x, here.pos.z)
@@ -1225,12 +1252,11 @@ class Walker:
                     if landing is not None:
                         ly = self.arrival_height(landing)
                         lf = here.flags | self.on_enter.get(landing.header, frozenset())
-                        if self._spotted(walk, landing, ly, "arrival", defeated, removable, lf):
-                            continue
                         la = self.maps.area(landing.header)
-                        target = _State(
-                            landing, ly, la.behaviour(landing.x, landing.z) == BRIDGE_START, lf
-                        )
+                        lb = la.behaviour(landing.x, landing.z) == BRIDGE_START
+                        if self._spotted(walk, landing, ly, "arrival", defeated, removable, lf, lb):
+                            continue
+                        target = _State(landing, ly, lb, lf)
                 if target in states:
                     continue
                 if not self._coord_step(target.pos, walk):
@@ -1273,7 +1299,7 @@ class Walker:
             # not the partner flag
             lone = t in self.doubles and not self.two_alive
             if t is not None and t not in defeated and not self._inert(o) and not lone:
-                walk.spot.setdefault((t,), Sighting(pos, "talk", s.y, s.flags))
+                walk.sighted((t,), Sighting(pos, "talk", s.y, s.flags, s.bridge))
             return
 
     def talk_tiles(
@@ -1337,42 +1363,110 @@ class ChainSpec:
 
 
 class Run(NamedTuple):
-    """One full sequence of the chain's fights, the walk after each prefix (``states[k]`` is the
-    walk from the tile of the k-th fight with the first k fights beaten, k = 0..n) and the map
-    header of each fight (where the player stands when it starts)."""
+    """One full sequence of the chain's fights, the walks after each prefix and the map header
+    of each fight (where the player stands when it starts). ``states[k]`` holds the walk from
+    every start state of the k-th fight that some history of the first k fights reaches, with
+    those fights beaten (``states[0]``: the walks from the entries), k = 0..n."""
 
     sequence: tuple[Fight, ...]
-    states: tuple[Walk, ...]
+    states: tuple[tuple[Walk, ...], ...]
     headers: tuple[int, ...] = ()
+
+
+def _chain_fights(walk: Walk, members: frozenset, group: frozenset, done: frozenset):
+    """The fights of ``group`` the walk can start, not yet fought (fight -> its starts); a
+    fight that mixes the chain's members with other trainers raises."""
+    out: dict[Fight, set[Sighting]] = {}
+    for f, sights in walk.starts.items():
+        fs = set(f)
+        if not fs & group or fs & done:
+            continue
+        if not fs <= members:
+            raise MapReadError(f"fight {f} mixes the chain {sorted(members)} with others")
+        out[f] = sights
+    return out
+
+
+def _start_walk(walker: Walker, s: Sighting, done: frozenset) -> Walk:
+    return walker.walk(s.pos, done, y=s.y, flags=s.flags, bridge=s.bridge)
+
+
+def chain_prefixes(
+    walker: Walker, spec: ChainSpec
+) -> tuple[dict[tuple[Fight, ...], tuple[Walk, ...]], dict[Fight, int]]:
+    """The walks after every prefix of the chain's fights, over every start state (a DP over
+    (prefix, start state)): the walks of a prefix p + f are the walks from every start of f
+    (``Walk.starts``) in every walk of p, with p + f beaten. The walk after a fight depends only
+    on its start state, the beaten trainers and the flags, so no history is enumerated. Also
+    the map header of each fight; a fight that starts on two headers raises."""
+    members = frozenset(spec.members)
+    level: dict[tuple[Fight, ...], dict[int, Walk]] = {(): {}}
+    for i, e in enumerate(spec.entries):
+        extra = spec.entry_flags[i] if spec.entry_flags else (frozenset(),)
+        for fl in extra:
+            w = walker.walk(e, (), flags=walker.flags | fl)
+            level[()][id(w)] = w
+    walks: dict[tuple[Fight, ...], tuple[Walk, ...]] = {}
+    heads: dict[Fight, int] = {}
+    while level:
+        nxt: dict[tuple[Fight, ...], dict[int, Walk]] = {}
+        for p, ws in level.items():
+            walks[p] = tuple(ws.values())
+            done = frozenset(t for f in p for t in f)
+            if done == members:
+                continue
+            for w in ws.values():
+                for f, sights in _chain_fights(w, members, members, done).items():
+                    bucket = nxt.setdefault((*p, f), {})
+                    for s in sights:
+                        if heads.setdefault(f, s.pos.header) != s.pos.header:
+                            raise MapReadError(f"fight {f} starts on two map headers")
+                        after = _start_walk(walker, s, done | set(f))
+                        bucket[id(after)] = after
+        level = nxt
+    return walks, heads
 
 
 def runs(walker: Walker, spec: ChainSpec) -> list[Run]:
     """Every full sequence of fights over ``spec.members`` the walk allows (``chain.js``
-    ``rec``). A fight that mixes members and other trainers raises: the group is wrong."""
-    out: list[Run] = []
+    ``rec``), with the walks of every start state after each prefix (``chain_prefixes``). A
+    fight that mixes members and other trainers raises: the group is wrong."""
     members = frozenset(spec.members)
-
-    def rec(s: Sighting | None, pos: Pos, done, seq, states, headers, flags=None):
-        if s is not None:
-            flags = s.flags
-        w = walker.walk(pos, done, y=None if s is None else s.y, flags=flags)
-        states = (*states, w)
-        if done == members:
-            out.append(Run(seq, states, headers))
-            return
-        for f, sight in list(w.spot.items()):
-            fs = set(f)
-            if not fs & members or fs & done:
-                continue
-            if not fs <= members:
-                raise MapReadError(f"fight {f} mixes the chain {sorted(members)} with others")
-            rec(sight, sight.pos, done | fs, (*seq, f), states, (*headers, sight.pos.header))
-
-    for i, e in enumerate(spec.entries):
-        extra = spec.entry_flags[i] if spec.entry_flags else (frozenset(),)
-        for f in extra:
-            rec(None, e, frozenset(), (), (), (), walker.flags | f)
+    walks, heads = chain_prefixes(walker, spec)
+    out = []
+    for p in walks:
+        if frozenset(t for f in p for t in f) != members:
+            continue
+        states = tuple(walks[p[:k]] for k in range(len(p) + 1))
+        out.append(Run(p, states, tuple(heads[f] for f in p)))
     return out
+
+
+def start_counts(walker: Walker, spec: ChainSpec) -> tuple[int, int, int]:
+    """The DP's size: prefixes, (prefix, start state) pairs, and the most start states of
+    one prefix."""
+    walks, _ = chain_prefixes(walker, spec)
+    return len(walks), sum(len(w) for w in walks.values()), max(len(w) for w in walks.values())
+
+
+def _gap_kinds(
+    maps,
+    walk: Walk,
+    headers: Collection[int],
+    healers: Collection[tuple[int, int]],
+    pc_headers: Collection[int],
+) -> set[str]:
+    """The capabilities of one walk in a gap: ``leave`` (a header outside ``headers``
+    reached), ``heal`` (a healer's talk tile reached), ``pc`` (a tile next to a PC of
+    ``pc_headers`` stood on)."""
+    kinds = set()
+    if walk.headers() - set(headers):
+        kinds.add("leave")
+    if any(key in walk.talk for key in healers):
+        kinds.add("heal")
+    if pc_headers and pc_reachable(maps, walk, pc_headers):
+        kinds.add("pc")
+    return kinds
 
 
 def chain_facts(
@@ -1385,15 +1479,30 @@ def chain_facts(
     pc_headers: Collection[int] = (),
 ) -> dict:
     """The facts of the trainers ``group`` of a chain: the group's orders (each full sequence
-    restricted to the group's fights), per order the gaps where every run can leave the chain's
-    headers, the gaps where every run reaches a healer or a PC, and per order the map header of
-    each fight. ``orders``, ``leave_gaps``, ``fight_headers`` (one list per order),
-    ``heal_gaps`` and ``pc_gaps`` (one list)."""
+    restricted to the group's fights), per order the gaps where every history can leave the
+    chain's headers, the gaps where every history reaches a healer or a PC, the gaps where some
+    history has no input (``locked``: a restriction, so the union), and per order the map header
+    of each fight. A history is a sequence with a start state per fight: a capability holds at
+    a gap only when the walk from every start state of the prefix has it (``chain_prefixes``).
+    ``orders``, ``leave_gaps``, ``fight_headers`` (one list per order), ``heal_gaps``,
+    ``pc_gaps`` and ``locked_gaps`` (one list)."""
     members = frozenset(group)
     leave: dict[tuple[Fight, ...], set[int]] = {}
     where: dict[tuple[Fight, ...], tuple[int, ...]] = {}
     heal: set[int] | None = None
     pcs: set[int] | None = None
+    locked: set[int] = set()
+    kinds_of: dict[int, set[str]] = {}
+
+    def kinds(walks: tuple[Walk, ...]) -> set[str]:
+        out: set[str] | None = None
+        for w in walks:
+            k = kinds_of.get(id(w))
+            if k is None:
+                k = kinds_of[id(w)] = _gap_kinds(maps, w, spec.headers, healers, pc_headers)
+            out = k if out is None else out & k
+        return set(out or ())
+
     for run in runs(walker, spec):
         idx = []
         for i, f in enumerate(run.sequence):
@@ -1409,13 +1518,16 @@ def chain_facts(
         gaps_heal: set[int] = set()
         gaps_pc: set[int] = set()
         for k, i in enumerate(idx[:-1], 1):
-            state = run.states[i + 1]
-            if state.headers() - set(spec.headers):
+            walks = run.states[i + 1]
+            have = kinds(walks)
+            if "leave" in have:
                 gaps_leave.add(k)
-            if any(key in state.talk for key in healers):
+            if "heal" in have:
                 gaps_heal.add(k)
-            if pc_headers and pc_reachable(maps, state, pc_headers):
+            if "pc" in have:
                 gaps_pc.add(k)
+            if any(w.held for w in walks):
+                locked.add(k)
         leave[order] = leave[order] & gaps_leave if order in leave else gaps_leave
         heal = gaps_heal if heal is None else heal & gaps_heal
         pcs = gaps_pc if pcs is None else pcs & gaps_pc
@@ -1428,6 +1540,7 @@ def chain_facts(
         "fight_headers": [list(where[o]) for o in orders],
         "pc_gaps": sorted(pcs or ()),
         "heal_gaps": sorted(heal or ()),
+        "locked_gaps": sorted(locked),
     }
 
 
@@ -1443,19 +1556,22 @@ def live_table(
     """The next-fight table of a chain by the live count (``LiveRow`` rows as dicts;
     ``nuzline.data.gauntlet``). ``walkers[c]`` walks with the field count c (1 or 2).
 
-    The walk after ``fought`` starts on the last fight's tile with those trainers beaten
-    (``runs``). Under count 1 the group is the members less the double-battle trainers, who
-    are not fought (``trainer_encounter.c:110-116``; ``scripts_battles.s:19-22``), and come back
-    when the count is two again. The recursion switches the count at every fight end (a faint,
-    a forced heal: both act before the gap's first step, on the fight tile) and, inside a gap,
-    where a revive (``bag``: any reached tile), a PC (``pc``: a reached tile next to a PC of
-    ``pc_headers``, a deposit or a withdraw) or a healer (``heal``: a talk tile of ``healers``)
-    changes it; each of those gives a change row whose fights are the plain row's plus those
-    the walk under the new count starts from such a tile, and the walk goes on from each.
-    Over the entries, entry flags and histories that reach one key, ``next`` is the union and
-    the gap facts the intersection (``chain_facts``). A plain row's ``gap``: ``leave`` (a
+    The walk after ``fought`` starts on a start state of the last fight (``Walk.starts``: every
+    tile, height, bridge state and flag set it can start from) with those trainers beaten
+    (``chain_prefixes``). Under count 1 the group is the members less the double-battle
+    trainers, who are not fought (``trainer_encounter.c:110-116``; ``scripts_battles.s:19-22``),
+    and come back when the count is two again. The recursion switches the count at every fight
+    end (a faint, a forced heal: both act before the gap's first step, on the fight tile) and,
+    inside a gap, where a revive (``bag``: any reached tile), a PC (``pc``: a reached tile next
+    to a PC of ``pc_headers``, a deposit or a withdraw) or a healer (``heal``: a talk tile of
+    ``healers``) changes it; each of those gives a change row whose fights are the plain row's
+    plus those the walk under the new count starts from such a tile, and the walk goes on from
+    each. Over the entries, entry flags, histories and start states that reach one key,
+    ``next`` is the union, the capabilities (``leave``, ``heal``, ``pc``) the intersection and
+    the restriction ``locked`` the union (``chain_facts``). A plain row's ``gap``: ``leave`` (a
     header outside ``spec.headers`` reached), ``heal`` (a healer's talk tile reached), ``pc``,
-    ``locked`` (``Walk.held``: no input in the gap).
+    ``locked`` (``Walk.held``: no input in the gap). A change row needs its tile in every
+    history: none where some history is locked.
 
     A count-1 walker with the partner raises: sight then counts two whatever the party holds
     (``field_control.c:182-184``), so a double-battle trainer still fights by sight, while a
@@ -1469,49 +1585,41 @@ def live_table(
     groups = {2: members, 1: members - frozenset(doubles)}
     nexts: dict[tuple, dict[Fight, int]] = {}
     gaps: dict[tuple, set[str]] = {}
+    held: dict[tuple, bool] = {}
     explored: set[tuple] = set()
 
-    def fights(walk: Walk, c: int, done: frozenset) -> dict[Fight, Sighting]:
-        out = {}
-        for f, sight in walk.spot.items():
-            fs = set(f)
-            if not fs & groups[c] or fs & done:
-                continue
-            if not fs <= members:
-                raise MapReadError(f"fight {f} mixes the chain {sorted(members)} with others")
-            out[f] = sight
-        return out
-
-    def add(key: tuple, found: Mapping[Fight, Sighting]) -> None:
+    def add(key: tuple, found: Mapping[Fight, set[Sighting]]) -> None:
         row = nexts.setdefault(key, {})
-        for f, sight in found.items():
-            if row.setdefault(f, sight.pos.header) != sight.pos.header:
-                raise MapReadError(f"after {key[0]}: fight {f} starts on two map headers")
+        for f, sights in found.items():
+            for sight in sights:
+                if row.setdefault(f, sight.pos.header) != sight.pos.header:
+                    raise MapReadError(f"after {key[0]}: fight {f} starts on two map headers")
 
-    def rec(pos: Pos, y: int | None, flags: frozenset, done: frozenset, seq: tuple) -> None:
-        state = (pos, y, flags, done, seq)
+    def go(found: Mapping[Fight, set[Sighting]], done: frozenset, seq: tuple) -> None:
+        for f, sights in found.items():
+            for s in sorted(sights):
+                rec(s.pos, s.y, s.flags, s.bridge, done | set(f), (*seq, f))
+
+    def rec(
+        pos: Pos, y: int | None, flags: frozenset, bridge: bool | None, done: frozenset, seq
+    ) -> None:
+        state = (pos, y, flags, bridge, done, seq)
         if state in explored:
             return
         explored.add(state)
         gap = bool(seq) and done != members
         for c in (1, 2):
-            walk = walkers[c].walk(pos, done, y=y, flags=flags)
-            found = fights(walk, c, done)
+            walk = walkers[c].walk(pos, done, y=y, flags=flags, bridge=bridge)
+            found = _chain_fights(walk, members, groups[c], done)
             add((seq, c, c, ""), found)
             if gap:
-                kinds = {"locked"} if walk.held else set()
-                if walk.headers() - set(spec.headers):
-                    kinds.add("leave")
+                kinds = _gap_kinds(maps, walk, spec.headers, healers, pc_headers)
                 talks = {walk.talk[k] for k in healers if k in walk.talk}
-                if talks:
-                    kinds.add("heal")
                 spots = pc_spots(maps, walk, pc_headers) if pc_headers else set()
-                if spots:
-                    kinds.add("pc")
                 key = (seq, c)
                 gaps[key] = kinds if key not in gaps else gaps[key] & kinds
-            for f, sight in found.items():
-                rec(sight.pos, sight.y, sight.flags, done | set(f), (*seq, f))
+                held[key] = held.get(key, False) or walk.held
+            go(found, done, seq)
             if not gap or walk.held:
                 continue
             changes = []
@@ -1524,15 +1632,14 @@ def live_table(
                     continue
                 key = (seq, c, to, at)
                 add(key, found)
-                more = fights(walkers[to].walk_from(tiles, done), to, done)
+                more = _chain_fights(walkers[to].walk_from(tiles, done), members, groups[to], done)
                 add(key, more)
-                for f, sight in more.items():
-                    rec(sight.pos, sight.y, sight.flags, done | set(f), (*seq, f))
+                go(more, done, seq)
 
     for i, e in enumerate(spec.entries):
         extra = spec.entry_flags[i] if spec.entry_flags else (frozenset(),)
         for f in extra:
-            rec(e, None, walkers[2].flags | f, frozenset(), ())
+            rec(e, None, walkers[2].flags | f, None, frozenset(), ())
     rows = []
     for (seq, live, to, at), found in nexts.items():
         done = frozenset(t for f in seq for t in f)
@@ -1545,15 +1652,18 @@ def live_table(
             "next": [list(f) for f in order],
             "headers": [found[f] for f in order],
         }
+        have = gaps.get((seq, live), set())
         if at:
-            if "locked" in gaps[(seq, live)] or (at == "pc" and "pc" not in gaps[(seq, live)]):
+            if held[(seq, live)] or (at == "pc" and "pc" not in have):
                 continue  # a change needs the tile in every history (the gap facts' rule)
-            if at == "heal" and "heal" not in gaps[(seq, live)]:
+            if at == "heal" and "heal" not in have:
                 continue
             row["to"] = to
             row["at"] = at
         elif seq:
-            row["gap"] = [g for g in ("leave", "heal", "pc", "locked") if g in gaps[(seq, live)]]
+            row["gap"] = [g for g in ("leave", "heal", "pc") if g in have]
+            if held[(seq, live)]:
+                row["gap"].append("locked")
         rows.append(row)
     return _rows(rows)
 
@@ -1890,19 +2000,19 @@ def _wayward_walker(
 
 
 def _wayward_next(
-    walker: Walker, pos: Pos, done: frozenset[int], y: int | None = None
-) -> tuple[Walk, dict[Fight, Sighting]]:
-    """The walk and the fights of pair members it can start (fight -> its sighting)."""
-    w = walker.walk(pos, done, y=y)
-    members = {t for pair in WAYWARD_PAIRS for t in pair}
-    nxt: dict[Fight, Sighting] = {}
-    for f, s in w.spot.items():
-        fs = set(f)
-        if not fs & members or fs & done:
-            continue
-        if not fs <= members:
-            raise MapReadError(f"Wayward Cave: fight {f} mixes pair members with others")
-        nxt[f] = s
+    walker: Walker, start: Sighting | Pos, done: frozenset[int]
+) -> tuple[Walk, dict[Fight, set[Sighting]]]:
+    """The walk from ``start`` (a fight's start state, or the arrival tile) and the fights of
+    pair members it can start (fight -> every start state, ``Walk.starts``)."""
+    if isinstance(start, Sighting):
+        w = _start_walk(walker, start, done)
+    else:
+        w = walker.walk(start, done)
+    members = frozenset(t for pair in WAYWARD_PAIRS for t in pair)
+    try:
+        nxt = _chain_fights(w, members, members, done)
+    except MapReadError as e:
+        raise MapReadError(f"Wayward Cave: {e}") from None
     return w, nxt
 
 
@@ -1931,29 +2041,38 @@ def wayward_facts(
 
     sequences: dict[tuple[Fight, ...], frozenset[int]] = {}
 
-    def with_partner(pos: Pos, y: int | None, done: frozenset[int], seq: tuple[Fight, ...]):
-        w, nxt = _wayward_next(joined, pos, done, y)
+    def by_level(walker: Walker, visit) -> None:
+        # a DP over (prefix, start state): the starts of p + f are every start of f in every
+        # walk of p (``Walk.starts``), so no history is enumerated
+        level: dict[tuple[Fight, ...], set] = {(): {WAYWARD_START}}
+        while level:
+            nxt: dict[tuple[Fight, ...], set] = {}
+            for seq, starts in level.items():
+                done = frozenset(t for f in seq for t in f)
+                for start in starts:
+                    w, fights = _wayward_next(walker, start, done)
+                    visit(w, seq, done)
+                    for f, sights in fights.items():
+                        nxt.setdefault((*seq, f), set()).update(sights)
+            level = nxt
+
+    def with_partner(w: Walk, seq: tuple[Fight, ...], done: frozenset[int]) -> None:
         if any(Pos(WAYWARD_HEADER, x, z) in w.seen for x, z in exits):
             sequences[seq] = done
-        for f, s in nxt.items():
-            with_partner(s.pos, s.y, done | set(f), (*seq, f))
 
-    with_partner(WAYWARD_START, None, frozenset(), ())
+    by_level(joined, with_partner)
     short = {seq for seq, done in sequences.items() if done != members}
     if not sequences or short:
         raise MapReadError(f"Wayward Cave: the exit is reachable after {sorted(short)}")
 
     reached: dict[int, bool] = {}
 
-    def without_partner(pos: Pos, y: int | None, done: frozenset[int], seq: tuple):
-        w, nxt = _wayward_next(alone, pos, done, y)
+    def without_partner(w: Walk, seq: tuple[Fight, ...], done: frozenset[int]) -> None:
         near = [(mira.x + dx, mira.z + dz) for dx, dz in DIRS]
         ok = any(Pos(WAYWARD_HEADER, x, z) in w.seen for x, z in near)
         reached[len(seq) + 1] = reached.get(len(seq) + 1, True) and ok
-        for f, s in nxt.items():
-            without_partner(s.pos, s.y, done | set(f), (*seq, f))
 
-    without_partner(WAYWARD_START, None, frozenset(), ())
+    by_level(alone, without_partner)
     # Without the partner the walk-out coord (0x4091 == 0) closes the start pocket: no pair is
     # reached and her tile is, so the game makes her join before fight 1 and the walk-out
     # never runs at a gap. A fight reached without her would make the join point a choice.
@@ -2172,7 +2291,7 @@ def chain_live_next(
         whole["fight_headers"],
         whole["pc_gaps"],
         whole["heal_gaps"],
-        (),
+        whole["locked_gaps"],
     )
     if table == _rows(r.to_dict() for r in prefix):
         return None
@@ -2263,6 +2382,7 @@ def derive_groups(
             group_escape(maps, facts["fight_headers"]),
             pc_gaps=gaps["pc_gaps"],
             heal_gaps=gaps["heal_gaps"],
+            locked_gaps=facts["locked_gaps"],
             live_next=live_next,
         )
 

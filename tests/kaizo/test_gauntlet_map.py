@@ -424,6 +424,50 @@ def test_live_table_revive_row_reopens_a_double_battle_trainer():
     assert table[(((1,),), 1, "bag")] == [[5]]
 
 
+def test_two_start_tiles_split_by_a_ledge_give_two_histories():
+    # Trainer 1 (all directions, sight 1) sees (3, 1) from the start side and (5, 1) from the
+    # far side, which the player reaches only down the one-way ledge at (1, 2). After a fight
+    # from (3, 1) the warp at (0, 1) is reached, after one from (5, 1) it is not (the ledge
+    # cannot be climbed, trainer 1 stands on (4, 1)): the leave at gap 1 needs both.
+    rows = ["#########", ".........", "#v######.", ".........", ".........", "######.##"]
+    objs = [trainer(1, 4, 1, SOUTH, 1, trainer_type=2), trainer(2, 6, 5, NORTH, 1)]
+    a = area(1, rows, objs, [Warp(0, 0, 1, 9, 0)])
+    far = area(9, ["..."], warps=[Warp(0, 0, 0, 1, 0)])
+    maps = StaticMaps([a, far])
+    spec = ChainSpec((1, 2), (1,), (Pos(1, 2, 1),))
+    w = Walker(maps, spec.members)
+    first = w.walk(Pos(1, 2, 1))
+    assert {s.pos for s in first.starts[(1,)]} == {Pos(1, 3, 1), Pos(1, 5, 1)}
+    after = {s.pos: w.walk(s.pos, {1}, y=s.y, flags=s.flags) for s in first.starts[(1,)]}
+    assert 9 in after[Pos(1, 3, 1)].headers() and 9 not in after[Pos(1, 5, 1)].headers()
+    facts = chain_facts(maps, w, spec, (1, 2))
+    assert facts["orders"] == [[[1], [2]], [[2], [1]]]
+    assert facts["leave_gaps"] == [[], []]  # the first sighting alone gave [[1], []]
+    (run,) = [r for r in runs(w, spec) if r.sequence == ((1,), (2,))]
+    assert len(run.states[1]) == 2  # the walks from both start tiles
+
+
+def test_a_gap_is_locked_when_one_start_tile_is_held():
+    # One live Pokemon. Trainer 1 (all directions, sight 1) sees (3, 1) and (5, 1); trainer 2
+    # (south, sight 1) sees (5, 1) too, so from (5, 1) the sight check starts 2 at once after
+    # 1 (object order, trainer_encounter.c:94-131): no input in the gap. From (3, 1) the
+    # player walks round to (5, 1). Locked is a restriction: the union over the starts.
+    rows = ["#####.###", ".........", "#.#####.#", "........."]
+    objs = [trainer(1, 4, 1, SOUTH, 1, trainer_type=2), trainer(2, 5, 0, SOUTH, 1)]
+    maps = StaticMaps([area(1, rows, objs)])
+    spec = ChainSpec((1, 2), (1,), (Pos(1, 0, 1),))
+    one = Walker(maps, spec.members, two_alive=False)
+    starts = one.walk(Pos(1, 0, 1)).starts[(1,)]
+    assert {s.pos for s in starts} == {Pos(1, 3, 1), Pos(1, 5, 1)}
+    assert [one.walk(s.pos, {1}).held for s in sorted(starts)] == [False, True]
+    facts = chain_facts(maps, one, spec, (1, 2))
+    assert facts["orders"] == [[[1], [2]]] and facts["locked_gaps"] == [1]
+    walkers = {c: Walker(maps, spec.members, two_alive=c == 2) for c in (1, 2)}
+    table = live_table(maps, walkers, spec, ())
+    after = [r for r in table if r["fought"] == [[1]]]
+    assert after and all("locked" in r["gap"] for r in after)  # no change row: none has "at"
+
+
 def test_gap_fields_are_absent_where_the_live_table_makes_them_order_dependent():
     # Two orders of 1, 2: a healer at the gap after 1 first only (order-dependent heal), a
     # leave at the gap after 2 first at one live only (count-dependent leave), no PC anywhere
@@ -899,13 +943,17 @@ def test_wayward_order_join_points_and_the_459_talk_tiles(rom_files, derived):
     assert d["leave_gaps"] == [[], []] and d["escape"] is True
     maps = RomMaps(rom_files)
     joined = _wayward_walker(maps, True)
-    pos, done = WAYWARD_START, frozenset()
+    starts, done = {WAYWARD_START}, frozenset()
     for pair in ((383, 443), (380, 458), (450, 496)):
-        _, nxt = _wayward_next(joined, pos, done)
-        (sight,) = [s for f, s in nxt.items() if set(f) == set(pair)]
-        pos, done = sight.pos, done | set(pair)
-    assert joined.talk_tiles(pos, 284, 459, done) == [(34, 28), (35, 27)]
-    assert joined.talk_tiles(pos, 284, 460, done) == []
+        nxt = set()
+        for start in starts:
+            _, fights = _wayward_next(joined, start, done)
+            nxt |= {s for f, sights in fights.items() if set(f) == set(pair) for s in sights}
+        assert nxt
+        starts, done = nxt, done | set(pair)
+    for s in starts:  # from every start state of the third pair
+        assert joined.talk_tiles(s.pos, 284, 459, done) == [(34, 28), (35, 27)]
+        assert joined.talk_tiles(s.pos, 284, 460, done) == []
 
 
 @pytest.mark.slow
@@ -1233,7 +1281,9 @@ def test_rom_objects_beyond_the_groups_headers_change_no_fact(rom_files):
             )
 
         start = GROUP_FLAGS[name]
-        heads = {h for r in runs(walker(start), spec) for w in r.states for h in w.headers()}
+        heads = {
+            h for r in runs(walker(start), spec) for ws in r.states for w in ws for h in w.headers()
+        }
         # a flag an own-header object carries too (509: the Eterna City grunts) is cited
         beyond = {
             o.flag
