@@ -19,7 +19,8 @@
 #   writes run.sh and body.json (receive code "<code>") but sends nothing.
 #   run.sh first writes /work/<name>/reads (the capture dir a compare reads; empty for a
 #   capture), then /work/<name>/times.txt: START, SYNC_RC=<n> (a failed uv sync stops here,
-#   without ALL_DONE), SNAP_LOCK <epoch>, CAPTURE_START or COMPARE_START, CAPTURE_RC=<n> <epoch> or
+#   without ALL_DONE; it runs under timeout -k 30 1800: rc 124 or 137 once it hangs),
+#   SNAP_LOCK <epoch>, CAPTURE_START or COMPARE_START, CAPTURE_RC=<n> <epoch> or
 #   COMPARE_RC=<n> <epoch>, ALL_DONE. Before the job run.sh checks /proc/sys/vm/max_map_count: under
 #   1048576 (a pod with 65530 aborts JAX processes, rc 134) or unreadable ends times.txt with
 #   MAP_COUNT_LOW <value|none> <epoch>, without ALL_DONE.
@@ -30,6 +31,10 @@
 #   After the job ends run.sh stops what is left of it (snapstop; JOB_LEFT <pids> <epoch> in
 #   times.txt when anything was) before COMPARE_RC/CAPTURE_RC is followed by ALL_DONE. A TERM
 #   writes TERM <epoch> to times.txt, stops the job the same way and exits 143, without ALL_DONE.
+#   A job process still live (not a zombie) after the KILL (SNAPSTOP_MAX_S, default 40 s; a
+#   process stuck in the kernel, e.g. on the network volume) ends times.txt with JOB_STUCK <pids>
+#   <epoch>: run.sh exits 1 (143 after a TERM) without the store and ALL_DONE and keeps the pod
+#   lock, which the next job judges stale once those processes are gone (snaplive).
 #   Env: SNAP_GATE_GB (default 88): run.sh starts the capture or compare only while container
 #   memory without reclaimable page cache (cgused) is under it, or once no pack unit has been
 #   live on the pod for IDLE_WAIT_S s (default 300; GATE_IDLE_START <epoch> in times.txt);
@@ -39,11 +44,61 @@
 #   expected peak stays at or under it. SNAP_WORKERS (default 16): snap_compare's --workers, the
 #   parts run at once (1: one after another). Both are passed only when the snap_compare that
 #   runs (the commit's, or --tool's) has --workers; an older one runs its parts one by one.
+#   Capture store on the network volume (DAYBOX.md "Network volume"; pod/cache_sync.sh, which
+#   travels in the payload as committed at HEAD of this checkout): a capture without --tool is
+#   keyed "<full sha>-<key16>" (key16: table_key16 below, from the tables archive itself, never
+#   from index.txt). On a pod whose /vol is a mountpoint, run.sh first fetches that key from the
+#   volume (store.log; times.txt then holds CAPTURE_FROM_VOLUME <key> <epoch>, CAPTURE_RC=0,
+#   ALL_DONE, and no capture runs); otherwise it captures and, after CAPTURE_RC=0, stores the
+#   capture (STORE_RC=<n> <epoch>; a stored key is never overwritten). A compare of
+#   /work/snapmain-<short>/snap whose capture.json is not on the pod fetches it from the volume
+#   first (FETCH_RC=<n> <epoch>), keyed by <short>'s full sha and its key16 from $RENT; when
+#   capture.json is still missing after it, times.txt ends NO_CAPTURE <dir> <epoch> and run.sh
+#   exits 1 (no compare, no ALL_DONE). Without a key nothing is stored or fetched (NOTE line); on
+#   a pod without /vol run.sh does what it did before the volume. Every volume call runs under
+#   timeout -k 30 <s>: CACHE_FETCH_TIMEOUT for a fetch, CACHE_STORE_TIMEOUT for a store (PC env,
+#   default 900 each, whole seconds, else refused): one that times out (rc 124 or 137) writes VOLUME_TIMEOUT fetch|store
+#   <epoch> to times.txt and a WARNING to run.out; a capture's timed-out fetch removes what it
+#   may have left (snap/, .snapfetch.*) and captures as without the volume; a compare's leaves
+#   only a complete, checked snap/ (renamed whole) or none, so NO_CAPTURE; a timed-out store
+#   leaves only a temp name on the volume (STORE_RC=124|137).
+#   Order in run.sh: uv sync, pod lock (SNAP_LOCK), the volume fetch, memory gate, job, snapstop,
+#   the volume store, ALL_DONE, lock released on exit. The fetch runs under the pod lock, so no
+#   other job on this pod writes the same capture folder meanwhile (another pod's store of the
+#   same key is a temp copy renamed whole, so a fetch sees the key whole or not at all); it is
+#   a file copy, so it does not wait at the memory gate, and a capture found on the volume
+#   ends the job before the gate. The store runs after CAPTURE_RC=0 and after snapstop (no job
+#   process still writes snap/), still under the lock.
 # fetch: receives what the pod sends (DAYBOX.md "Snapshot compare", Fetch) into
 #   $RENT/out/<name>/fetch-<epoch>/ and unpacks every .tgz received.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
 . "$HERE/pod/gate.sh"   # podgate and reserve_knobs, copied into run.sh
+# table_key16 capture|compare <full sha> <tables archive>: the first 16 hex of a build's table
+# key (tools/ops/build_tables.sh, tools/ops/table_key.py), or nothing.
+#   capture (the key a capture is stored under): only from the archive itself, the
+#     <archive minus .tar.xz>.key file beside it, else its tables_k<key16>.tar.xz name; and when
+#     $RENT/tables/tables_k<key16>.tar.xz exists, the archive must be byte for byte that build
+#     (cmp), else nothing (a rebuilt or edited archive beside a stale .key). Never from
+#     index.txt: a capture made with other tables would be stored under the official key and
+#     fetched by every later compare.
+#   compare (the key of the main capture to fetch): as capture, else the last "<sha> <key>" line
+#     of $RENT/tables/index.txt for <full sha>. The fallback only names which stored capture to
+#     fetch; a stored capture got its key from its own archive, so it fetches only a capture made
+#     with that key's tables.
+# (Kept here, not in common.sh: common.sh is an input of the table key.)
+table_key16() { local k="" a="${3:-}" ka
+  if [ -n "$a" ]; then
+    [ -f "${a%.tar.xz}.key" ] && k=$(tr -dc 0-9a-f < "${a%.tar.xz}.key")
+    [ -n "$k" ] || k=$(basename "$a" | sed -n 's/^tables_k\([0-9a-f]\{16\}\)\.tar\.xz$/\1/p')
+    k=${k:0:16}
+    if [[ "$k" =~ ^[0-9a-f]{16}$ ]]; then ka="$RENT/tables/tables_k$k.tar.xz"
+      if [ -f "$a" ] && [ -f "$ka" ] && ! cmp -s "$a" "$ka"; then
+        echo "NOTE: $a differs from $ka, the build of key $k its .key names: no key from it" >&2; k=""; fi
+    else k=""; fi
+  fi
+  [ -n "$k" ] || [ "$1" != compare ] || k=$(awk -v s="$2" '$1 == s {k = $2} END {print k}' "$RENT/tables/index.txt" 2>/dev/null | tr -dc 0-9a-f)
+  k=${k:0:16}; if [[ "$k" =~ ^[0-9a-f]{16}$ ]]; then echo "$k"; fi; return 0; }
 usage() { sed -n '4,7p' "$0" | sed 's/^# *//'; exit 2; }
 # The functions below are copied into run.sh (declare -f); run.sh runs on the pod, not here.
 # cgused: container memory in bytes without reclaimable page cache: cgroup v2 memory.current
@@ -70,10 +125,11 @@ procscan() { local f s pid st pp pg
     pid=${s%% *}; read -r st pp pg _ <<< "${s##*) }"
     case "$pid$pp$pg" in ''|*[!0-9]*) continue;; esac
     PS_ST[pid]=$st; PS_PP[pid]=$pp; PS_PG[pid]=$pg; done; }
-# snapmembers <groups> <except pid>: SM = the pids of procscan's processes that are not zombies,
-# are not <except pid> and belong to one of the process groups <groups> (ids 0 and 1 never count).
+# snapmembers <groups> <except pid> [<except group>]: SM = the pids of procscan's processes that
+# are not zombies, are not <except pid> and belong to one of the process groups <groups> (ids 0
+# and 1 never count, nor <except group>).
 snapmembers() { local p g gs=""; SM=""
-  for g in $1; do case "$g" in ''|*[!0-9]*|0|1) ;; *) gs="$gs $g";; esac; done
+  for g in $1; do case "$g" in ''|*[!0-9]*|0|1|"${3:-x}") ;; *) gs="$gs $g";; esac; done
   for p in "${!PS_ST[@]}"; do
     if [ "${PS_ST[p]}" = Z ] || [ "$p" = "$2" ]; then continue; fi
     case "$gs " in *" ${PS_PG[p]} "*) SM="$SM $p";; esac; done; }
@@ -83,11 +139,13 @@ snapmembers() { local p g gs=""; SM=""
 # belongs to process group <pid> (run.sh leads its own group under setsid) or to a group in
 # <lock dir>/groups (the job's groups, snapwatch): so a KILLed run.sh whose driver or parts
 # still run keeps the lock, as podgate counts a unit live while its group has a live member.
+# The waiting shell's own group ($$; run.sh leads its group) never counts: a holder group id
+# reused by this waiter would otherwise make it wait on itself.
 snaplive() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac
   procscan
   if [ -n "${PS_ST[$1]}" ] && [ "${PS_ST[$1]}" != Z ] &&
      tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -qE '/run\.sh( |$)'; then return 0; fi
-  snapmembers "$1 $(tr -cs '0-9' ' ' < "$2/groups" 2>/dev/null)" ""; [ -n "$SM" ]; }
+  snapmembers "$1 $(tr -cs '0-9' ' ' < "$2/groups" 2>/dev/null)" "" "$$"; [ -n "$SM" ]; }
 # snaplock <dir> <times.txt>: take the lock (mkdir <dir>; <dir>/pid = this shell's pid, <dir>/name
 # = $W). Held by a live holder (snaplive): wait, printing "lock wait <time>: <holder> holds <dir>"
 # once a minute. Stale (its holder not live; its pid is this shell's own, a pid reused since the
@@ -115,13 +173,21 @@ snaplock() { local d="$1" t="$2" p q n=0 e=0
   done; }
 # snapunlock <dir>: release the lock when this shell holds it.
 snapunlock() { [ "$(cat "$1/pid" 2>/dev/null)" = "$$" ] && rm -rf "$1"; return 0; }
+# sgprune: drop from SG every group with no member left in procscan's scan (no process that is
+# not a zombie has it as its group), so a group id the system reuses later for an unrelated
+# process is not stopped (snapstop) or counted (snaplive) as the job's.
+sgprune() { local p g lg="" n=""
+  for p in "${!PS_ST[@]}"; do [ "${PS_ST[p]}" = Z ] || lg="$lg ${PS_PG[p]}"; done
+  for g in $SG; do case "$lg " in *" $g "*) n="$n $g";; esac; done
+  SG=${n# }; }
 # snapwatch <pid> <lock dir>: wait for the job <pid> (a child of this shell) and return its exit
-# code. Every 2 s it adds the process group of each descendant of this shell to SG (set by
-# run.sh to its own pid) and, when SG grows while this shell holds the lock, writes it to
-# <lock dir>/groups: a job process in a group of its own (should uv or the driver start one)
-# still holds the lock (snaplive) and is still stopped (snapstop).
+# code. Every 2 s it drops the groups with no member left from SG (sgprune), adds the process
+# group of each descendant of this shell to SG (set by run.sh to its own pid) and, when SG
+# changed while this shell holds the lock, writes it to <lock dir>/groups: a job process in a
+# group of its own (should uv or the driver start one) still holds the lock (snaplive) and is
+# still stopped (snapstop).
 snapwatch() { local p q o
-  while procscan; [ -n "${PS_ST[$1]}" ] && [ "${PS_ST[$1]}" != Z ]; do o=$SG
+  while procscan; [ -n "${PS_ST[$1]}" ] && [ "${PS_ST[$1]}" != Z ]; do o=$SG; sgprune
     for p in "${!PS_PP[@]}"; do q=${PS_PP[p]}
       while [ -n "$q" ] && [ "$q" -gt 1 ] && [ "$q" != "$$" ]; do q=${PS_PP[q]}; done
       if [ "$q" = "$$" ]; then case " $SG " in *" ${PS_PG[p]} "*) ;; *) SG="$SG ${PS_PG[p]}";; esac; fi
@@ -131,16 +197,20 @@ snapwatch() { local p q o
   done
   wait "$1"; }
 # snapstop <times.txt>: stop what is left of the job: every process, other than this shell, that
-# is not a zombie and belongs to a group in SG. Logs "JOB_LEFT <pids> <epoch>" in <times.txt> when
-# any is left, TERMs them, KILLs what is left after 30 s and returns once none is left (at most
-# 40 s).
-snapstop() { local i
-  for ((i = 0; i <= 40; i++)); do procscan; snapmembers "$SG" "$$"
+# is not a zombie and belongs to a group in SG (pruned on every scan, sgprune). Logs "JOB_LEFT
+# <pids> <epoch>" in <times.txt> when any is left, TERMs them, KILLs what is left after
+# SNAPSTOP_KILL_S s (default 30) and returns 0 once none is left. One still live after
+# SNAPSTOP_MAX_S s (default 40; at least the KILL time): logs "JOB_STUCK <pids> <epoch>" and
+# returns 1, so run.sh keeps the pod lock rather than reporting the job stopped.
+snapstop() { local i k="${SNAPSTOP_KILL_S:-30}" m="${SNAPSTOP_MAX_S:-40}"
+  case "$k" in ''|*[!0-9]*) k=30;; esac; case "$m" in ''|*[!0-9]*) m=40;; esac; [ "$m" -ge "$k" ] || m=$k
+  for ((i = 0; i <= m; i++)); do procscan; sgprune; snapmembers "$SG" "$$"
     [ -n "$SM" ] || return 0
     if [ "$i" = 0 ]; then echo "JOB_LEFT$SM $(date +%s)" >> "$1"; kill -TERM $SM 2>/dev/null; fi
-    [ "$i" -ge 30 ] && kill -KILL $SM 2>/dev/null
-    sleep 1
-  done; }
+    [ "$i" -ge "$k" ] && kill -KILL $SM 2>/dev/null
+    [ "$i" = "$m" ] || sleep 1
+  done
+  echo "JOB_STUCK$SM $(date +%s)" >> "$1"; return 1; }
 # snapgate <gate GB> <times.txt>: return once container memory without page cache (cgused) is
 # under <gate GB>. While it is not, run.out gets "gate wait <time>: memory <GB> GB without page
 # cache, gate <GB> GB, <n> pack units live" every 30 s. Once no pack unit has been live on the
@@ -226,6 +296,9 @@ if [ -n "$TSHA" ]; then
   FILES+=(tool.tar)
 fi
 cp "$TB" "$O/tables.tar.xz"
+TOP=$(git -C "$HERE" rev-parse --show-toplevel)
+git -C "$TOP" show HEAD:tools/ops/day/pod/cache_sync.sh | tr -d '\r' > "$O/cache_sync.sh" || refuse "no tools/ops/day/pod/cache_sync.sh at HEAD of $TOP"
+FILES+=(cache_sync.sh)
 CT=$(tar -tf "$O/code.tar"; [ -z "$TSHA" ] || tar -tf "$O/tool.tar")
 TALL=$(tar -tJf "$O/tables.tar.xz"); T=$(printf '%s\n' "$TALL" | grep -v '/$' || true)
 deny "tables entry with '..', a leading '/' or './'" "$TALL" -E "$BADPATH"
@@ -242,33 +315,69 @@ SRC="$SHA"; [ -z "$TSHA" ] || SRC="$TSHA"; PAR=""
 SC=$(git -C "$REPO" show "$SRC:tools/snap_compare.py") || refuse "no tools/snap_compare.py at $SRC"
 if [[ "$SC" == *'"--workers"'* ]]; then PAR=" --workers $WORKERS --gate-gb $GATE"
 else echo "NOTE: tools/snap_compare.py at ${SRC:0:8} has no --workers: its parts run one after another"; fi
+VOLQ="mountpoint -q /vol 2>/dev/null"; PRE=":"; POST=":"
+# timeout -k 30 of the volume calls (PC env, written into run.sh): a fetch, a store
+VTF="${CACHE_FETCH_TIMEOUT:-900}"; VTS="${CACHE_STORE_TIMEOUT:-900}"
+[[ "$VTF" =~ ^[1-9][0-9]*$ ]] || refuse "CACHE_FETCH_TIMEOUT '$VTF' is not a whole number of seconds"
+[[ "$VTS" =~ ^[1-9][0-9]*$ ]] || refuse "CACHE_STORE_TIMEOUT '$VTS' is not a whole number of seconds"
 if [ "$MODE" = capture ]; then
   SCRIPT="tools/snap_compare.py"; [ -z "$TSHA" ] || SCRIPT="$W/tool/tools/snap_compare.py"
   JOB="CAPTURE"; CMD="uv run --frozen python \"$SCRIPT\" capture \"\$W/snap\" 0-199 --repo \"\$W/repo\" --commit $SHA$PAR -v > \"\$W/capture.log\" 2>&1"
+  K=""; [ -n "$TSHA" ] || K=$(table_key16 capture "$SHA" "$TB")
+  if [ -n "$TSHA" ]; then echo "NOTE: a --tool re-capture is not stored on the network volume"
+  elif [ -z "$K" ]; then echo "NOTE: no table key for $TB (no .key file beside it and no tables_k<key16> name, or it differs from the build its key names; index.txt is not used for a capture): the capture is neither fetched from nor stored on the network volume"
+  else SKEY="$SHA-$K"; echo "capture store key $SKEY (fetched instead of captured when the pod's volume has it)"
+    PRE="if $VOLQ; then vr=0; timeout -k 30 $VTF bash \"\$W/cache_sync.sh\" snap-fetch $SKEY \"\$W\" own > \"\$W/store.log\" 2>&1 || vr=\$?
+  if [ \"\$vr\" = 0 ]; then echo \"CAPTURE_FROM_VOLUME $SKEY \$(date +%s)\" >> \"\$W/times.txt\"; echo \"CAPTURE_RC=0 \$(date +%s)\" >> \"\$W/times.txt\"; echo ALL_DONE >> \"\$W/times.txt\"; exit 0; fi
+  if [ \"\$vr\" = 124 ] || [ \"\$vr\" = 137 ]; then echo \"VOLUME_TIMEOUT fetch \$(date +%s)\" >> \"\$W/times.txt\"; rm -rf \"\$W/snap\" \"\$W\"/.snapfetch.*
+    echo \"WARNING: the volume fetch of $SKEY timed out after $VTF s (rc \$vr): captured instead\"; fi
+fi"
+    POST="if [ \"\$rc\" = 0 ] && $VOLQ; then sr=0; timeout -k 30 $VTS bash \"\$W/cache_sync.sh\" snap-publish \"\$W\" $SKEY >> \"\$W/store.log\" 2>&1 || sr=\$?
+  if [ \"\$sr\" = 124 ] || [ \"\$sr\" = 137 ]; then echo \"VOLUME_TIMEOUT store \$(date +%s)\" >> \"\$W/times.txt\"; echo \"WARNING: the volume store of $SKEY timed out after $VTS s (rc \$sr): not stored\"; fi
+  echo \"STORE_RC=\$sr \$(date +%s)\" >> \"\$W/times.txt\"
+fi"
+  fi
 else
   JOB="COMPARE"; AN=""; [ -z "$ALLOW" ] || AN=" --allow-new $ALLOW"
   CMD="uv run --frozen python tools/snap_compare.py compare \"$CAP\" 0-199 --repo \"\$W/repo\" --commit $SHA$AN$PAR -v > \"\$W/compare.log\" 2>&1"
+  CS=""; K=""
+  if [[ "$CAP" =~ ^/work/snapmain-([0-9a-f]{7})/snap$ ]]; then
+    CS=$(git -C "$REPO" rev-parse --verify -q "${BASH_REMATCH[1]}^{commit}" 2>/dev/null || true)
+    [ -z "$CS" ] || K=$(table_key16 compare "$CS" "$RENT/tables_${CS:0:8}.tar.xz"); fi
+  if [ -z "$K" ]; then echo "NOTE: no store key for $CAP (only /work/snapmain-<short>/snap of a commit with a table key in $RENT/tables): a capture missing on the pod is not fetched from the network volume"
+  else CKEY="$CS-$K"; echo "capture store key $CKEY (fetched when $CAP is not on the pod)"
+    PRE="if [ ! -f \"$CAP/capture.json\" ] && $VOLQ; then vr=0; timeout -k 30 $VTF bash \"\$W/cache_sync.sh\" snap-fetch $CKEY \"${CAP%/snap}\" > \"\$W/store.log\" 2>&1 || vr=\$?
+  echo \"FETCH_RC=\$vr \$(date +%s)\" >> \"\$W/times.txt\"
+  if [ \"\$vr\" = 124 ] || [ \"\$vr\" = 137 ]; then echo \"VOLUME_TIMEOUT fetch \$(date +%s)\" >> \"\$W/times.txt\"; rm -rf \"${CAP%/snap}\"/.snapfetch.*
+    echo \"WARNING: the volume fetch of $CKEY timed out after $VTF s (rc \$vr)\"; fi
+  if [ ! -f \"$CAP/capture.json\" ]; then echo \"NO_CAPTURE $CAP \$(date +%s)\" >> \"\$W/times.txt\"; exit 1; fi
+fi"
+  fi
 fi
 cat > "$O/run.sh" <<EOS
 #!/bin/bash
 # $MODE of $SHA; written by tools/ops/day/snap.sh
 export PATH=/root/.local/bin:/work/_bin:\$PATH UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 W="$W"; printf '%s\n' "$CAP" > "\$W/reads"; cd "\$W/repo"
-$(declare -f cgused procscan snapmembers snaplive snaplock snapunlock snapwatch snapstop snapgate reserve_knobs podgate)
+$(declare -f cgused procscan snapmembers snaplive snaplock snapunlock sgprune snapwatch snapstop snapgate reserve_knobs podgate)
 L=/work/.snaplock; SG=\$\$
 # Exit (TERM included) releases the pod lock; a TERM first writes TERM <epoch> to times.txt and
 # stops the job (snapstop: run.sh's process group, which it leads under setsid, and every group
-# snapwatch saw a descendant in), then exits 143.
+# snapwatch saw a descendant in), then exits 143. A job process snapstop could not stop
+# (JOB_STUCK) keeps the lock: the EXIT trap is dropped, so the next job waits until it is gone.
 trap 'snapunlock "\$L"' EXIT
-trap 'trap "" TERM; echo "TERM \$(date +%s)" >> "\$W/times.txt"; snapstop "\$W/times.txt"; exit 143' TERM
+trap 'trap "" TERM; echo "TERM \$(date +%s)" >> "\$W/times.txt"; snapstop "\$W/times.txt" || trap - EXIT; exit 143' TERM
 echo "START \$(date +%s)" > "\$W/times.txt"
 m=\$(tr -dc 0-9 < /proc/sys/vm/max_map_count 2>/dev/null); [ "\${m:-0}" -ge 1048576 ] 2>/dev/null || { echo "MAP_COUNT_LOW \${m:-none} \$(date +%s)" >> "\$W/times.txt"; exit 1; }
-(uv sync --frozen -q) > "\$W/sync.log" 2>&1; rc=\$?; echo "SYNC_RC=\$rc \$(date +%s)" >> "\$W/times.txt"; [ "\$rc" = 0 ] || exit 1
+(timeout -k 30 1800 uv sync --frozen -q) > "\$W/sync.log" 2>&1; rc=\$?; echo "SYNC_RC=\$rc \$(date +%s)" >> "\$W/times.txt"; [ "\$rc" = 0 ] || exit 1
+export CACHE_PY="\$W/repo/.venv/bin/python"
 snaplock "\$L" "\$W/times.txt"; echo "SNAP_LOCK \$(date +%s)" >> "\$W/times.txt"
+$PRE
 snapgate $GATE "\$W/times.txt"; echo "${JOB}_START \$(date +%s)" >> "\$W/times.txt"
 $CMD &
-snapwatch \$! "\$L"; echo "${JOB}_RC=\$? \$(date +%s)" >> "\$W/times.txt"
-snapstop "\$W/times.txt"
+snapwatch \$! "\$L"; rc=\$?; echo "${JOB}_RC=\$rc \$(date +%s)" >> "\$W/times.txt"
+snapstop "\$W/times.txt" || { trap - EXIT; echo "ERROR: job processes still live after the KILL (JOB_STUCK in times.txt): the pod lock stays held until they are gone"; exit 1; }
+$POST
 echo ALL_DONE >> "\$W/times.txt"
 EOS
 tr -d '\r' < "$O/run.sh" > "$O/run.tmp" && mv "$O/run.tmp" "$O/run.sh"
