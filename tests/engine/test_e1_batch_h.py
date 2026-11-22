@@ -31,7 +31,7 @@ from nuzline.engine.outcome import (
     acid_rain_pairs,
     empty_outcome,
     future_thresholds,
-    hit_class,
+    hit_class_mask,
 )
 from tests.engine.d2_states import four, with_moves
 from tests.engine.helpers import (
@@ -92,7 +92,7 @@ def test_future_sight_law_is_classes_where_acid_rain_can_write(tables, names, fo
     )
     s = _pending(s, names, 1, 0)
     acts = jnp.asarray([0, foe_action], jnp.int32)
-    assert not bool(future_thresholds(tables, s, acts)[2][1])
+    assert not bool(future_thresholds(tables, s, acts)[1][1])
     assert _law(tables, s, acts, 1) == hit_class_law([_accuracy(tables, names)])
 
 
@@ -119,7 +119,7 @@ def test_future_sight_law_on_deep_fog_covers_the_acid_rain_gravity(tables, names
     assert _law(tables, s, acts, 1) == hit_class_law([a * 6 // 10, a, a * 10 // 6])
     for hp, lands in ((1, lambda u: True), (None, lambda u: u <= a * 6 // 10)):
         s, acts = _fog_chase(tables, names, hp=hp)
-        thr, ok, _ = future_thresholds(tables, s, acts)
+        values, _ = future_thresholds(tables, s, acts)
         # The baseline's hit roll 0 always misses (step._future_sight: ``roll > 0``); the
         # default roll 1 lands in every class.
         base = _hits()._replace(future_hit=jnp.zeros((2,), jnp.int8))
@@ -130,7 +130,7 @@ def test_future_sight_law_on_deep_fog_covers_the_acid_rain_gravity(tables, names
             o = base._replace(future_hit=jnp.asarray([0, u], jnp.int8))
             out = assert_matches_reference(tables, s, acts, o)
             assert (int(out.hp[1, 1]) == int(missed.hp[1, 1]) - 5) is lands(u), (hp, u)
-            c = int(hit_class(u, thr[1], ok[1]))
+            c = int(hit_class_mask(u, values[1]))
             if c != u:
                 o_c = o._replace(future_hit=jnp.asarray([0, c], jnp.int8))
                 _same(jit_step(tables, s, acts, o_c), out)
@@ -188,10 +188,10 @@ def test_only_a_due_hit_keeps_the_roll_whole(tables, names):
     raw = jax.vmap(lambda k: jax.random.randint(jax.random.fold_in(k, 28), (2,), 1, 101))(keys)
     for timer, loose in ((2, False), (1, True)):
         st = _pending(s, names, 1, 0, timer)
-        thr, ok, whole = future_thresholds(tables, st, acts)
+        values, whole = future_thresholds(tables, st, acts)
         assert bool(whole[1]) is loose
         stored = np.asarray(sample_rows(keys, tables, st, acts).future_hit)[:, 1]
-        want = raw[:, 1] if loose else hit_class(raw[:, 1], thr[1], ok[1])
+        want = raw[:, 1] if loose else hit_class_mask(raw[:, 1], values[1])
         assert np.array_equal(stored, np.asarray(want))
 
 
@@ -211,7 +211,7 @@ def test_four_battlers_keep_the_roll_whole_where_an_acid_pair_is_reachable(table
         want = np.zeros((4, 4), bool)
         want[2, 3] = bool(pursuit)
         assert np.array_equal(pairs, want)
-        assert bool(future_thresholds(tables, s, acts, moves)[2][0]) is bool(pursuit)
+        assert bool(future_thresholds(tables, s, acts, moves)[1][0]) is bool(pursuit)
 
 
 # --- H-2: Immunity, Own Tempo, Water Veil, Magma Armor, Oblivious; the switch-out cure -------

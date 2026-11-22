@@ -345,7 +345,7 @@ from nuzline.engine.ids import (
     Type,
     sleepless,
 )
-from nuzline.engine.order import encore_slot_of, move_effects, terrain_index
+from nuzline.engine.order import encore_slot_of, move_effects, sketch_copy, terrain_index
 from nuzline.engine.outcome import Outcome, crit_lands, read_chance, secondary_procs
 from nuzline.engine.state import (
     MOVES,
@@ -2298,6 +2298,8 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & ~jnp.any(last == jnp.asarray(MIMIC_FORBIDDEN, _I32))
         & (state.transformed[side] == 0)  # :4482, VOLATILE_CONDITION_TRANSFORM
         & (last != 0)
+        # BtlCmd_TryMimic's own test (:4483): the defender's VOLATILE_CONDITION_SUBSTITUTE only.
+        # subscript_mimic.s has no CheckSubstitute, so not ``h.shielded``'s SUBSTITUTE_HIT.
         & (state.substitute_hp[h.target_side] == 0)
         & ~jnp.any(moves == last)
     )
@@ -2319,6 +2321,54 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         shadow_moves=put(state.shadow_moves, (side, j), moves[j]),
         shadow_pp=put(state.shadow_pp, (side, j), live_pp),
         mimic_slots=put(state.mimic_slots, side, state.mimic_slots[side].astype(_I32) | (1 << j)),
+    )
+
+
+def _sketch(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Sketch (effect_script_0095.s:5, a direct ON_HIT ``subscript_sketch.s``):
+    ``CheckSubstitute BTLSCR_DEFENDER`` (:5) and ``BtlCmd_TrySketch`` (battle_script.c:4839-4884)
+    fail the move (subscript_sketch.s:15, MOVE_STATUS_FAILED) on a defender with a Substitute, a
+    Transformed user (:4847), a defender's ``moveSketched`` (``state.sketch_move``) that is
+    MOVE_NONE, Struggle, Sketch or Chatter (``SKETCH_FORBIDDEN``, :4848-4851) or that the user
+    already knows in a slot that is not Sketch (:4855-4860; the forbidden Sketch itself makes
+    that test the same as ``moves == last``). Otherwise the first Sketch slot (:4862-4865,
+    :4868) takes the move with its table PP (:4869-4870, ``MOVE_DATA().pp``: no cap) and a copied
+    Last Resort zeroes ``lastResortCount`` (:4876-4878). The slot's ``ppUps`` is not written
+    (TrySketch sets ``moves`` and ``ppCur`` only; ``BtlIOCmd_UpdatePartyMon`` copies move and PP,
+    battle_io_command.c:581-582), so its max PP (``hooks.max_pp``, MoveTable_CalcMaxPP,
+    move_table.c:25-34) is the copy's table PP with Sketch's slot's PP Ups: none in play. PP Up
+    needs a max PP of 5 or more (item_use_pokemon.c:20, :187) and Sketch has 1, and every way
+    Sketch enters a slot zeroes its ``ppUps`` first (an in-battle level-up, battle_script.c:10170;
+    evolution.c:632; move_reminder.c:934; party_menu/callbacks.c:1111): ``Pokemon_SetMoveSlot``
+    alone keeps them (pokemon.c:3920-3933). The engine's
+    ``moves`` / ``pp`` are the party Pokemon's, and ``BtlIOCmd_UpdatePartyMon`` writes every
+    unflagged slot (battle_io_command.c:575-587), so the write is permanent: no shadow and no
+    ``mimic_slots`` bit (Mimic cannot copy Sketch, ``Move_CanBeMimicked``). Only Sleep Talk
+    reaches Sketch through another move (a known move, battle_script.c:4916-4925), so a Sketch
+    slot exists wherever this runs."""
+    fmt = format_of(state)
+    side, user = h.side, h.user
+    own = party(fmt, side)
+    # BtlCmd_TrySketch's own tests (``order.sketch_copy``, shared with ``order.sketched_state``).
+    copies, j, last = sketch_copy(state, side, h.target_side)
+    cond = (
+        (h.effect == _E.SKETCH)
+        & h.landed
+        & ~h.shielded  # subscript_sketch.s:5, BtlCmd_CheckSubstitute (battle_script.c:9180-9181)
+        & copies
+    )
+
+    def put(arr, index, value):
+        return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
+
+    return state._replace(
+        moves=put(state.moves, (own, user, j), last),
+        pp=put(state.pp, (own, user, j), tables.move_pp[last].astype(_I32)),
+        last_resort_count=put(
+            state.last_resort_count,
+            side,
+            jnp.where(last == MOVE_LAST_RESORT, 0, state.last_resort_count[side]),
+        ),
     )
 
 
@@ -4349,6 +4399,7 @@ def play_hit(
         _magnet_rise,
         _gravity,
         _mimic,
+        _sketch,
         _transform,
         _chatter,
         _ingrain,

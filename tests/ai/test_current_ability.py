@@ -78,10 +78,10 @@ def test_switching_reads_the_current_ability(monkeypatch, kaizo_tables, state):
 
     sites = 44
     assert not switching._refusals(
-        switching._layout(kaizo_tables, state, sites), state, kaizo_tables, sites
+        switching._layout(kaizo_tables, state, sites), state, kaizo_tables
     )
     _changed(monkeypatch, 0, NORMALIZE)
     with jax.disable_jit():
         lay = switching._layout(kaizo_tables, state, sites)
-        lines = switching._refusals(lay, state, kaizo_tables, sites)
+        lines = switching._refusals(lay, state, kaizo_tables)
     assert any("Normalize" in line for line in lines), lines

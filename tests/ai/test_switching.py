@@ -18,10 +18,7 @@ from nuzline.ai.switching import (
     INEFFECTIVE,
     NO_SWITCH,
     NOT_VERY_EFFECTIVE,
-    REFUSED_ACTION,
     SUPER_EFFECTIVE,
-    SWITCH_NONE,
-    SWITCH_REFUSED,
     SWITCH_SITES,
     SwitchSite,
     UnsupportedSwitching,
@@ -186,28 +183,6 @@ def test_apply_type_chart_stab_then_each_entry(tables, names):
     assert chart(1, "Tackle", 0) == 0
 
 
-def test_too_many_sites_are_refused(tables, names):
-    s = _trace_f(tables, names)
-    rock_throw = jnp.full((4,), names.move("Rock Throw"), jnp.int16)
-    # Geodude and Onix with four Rock Throws each: 8 pass-2 sites; Cranidos with
-    # Rock Throw x4 against Starly: 4 keep sites. 12 > 9.
-    s = s._replace(moves=s.moves.at[1, :3].set(rock_throw))
-    with pytest.raises(UnsupportedSwitching, match="12 voluntary-switch draws"):
-        switch_sites(tables, s)
-    with pytest.raises(UnsupportedSwitching):
-        sample_ai_outcome(jax.random.PRNGKey(0), tables, s)
-    with pytest.raises(UnsupportedSwitching):
-        enumerate_ai_outcomes(tables, s)
-    # Traced (jit/vmap): every entry is REFUSED and the refusal propagates.
-    sites = jax.jit(switch_sites)(tables, s)
-    assert sites.tolist() == [K.REFUSED] * SWITCH_SITES
-    o = jax.jit(sample_ai_outcome)(jax.random.PRNGKey(0), tables, s)
-    assert int(o.switch_stop) == SWITCH_REFUSED
-    _, probs = jax.jit(enumerate_ai_outcomes)(tables, s)
-    assert np.isnan(np.asarray(probs)).all()
-    assert int(jax.jit(switch_action)(tables, s, jnp.int8(SWITCH_NONE))) == REFUSED_ACTION
-
-
 @pytest.mark.parametrize(
     ("change", "missing"),
     [
@@ -278,6 +253,48 @@ def test_shadow_tag_and_arena_trap_block_the_switch(tables, names):
         )
         t = as_species(tables, s, 0, 0, names.species(species), slot)
         assert switch_sites(tables, t).tolist() == [K.NONE] * SWITCH_SITES, species
+
+
+def _suppressed(s):
+    return s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+
+
+@pytest.mark.parametrize(
+    "species, ability, steel",
+    [
+        ("Wobbuffet", "Shadow Tag", False),
+        ("Diglett", "Arena Trap", False),
+        ("Magnemite", "Magnet Pull", True),
+    ],
+)
+def test_gastro_acid_lifts_the_trap_gate(tables, names, species, ability, steel):
+    """I-2: ``TrainerAI_ShouldSwitch`` (trainer_ai.c:3906-3913) counts Shadow Tag, Arena Trap and
+    Magnet Pull with ``CountAbility`` (battle_lib.c:2896-2903, :2933-2940), which compares
+    ``Battler_Ability`` (:3088-3106): the player's holder under Gastro Acid gates nothing."""
+    s = _trace_f(tables, names)
+    if steel:  # Magnet Pull traps only a Steel Pokemon (:3910-3911)
+        s = s._replace(
+            types=s.types.at[1, CRANIDOS].set(jnp.asarray([names.type("Steel")] * 2, jnp.int8))
+        )
+    base = switch_sites(tables, s).tolist()
+    assert base != [K.NONE] * SWITCH_SITES  # the gate is the only thing that would stop it
+    slot = names.species_abilities(names.species(species)).index(names.ability(ability))
+    t = as_species(tables, s, 0, 0, names.species(species), slot)
+    t = t._replace(types=t.types.at[0, 0].set(s.types[0, 0]))  # the layout stays trace F's
+    assert switch_sites(tables, t).tolist() == [K.NONE] * SWITCH_SITES
+    u = _suppressed(t)
+    assert switch_sites(tables, u).tolist() == base
+    assert _actions(tables, u) == _actions(tables, s)
+
+
+def test_gastro_acid_keeps_multitype_out_of_the_trap_gate(tables, names):
+    """``Battler_Ability`` keeps Multitype under suppression (battle_lib.c:3090-3093); it is no
+    trap ability, so the gate stays open either way."""
+    s = _trace_f(tables, names)
+    t = as_species(tables, s, 0, 0, names.species("Arceus"), 0)
+    t = t._replace(types=t.types.at[0, 0].set(s.types[0, 0]))
+    base = switch_sites(tables, t).tolist()
+    assert switch_sites(tables, _suppressed(t)).tolist() == base == switch_sites(tables, s).tolist()
 
 
 def test_jit_without_64bit(tables, names):
@@ -576,3 +593,63 @@ def test_absorb_holder_active_or_untyped_move_hit_draws_none(tables, names):
     ball = rain._replace(move_hit=rain.move_hit.at[1].set(names.move("Weather Ball")))
     assert switching_refusals(tables, ball) == []
     assert K.ABSORB not in switch_sites(tables, ball).tolist()
+
+
+@pytest.mark.fullset
+def test_vanilla_switch_sites_bound_every_accepted_trainer(tables, names):
+    """``SWITCH_SITES`` (9) bounds the candidate draws of every vanilla trainer whose party the
+    flat layout accepts (every move in ``commands.MOVE_EFFECTS``, ``policy._refused``), the four
+    parts read as ``KAIZO_SWITCH_SITES``' are, for any player active type pair ``T``:
+    a draw needs a move whose flags hold SUPER_EFFECTIVE against ``T`` (a superset here: a 2x
+    chart row against either type; ``BattleSystem_CalcEffectiveness``, battle_lib.c:2681-2730,
+    has no power test, so Stealth Rock counts). Keep draws (trainer_ai.c:3576-3592): the active's
+    such moves; Wonder Guard draws (:3315-3344) exist only when the active has none (:3300-3311),
+    so the larger of the two counts; absorb draws (:3681-3708): bench Pokemon with Flash Fire,
+    Water Absorb or Volt Absorb; the passes (:3756-3804): each bench Pokemon's such moves, twice
+    only when one attacking type is immune on one of its types and resisted on the other
+    (``UpateMoveStatusForTypeMul``, battle_lib.c:2782-2805) or it can have Wonder Guard."""
+    from nuzline.ai.commands import MOVE_EFFECTS
+    from nuzline.data.forms import personal_row
+    from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+    from nuzline.engine.ids import AbilityId
+    from tests.engine.helpers import INTERMEDIATE
+
+    chart = np.asarray(tables.type_chart)  # tenths: 0 immune, 5 resisted, 20 super effective
+    move_type = np.asarray(tables.move_type)
+    types_of = np.asarray(tables.species_types)
+    abilities_of = np.asarray(tables.species_abilities)
+    variable = {names.move(m) for m in ("Hidden Power", "Weather Ball", "Natural Gift", "Judgment")}
+    absorb = {AbilityId.FLASH_FIRE, AbilityId.WATER_ABSORB, AbilityId.VOLT_ABSORB}
+    n_types = chart.shape[0]
+    pairs = [(a, b) for a in range(n_types) for b in range(a, n_types)]
+
+    def se(moves, t):
+        return sum(
+            1 for m in moves if m and (m in variable or chart[move_type[m], list(t)].max() == 20)
+        )
+
+    inter = IntermediateData(INTERMEDIATE)
+    fits, worst = [], 0
+    for trainer in load_trainers(INTERMEDIATE):
+        party = build_trainer_party(trainer, inter)
+        if not party or any(m and m not in MOVE_EFFECTS for mon in party for m in mon.moves):
+            continue
+        fits.append(trainer.id)
+        rows = [personal_row(tables, mon.species, mon.form) for mon in party]
+        both = []
+        for r in rows:
+            t1, t2 = (int(x) for x in types_of[r])
+            twice = t1 != t2 and any(
+                {int(chart[x, t1]), int(chart[x, t2])} == {0, 5} for x in range(n_types)
+            )
+            both.append(2 if twice or AbilityId.WONDER_GUARD in abilities_of[r] else 1)
+        for a in range(len(party)):
+            bench = [b for b in range(len(party)) if b != a]
+            held = sum(1 for b in bench if absorb & set(abilities_of[rows[b]].tolist()))
+            for t in pairs:
+                keep = se(party[a].moves, t)
+                guard = sum(se(party[b].moves, t) for b in bench)
+                passes = sum(both[b] * se(party[b].moves, t) for b in bench)
+                worst = max(worst, max(keep, guard) + held + passes)
+    assert 246 in fits  # Roark
+    assert worst <= SWITCH_SITES, (worst, fits)
