@@ -106,9 +106,12 @@ pack_sent_key() { local f k
 
 # pack_body_env: the exec-pod body's env field (',"env":{...}') holding GATE_GB, KILL_GB and MAXP
 # as set on the PC for pack.sh (the shape's values, docs/process.md section 5), only those set;
-# nothing when none is. Refuses a value that is not a whole number.
+# nothing when none is. Refuses a value that is not a whole number; warns on stderr when it sets any.
 pack_body_env() { local n v out=""
   for n in GATE_GB KILL_GB MAXP; do v=${!n-}; [ -n "$v" ] || continue
     case "$v" in *[!0-9]*) refuse "$n '$v' is not a whole number" "";; esac
     out="$out${out:+,}\"$n\":\"$v\""; done
-  [ -z "$out" ] || printf ',"env":{%s}' "$out"; }
+  [ -z "$out" ] && return 0
+  # A knob exported in the shell reaches every body, normal runs included: say so on stderr.
+  echo "WARNING pack.sh: ${out//\"/} from the environment go into this body's env" >&2
+  printf ',"env":{%s}' "$out"; }
