@@ -9023,7 +9023,10 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
             # battle's movePrev is moveTemp (the chosen move) when the attack message showed.
             s.move_prev = move if turn.attack_message else 0
-            if turn.attack_message:  # moveSketched, bcp.c:3952-3954 (I-3)
+            # moveSketched, bcp.c:3952-3954 (I-3): the mover's, also after a Magic Coat
+            # reflection (the nested holder pass writes none: LoopSpreadMoves swaps the
+            # attacker back first, bcp.c:3831-3835).
+            if turn.attack_message:
                 s.battlers[side].sketch_move = move
             copied = (0, 0) if turn.reflected else _copied_writes(tables, turn, move, record)
             conv2 = None if turn.reflected else _conv2_writes(tables, s, turn, side, move, record)

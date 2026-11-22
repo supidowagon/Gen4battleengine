@@ -468,3 +468,23 @@ def test_a_sketched_metronome_calls_are_graded_for_the_holder(tables, names):
     assert any("SMEARGLE" in m.upper() and "Gyro Ball with Speed" in m for m in report.missing), (
         report.missing
     )
+
+
+def test_a_reflected_move_is_the_movers_sketch_move(tables, names):
+    """A Magic Coat reflection: LoopSpreadMoves swaps the attacker back to the mover
+    (``magicCoatMon``, bcp.c:3831-3835) before UpdateMoveBuffers writes moveSketched (:3952-3954),
+    so the mover's is its reflected Leer and the holder's stays its own Magic Coat. The next
+    turn's Sketch copies the Leer. Engine == reference."""
+    s = _sketcher(
+        tables,
+        names,
+        foe=("Leer",),
+        order="player",
+        mine=("Magic Coat", "Sketch", "Tackle", "Protect"),
+    )
+    out = assert_matches_reference(tables, s, A("Magic Coat", "Leer", s, names), _o())
+    leer = names.move("Leer")
+    assert int(out.sketch_move[1]) == leer
+    assert int(out.sketch_move[0]) == names.move("Magic Coat")
+    nxt = assert_matches_reference(tables, out, A("Sketch", "Leer", out, names), _o())
+    assert leer in nxt.moves[0, 0].tolist()

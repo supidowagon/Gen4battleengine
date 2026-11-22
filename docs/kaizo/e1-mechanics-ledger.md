@@ -2948,6 +2948,13 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
 
 - I-S1 Batch I compare `snapcmp-e1i-bd2555b` (tip bd2555bc vs the main fd3c1fcc capture `snapmain-fd3c1fc`, 200 seeds, 122 parts, `--allow-new sketch_move`): COMPARE_RC=1, 110 ok, 12 diverged, 0 sampler or generator drift. Log `_scratch/rent/out/snapcmp-e1i-bd2555b/`. One class only:
   - Diverged, class A (I-6): 6 `step` and 6 `jitstep` parts (seeds 0-9, 20-29, 30-39, 130-139, 160-169, 180-189). Each first diff is `ai_ability_known[slot]` 72 -> 0 or 1 at turn 1-4: seed 4 [0], seed 29 [2], seed 34 [0], seed 139 [3], seed 167 [1], seed 184 [2]. 72 is ABILITY_VITAL_SPIRIT (generated/abilities.txt line 73, NONE = 0). Main recorded Vital Spirit as revealed when it cured a status. Batch I keeps the slot's earlier value: 0 none, or the generator's drawn 1. The decomp gives that cure the forbids-status script (BattleSystem_RecoverStatusByAbility, battle_lib.c:4397-4410). Its message tags BTLSCR_MSG_TEMP (subscript_ability_forbids_status.s:6), so it skips `BattleAI_SetAbility` (battle_script.c:11799-11806): no reveal. Intended I-6 mechanic. No other group or field moved; `sketch_move` is the only new field. The `sample`, `rest`, `ai`, `gen` and `roark` groups are identical.
+- Batch I merge-gate fixes (`_scratch/manager/review_batch_i_2686deda.md`; report `_scratch/e1/i-next/gate-fix-report.md`):
+  - Sketch during a Magic Coat reflection: LoopSpreadMoves swaps the attacker back to the mover (`magicCoatMon`,
+    bcp.c:3831-3835) before UpdateMoveBuffers writes moveSketched (:3952-3954). The mover records its own (reflected)
+    move, and the holder's reflected pass writes nothing. The holder keeps Magic Coat from its own action. JAX: the
+    reflected pass has `ready_t` False (step.py, `_set_sketch`). Reference: the nested holder pass runs no `_actions`
+    write. Sketch itself has no MOVE_FLAG_MAGIC_COAT (res/moves/sketch/data.json:21). Test:
+    `test_a_reflected_move_is_the_movers_sketch_move`.
 
 ## Stream state (restart point, 2026-11-19)
 

@@ -3182,7 +3182,12 @@ def _use_move(
     state = state._replace(move_prev=prev.astype(state.move_prev.dtype))
     # UpdateMoveBuffers' moveSketched (bcp.c:3952-3954), I-3: moveTemp where the attack message
     # showed, outside the REUSE_LAST_MOVE block and kept otherwise (``_set_sketch``). The same
-    # battler and move as ``movePrevByBattler``; Pursuit's pre-switch hit never reaches it.
+    # battler and move as ``movePrevByBattler``; Pursuit's pre-switch hit never reaches it. A
+    # Magic Coat reflection: LoopSpreadMoves swaps the attacker back to the mover
+    # (``magicCoatMon``, bcp.c:3831-3835) before UpdateMoveBuffers, so the mover records its own
+    # move (this pass) and the holder's reflected pass writes nothing (``ready_t`` is False
+    # there); the holder's moveSketched stays Magic Coat from its own action. Sketch has no
+    # MOVE_FLAG_MAGIC_COAT (res/moves/sketch/data.json:21), so it is never reflected.
     state = _set_sketch(state, side, move, ready_t & tail & shown_t)
     # UpdateFlagsWhenHit's conversion2 fields (bcp.c:4509-4533, E3-B2-3) for the foe defender
     # (``record``): where SYSCTL_MOVE_SUCCEEDED is set and the move has no MOVE_STATUS_NO_EFFECTS
