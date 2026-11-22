@@ -651,6 +651,11 @@ def trainer_record(
     def fog() -> list[int]:
         return fog_headers(src.trainer_maps.get(tid, []), src.map_weather)
 
+    if "fog_headers" not in t:
+        raise ResolveError(
+            f"trainer {tid}: trainers.json has no fog_headers (re-run python -m tools.extract_rom "
+            "--game kaizo: maps.trainer_fog_headers writes it)"
+        )
     if t["start_condition"] == "fog" and t["fog_headers"] != fog():
         raise ResolveError(
             f"trainer {tid}: trainers.json fog_headers {t['fog_headers']} disagree with the "
