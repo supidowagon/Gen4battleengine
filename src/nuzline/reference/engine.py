@@ -3376,8 +3376,8 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
     test (H-2): a status its ``Battler_Ability`` forbids (``_FORBIDDEN``), Own Tempo's confusion
     (:4390-4395) or Oblivious' infatuation (:4426-4431) is cleared by
     subscript_ability_forbids_status.s (:11-13, :_045, :_052). Its message tags BTLSCR_MSG_TEMP
-    (no BattleAI_SetAbility, script.c:11801-11802); the Insomnia, Vital Spirit and Limber reveal
-    stays for now (``hooks.REVEALS_ON``). Run at each move end for the attacker then the defender
+    (no BattleAI_SetAbility, script.c:11801-11802): no cure reveals the ability (I-6;
+    ``hooks.REVEALS_ON``). Run at each move end for the attacker then the defender
     (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
     mon = _active(s, side)
     _arm_unburden(s, side)
@@ -3394,8 +3394,6 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
             sd.nightmare = 0
         mon.status = Status.NONE
         mon.status_counter = 0
-        if ability in (*SLEEPLESS_ABILITIES, AbilityId.LIMBER):
-            _know_ability(s, side)
 
 
 def _form_change(tables, s: RefState) -> None:

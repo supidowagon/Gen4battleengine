@@ -55,7 +55,7 @@ reveals nothing.
 Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
 Simple, Mold Breaker, Adaptability and Solid Rock in ``damage.py``; Keen Eye, Inner
 Focus, Rock Head, Static, Poison Point, Flame Body, Rough Skin and Limber in
-``effects.py`` (Limber's cure here); Immunity, Own Tempo, Water Veil, Magma Armor and Oblivious
+``effects.py`` (its cure here); Immunity, Own Tempo, Water Veil, Magma Armor and Oblivious
 block in ``effects.py`` and cure here (``recover_status_by_ability``, H-2); Color Change in
 ``effects._contact_ability``, Marvel Scale in ``damage.py``, Soundproof in ``step.py`` (its block
 and the uproar wake-ups) and ``effects.py`` (sleep in an uproar, Perish Song), H-3; Steadfast, Natural Cure,
@@ -180,12 +180,10 @@ TYPE_CHANGE, SOUND_BLOCKED = "type_change", "sound_blocked"
 # * Rough Skin: whenever it hurts the attacker: subscript_rough_skin.s prints
 #   ``TAG_NICKNAME_ABILITY_NICKNAME, BTLSCR_DEFENDER, BTLSCR_DEFENDER, BTLSCR_ATTACKER``.
 # * Limber: a direct paralysis (Thunder Wave) it blocks (subscript_paralyze.s:_170, "prevents
-#   paralysis", ``TAG_NICKNAME_ABILITY``; an indirect or ability side effect ends silently),
-#   and the cure of a paralysis (``RecoverStatusByAbility``, as Insomnia).
+#   paralysis", ``TAG_NICKNAME_ABILITY``; an indirect or ability side effect ends silently).
 # * Insomnia: a sleep move it blocks (subscript_fall_asleep.s:_221 prints "stayed awake
-#   because of its {1}" with ``TAG_NICKNAME_ABILITY``), and the cure of a sleep status
-#   (``RecoverStatusByAbility``, subscript_ability_forbids_status.s:6 tags
-#   ``BTLSCR_MSG_TEMP``).
+#   because of its {1}" with ``TAG_NICKNAME_ABILITY``). Its cure of a sleep status
+#   (``RecoverStatusByAbility``) tags ``BTLSCR_MSG_TEMP``: no reveal (I-6).
 # * Leaf Guard: a direct status (a status move) it blocks in sun (``effects._inflict``; ruling
 #   G-14): subscript_poison.s:_201, _badly_poison.s:_266, _burn.s:_264, _paralyze.s:_170 and
 #   _fall_asleep.s:_221 print their "prevents" / "stayed awake" message with
@@ -234,10 +232,11 @@ TYPE_CHANGE, SOUND_BLOCKED = "type_change", "sound_blocked"
 #   BTLSCR_MSG_TEMP: no reveal (battle_script.c:11801-11802).
 # Marvel Scale prints nothing (CalcMoveDamage, battle_lib.c:6797-6800).
 # Magma Armor's freeze block prints the attack message only (subscript_freeze.s:_128). The cures of
-# ``recover_status_by_ability`` tag ``BTLSCR_MSG_TEMP``, which never reaches
-# ``BattleAI_SetAbility`` (battle_script.c:11801-11802): Immunity, Own Tempo, Water Veil, Magma
-# Armor and Oblivious reveal nothing there (Insomnia's, Vital Spirit's and Limber's
-# ``STATUS_CURE`` stay for now).
+# ``recover_status_by_ability`` tag ``BTLSCR_MSG_TEMP`` (subscript_ability_forbids_status.s:6),
+# which never reaches ``BattleAI_SetAbility`` (battle_script.c:11801-11802): Immunity, Own Tempo,
+# Limber, Insomnia, Vital Spirit, Water Veil, Magma Armor and Oblivious reveal nothing there
+# (I-6; ``STATUS_CURE`` is Shed Skin's and Hydration's alone, whose
+# subscript_ability_restore_status.s:8 tags ``BTLSCR_MSG_BATTLER_TEMP``).
 # The others never reveal: Intimidate's "cuts" message, Download's "raised its" message
 # (``SetupNicknameAbilityStatMsg``, :2854) and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
@@ -256,11 +255,11 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.FLAME_BODY: frozenset({CONTACT_STATUS}),
     AbilityId.CUTE_CHARM: frozenset({CONTACT_STATUS}),
     AbilityId.ROUGH_SKIN: frozenset({CONTACT_DAMAGE}),
-    AbilityId.INSOMNIA: frozenset({SLEEP_BLOCKED, STATUS_CURE}),
-    AbilityId.VITAL_SPIRIT: frozenset({SLEEP_BLOCKED, STATUS_CURE}),  # as Insomnia (G-47)
+    AbilityId.INSOMNIA: frozenset({SLEEP_BLOCKED}),
+    AbilityId.VITAL_SPIRIT: frozenset({SLEEP_BLOCKED}),  # as Insomnia (G-47)
     # subscript_weather_continues.s:_076 tags the healed battler (G-45).
     AbilityId.ICE_BODY: frozenset({WEATHER_HP}),
-    AbilityId.LIMBER: frozenset({PARALYSIS_BLOCKED, STATUS_CURE}),
+    AbilityId.LIMBER: frozenset({PARALYSIS_BLOCKED}),
     AbilityId.SHED_SKIN: frozenset({STATUS_CURE}),
     # F-5: subscript_ability_restore_status.s:8 tags the holder (BTLSCR_MSG_BATTLER_TEMP).
     AbilityId.HYDRATION: frozenset({STATUS_CURE}),
@@ -559,8 +558,8 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
     counter with it; msgTemp MSGCOND_SLEEP 0 also clears VOLATILE_CONDITION_NIGHTMARE, :10,
     :16-18, G-32), the confusion bits (msgTemp 5, :11, :_045) or the infatuation (msgTemp 6,
     :12, :_052). Its message (:6) tags ``BTLSCR_MSG_TEMP``, which never reaches
-    ``BattleAI_SetAbility`` (battle_script.c:11801-11802); only Insomnia's, Vital Spirit's and
-    Limber's ``STATUS_CURE`` reveal is kept for now (``REVEALS_ON``). The decomp runs it for the
+    ``BattleAI_SetAbility`` (battle_script.c:11801-11802), so no cure reveals the ability (I-6;
+    ``STATUS_CURE`` is Shed Skin's and Hydration's, ``REVEALS_ON``). The decomp runs it for the
     attacker then the defender at each move end (``BattleControllerPlayer_MoveEnd``,
     battle_controller_player.c:3965-3967) and for every battler on a switch-in
     (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``, battle_lib.c:4135-4145)."""
@@ -587,7 +586,7 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
         ),
     )
     state = clear_nightmare(state, side, woke & (status == Status.SLEEP))
-    return reveal_ability(state, side, mon, STATUS_CURE, woke)
+    return state
 
 
 # The status berries: the statuses each one cures (``BattleSystem_TriggerHeldItem``,
