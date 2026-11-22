@@ -641,7 +641,7 @@ def _git(repo: Path, *args: str) -> None:
 def test_pack_refuses_pod_scripts_that_differ_from_main(tmp_path):
     repo = tmp_path / "repo"
     (repo / "tools/ops/day/pod").mkdir(parents=True)
-    for rel in ("tools/ops/common.sh", "tools/ops/day/pack.sh"):
+    for rel in ("tools/ops/common.sh", "tools/ops/day/pack.sh", "tools/ops/day/pack_lib.sh", "tools/ops/day/table_key16.sh"):
         (repo / rel).write_bytes((ROOT / rel).read_bytes().replace(b"\r", b""))
     (repo / "tools/ops/day/pod/a.sh").write_text("echo 1\n", encoding="utf-8", newline="\n")
     _git(repo, "init", "-q", "-b", "main")

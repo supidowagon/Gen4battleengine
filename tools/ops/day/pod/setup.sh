@@ -12,6 +12,7 @@
 # files.txt lines: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]"; A = no -m filter;
 # <GB>G = a floor on the expected peak of every unit cut from that line. Each unit's expected peak
 # goes to out/<unit>.w: max(<GB>, bin/weights.py over bin/weights.txt); runner.sh gates on it.
+# Writes the quick lane marker /work/_lane/<stream>.sha once the repo is built (bin/lane.sh).
 # Writes gate.env (GATE_VERSION, POD_SCRIPTS, POD_WEIGHTS for podcheck.sh) and run.env (the
 # knobs the exec-pod body's env set, for a runner restart) first.
 set -euxo pipefail
@@ -46,6 +47,10 @@ R="$D/repo"; rm -rf "$R"; mkdir "$R"; tar --no-same-owner -xf code.tar -C "$R"
 tar --no-same-owner -xJf tables.tar.xz -C "$R"; [ -f "$R/data/gen4_platinum_kaizo/manifest.json" ]
 mkdir -p "$R/external"; ln -sfn "/work/_decomp/$DECOMP" "$R/external/pokeplatinum"
 ( cd "$R" && uv sync --frozen -q )
+# Quick lane marker (DAYBOX.md "Quick lane"): this run's repo is now the stream's last synced state.
+. "$D/bin/lane.sh"; RUNNAME=$(basename "$D")
+if STREAM=$(lane_stream "$RUNNAME"); then lane_write_marker "$STREAM" "$COMMIT" "$R" "${TABLES_KEY:-}" || echo "WARNING: lane marker of stream $STREAM not written"
+else echo "WARNING: no stream in the run name $RUNNAME; no lane marker"; fi
 # The damage oracle needs node + @smogon/calc; node is installed once per pod (DAYBOX.md bring-up
 # step 6). With NUZLINE_REQUIRE_NODE=1 (the nightly) a pod without npm fails the setup.
 if command -v npm >/dev/null && [ -f "$R/tools/smogon_calc/package-lock.json" ]; then ( cd "$R" && npm ci -s --prefix tools/smogon_calc )
