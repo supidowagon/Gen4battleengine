@@ -929,3 +929,44 @@ def test_agg_prints_the_runs_peak_from_mem_mb_txt(tmp_path, mem, want):
     line = _agg_peak_line(tmp_path, mem)
     assert f"container peak while this run ran (max of its mem_mb.txt, 15 s samples, incl. other runs) {want};" in line
     assert line.endswith("container lifetime peak (since the pod started, incl. earlier and other runs) n/a")
+
+
+def test_a_module_that_skips_itself_at_collection_fails_the_run(tmp_path):
+    """setup.sh's collection summary: a module that skipped itself while collecting (a module-level
+    pytest.importorskip of a package the pod lacks: "SKIPPED [1] <module>:<line>: ..." of -rs)
+    gets "<module> 0 collect_rc=5 module_skipped", also inside a folder line that collected other
+    modules; a line that collects nothing under the -m filter alone stays "<line> 0 collect_rc=5".
+    agg.sh lists the module and its skip line under collection failures and ends RESULT: FAIL."""
+    d = tmp_path / "run"
+    for sub in ("col", "out", "bin"):
+        (d / sub).mkdir(parents=True)
+    for n in ("weights.py", "weights.txt", "agg.sh", "gate.sh"):
+        (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
+    skip = "SKIPPED [1] tests/rom/test_a.py:7: could not import 'ndspy': No module named 'ndspy'"
+    lines = [("tests/rom/test_a.py 1", "5", f"\n{skip}\nno tests collected in 0.04s\n"),
+             ("tests/rom 1", "0", "tests/rom/test_b.py::test_x\n\nSKIPPED [1] tests\\rom\\test_c.py:5: could not import 'capstone'\n"),
+             ("tests/test_d.py 1", "5", "\nno tests collected (3 deselected) in 0.1s\n")]
+    (d / "col" / "list.txt").write_text("".join(f"{x}\n" for x, _, _ in lines), encoding="utf-8", newline="\n")
+    for k, (_, rc, out) in enumerate(lines, 1):
+        (d / "col" / f"{k}.rc").write_text(rc + "\n")
+        (d / "col" / f"{k}.out").write_text(out, encoding="utf-8", newline="\n")
+        (d / "col" / f"{k}.ids").write_text("".join(x + "\n" for x in out.splitlines() if "::" in x), encoding="utf-8", newline="\n")
+    setup = (GATE.parent / "setup.sh").read_text(encoding="utf-8").replace("\r", "")
+    py = setup[setup.index("<<'PY'\n") + 7 : setup.index("\nPY\n")]
+    subprocess.run([sys.executable, "-", str(d)], input=py, text=True, check=True, capture_output=True)
+    assert (d / "collected.txt").read_text().splitlines() == [
+        "tests/rom/test_a.py 0 collect_rc=5 module_skipped",
+        "tests/rom/test_c.py 0 collect_rc=0 module_skipped",
+        "tests/rom/test_b.py 1 collect_rc=0",
+        "tests/test_d.py 0 collect_rc=5"]
+    (d / "out" / "DONE").write_text("")
+    (d / "out" / "u_001.rc").write_text("0\n")
+    (d / "out" / "u_001.log").write_text("1 passed in 0.10s\n")
+    r = subprocess.run([BASH, "-c", f"CGROOT='{_posix(tmp_path / 'nocg')}' bash '{_posix(d / 'bin' / 'agg.sh')}'"],
+                       check=False, capture_output=True, text=True, env=_clean_env())
+    out = r.stdout.splitlines()
+    cf = out.index(next(x for x in out if x.startswith("--- collection failures")))
+    assert out[cf + 1 : cf + 3] == ["tests/rom/test_a.py 0 collect_rc=5 module_skipped",
+                                    "tests/rom/test_c.py 0 collect_rc=0 module_skipped"], r.stdout
+    assert skip in out
+    assert out[-1].startswith("RESULT: FAIL (") and "2 collection failures;" in out[-1], out[-1]
