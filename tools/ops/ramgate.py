@@ -81,24 +81,6 @@ ENV_NO_WAIT = "NUZLINE_RAMGATE_NO_WAIT"  # measuring harness only: it checks RAM
 ENV_DONE = "NUZLINE_RAMGATE_DONE"
 ENV_NESTED = "PYTEST_CURRENT_TEST"  # set while a test runs: a pytest inside it is not gated
 
-# Pytest options (and common plugin options) that take a separate value argument; the value is
-# not a test id. A value of an option missing here reads as an id and weighs 20: it errs to POD.
-_VALUE_OPTIONS = frozenset(
-    {
-        *("-m", "-k", "-p", "-o", "-c", "-n", "-W", "-r"),
-        *("--durations", "--durations-min", "--maxfail", "--deselect", "--ignore"),
-        *("--ignore-glob", "--rootdir", "--confcutdir", "--basetemp", "--junitxml"),
-        *("--junit-xml", "--tb", "--color", "--import-mode", "--override-ini"),
-        *("--log-level", "--log-file", "--log-format", "--log-cli-level"),
-        *("--log-date-format", "--capture", "--assert", "--pythonwarnings"),
-        *("--numprocesses", "--dist", "--verbosity", "--report-log", "--pastebin"),
-        *("--doctest-glob", "--doctest-report", "--hypothesis-seed"),
-        *("--hypothesis-profile", "--timeout", "--show-capture", "--junitprefix"),
-        *("--junit-prefix", "--max-worker-restart", "--maxprocesses", "--tx", "--rsyncdir"),
-    }
-)
-
-
 def load_weights(path: str | Path = WEIGHTS) -> dict[str, float]:
     """`<id> <GB> ...` lines of weights.txt; comments and unreadable lines are skipped."""
     out: dict[str, float] = {}
@@ -130,47 +112,6 @@ def weight(ident: str, table: Mapping[str, float]) -> float:
 
 def load_rom_weights(path: str | Path = ROM_WEIGHTS) -> dict[str, float]:
     return load_weights(path) if Path(path).exists() else {}
-
-
-def _relative(arg: str, rootdir: Path, invocation_dir: Path | None) -> str:
-    path, sep, node = arg.replace("\\", "/").partition("::")  # before Path: POSIX keeps backslashes
-    p = Path(path)
-    if not p.is_absolute():
-        p = (invocation_dir or rootdir) / p
-    try:
-        rel = p.resolve().relative_to(rootdir.resolve()).as_posix()
-    except ValueError:
-        rel = path
-    rel = rel.removeprefix("./").rstrip("/") or "."
-    return rel + sep + node
-
-
-def selected_ids(
-    args: Iterable[str], rootdir: str | Path, invocation_dir: str | Path | None = None
-) -> list[str]:
-    """Path and node-id args of a pytest command line, repo-relative with forward slashes.
-
-    Options and their values are dropped. An empty result means the whole tests/ tree."""
-    root = Path(rootdir)
-    inv = Path(invocation_dir) if invocation_dir else None
-    ids: list[str] = []
-    skip = False
-    for a in args:
-        if skip:
-            skip = False
-        elif a.startswith("-") and a != "-":
-            skip = a in _VALUE_OPTIONS
-        else:
-            ids.append(_relative(a, root, inv))
-    return ids
-
-
-def run_weight(ids: Iterable[str], table: Mapping[str, float]) -> float:
-    """Heaviest id; no ids = the whole tree = the heaviest entry of the table."""
-    ids = list(ids)
-    if not ids or ids == ["."]:
-        return max(table.values(), default=DEFAULT_WEIGHT)
-    return max(weight(i, table) for i in ids)
 
 
 def decide(weight_gb: float, free: float, rom_gate: bool = False) -> str:

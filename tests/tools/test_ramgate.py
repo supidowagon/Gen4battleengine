@@ -110,38 +110,6 @@ def test_load_weights(tmp_path):
     assert rg.load_weights() and all(v > 0 for v in rg.load_weights().values())
 
 
-def test_selected_ids_drop_options_and_values():
-    args = [
-        "-m",
-        "not slow and not fullset",
-        "-q",
-        "-k",
-        "foo",
-        "-p",
-        "no:cacheprovider",
-        "--durations",
-        "40",
-        "-o",
-        "addopts=",
-        "--maxfail=2",
-        "tests\\a\\test_x.py::test_one",
-        "./tests/b/",
-    ]
-    assert rg.selected_ids(args, ROOT) == ["tests/a/test_x.py::test_one", "tests/b"]
-
-
-def test_selected_ids_absolute_and_invocation_dir():
-    assert rg.selected_ids([str(ROOT / "tests" / "a.py")], ROOT) == ["tests/a.py"]
-    assert rg.selected_ids(["a.py"], ROOT, ROOT / "tests") == ["tests/a.py"]
-    assert rg.selected_ids(["-x", "-q"], ROOT) == []
-
-
-def test_run_weight_heaviest_and_whole_tree():
-    assert rg.run_weight(["tests/a/test_x.py", "tests/b/test_y.py"], TABLE) == 5.0
-    assert rg.run_weight(["tests/a/test_x.py", "tests/new.py"], TABLE) == 20.0
-    assert rg.run_weight([], TABLE) == 30.0
-
-
 def test_decide_boundaries():
     assert rg.decide(7.99, 100) == "GO"
     assert rg.decide(8, 100) == "POD"
