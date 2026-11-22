@@ -986,10 +986,13 @@ def give_up_only(tables: Tables, known: Collection[int], move: int) -> bool:
     """Whether the only answer worth enumerating for the offered ``move`` is to give it up
     (never-better pruning, design section 6, "Bound" rule 2): its effect is unsupported
     (``coverage.learn_masked``, ruling D10), or a known move has the same effect id, type and
-    category and a power, accuracy (0 = never misses) and PP at least as high. To keep the
-    pruning exact the known move must also match priority, target, move params and flags, and
-    have at least the offered move's secondary-effect chance: a difference there could make the
-    offered move the better one."""
+    category and a power, accuracy (0 = never misses) and PP at least as high. The known move
+    must also match priority, target, move params and flags, and have at least the offered
+    move's secondary-effect chance: a difference there could make the offered move the better
+    one. The offered move is then never better on these columns, but the pruning is not exact:
+    a second copy of an equal move can still be the better plan (more PP in total; a second
+    copy to use under Torment, Disable or Encore on the first). Pruning that answer only lowers
+    the result, never raises it."""
     if learn_masked(tables, move):
         return True
     t = {name: np.asarray(getattr(tables, name)) for name in _MOVE_COLUMNS}

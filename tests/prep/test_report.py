@@ -356,7 +356,7 @@ def test_cheaper_alternative_line(tables, names):
     lines = render(result, prob, names, tables=tables)
     found = [line for line in lines if line.startswith("Cheaper, tied within noise: ")]
     assert len(found) == 1 and "Cost: none" in found[0]
-    assert "0.012 expected deaths" in found[0]
+    assert "0.013 expected deaths" in found[0]  # 0.0123 rounded up
     assert "\n".join(lines).isascii()
     rec = record(result, prob, names, PrepSettings(), 7, "tv", tables=tables)
     assert json.loads(json.dumps(rec)) == rec

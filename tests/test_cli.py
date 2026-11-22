@@ -1556,3 +1556,11 @@ def test_gauntlet_setup_from_flags(monkeypatch):
     twice = _parser().parse_args([*argv, "--rule", "time=day", "--time", "night"])
     with pytest.raises(G.GauntletSettingsError, match="given twice"):
         _gauntlet_setup(twice, _gauntlet_trainer(True), None, None)
+
+
+def test_cli_chances_round_down_and_interval_highs_up():
+    from nuzline.cli import _interval, _pct
+
+    assert _pct(0.9996) == " 99.9 %" and _pct(1.0) == "100.0 %"
+    assert _interval(0.9871, 0.99961) == "[98.7, 100.0]"
+    assert _interval(0.0, 0.00011, 5) == "[ 0.0,   0.1]"

@@ -124,7 +124,7 @@ from pathlib import Path
 
 from nuzline.data.games import ALIASES
 from nuzline.data.trainer import Trainer
-from nuzline.text import ascii_text, class_text
+from nuzline.text import ascii_text, class_text, decimals, tenths
 
 # The vanilla trainers directory (benchmarks/ and tests read it; commands use the game's).
 INTERMEDIATE = Path(__file__).resolve().parents[2] / "data" / "intermediate"
@@ -1038,7 +1038,13 @@ def _print_pool(args, game, tables, names, player, trainer, opp, save) -> None:
 
 
 def _pct(p: float) -> str:
-    return f"{100 * p:5.1f} %"
+    """A win chance, rounded down (``nuzline.text.tenths``)."""
+    return f"{tenths(p):>5} %"
+
+
+def _interval(low: float, high: float, width: int = 4) -> str:
+    """A 95 % interval in percent: the low end rounded down, the high end up."""
+    return f"[{tenths(low):>4}, {tenths(high, up=True):>{width}}]"
 
 
 def _rank(args) -> int:
@@ -1102,12 +1108,12 @@ def _rank(args) -> int:
     )
     for i, r in enumerate(ranking, 1):
         mark = "*" if r.tied_with_best else " "
-        odds = f"{_pct(r.score)} [{100 * r.ci_low:4.1f}, {100 * r.ci_high:5.1f}]"
+        odds = f"{_pct(r.score)} {_interval(r.ci_low, r.ci_high, 5)}"
         ladder = [_pct(v) for v in r.ladder] or ["-"] * (MAX_DEATHS + 1)
         cells = " ".join(f"{c:>7}" for c in ladder)
         _say(
             f"  {mark} {i:2d}  {r.label:<{width}}  {odds:<27}  {_pct(r.p_win):>7}  "
-            f"{r.e_faints:9.2f}  {cells}"
+            f"{decimals(r.e_faints, 2, up=True):>9}  {cells}"
         )
     if any(r.tied_with_best for r in ranking):
         print("* the interval overlaps the leader's: a statistical tie, not reordered")
@@ -1583,7 +1589,7 @@ def line_report_lines(setup: LineSetup, rules, odds, seed: int, deaths: int) -> 
         p = odds.wins_any / odds.n if k is None else odds.rung(k)
         low, high = odds.interval(k)
         # Width 16: "win, <=3 deaths" (15) keeps a space before "100.0 %".
-        out.append(f"  {label:<16} {_pct(p)} [{100 * low:4.1f}, {100 * high:4.1f}]")
+        out.append(f"  {label:<16} {_pct(p)} {_interval(low, high)}")
     out.append(distribution_line(odds.distribution, "deaths"))
     out.append(
         f"mean turns {odds.mean_turns:.1f}; default player decided "

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-import math
 from collections.abc import Callable, Sequence
 from typing import NamedTuple
 
@@ -47,6 +46,8 @@ from nuzline.prep.variants import (
     percent_cut,
 )
 from nuzline.search import plan_tree
+from nuzline.text import decimals
+from nuzline.text import tenths as _tenths
 
 __all__ = [
     "CANNOT_UNDO",
@@ -363,7 +364,7 @@ def _cheaper_lines(result: PrepResult, problem: PrepProblem, names: Names) -> li
     line = (
         f"Cheaper, tied within noise: {setup_label(names, problem, f.setup)} "
         f"{_tenths(top.estimate)}% ({_tenths(top.ci_low)}%-{_tenths(top.ci_high)}%), "
-        f"{top.e_deaths:.3f} expected deaths, {cost_line(problem, names, f.setup)}"
+        f"{decimals(top.e_deaths, 3, up=True)} expected deaths,{cost_line(problem, names, f.setup)}"
     )
     return [line]
 
@@ -515,15 +516,6 @@ def next_fight_scorer(
     return score
 
 
-def _tenths(p: float, *, up: bool = False) -> str:
-    """``p`` as a percentage to one decimal, rounded down (a win chance never shows higher than
-    it is: 0.9996 is "99.9", not "100.0") or, with ``up``, rounded up (a loss chance never shows
-    lower). The product is rounded to 9 places first, so a float such as 0.999 * 1000 =
-    998.9999999999999 stays 99.9."""
-    tenths = round(1000 * p, 9)
-    return f"{(math.ceil(tenths) if up else math.floor(tenths)) / 10:.1f}"
-
-
 def _percent(p: float) -> str:
     return f"{_tenths(p)} %"
 
@@ -560,7 +552,7 @@ def post_fight_lines(post: PostFight, names: Names) -> list[str]:
                 out.append(
                     f"    {_answer_text(post, names, answer)}: {_percent(answer.p)} "
                     f"({_percent(answer.ci_low)} to {_percent(answer.ci_high)}), "
-                    f"{answer.e_deaths:.2f} expected deaths"
+                    f"{decimals(answer.e_deaths, 2, up=True)} expected deaths"
                 )
         out.append(f"  Better answer: {_answer_text(post, names, post.answers[0])}.")
     elif post.next_trainer is not None:

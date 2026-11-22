@@ -98,7 +98,8 @@ Method (every rule cited to the decomp; paths relative to ``external/pokeplatinu
 - Coord events: one runs when ``FieldSystem_TryGetVar(var) == value`` (``sub_0203CC14``,
   ``src/unk_0203C954.c:208-223``). A var below ``VARS_START`` (0x4000) reads as the number itself
   (``FieldSystem_TryGetVar``, ``src/script_manager.c:428-452``), so a coord on var 0 runs only when
-  its value is 0. Another var matches when the caller's ``vars`` say so. A matching coord on a tile
+  its value is 0. Another var matches when the caller's ``vars`` say so. Only the first matching
+  coord of a tile, in event order, runs (:217-221). A matching coord on a tile
   walked in a ``strict`` header (the group's own) raises unless the caller's ``coord_rule`` models
   it; in another header, or when the caller does not know the var, it is recorded in
   ``Walk.crossed``.
@@ -950,7 +951,12 @@ class Walker:
         return None
 
     def _coord_step(self, pos: Pos, walk: Walk) -> bool:
-        """Apply the coord events of a tile entered; False when a script takes the player."""
+        """Apply the coord events of a tile entered; False when a script takes the player.
+
+        The game runs only the first coord of the tile, in event order, whose var matches
+        (``sub_0203CC14``, ``src/unk_0203C954.c:217-221``; one script, ``field_control.c:769-773``):
+        a known match ends the loop. A coord whose var is unknown may or may not be that one,
+        so its action applies and the later coords are applied too."""
         area = self.maps.area(pos.header)
         for c in area.coords:
             if not c.covers(pos.x, pos.z):
@@ -969,6 +975,8 @@ class Walker:
             if action == "block":
                 return False
             walk.crossed.append((pos, c))
+            if matches:
+                break
         return True
 
     # -- movement
@@ -1281,11 +1289,14 @@ def pc_reachable(maps, walk: Walk, headers: Collection[int]) -> bool:
 
 
 def pc_spots(maps, walk: Walk, headers: Collection[int]) -> set[Pos]:
-    """The reached tiles next to a PC tile (behaviour 0x83) of ``headers``."""
+    """The tiles next to a PC tile (behaviour 0x83) of ``headers`` where the player stands with
+    input (``Walk.states``; ``Walk.seen`` also holds the tiles a spin, a slide or a jump only
+    crosses, and the warp tiles left at once)."""
+    stood = {s.pos for s in walk.states}
     out = set()
     for h in headers:
         for x, z in maps.area(h).pc_tiles():
-            out |= {Pos(h, x + dx, z + dz) for dx, dz in DIRS} & walk.seen.keys()
+            out |= {Pos(h, x + dx, z + dz) for dx, dz in DIRS} & stood
     return out
 
 
@@ -1424,7 +1435,16 @@ def live_table(
     Over the entries, entry flags and histories that reach one key, ``next`` is the union and
     the gap facts the intersection (``chain_facts``). A plain row's ``gap``: ``leave`` (a
     header outside ``spec.headers`` reached), ``heal`` (a healer's talk tile reached), ``pc``,
-    ``locked`` (``Walk.held``: no input in the gap)."""
+    ``locked`` (``Walk.held``: no input in the gap).
+
+    A count-1 walker with the partner raises: sight then counts two whatever the party holds
+    (``field_control.c:182-184``), so a double-battle trainer still fights by sight, while a
+    talk reads the party only; the table does not model that split."""
+    if walkers[1].partner:
+        raise MapReadError(
+            "live_table: a count-1 walk with the partner is not modelled (sight counts two, "
+            "field_control.c:182-184)"
+        )
     members = frozenset(spec.members)
     groups = {2: members, 1: members - frozenset(doubles)}
     nexts: dict[tuple, dict[Fight, int]] = {}

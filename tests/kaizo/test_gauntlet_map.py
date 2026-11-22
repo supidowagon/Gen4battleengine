@@ -39,6 +39,7 @@ from tools.kaizo.gauntlet_map import (
     gym_reach,
     live_table,
     pc_reachable,
+    pc_spots,
     runs,
 )
 from tools.rom.inputs import REPO_ROOT
@@ -231,6 +232,24 @@ def test_a_matching_coord_raises_unless_the_caller_models_it():
     assert Pos(1, 3, 0) not in blocked.walk(Pos(1, 0, 0)).seen
 
 
+def test_only_the_first_matching_coord_of_a_tile_runs():
+    # sub_0203CC14 (src/unk_0203C954.c:217-221) returns the first coord in event order whose
+    # var matches; the second coord on the tile never runs
+    def rule(h, c, m):
+        return "pass" if c.script == 7 else "block"
+
+    first = [Coord(7, 3, 0, 1, 1, 0, 0), Coord(8, 3, 0, 1, 1, 0, 0)]
+    w = Walker(StaticMaps([area(1, ["......"], coords=first)]), coord_rule=rule)
+    walk = w.walk(Pos(1, 0, 0))
+    assert Pos(1, 5, 0) in walk.seen and [c.script for _, c in walk.crossed] == [7]
+    second = Walker(StaticMaps([area(1, ["......"], coords=first[::-1])]), coord_rule=rule)
+    assert Pos(1, 3, 0) not in second.walk(Pos(1, 0, 0)).seen
+    # a first coord on an unknown var may not run: the matching one after it still applies
+    unknown = [Coord(7, 3, 0, 1, 1, 1, 0x4091), Coord(8, 3, 0, 1, 1, 0, 0)]
+    w = Walker(StaticMaps([area(1, ["......"], coords=unknown)]), coord_rule=rule)
+    assert Pos(1, 3, 0) not in w.walk(Pos(1, 0, 0)).seen
+
+
 def test_a_coord_by_a_known_or_unknown_var():
     a = area(1, ["......"], coords=[Coord(7, 3, 0, 1, 1, 1, 0x4091)])
     unknown = Walker(StaticMaps([a])).walk(Pos(1, 0, 0))  # var not known: recorded only
@@ -239,6 +258,16 @@ def test_a_coord_by_a_known_or_unknown_var():
     assert Pos(1, 5, 0) in off.seen
     with pytest.raises(MapReadError):
         Walker(StaticMaps([a]), vars={0x4091: 1}).walk(Pos(1, 0, 0))
+
+
+def test_a_spin_past_a_pc_tile_gives_no_pc_spot():
+    # the spin north from (1, 3) crosses (1, 2), the only tile beside the PC at (0, 2), with no
+    # input there: the player never stands next to the PC
+    rows = ["...", "#n#", "Pn#", "#n#", "..."]
+    maps = StaticMaps([area(1, rows)])
+    w = Walker(maps).walk(Pos(1, 1, 4))
+    assert Pos(1, 1, 2) in w.seen and Pos(1, 1, 0) in w.seen
+    assert pc_spots(maps, w, [1]) == set()
 
 
 def test_a_pc_tile_is_reached_from_a_neighbour():
@@ -360,6 +389,16 @@ def test_live_table_zero_step_gap_is_locked():
         {"fought": [[1]], "live": 1, "next": [[2]], "headers": [1], "gap": ["locked"]},
         {"fought": [[1]], "live": 2, "next": [[2]], "headers": [1], "gap": ["locked"]},
     ]
+
+
+def test_live_table_raises_for_a_count_one_walk_with_the_partner():
+    # with the partner sight counts two whatever the party holds (field_control.c:182-184):
+    # dropping the double-battle trainers at one live would be wrong
+    maps = StaticMaps([area(1, ["......"], [trainer(1, 5, 0, WEST, 3)])])
+    spec = ChainSpec((1,), (1,), (Pos(1, 0, 0),))
+    walkers = {c: Walker(maps, spec.members, two_alive=c == 2, partner=True) for c in (1, 2)}
+    with pytest.raises(MapReadError, match="partner"):
+        live_table(maps, walkers, spec, ())
 
 
 def test_live_table_revive_row_reopens_a_double_battle_trainer():
