@@ -315,14 +315,12 @@ from nuzline.engine.ids import (
     MOVE_KNOCK_OFF,
     MOVE_LAST_RESORT,
     MOVE_MIMIC,
-    MOVE_SKETCH,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_ASLEEP,
     POWER_IF_TARGET_MOVED,
     REFRESH_STATUSES,
     RESIST_ANY_NORMAL,
     REST_TURNS,
-    SKETCH_FORBIDDEN,
     SPECIES_CHATOT,
     SPIKES_MAX,
     STAT_MOVE_ABILITY_IDS,
@@ -347,7 +345,7 @@ from nuzline.engine.ids import (
     Type,
     sleepless,
 )
-from nuzline.engine.order import encore_slot_of, move_effects, terrain_index
+from nuzline.engine.order import encore_slot_of, move_effects, sketch_copy, terrain_index
 from nuzline.engine.outcome import Outcome, crit_lands, read_chance
 from nuzline.engine.state import (
     MOVES,
@@ -2342,17 +2340,13 @@ def _sketch(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     fmt = format_of(state)
     side, user = h.side, h.user
     own = party(fmt, side)
-    last = state.sketch_move[h.target_side].astype(_I32)
-    moves = state.moves[own, user].astype(_I32)
-    j = jnp.argmax(moves == MOVE_SKETCH)
+    # BtlCmd_TrySketch's own tests (``order.sketch_copy``, shared with ``order.sketched_state``).
+    copies, j, last = sketch_copy(state, side, h.target_side)
     cond = (
         (h.effect == _E.SKETCH)
         & h.landed
         & ~h.shielded  # subscript_sketch.s:5, BtlCmd_CheckSubstitute (battle_script.c:9180-9181)
-        & (state.transformed[side] == 0)  # :4847, VOLATILE_CONDITION_TRANSFORM
-        & (last != 0)
-        & ~jnp.any(last == jnp.asarray(SKETCH_FORBIDDEN, _I32))
-        & ~jnp.any(moves == last)
+        & copies
     )
 
     def put(arr, index, value):

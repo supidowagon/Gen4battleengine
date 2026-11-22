@@ -92,6 +92,7 @@ from nuzline.engine.actions import (
     locked_slot,
     move_imprisoned,
     replacement_bench,
+    sealed_mask,
 )
 from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
@@ -989,6 +990,7 @@ def _empty_events(fmt: Format) -> dict:
             "move_failed",
             "disabled_at_move",
             "sealed_at_move",
+            "seal_mask_at_move",
             "encored_at_move",
             "gravity_at_move",
             *EVENT_FLAGS,
@@ -1216,6 +1218,10 @@ def _use_move(
     # Likewise a battler of the other side imprisoning (the Sleep Talk set's other change within
     # the turn, ruling B7-13).
     sealed_at_move = ready & imprisoning_foe(state, side)
+    # The battler's sealed slots when its action starts (``actions.sealed_mask``): a faster
+    # imprisoning foe's Sketch changes them while the bit stays (battle_script.c:4868; the event
+    # the Sketch call variants split on, enumerate.sketched_events).
+    seal_mask_at_move = jnp.where(ready, sealed_mask(state, side), 0)
     # Gravity is up when the action starts: a faster foe's Gravity this turn changes the
     # invokers' sets (G-67), the event their Gravity call variants split on.
     gravity_at_move = ready & fcm.gravity_on(state)
@@ -3277,6 +3283,7 @@ def _use_move(
         "move_failed": move_failed,
         "disabled_at_move": disabled_at_move,
         "sealed_at_move": sealed_at_move,
+        "seal_mask_at_move": seal_mask_at_move,
         "encored_at_move": encored_at_move,
         "gravity_at_move": gravity_at_move,
     }

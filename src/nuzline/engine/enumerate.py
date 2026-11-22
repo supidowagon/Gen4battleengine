@@ -219,7 +219,7 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
 from nuzline.engine import targets
-from nuzline.engine.actions import absent_now, imprisoning_foe, replacement_bench
+from nuzline.engine.actions import absent_now, imprisoning_foe, replacement_bench, sealed_mask
 from nuzline.engine.damage import (
     NUM_TYPES,
     PHYSICAL,
@@ -258,6 +258,7 @@ from nuzline.engine.ids import (
     FOCUS_BAND_PARAM,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
+    MOVE_SKETCH,
     NO_IN_BATTLE_HOLD_EFFECT_ITEMS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
@@ -318,6 +319,7 @@ from nuzline.engine.order import (
     qc_transfer,
     sealed_state,
     selected_move,
+    sketched_state,
     takeover_possible,
     truant_loafs,
     used_moves,
@@ -1966,16 +1968,27 @@ def outcome_laws(
         call = jnp.asarray(call, _I32)
         # A Sleep Talk variant that assumes a faster foe's Disable lands (CALL_DISABLED, ruling
         # B5-13) calls from the set with the user's last move disabled; one that assumes a faster
-        # foe's Imprison (CALL_SEALED, ruling B7-13) from the set without the moves it seals.
+        # foe's Imprison (CALL_SEALED, ruling B7-13) from the set without the moves it seals; one
+        # that assumes an imprisoning foe's Sketch (CALL_SKETCHED) from the set without its copy.
         talking = kinds == CALL_SLEEP_TALK
         disabled = talking & (call >= CALL_DISABLED) & (call < CALL_SEALED)
-        sealed = talking & (call >= CALL_SEALED) & (call < CALL_GRAVITY)
+        sealed = talking & (call >= CALL_SEALED) & (call < CALL_SKETCHED)
+        sketched = talking & (call >= CALL_SKETCHED) & (call < CALL_GRAVITY)
         # A variant that assumes a faster foe's Gravity lands first (CALL_GRAVITY, G-67) calls
         # from the set Gravity leaves (Sleep Talk, Metronome, Assist).
         grav = (call >= CALL_GRAVITY) & ~taken
         after_foe = copycat & (call == 1)
         disabled = disabled & ~taken
         sealed = sealed & ~taken
+        sketched = sketched & ~taken
+        copied = jnp.stack(
+            [
+                used_moves(
+                    tables, sketched_state(state, _foe(sd), sd), actions, call, after_foe, chosen
+                )[sd]
+                for sd in range(fmt.B)
+            ]
+        )
         moves = jnp.where(
             disabled,
             used_moves(tables, disabled_state(state, disabled), actions, call, after_foe, chosen),
@@ -1983,12 +1996,18 @@ def outcome_laws(
                 sealed,
                 used_moves(tables, sealed_state(state, sealed), actions, call, after_foe, chosen),
                 jnp.where(
-                    taken,
-                    used_moves(tables, took_state, actions, call, after_foe, chosen),
+                    sketched,
+                    copied,
                     jnp.where(
-                        grav,
-                        used_moves(tables, gravity_state(state), actions, call, after_foe, chosen),
-                        used_moves(tables, state, actions, call, after_foe, chosen),
+                        taken,
+                        used_moves(tables, took_state, actions, call, after_foe, chosen),
+                        jnp.where(
+                            grav,
+                            used_moves(
+                                tables, gravity_state(state), actions, call, after_foe, chosen
+                            ),
+                            used_moves(tables, state, actions, call, after_foe, chosen),
+                        ),
                     ),
                 ),
             ),
@@ -4212,10 +4231,14 @@ CALL_VALUES = METRONOME_DRAW
 # without the moves the foe's Imprison seals. ``order.invoked_move`` takes ``call % count`` with
 # ``count`` 1-4, a divisor of every offset, so ``step`` plays every encoding of ``u`` alike, on
 # the live set; ``call_consistent`` keeps each row in the one variant whose assumption its turn
-# met (one foe move a turn: never both).
+# met (one foe move a turn: never both). ``u + CALL_SKETCHED`` assumes the set left after an
+# imprisoning foe Sketches the user before its move (``order.sketched_state``): the copy joins the
+# imprisoner's moves and Move_Imprisoned reads them live (battle_lib.c:3316-3338, battle_script.c:
+# 4927). 7 * 12 leaves 4-6 * 12 to the Transform / Mimic / leave copies of the ledger's Open F.
 CALL_KEEP = SLEEP_TALK_VALUES
 CALL_DISABLED = 2 * SLEEP_TALK_VALUES
 CALL_SEALED = 3 * SLEEP_TALK_VALUES
+CALL_SKETCHED = 7 * SLEEP_TALK_VALUES
 
 
 def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
@@ -4245,6 +4268,22 @@ def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]
     return disabled, sealed
 
 
+def sketched_events(state: BattleState, events) -> jnp.ndarray:
+    """``bool[B]``: the side's sealed slots when its action started (the ``seal_mask_at_move``
+    event) differ from the turn-start ones and equal those after its foe's Sketch
+    (``order.sketched_state``), while a foe imprisoned at the turn start: an imprisoning Sketch
+    user moved first and its copy is sealed (battle_script.c:4868, battle_lib.c:3316-3338). Equal
+    masks give equal Sleep Talk sets (``actions.sealed_mask``)."""
+    fmt = format_of(state)
+    seen = jnp.asarray(events["seal_mask_at_move"])
+    out = []
+    for side in range(fmt.B):
+        start = sealed_mask(state, side)
+        after = sealed_mask(sketched_state(state, _foe(side), side), side)
+        out.append(imprisoning_foe(state, side) & (seen[side] != start) & (seen[side] == after))
+    return jnp.stack(out)
+
+
 def gravity_events(state: BattleState, events) -> jnp.ndarray:
     """``bool[B]``: Gravity was up when the side's action started (the ``gravity_at_move`` event
     of ``step_events``) and down at the turn start: a faster foe's Gravity landed before its
@@ -4267,8 +4306,9 @@ def call_consistent(
     turn: a side that ``order.takeover_possible`` allows keeps a row only where its encored move
     replaced the chosen one (``taken_events``) exactly when the tag says so. For each Sleep Talk
     side not taken over whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED`` /
-    ``CALL_SEALED`` / ``CALL_GRAVITY``), whether a Disable, an Imprison or a Gravity changed its
-    set before its action (``_split_events`` and ``gravity_events`` of ``step_events`` on
+    ``CALL_SEALED`` / ``CALL_SKETCHED`` / ``CALL_GRAVITY``), whether a Disable, an Imprison, an
+    imprisoner's Sketch or a Gravity changed its set before its action (``_split_events``,
+    ``sketched_events`` and ``gravity_events`` of ``step_events`` on
     ``state``, ``actions``, ``outcome``) matches the variant. A Metronome or Assist side not
     taken over keeps a row only where its call is a Gravity variant (``>= CALL_GRAVITY``)
     exactly when a foe's Gravity landed before it (G-67). Unsplit Sleep Talk rows always keep."""
@@ -4285,19 +4325,28 @@ def call_consistent(
     call = jnp.asarray(outcome.call, _I32)
     split = talk & (call >= CALL_KEEP)
     disabled, sealed = _split_events(state, events)
+    sketched = sketched_events(state, events)
     landed = gravity_events(state, events)
     seen = jnp.where(
         landed,
         CALL_GRAVITY,
-        jnp.where(sealed, CALL_SEALED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP)),
+        jnp.where(
+            sealed,
+            CALL_SEALED,
+            jnp.where(sketched, CALL_SKETCHED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP)),
+        ),
     )
     want = jnp.where(
         call >= CALL_GRAVITY,
         CALL_GRAVITY,
         jnp.where(
-            call >= CALL_SEALED,
-            CALL_SEALED,
-            jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP),
+            call >= CALL_SKETCHED,
+            CALL_SKETCHED,
+            jnp.where(
+                call >= CALL_SEALED,
+                CALL_SEALED,
+                jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP),
+            ),
         ),
     )
     listed_ok = ~listing | ((call >= CALL_GRAVITY) == landed)
@@ -4324,9 +4373,14 @@ class CallLaws(NamedTuple):
     # int32[B, CALL_VALUES]: likewise from the set a faster foe's Imprison can leave
     # (``order.sealed_state``, ruling B7-13); ``called`` where no such set can arise.
     sealed: jnp.ndarray
-    # bool[B]: a faster foe's Disable / Imprison can change the side's Sleep Talk set this turn.
+    # int32[B, CALL_VALUES]: likewise from the set left after a foe that imprisons at the turn
+    # start Sketches the side (``order.sketched_state``); ``called`` where no such set can arise.
+    sketched: jnp.ndarray
+    # bool[B]: a faster foe's Disable / Imprison / Sketch can change the side's Sleep Talk set
+    # this turn.
     can_disable: jnp.ndarray
     can_seal: jnp.ndarray
+    can_sketch: jnp.ndarray
     # The takeover variant (ruling B11-1): bool[B] a foe's Encore can replace the side's move
     # (``order.takeover_possible``), and the call law of the encored move read with the encored
     # state (``order.encored_state``): its kind, weights and calls as above.
@@ -4460,7 +4514,10 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       uniform redraw, battle_script.c:4931-4933; ``order.invoked_move`` takes the allowed slot
       ``value % count``), from the turn-start set; ``alt`` from the set a faster foe's Disable can
       leave (ruling B5-13), possible while nothing is disabled, the user has a last move and its
-      foe uses a move; ``sealed`` from the set a faster foe's Imprison can leave (B7-13). Drawn
+      foe uses a move; ``sealed`` from the set a faster foe's Imprison can leave (B7-13);
+      ``sketched`` from the set left when a foe that imprisons already Sketches the user first
+      (its copy is sealed: Move_Imprisoned reads its live moves, battle_lib.c:3316-3338,
+      battle_script.c:4927; possible where that foe knows Sketch and uses a move). Drawn
       only when it can be read: the user sleeps at the start, or its foe uses an invoker or a
       move that can put it to sleep (over-approximate);
     * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536)
@@ -4508,6 +4565,17 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         & ~jnp.stack([imprisoning_foe(state, side) for side in range(fmt.B)])
         & foes(uses_move)
     )
+    # A foe that imprisons already and knows Sketch can copy the user's moveSketched before its
+    # move (chosen, or called by Sleep Talk: battle_script.c:4916-4925; no other invoker calls
+    # Sketch, battle_lib.c:7152-7177).
+    knows_sketch = jnp.stack(
+        [jnp.any(state.moves[party(fmt, b), state.active[b]] == MOVE_SKETCH) for b in range(fmt.B)]
+    )
+    can_sketch = (
+        (kinds == CALL_SLEEP_TALK)
+        & jnp.stack([imprisoning_foe(state, side) for side in range(fmt.B)])
+        & foes(uses_move & knows_sketch)
+    )
     can_take = jnp.stack(
         [takeover_possible(tables, state, actions, side, _foe(side)) for side in range(fmt.B)]
     )
@@ -4520,7 +4588,7 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         [gravity_possible(tables, state, actions, side, _foe(side)) for side in range(fmt.B)]
     ) & (kinds != CALL_NONE)
     heavy = gravity_state(state)
-    weights, called, alts, seals, t_weights, t_called = [], [], [], [], [], []
+    weights, called, alts, seals, sketches, t_weights, t_called = [], [], [], [], [], [], []
     g_weights, g_called = [], []
     for side in range(fmt.B):
         foe = _foe(side)
@@ -4541,6 +4609,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         )(values)
         alts.append(jnp.where(can_split[side], alt, call))
         seals.append(jnp.where(can_seal[side], seal, call))
+        copy = sketched_state(state, foe, side)
+        sketch = jax.vmap(
+            lambda v, side=side, copy=copy: invoked_move(tables, copy, side, chosen[side], v)
+        )(values)
+        sketches.append(jnp.where(can_sketch[side], sketch, call))
         took = encored_state(tables, state, jnp.arange(fmt.B) == side)
         t_weight, t_call = _side_call_law(
             tables, took, side, encored[side], taken_kinds[side], chosen[foe], uses_move[foe],
@@ -4560,8 +4633,10 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         called=jnp.stack(called),
         alt=jnp.stack(alts),
         sealed=jnp.stack(seals),
+        sketched=jnp.stack(sketches),
         can_disable=can_split,
         can_seal=can_seal,
+        can_sketch=can_sketch,
         can_take=can_take,
         taken_kind=taken_kinds.astype(_I32),
         taken_weight=jnp.stack(t_weights),
@@ -4572,18 +4647,20 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     )
 
 
-def _side_variants(kind, weight, called, alt, sealed, heavy, offsets) -> list[tuple[int, int, int]]:
+def _side_variants(
+    kind, weight, called, alt, sealed, sketched, heavy, offsets
+) -> list[tuple[int, int, int]]:
     """``(value, numerator, denominator)`` per call variant of one side's law
     (``call_variants``); ``heavy`` is Sleep Talk's call from the set Gravity leaves."""
     if kind in (CALL_SLEEP_TALK, CALL_METRONOME, CALL_ASSIST):
-        groups: dict[tuple[int, int, int, int], list[int]] = {}
+        groups: dict[tuple[int, int, int, int, int], list[int]] = {}
         for v in np.flatnonzero(weight):
-            key = (int(called[v]), int(alt[v]), int(sealed[v]), int(heavy[v]))
+            key = (int(called[v]), int(alt[v]), int(sealed[v]), int(sketched[v]), int(heavy[v]))
             groups.setdefault(key, [int(v), 0])[1] += int(weight[v])
         den = int(weight.sum())
         out = []
-        for (move, other, shut, grav), (v, w) in groups.items():
-            if move == other == shut == grav:
+        for (move, other, shut, copy, grav), (v, w) in groups.items():
+            if move == other == shut == copy == grav:
                 out.append((v, w, den))
             else:
                 # One variant per set the turn can leave, each kept only where the turn met
@@ -4613,7 +4690,8 @@ def call_variants(laws: CallLaws) -> list[Variant]:
     smallest, with the group's summed weight). A Sleep Talk group whose values call another move
     from the Disable-shrunk set (``CallLaws.alt``) is two variants of the same weight,
     ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13), and one more, ``CALL_SEALED``, where a
-    faster foe's Imprison can land (B7-13), and ``CALL_GRAVITY`` where a faster foe's Gravity can
+    faster foe's Imprison can land (B7-13), ``CALL_SKETCHED`` where an imprisoning foe's Sketch
+    can (``CallLaws.can_sketch``), and ``CALL_GRAVITY`` where a faster foe's Gravity can
     (G-67, ``CallLaws.can_gravity``). A Metronome or Assist side whose foe's Gravity can land
     first also has the Gravity variants: the law under Gravity, values ``+ CALL_GRAVITY``, of
     total weight 1 beside the turn-start law's 1. Where a foe's Encore can replace the side's move
@@ -4628,20 +4706,28 @@ def call_variants(laws: CallLaws) -> list[Variant]:
         offsets = [CALL_KEEP]
         offsets += [CALL_DISABLED] if bool(laws.can_disable[side]) else []
         offsets += [CALL_SEALED] if bool(laws.can_seal[side]) else []
+        offsets += [CALL_SKETCHED] if bool(laws.can_sketch[side]) else []
         kind = int(laws.kind[side])
         gravity = bool(laws.can_gravity[side])
         talk = kind == CALL_SLEEP_TALK
         offsets += [CALL_GRAVITY] if gravity and talk else []
         heavy = laws.gravity_called[side] if talk else laws.called[side]
-        law = (laws.weight[side], laws.called[side], laws.alt[side], laws.sealed[side], heavy)
+        law = (
+            laws.weight[side],
+            laws.called[side],
+            laws.alt[side],
+            laws.sealed[side],
+            laws.sketched[side],
+            heavy,
+        )
         out = [(v, False, w, d) for v, w, d in _side_variants(kind, *law, offsets)]
         if gravity and kind in (CALL_METRONOME, CALL_ASSIST):
             heavy = laws.gravity_called[side]
-            law = (laws.gravity_weight[side], heavy, heavy, heavy, heavy)
+            law = (laws.gravity_weight[side], heavy, heavy, heavy, heavy, heavy)
             out += [(v + CALL_GRAVITY, False, w, d) for v, w, d in _side_variants(kind, *law, [])]
         if bool(laws.can_take[side]):
             took = laws.taken_called[side]
-            law = (laws.taken_weight[side], took, took, took, took)
+            law = (laws.taken_weight[side], took, took, took, took, took)
             kind = int(laws.taken_kind[side])
             out += [(v, True, w, d) for v, w, d in _side_variants(kind, *law, [])]
         per_side.append(out)

@@ -1604,7 +1604,13 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     `enumerate.call_laws` offers `CALL_SEALED` only when no foe imprisons at the turn start (`can_seal`,
     enumerate.py:3701-3706) and `_split_events` sees only an Imprison landing (`sealed_at_move`, step.py:903). Needs a
     hypothetical state of the foe's moves after the copy and a step event of the sealed set at the action: not a
-    bounded change, left for the next batch.
+    bounded change, left for the next batch. A third copy source since I-3: an imprisoning player Sketch user that
+    moves first puts the Sleep Talk user's `moveSketched` into its Sketch slot (bs:4868; the copy is the move shown
+    last, kept through sleep turns, bcp.c:3952-3954), which Move_Imprisoned then seals (lib.c:3316-3338, bs:4927).
+    Built by the batch I gate fix: `CALL_SKETCHED` = 7 * `SLEEP_TALK_VALUES` (84), `CallLaws.sketched` /
+    `can_sketch`, `order.sketched_state` / `sketch_copy`, the step event `seal_mask_at_move` (`actions.sealed_mask`),
+    `enumerate.sketched_events`, the `sample_outcome` alternative. Transform, Mimic and the imprisoner leaving stay
+    open here; E2 builds them in D6-12 on the same event (`_scratch/e1/i-next/note-for-e2-d6-12.md`).
   - Effect Spore's contact roll (battle_lib.c:4214-4335) and Suction Cups against Roar: both map to
     `AbilityId.UNSUPPORTED`, so coverage refuses every holder (`IMPLEMENTED_ABILITIES`, coverage.py:194, :743).
     Vanilla holders: 4 personal rows with Effect Spore, 3 with Suction Cups (`species_abilities_decomp` 27, 21); no

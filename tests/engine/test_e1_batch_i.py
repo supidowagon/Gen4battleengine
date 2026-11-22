@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from nuzline.engine.actions import MOVE_ACTIONS, usable_moves
@@ -327,3 +328,80 @@ def test_coverage_grades_the_moves_a_sketch_can_copy(tables, names):
     assert any("Sketch move effect" in m and "SMEARGLE" in m.upper() for m in r.missing)
     plain = check_coverage(broken, names, sample_party(names)[:1], roark_trainer(), opp, 0)
     assert not any("Sketch move effect" in m for m in plain.missing)
+
+
+# --- I-3 gate fix: a Sketch by an imprisoner shrinks the foe's Sleep Talk set ---------------
+
+
+def _talker_under_sketch(tables, names, order):
+    """Smeargle (Sketch, Imprison, Spore, Protect) imprisons at the turn start (it imprisoned
+    the foe's previous Pokemon: the bit stays, battle_lib.c:3316-3338 reads only the bit and
+    its live moves) against a sleeping Geodude (Sleep Talk, Tackle, Ember, Thunder) that shares
+    no move with it. The Geodude's ``moveSketched`` is Ember and its ``movePrevByBattler``
+    MOVE_NONE (an Ember that showed its message and failed, bcp.c:3944-3954), so no Disable
+    hypothesis splits the set. ``order`` "player": the Smeargle moves first."""
+    s = _sketcher(
+        tables,
+        names,
+        foe=("Sleep Talk", "Tackle", "Ember", "Thunder"),
+        order=order,
+        mine=("Sketch", "Imprison", "Spore", "Protect"),
+    )
+    ember = names.move("Ember")
+    return s._replace(
+        status=s.status.at[1, 0].set(Status.SLEEP),
+        status_counter=s.status_counter.at[1, 0].set(5),
+        imprison=s.imprison.at[0].set(1),
+        sketch_move=s.sketch_move.at[1].set(ember),
+        last_move=s.last_move.at[1].set(0),
+    )
+
+
+def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names):
+    """The decomp's draw: the Smeargle's Sketch puts Ember in its first slot (battle_script.c:
+    4868), Sleep Talk then flags every move an imprisoner knows (BtlCmd_TrySleepTalk, :4927;
+    CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290, Move_Imprisoned's live ``moves``,
+    :3316-3338) and redraws uniformly over the rest (:4931-4933): of the 12 call values, 6 call
+    Tackle and 6 Thunder, none Ember. Engine == reference on each."""
+    from nuzline.engine.step import step_events
+
+    s = _talker_under_sketch(tables, names, "player")
+    acts = A("Sketch", "Sleep Talk", s, names)
+    seen = []
+    for u in range(12):
+        o = _o()._replace(call=jnp.asarray([0, u], jnp.int16))
+        out = assert_matches_reference(tables, s, acts, o)
+        assert int(out.moves[0, 0, 0]) == names.move("Ember")
+        seen.append(int(step_events(tables, s, acts, o)[1]["called"][1]))
+    assert seen.count(names.move("Tackle")) == 6 and seen.count(names.move("Thunder")) == 6
+
+
+@pytest.mark.parametrize("order", ["player", "opp"])
+def test_the_call_law_follows_an_imprisoners_sketch(tables, names, order):
+    """``enumerate_turn`` gives the decomp's weights: after a faster imprisoner's Sketch of Ember
+    Tackle and Thunder 1/2 each (the ``CALL_SKETCHED`` variant, ``order.sketched_state``); before
+    a slower one the turn-start set, 1/3 each. The turn-start law alone gave Tackle 2/3 in the
+    first case. Each kept call value plays engine == reference."""
+    import jax
+
+    from nuzline.engine.enumerate import CALL_SKETCHED, enumerate_turn
+    from nuzline.engine.step import turn_events
+    from tests.engine.helpers import padded_rows
+
+    s = _talker_under_sketch(tables, names, order)
+    acts = A("Sketch", "Sleep Talk", s, names)
+    outcomes, probs = enumerate_turn(tables, s, acts)
+    assert abs(float(sum(probs)) - 1.0) < 1e-12
+    program = jax.jit(jax.vmap(turn_events, in_axes=(None, None, None, 0)))
+    called = np.asarray(padded_rows(program, tables, s, acts, outcomes)["called"])[:, 1]
+    law = {int(m): float(probs[called == m].sum()) for m in np.unique(called)}
+    moves = ("Tackle", "Thunder") if order == "player" else ("Tackle", "Ember", "Thunder")
+    assert set(law) == {names.move(m) for m in moves}
+    for m in moves:
+        assert abs(law[names.move(m)] - 1 / len(moves)) < 1e-12, law
+    calls = np.asarray(outcomes.call)[:, 1]
+    assert np.any(calls >= CALL_SKETCHED) == (order == "player")
+    for value in np.unique(calls):
+        row = int(np.flatnonzero(calls == value)[0])
+        assert_matches_reference(tables, s, acts, jax.tree.map(lambda f, r=row: f[r], outcomes))
+
