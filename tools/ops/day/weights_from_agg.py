@@ -1,7 +1,9 @@
 """Refresh tools/ops/day/pod/weights.txt from pod-run results.
 
-Usage: python tools/ops/day/weights_from_agg.py [--since <spec>]... <weights.txt> <agg.txt>... > <new weights.txt>
---since <spec>, repeatable: only these results count. <spec> is a commit (the run's meta.env
+Usage: python tools/ops/day/weights_from_agg.py [--since <spec> | --since-file <file>]... <weights.txt> <agg.txt>...
+  > <new weights.txt>
+--since <spec>, repeatable: only these results count. --since-file <file>: one <spec> per line of <file>
+(blank lines and "#" comments skipped; tools/ops/day/weights_since.txt holds the last refresh's list). <spec> is a commit (the run's meta.env
 COMMIT must descend from it, `git merge-base --is-ancestor`) or a run-name glob (it has * ? or [).
 "<test file>=<spec>" applies to the units of that file only, on top of the other specs.
 Without --since every given result counts.
@@ -16,7 +18,7 @@ counted results (agg.txt per-unit table; ids from <agg dir>/out/<unit>.ids, else
   among their ids (that line already carries the unit's peak). An agg.txt without a per-unit table counts its per-file max_rss_MB.
 New value of a line of GB g with fresh measurement m: m when m > g; else the larger of m's floor
 and nothing lower: floor(m) = ceil(m x 1.1) when m >= 40, else ceil(max(m x 1.25, m + 2)); a line
-moves down to floor(m) only when floor(m) < g. A line with no fresh measurement stays. Also stays:
+moves down to floor(m) only when floor(m) < g. A file line the table lacks is written at floor(m), the same margin. A line with no fresh measurement stays. Also stays:
 a hand-kept line whose cite has the word "keep" (never lowered), a hand-kept per-test line whose
 test is in a counted rc 137 or rc 98 unit (never lowered), and any line whose old peak the fresh
 results did not run again (_old_peak_rerun): a line goes down to n only when the run its line cites
@@ -37,7 +39,9 @@ stderr: "REDUCED <entry> <old> -> <new> GB" for the 20 largest reductions (a new
 counts from its file's line), "changed: <n> down, <n> up", and warnings ("WARNING: ..."; the
 table is still printed): a unit killed three times (rc 98, no peak), a kernel kill whose lower
 bound is above its file's measured peak (the line takes the bound; the real peak may be higher),
-a unit of hand-kept ids only that peaked above its largest hand-kept weight. DAYBOX.md, Send a
+a unit of hand-kept ids only that peaked above its largest hand-kept weight. After the "changed" line, one
+"EXCLUDED <run> <unit> <file>: ..." line per unit left out of its file's line because its peak is at or
+under the largest hand-kept weight of its ids (no warning). DAYBOX.md, Send a
 run step 2: the new table is not moved into place while any warning stands.
 """
 
@@ -263,6 +267,7 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
 
     best: dict[str, tuple[int, str]] = {}
     low: dict[str, tuple[int, str, str]] = {}
+    excluded: list[str] = []
     for f, (mib, run, _mark) in flat.items():
         best[f] = (mib, run)
     for u in units:
@@ -279,6 +284,8 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
                          f"above their largest hand-kept weight {max(covered)} GB: {u.run} {u.name} {u.ids[0]}")
             continue
         if covered and u.rc != "137" and gb(u.mib) <= max(covered):
+            excluded.append(f"EXCLUDED {u.run} {u.name} {f}: peak {gb(u.mib)} GB at or under its hand-kept "
+                            f"weight {max(covered)} GB")
             continue   # a hand-kept line of one of its ids already carries this unit's peak
         if not u.alone and all(_hand_covered(t, hand) or (t in test_m and _lineable(t)) for t in u.ids):
             continue
@@ -334,7 +341,7 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
             changes.append((g, files[e][0], e))
     for f, (mib, run) in best.items():
         if f not in files and f not in hand_entries:
-            files[f] = (gb(mib), run)
+            files[f] = (floor_gb(gb(mib)), run)   # a first line carries the margin a lowered one keeps
 
     tests: dict[str, tuple[int, str]] = {}
     for e, (g, cite) in old.items():
@@ -360,6 +367,7 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
     down = sorted(((o - n, o, n, e) for o, n, e in changes if n < o), key=lambda x: (-x[0], x[3]))
     rep = [f"REDUCED {e} {o} -> {n} GB" for _, o, n, e in down[:20]]
     rep.append(f"changed: {len(down)} down, {sum(1 for o, n, _ in changes if n > o)} up")
+    rep.extend(excluded)
     if report is not None:
         report.extend(rep)
     if warn is not None:
@@ -376,8 +384,12 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
 
 def main(argv: list[str]) -> int:
     since = []
-    while argv[:1] == ["--since"] and len(argv) > 1:
-        since.append(argv[1])
+    while argv[:1] in (["--since"], ["--since-file"]) and len(argv) > 1:
+        if argv[0] == "--since":
+            since.append(argv[1])
+        else:
+            since.extend(x for x in (ln.split("#", 1)[0].strip() for ln in
+                                     Path(argv[1]).read_text(encoding="utf-8").splitlines()) if x)
         argv = argv[2:]
     if len(argv) < 2 or any(a.startswith("--") for a in argv):
         print(__doc__, file=sys.stderr)
