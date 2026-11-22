@@ -699,6 +699,13 @@ three structs has a row.
   `step._execute_actions`; the reference's `_Turn.reselected`). Snatch's DecPPForPressure
   (bcp.c:3107) is not reached: Snatch is not modelled (no effect id, a coverage refusal).
   Written in `step._action_phase` (`order.selection_slots`) and the reference's `_ref_step`.
+  Canonical at a turn boundary (E2-ML-9; `step.canonical_selection` at the end of `step_events`,
+  `replace` and `replace_round`; the reference's `_canonical_selection` in `ref_step`,
+  `ref_replace`, `ref_replace_round`): 0 for a battler whose active Pokemon has HP and that is not
+  locked (`locked_slot < 0`, Battler_CanPickCommand, battle_lib.c:6224-6235), since its next FIGHT
+  writes it (bcp.c:445, :526) and no reader takes it under Struggle (lib.c:1382-1383,
+  battle_script.c:6752) or a non-FIGHT command (lib.c:1378-1391); a locked battler, a battler at
+  0 HP (absent, or its newcomer decides at the replacement) and a paused state keep it.
 - The selected move's carried value (E2-ML-8): `selected_temp` (per battler,
   `battlerActions[b][BATTLE_ACTION_TEMP_VALUE]`, initial 0). The selection writes 1 + the slot for
   a FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447), the party slot 0..5 for a switch
@@ -723,7 +730,14 @@ three structs has a row.
   (battle_lib.c:2376-2387) and TryPursuit reads and spends `ppCur[4]`, the byte after `ppCur`:
   `ppUps[0]` (battle_mon.h:99-100), so `pp_ups[..., 0]` (`step._pursuit_pp`, review 7). Written by
   `order.with_selection` (`step._action_phase`, `step.replacement_power_mul`, the laws' entry
-  points) and the reference's `_ref_step`. Not in `VOLATILE_FIELDS`.
+  points) and the reference's `_ref_step`. Not in `VOLATILE_FIELDS`. Canonical at a turn boundary
+  (E2-ML-9, where `move_slot` is): 0 for a battler whose active Pokemon has HP, that is not locked
+  and that has a usable move (`actions.usable_moves`, the test of the next selection on that
+  state), since the next selection writes it (bcp.c:447, :525, :565, :595) before any read; a
+  Struggle-bound battler (STRUGGLING_ALL, bcp.c:433-442) keeps it (the Rage check, bcp.c:844, and
+  TryPursuit, battle_script.c:6909, read it with no Struggle test), as do a locked battler, a
+  battler at 0 HP and a paused state. The trace does not record it: `tools/trace_to_state.py`
+  refuses a turn whose fitting candidates differ in a live value (`_Turn.check_selection`).
 - The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
   counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
   written at B = 4 only.

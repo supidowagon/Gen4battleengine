@@ -558,6 +558,33 @@ def test_a_locked_pursuer_pursues_with_its_carried_move_in_both_engines(tables, 
     assert int(out.selected_temp[1]) == 2
 
 
+@pytest.mark.slow  # a step against the reference
+def test_dead_selection_values_are_canonical_in_both_engines(tables, names):
+    """E2-ML-9: at the turn boundary an unrun pick leaves no trace. The sleeping player picks
+    Growl, which does not run; it can pick next turn with a usable move, so its moveSlot and
+    TEMP_VALUE are rewritten before any read (bcp.c:445-447, :525-526): both 0. The foe has no PP
+    left (STRUGGLING_ALL, bcp.c:433-442): its carried TEMP_VALUE stays readable (Rage check,
+    bcp.c:844; TryPursuit, battle_script.c:6909) and is kept; its moveSlot has no reader under
+    Struggle (battle_lib.c:1382-1383, battle_script.c:6752): 0."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle", "Growl"], 35)],
+        [_mon(n, "Houndour", ["Pursuit", "Tackle"], 30)],
+    )
+    s = s._replace(
+        status=s.status.at[0, 0].set(Status.SLEEP),
+        status_counter=s.status_counter.at[0, 0].set(3),
+        pp=s.pp.at[1, 0, :2].set(0),
+        move_slot=s.move_slot.at[1].set(1),
+        selected_temp=s.selected_temp.at[1].set(2),
+    )
+    out = assert_matches_reference(tables, s, (1, 0), O)
+    assert int(out.status[0, 0]) == Status.SLEEP  # the pick never ran
+    assert [int(out.move_slot[0]), int(out.selected_temp[0])] == [0, 0]
+    assert [int(out.move_slot[1]), int(out.selected_temp[1])] == [0, 2]
+
+
 def _struggling_pursuer_board(tables, names):
     """E2-ML-8, review 5 #2: the foe's only move, Pursuit, is disabled, so its FIGHT Struggles
     (STRUGGLING_ALL, bcp.c:433-434) and keeps the TEMP_VALUE 1 of its last Pursuit; TryPursuit has

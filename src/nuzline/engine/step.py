@@ -92,6 +92,7 @@ from nuzline.engine.actions import (
     locked_slot,
     move_imprisoned,
     replacement_bench,
+    usable_moves,
 )
 from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
@@ -5870,6 +5871,8 @@ def step_events(
     s = s._replace(
         starf_roll=roll.astype(s.starf_roll.dtype), starf_taken=jnp.zeros_like(s.starf_taken)
     )
+    # The unread moveSlot / TEMP_VALUE at the turn boundary (E2-ML-9; a pause keeps them).
+    s = canonical_selection(tables, s)
     return _where(state.over != 0, state, s), events
 
 
@@ -5906,6 +5909,41 @@ def canonical_target(state: BattleState) -> BattleState:
     keep = (state.locked_move != 0) | (state.encore_move != 0)
     canon = jnp.where(keep, state.chosen_target, jnp.arange(2) ^ 1)
     return state._replace(chosen_target=canon.astype(state.chosen_target.dtype))
+
+
+def canonical_selection(tables: Tables, state: BattleState) -> BattleState:
+    """``move_slot`` and ``selected_temp`` canonical at a turn boundary (E2-ML-9): 0 where no
+    reader can see them before the next selection writes them. Nothing clears either field
+    (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182), so
+    an unrun pick (a battler immobilized, or fainted before acting) would leave states that differ
+    only in dead values. For a battler whose active Pokemon has HP and that picks a command next
+    turn (not locked: ``locked_slot < 0``, Battler_CanPickCommand, battle_lib.c:6224-6235, whose
+    RECHARGING no move sets) both are dead when it has a usable move (``usable_moves``, the test
+    ``order.selection_slots`` / ``selection_temps`` apply to this state at the next turn start):
+    a FIGHT writes both (bcp.c:525-526; under an Encore moveSlot and TEMP_VALUE 0, :445-447), a
+    switch or item writes TEMP_VALUE (:565, :595) and leaves a moveSlot that only a FIGHT battler's
+    readers take (battle_lib.c:1378-1391; ATTACKER_MOVE_SLOT, common.h:8, at battle_script.c:6753,
+    :7237 and lib.c:7390-7395 for the move running). A Struggle-bound battler (STRUGGLING_ALL,
+    bcp.c:433-442) writes neither: its moveSlot has no reader under Struggle (lib.c:1382-1383,
+    battle_script.c:6752), so it is 0; its TEMP_VALUE stays readable (the Rage check, bcp.c:844;
+    TryPursuit, battle_script.c:6909, neither tests Struggle), so it is kept. A locked battler
+    writes nothing (bcp.c:334-337) and its readers take both: kept. A battler at 0 HP keeps both:
+    an absent one writes nothing (bcp.c:330-333), and a pending replacement's newcomer decides at
+    ``replace`` / ``replace_round``, which canonicalize again. A paused state (``pivot_battler``,
+    ``learn_site``) keeps both: the turn's remaining actions read them. Idempotent."""
+    fmt = format_of(state)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    slots, temps = [], []
+    for b in range(fmt.B):
+        present = state.hp[party(fmt, b), state.active[b]] > 0
+        picks = present & (locked_slot(state, b) < 0) & ~paused
+        usable = jnp.any(usable_moves(tables, state, b))
+        slots.append(jnp.where(picks, 0, state.move_slot[b]))
+        temps.append(jnp.where(picks & usable, 0, state.selected_temp[b]))
+    return state._replace(
+        move_slot=jnp.stack(slots).astype(state.move_slot.dtype),
+        selected_temp=jnp.stack(temps).astype(state.selected_temp.dtype),
+    )
 
 
 def roosting_now(state: BattleState, roosted) -> jnp.ndarray:
@@ -6242,6 +6280,8 @@ def replace(
     # The hazards' assuranceDamageMask (effects.entry_hazards) is turnFlags too, which
     # SetupNextTurn clears before any action reads it (B13-17): a turn scratch, 0 between turns.
     out = out._replace(ts_assurance=jnp.zeros_like(out.ts_assurance))
+    # The newcomer's unread moveSlot / TEMP_VALUE (E2-ML-9): its usable moves decide.
+    out = canonical_selection(tables, out)
     # The slot's speedRand stays; it is unread unless the newcomer (or, after an entry
     # faint, the next replacement) can be a Quick Claw holder (qc_kept).
     return _keep_quick_claw(tables, out, out.qc_roll)
@@ -6308,4 +6348,5 @@ def replace_round(tables: Tables, state: BattleState, picks, trace_pick=None) ->
     pending = jnp.any(needs_replacement(out) != 0)
     out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))
     out = out._replace(ts_assurance=jnp.zeros_like(out.ts_assurance))
+    out = canonical_selection(tables, out)  # E2-ML-9, as ``replace``
     return _keep_quick_claw(tables, out, out.qc_roll)

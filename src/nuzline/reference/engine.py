@@ -8835,7 +8835,28 @@ def ref_step(
         )
         sd.starf_roll = [first] + [0] * (len(STARF_QUEUE) - 1)
         sd.starf_taken = 0
+    if not actions_only:
+        _canonical_selection(tables, out)  # step.step_events' last write (E2-ML-9)
     return out
+
+
+def _canonical_selection(tables, s: RefState) -> None:
+    """``engine.step.canonical_selection`` in place (E2-ML-9): at a turn boundary that is not a
+    pause (``pivot_battler``, ``learn_site``), a battler whose active Pokemon has HP and that is not
+    locked (``_locked_slot < 0``, Battler_CanPickCommand, lib.c:6224-6235) gets ``move_slot`` 0
+    (its next FIGHT writes it, bcp.c:445, :526, and no reader takes it under Struggle or a non-FIGHT
+    command: lib.c:1378-1391, battle_script.c:6752-6753) and, when it has a usable move
+    (``_usable``, the next selection's test), ``selected_temp`` 0 (the next selection writes it,
+    bcp.c:447, :525, :565, :595); a Struggle-bound one keeps ``selected_temp`` (read by the Rage
+    check, bcp.c:844, and TryPursuit, battle_script.c:6909). Locked and 0-HP battlers keep both."""
+    if s.pivot_battler or s.learn_site:
+        return
+    for b, sd in enumerate(s.battlers):
+        if _active(s, b).hp <= 0 or _locked_slot(s, b) >= 0:
+            continue
+        sd.move_slot = 0
+        if any(_usable(tables, s, b)):
+            sd.selected_temp = 0
 
 
 def _ref_step(
@@ -9879,6 +9900,7 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
     # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
     if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
         _set_roosting(s, [0] * _fmt(s).B)
+    _canonical_selection(tables, s)  # the newcomer's usable moves decide (E2-ML-9)
     return s
 
 
@@ -9921,4 +9943,5 @@ def ref_replace_round(tables, state: RefState, picks, trace_pick=None) -> RefSta
         sd.starf_taken = 0
     if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
         _set_roosting(s, [0] * _fmt(s).B)
+    _canonical_selection(tables, s)  # E2-ML-9, as ref_replace
     return s
