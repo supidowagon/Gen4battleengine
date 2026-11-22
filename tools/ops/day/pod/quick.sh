@@ -15,7 +15,8 @@
 # QUICK_DONE rc=<n>; or FALLBACK_FULL <reason> (rc 3: nothing was run; send a normal 1-chunk run
 # of the same ids), QUICK_DONE rc=3. rc: 0 pass; 3 fallback; 4 gate wait over QUICK_WAIT_S;
 # 5 broken pod state; 6 pytest passed no test (all skipped or deselected); 11-15 pytest's exit
-# code 1-5 plus 10 (11: a test failed); 20 any other pytest exit (a signal, uv failing);
+# code 1-5 plus 10 (11: a test failed; 12 also when uv fails before pytest, uv exits 2); 20 any
+# other exit (a signal);
 # 124 pytest ran over QUICK_MAX_S (its process group was killed). quick.rc holds the rc, agg.txt
 # "RESULT: PASS|FAIL (...)" plus the log (wait.sh and collect.sh read agg.txt; bin/notify.sh sees
 # quick.rc and offers results.tgz like the end of a normal run). Writes gate.env (podcheck.sh).
