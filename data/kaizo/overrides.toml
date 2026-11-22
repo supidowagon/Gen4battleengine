@@ -643,59 +643,34 @@ name = "Route 213"
 trainers = [106, 103, 105, 111, 110]
 source = "Wake Split:215"
 # No Surf before the Fen Badge (field_control.c:690): the beach is one line, walked from the
-# lobby end or from the west end. The lobby healer (scr 462 entry 2 HealParty @74) is reached
-# at every gap from the lobby end only, so no gap heals in every order. Hidden at the Wake
-# split: the grunt (obj 28, flag 538), Looker (obj 31, 488) and the lobby's Looker (header 376
-# obj 2, 529), cleared only past the Fen Badge (scr 459 @827-839). Trainer 696's pair and its
-# four spectators (objs 33-38, flag 482) stand until the player enters the lobby (scr 462
-# entry 1 @37, @152). Same orders and gaps either way. live_next: the walk does not depend on
-# the live count, but the healer's reach does depend on the order: after 106 first it is
-# reached at every gap (gap "heal", a heal change row), after 110 first at none. No
-# heal_gaps: the heal depends on the order, so it is read from live_next only.
+# lobby end or from the west end. Hidden at the Wake split: the grunt (obj 28, flag 538),
+# Looker (obj 31, 488) and the lobby's Looker (header 376 obj 2, 529), cleared only past the
+# Fen Badge (scr 459 @827-839). Trainer 696's pair and its four spectators (objs 33-38, flag
+# 482) stand until the player enters the lobby (scr 462 entry 1 @37, @152). Var 0x40FA: 7 at
+# the lobby-end entries (the lobby's OnTransition, scr 462 entry 1 @24-31), unknown at the west
+# entry (every story coord blocks there). From the lobby end the way onto the beach line crosses
+# coord 12 (699,832), value 7: a camera cutscene (scr 459 script 12 @477-649) that places
+# trainer 107 (obj 4) on (700,832), facing south with no movement, and sets 8 @643. 107 then
+# stands on the beach line's only tile back east until a map load, so after the cutscene the
+# lobby (its healer, scr 462 entry 2 HealParty @74, and its doors) is out of reach: the order
+# from the lobby end has no leave gap and no heal. The west order leaves at every gap (the
+# west exit). Walking non-members 107 (obj 4, movement 43, range 3x7) and 108 (obj 5, movement
+# 41, range 2x2) close the lobby end while unbeaten: the facts need both beaten.
 orders = [
   [[106], [103], [105], [111], [110]],
   [[110], [111], [105], [103], [106]],
 ]
-leave_gaps = "all"
+leave_gaps = [[], [1, 2, 3, 4]]
 escape = false
 pc_gaps = []
+heal_gaps = []
 locked_gaps = []
 fight_headers = 373
 field_moves = []
 field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Rock Smash rock but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
-live_next = [
-  { fought = [], live = 1, next = [[106], [110]], headers = [373, 373] },
-  { fought = [], live = 2, next = [[106], [110]], headers = [373, 373] },
-  { fought = [[106]], live = 1, next = [[103]], headers = [373], gap = ["leave", "heal"] },
-  { fought = [[106]], live = 1, to = 2, at = "bag", next = [[103]], headers = [373] },
-  { fought = [[106]], live = 1, to = 2, at = "heal", next = [[103]], headers = [373] },
-  { fought = [[106]], live = 2, next = [[103]], headers = [373], gap = ["leave", "heal"] },
-  { fought = [[110]], live = 1, next = [[111]], headers = [373], gap = ["leave"] },
-  { fought = [[110]], live = 1, to = 2, at = "bag", next = [[111]], headers = [373] },
-  { fought = [[110]], live = 2, next = [[111]], headers = [373], gap = ["leave"] },
-  { fought = [[106], [103]], live = 1, next = [[105]], headers = [373], gap = ["leave", "heal"] },
-  { fought = [[106], [103]], live = 1, to = 2, at = "bag", next = [[105]], headers = [373] },
-  { fought = [[106], [103]], live = 1, to = 2, at = "heal", next = [[105]], headers = [373] },
-  { fought = [[106], [103]], live = 2, next = [[105]], headers = [373], gap = ["leave", "heal"] },
-  { fought = [[110], [111]], live = 1, next = [[105]], headers = [373], gap = ["leave"] },
-  { fought = [[110], [111]], live = 1, to = 2, at = "bag", next = [[105]], headers = [373] },
-  { fought = [[110], [111]], live = 2, next = [[105]], headers = [373], gap = ["leave"] },
-  { fought = [[106], [103], [105]], live = 1, next = [[111]], headers = [373], gap = ["leave", "heal"] },
-  { fought = [[106], [103], [105]], live = 1, to = 2, at = "bag", next = [[111]], headers = [373] },
-  { fought = [[106], [103], [105]], live = 1, to = 2, at = "heal", next = [[111]], headers = [373] },
-  { fought = [[106], [103], [105]], live = 2, next = [[111]], headers = [373], gap = ["leave", "heal"] },
-  { fought = [[110], [111], [105]], live = 1, next = [[103]], headers = [373], gap = ["leave"] },
-  { fought = [[110], [111], [105]], live = 1, to = 2, at = "bag", next = [[103]], headers = [373] },
-  { fought = [[110], [111], [105]], live = 2, next = [[103]], headers = [373], gap = ["leave"] },
-  { fought = [[106], [103], [105], [111]], live = 1, next = [[110]], headers = [373], gap = ["leave", "heal"] },
-  { fought = [[106], [103], [105], [111]], live = 1, to = 2, at = "bag", next = [[110]], headers = [373] },
-  { fought = [[106], [103], [105], [111]], live = 1, to = 2, at = "heal", next = [[110]], headers = [373] },
-  { fought = [[106], [103], [105], [111]], live = 2, next = [[110]], headers = [373], gap = ["leave", "heal"] },
-  { fought = [[110], [111], [105], [103]], live = 1, next = [[106]], headers = [373], gap = ["leave"] },
-  { fought = [[110], [111], [105], [103]], live = 1, to = 2, at = "bag", next = [[106]], headers = [373] },
-  { fought = [[110], [111], [105], [103]], live = 2, next = [[106]], headers = [373], gap = ["leave"] },
-]
-orders_source = "rom:header 373 events 359; water behaviour 0x15 without Surf (Wake split); door (706,818) -> header 376"
+requires_beaten = [107, 108]
+requires_beaten_source = "rom:header 373 objs 4 (trainer 107, movement 43, range 3x7) and 5 (108, movement 41, range 2x2): walking non-members close their range box and, unbeaten, its sight area (map_object_move.c:675-705, script_manager.c:517-520); unbeaten no order completes (gauntlet_map.derive_groups)"
+orders_source = "rom:header 373 events 359; water behaviour 0x15 without Surf (Wake split); door (706,818) -> header 376; coord 12 cutscene scr 459 @477-649 (ROUTE_213_CUTSCENE)"
 
 # Collector Gerald (MULTI BATTLE with Clown Bob, GAUNTLET)*; Clown Bob (MULTI BATTLE with Collector Gerald, GAUNTLET); Camper Parker (MULTI BATTLE with Picknicker Tori, GAUNTLET); Picknicker Tori (MULTI BATTLE with Camper Parker, GAUNTLET); Bug Catcher Adalbert (MULTI BATTLE with Camper Mike, GAUNTLET); Camper Mike (MULTI BATTLE with Bug Catcher Adalbert, GAUNTLET); Lass Cassidy (MULTI BATTLE with Youngster Butch, GAUNTLET); Youngster Butch (MULTI BATTLE with Lass Cassidy, GAUNTLET); Hiker Reginald (MULTI BATTLE with Hiker Lorenzo, GAUNTLET); Hiker Lorenzo (MULTI BATTLE with Hiker Reginald, GAUNTLET); Castle Valet Darach (MULTI BATTLE with Lady Caitlin, GAUNTLET END); Lady Caitlin (MULTI BATTLE with Castle Valet Darach, GAUNTLET END)
 # rows: Galactic Split:117=443, Galactic Split:127=383, Galactic Split:137=380, Galactic Split:147=458, Galactic Split:157=459, Galactic Split:167=460, Galactic Split:177=450, Galactic Split:187=496, Galactic Split:197=454, Galactic Split:207=455, Galactic Split:217=749, Galactic Split:227=750

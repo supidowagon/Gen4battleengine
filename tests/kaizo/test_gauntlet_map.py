@@ -1489,15 +1489,19 @@ def test_building_3_is_forced_412_422_with_no_leave_gap(derived):
 @pytest.mark.slow
 def test_route_213_without_surf_is_a_beach_line_from_either_end(derived):
     # The Wake split holds no Fen Badge: no Surf, so the beach is one line, walked from the
-    # lobby end or the west end; the lobby healer is reached at every gap only from the lobby end
+    # lobby end or the west end. From the lobby end the way passes coord 12's cutscene, which
+    # parks trainer 107 on (700, 832), the line's only tile back east (ROUTE_213_CUTSCENE): no
+    # leave and no lobby heal after it. The west order leaves at every gap (the west exit).
     d = derived["Route 213"]
     assert {tuple(t for f in o for t in f) for o in d["orders"]} == {
         (106, 103, 105, 111, 110),
         (110, 111, 105, 103, 106),
     }
-    # the healer's reach depends on the order: no flat heal_gaps (live_next holds it)
-    assert d["leave_gaps"] == [[1, 2, 3, 4]] * 2 and d["heal_gaps"] is None
-    assert d["pc_gaps"] == []
+    leave = {o[0][0]: g for o, g in zip(d["orders"], d["leave_gaps"])}
+    assert leave == {106: [], 110: [1, 2, 3, 4]}
+    assert d["heal_gaps"] == [] and d["pc_gaps"] == [] and d["live_next"] is None
+    # walking non-members 107 and 108 close the lobby end unbeaten (Walker.wander_tiles)
+    assert d["requires_beaten"] == [107, 108]
 
 
 @pytest.mark.slow
@@ -1962,9 +1966,8 @@ def test_rom_route_204_live_next_follows_the_count(rom_files, derived):
     # 15 (Twins Liv & Liz) is a double-battle trainer: with one live Pokemon it is not fought,
     # and a faint or a revive between fights switches the continuation. No gym trainer is one,
     # and the Wayward pairs fight with the partner, who counts two: only Route 204 North's walk
-    # depends on the count. Route 213's table is stored for its per-order heal (the lobby healer
-    # is reached at every gap after 106 first, at none after 110 first; heal_gaps is absent).
-    # Route 204 North's leave depends on the count (after 13: at one live, not at two).
+    # depends on the count. Route 204 North's leave depends on the count (after 13: at one
+    # live, not at two).
     from tools.kaizo.gauntlet_map import GYM_FIGHTS, read_double_trainers
 
     doubles = read_double_trainers(rom_files)
@@ -1977,28 +1980,14 @@ def test_rom_route_204_live_next_follows_the_count(rom_files, derived):
     assert rows[(((15,),), 1, "")] == [[13]]  # a faint in the twins' fight
     assert rows[(((13,),), 2, "")] == [[14], [15]] and rows[(((13,),), 1, "")] == [[14]]
     assert rows[(((13,), (14,)), 1, "")] == [] and rows[(((13,), (14,)), 1, "bag")] == [[15]]
-    assert {n for n, d in derived.items() if d["live_next"] is not None} == {
-        "Route 204 North",
-        "Route 213",
-    }
-    heal = {
-        tuple(map(tuple, r["fought"]))
-        for r in derived["Route 213"]["live_next"]
-        if "heal" in r.get("gap", ())
-    }
-    assert heal == {
-        ((106,),),
-        ((106,), (103,)),
-        ((106,), (103,), (105,)),
-        ((106,), (103,), (105,), (111,)),
-    }
+    assert {n for n, d in derived.items() if d["live_next"] is not None} == {"Route 204 North"}
     absent = {
         (n, k)
         for n, d in derived.items()
         for k in ("leave_gaps", "heal_gaps", "pc_gaps")
         if d[k] is None
     }
-    assert absent == {("Route 204 North", "leave_gaps"), ("Route 213", "heal_gaps")}
+    assert absent == {("Route 204 North", "leave_gaps")}
 
 
 def test_a_move_met_but_never_needed_is_not_relevant():
@@ -2069,6 +2058,155 @@ def test_a_warp_writes_the_var_unless_it_holds_the_kept_value():
     assert var_value(w._enter_flags(2, frozenset({var_flag(0x40FA, 9)})), 0x40FA) == 9
     assert var_value(w._enter_flags(2, frozenset()), 0x40FA) is None  # unknown may be 9
     assert var_value(w._enter_flags(3, frozenset({var_flag(0x40FA, 3)})), 0x40FA) == 3
+
+
+def _cutscene_maps(warp=False):
+    # header 1: a column coord at x 2 (script 7, var 0x4100 value 7) every path east crosses;
+    # trainer 3 at (7, 2) looks east off the map; with ``warp`` a door at (0, 2) into header 2
+    # and back
+    rows = ["........", "........", "........"]
+    warps = [Warp(0, 0, 2, 2, 0)] if warp else []
+    one = area(1, rows, [trainer(3, 7, 2, EAST, 2)], warps, [Coord(7, 2, 0, 1, 3, 7, 0x4100)])
+    two = area(2, ["..."], warps=[Warp(0, 0, 0, 1, 0)])
+    return StaticMaps([one, two])
+
+
+def _cutscene_rule(effect):
+    from tools.kaizo.gauntlet_map import CoordEffect
+
+    def rule(header, coord, matches):
+        if coord.script == 7 and matches:
+            return effect
+        if coord.script == 8:
+            return "block" if matches else None
+        return None
+
+    assert isinstance(effect, CoordEffect)
+    return rule
+
+
+def _walks(w, start, flags):
+    # the plain walk and the walk over object layouts must agree on the tiles and fights
+    plain = w.walk(start, flags=flags, y=0)
+    lay = w.walk_layouts([_State(start, 0, False, frozenset(flags))])
+    assert set(plain.seen) == set(lay.seen) and set(plain.spot) == set(lay.spot)
+    return plain
+
+
+def test_a_coord_effect_writes_the_var_and_the_next_coord_reads_it():
+    from tools.kaizo.gauntlet_map import CoordEffect, var_flag
+
+    rows = ["........"]
+    coords = [Coord(7, 2, 0, 1, 1, 7, 0x4100), Coord(8, 5, 0, 1, 1, 8, 0x4100)]
+    maps = StaticMaps([area(1, rows, coords=coords)])
+    rule = _cutscene_rule(CoordEffect(writes=((0x4100, 8),)))
+    w = Walker(maps, strict=[1], coord_rule=rule)
+    # 7 -> the effect passes and writes 8; coord 8 then matches and blocks
+    walk = _walks(w, Pos(1, 0, 0), {var_flag(0x4100, 7)})
+    assert Pos(1, 4, 0) in walk.seen and Pos(1, 5, 0) not in walk.seen
+    assert [c.script for _, c in walk.crossed] == [7]
+    # a write to a value no coord reads passes both
+    other = Walker(maps, strict=[1], coord_rule=_cutscene_rule(CoordEffect(writes=((0x4100, 9),))))
+    assert Pos(1, 7, 0) in _walks(other, Pos(1, 0, 0), {var_flag(0x4100, 7)}).seen
+
+
+def test_a_coord_effect_places_a_trainer_until_the_next_map_load():
+    from tools.kaizo.gauntlet_map import CoordEffect, place_flag, placements, var_flag
+
+    # trainer 3 placed on (5, 2) looking north (movement 0: its direction only), sight 2
+    effect = CoordEffect(place=((3, 5, 2, 0, NORTH),))
+    w = Walker(_cutscene_maps(), {3}, strict=[1], coord_rule=_cutscene_rule(effect))
+    walk = _walks(w, Pos(1, 0, 0), {var_flag(0x4100, 7)})
+    # its line (5, 1), (5, 0) and its tile close the way east
+    seen_at = {x.pos: x for x in walk.starts[(3,)] if x.how == "sight"}
+    assert set(seen_at) == {Pos(1, 5, 0), Pos(1, 5, 1)}
+    assert not {Pos(1, 6, z) for z in range(3)} & set(walk.seen)
+    assert placements(seen_at[Pos(1, 5, 0)].flags) == [(1, 3, 5, 2, 0, NORTH)]
+    # the trainer walks up from its placed tile (5, 2): one step north to (5, 1) for (5, 0)
+    assert (1, 3, 5, 1, 0, NORTH) in seen_at[Pos(1, 5, 0)].moved
+    assert (1, 3, 5, 2, 0, NORTH) in seen_at[Pos(1, 5, 1)].moved
+    # not run (the var holds 8): it stays on (7, 2) looking east, the way is open
+    plain = _walks(w, Pos(1, 0, 0), {var_flag(0x4100, 8)})
+    assert Pos(1, 6, 0) in plain.seen
+    assert all(x.how == "talk" for x in plain.starts.get((3,), ()))
+    # the placed object blocks its tile, not its event tile
+    s0 = _State(Pos(1, 2, 0), 0, False, frozenset({place_flag(1, 3, 5, 2, 0, NORTH)}))
+    placed = w.with_effects(s0, (effect,))
+    assert (1, 3, 5, 2, 0, NORTH) in placed.moved
+    a = w.maps.area(1)
+    assert [o.index for o in w.objects_on(a, 5, 2, placed.moved)] == [3]
+    assert w.objects_on(a, 7, 2, placed.moved) == []
+    # beaten, the placed trainer neither sees nor fights when talked to: it only blocks
+    beaten = Walker(_cutscene_maps(), {9}, strict=[1], coord_rule=w.coord_rule, beaten={3})
+    walk = _walks(beaten, Pos(1, 0, 0), {var_flag(0x4100, 7)})
+    assert walk.spot == {} and Pos(1, 6, 0) in walk.seen and Pos(1, 5, 2) not in walk.seen
+
+
+def test_a_warp_ends_a_placement():
+    from tools.kaizo.gauntlet_map import CoordEffect, placements, var_flag
+
+    effect = CoordEffect(place=((3, 1, 1, 0, EAST),))
+    w = Walker(_cutscene_maps(warp=True), {3}, strict=[1, 2], coord_rule=_cutscene_rule(effect))
+    s0 = w.with_effects(_State(Pos(1, 2, 2), 0, False, frozenset({var_flag(0x4100, 8)})), (effect,))
+    assert placements(s0.flags) and s0.moved
+    # the door (0, 2) -> header 2 -> back: the landing's flags carry no placement, no moved
+    out = w.walk_from([s0])
+    back = {s for s in out.states if s.pos.header == 1 and s.pos != Pos(1, 2, 2)}
+    landed = [s for s in back if not placements(s.flags)]
+    assert landed and all(s.moved == () for s in landed)
+    assert all(var_flag(0x4100, 8) in s.flags for s in landed)  # the var stays
+
+
+def test_the_route_213_cutscene_coord_passes_with_its_effect():
+    from tools.kaizo.gauntlet_map import (
+        ROUTE_213_CUTSCENE,
+        ROUTE_213_VAR,
+        route_213_coord_rule,
+    )
+
+    c = Coord(12, 699, 832, 1, 1, 7, ROUTE_213_VAR)
+    assert route_213_coord_rule(373, c, True) is ROUTE_213_CUTSCENE
+    assert route_213_coord_rule(373, c, None) is None  # unknown: blocks by default
+    assert route_213_coord_rule(373, c._replace(script=13, value=8), True) == "block"
+    assert ROUTE_213_CUTSCENE.writes == ((ROUTE_213_VAR, 8),)
+    assert ROUTE_213_CUTSCENE.place == ((4, 700, 832, 0, SOUTH),)
+
+
+@pytest.mark.slow
+def test_rom_route_213_cutscene_script_is_the_cited_one(rom_files, decomp):
+    # scr 459 script 12 (coord 12): SetPosition of object 6 (668, 832) @477 and (668, 810)
+    # facing 1 @629, of object 4 (700, 832) facing 1 @521, SetMovementType 4 -> 0 @533,
+    # 0x40FA = 8 @643; no move of the player (local id 255); objects 4 and 6 of header 373 are
+    # trainer 107 (movement 43) and the type-0 object of talk script 14 on (668, 810) facing 1
+    from tools.kaizo.gauntlet_map import ROUTE_213_CUTSCENE, ROUTE_213_VAR, RomMaps
+    from tools.rom.readers.maps import SCRIPTS_NARC, _walk, command_table
+
+    table = command_table(decomp)
+    decoded = _walk(rom_files.narc(SCRIPTS_NARC)[459], table, "scr 459")[0]
+    cmds = {at: (table.constants[op], tuple(v)) for at, (op, v, _) in decoded.items()}
+    run = {at: c for at, c in cmds.items() if 477 <= at <= 649}
+    assert run[477] == ("SCRCMD_SETPOSITION", (6, 668, 0, 832, 3))
+    assert run[521] == ("SCRCMD_SETPOSITION", (4, 700, 0, 832, 1))
+    assert run[533] == ("SCRCMD_SETMOVEMENTTYPE", (4, 0))
+    assert run[629] == ("SCRCMD_SETPOSITION", (6, 668, 0, 810, 1))
+    assert run[643] == ("SCRCMD_SETVARFROMVALUE", (ROUTE_213_VAR, 8))
+    assert cmds[649][0] == "SCRCMD_END"
+    moved = {v[0] for n, v in run.values() if n == "SCRCMD_APPLYMOVEMENT"}
+    assert moved == {6, 241}
+    placed = {
+        v[0] for n, v in run.values() if n in ("SCRCMD_SETPOSITION", "SCRCMD_SETMOVEMENTTYPE")
+    }
+    assert placed == {4, 6}
+    a = RomMaps(rom_files).area(373)
+    o4, o6 = a.object_by_index(4), a.object_by_index(6)
+    assert (o4.local_id, o4.trainer, o4.movement, o4.x, o4.z) == (4, 107, 43, 704, 832)
+    assert (o6.local_id, o6.trainer_type, o6.script, o6.x, o6.z, o6.direction) == (
+        6, 0, 14, 668, 810, 1,
+    )  # fmt: skip
+    ((index, x, z, movement, direction),) = ROUTE_213_CUTSCENE.place
+    assert (index, x, z, movement, direction) == (o4.index, 700, 832, 0, 1)
+    coord = next(c for c in a.coords if c.script == 12)
+    assert (coord.x, coord.z, coord.value, coord.var) == (699, 832, 7, ROUTE_213_VAR)
 
 
 def _wanderer(rx=1, rz=0):

@@ -393,15 +393,16 @@ def test_route_204_north_a_faint_switches_the_continuation():
     assert f.leave_gaps_of(f.orders[0]) == (1, 2)
 
 
-def test_route_213_heal_is_read_from_live_next_by_order():
-    # The lobby healer is reached at every gap after 106 first, at none after 110 first: no
-    # flat heal_gaps, and no reader takes it as empty.
+def test_route_213_from_the_lobby_end_has_no_leave_or_heal_after_the_cutscene():
+    # From the lobby end the way crosses coord 12's cutscene, which parks trainer 107 on the
+    # beach line's only tile back east (scr 459 @521-533): no lobby (heal, doors) after it. The
+    # west order leaves at every gap. Both walking non-members must be beaten.
     f = next(g for g in load_overrides().gauntlets if g.name == "Route 213").facts
-    assert f.heal_gaps is None and "heal_gaps" not in f.to_dict()
-    assert f.pc_gaps == () and f.leave_gaps == ((1, 2, 3, 4),) * 2
+    assert f.heal_gaps == () and f.pc_gaps == () and f.live_next == ()
     east, west = sorted(f.orders, key=lambda o: o[0] != (106,))
-    assert [f.gap_holds(east, k, "heal") for k in range(1, 5)] == [True] * 4
-    assert [f.gap_holds(west, k, "heal") for k in range(1, 5)] == [False] * 4
+    assert f.leave_gaps_of(east) == () and f.leave_gaps_of(west) == (1, 2, 3, 4)
+    assert [f.gap_holds(east, k, "heal") for k in range(1, 5)] == [False] * 4
+    assert f.requires_beaten == (107, 108) and f.requires_beaten_source.startswith("rom:")
 
 
 def test_missing_file_is_empty(tmp_path):

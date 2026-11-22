@@ -259,6 +259,39 @@ def var_value(flags: Collection[int], var: int) -> int | None:
     return found[0] if found else None
 
 
+# A coord script may place a live map object: ``ScrCmd_SetPosition`` (``src/scrcmd.c:4576-4590``)
+# moves and turns the live object only (``MapObject_SetPosDirFromCoords``,
+# ``src/map_object.c:2447-2469``, then ``MapObject_RecalculateObjectHeight``) and
+# ``ScrCmd_SetMovementType`` (``src/scrcmd.c:2511-2517``, ``MapObject_SwitchMovementType``
+# ``src/map_object.c:2471-2477``) sets its movement type; neither writes the map's object event,
+# so the next map load re-creates the object from its event (``src/field_map_change.c:341-360``).
+# The walk state carries such a placement twice: a ``moved`` entry ``(header, index, x, z,
+# movement, direction)`` (the tile it stands on, ``Walker.objects_on``) and a pseudo flag
+# (``place_flag``: its sight and range box, ``Walker.objects``); a warp drops both.
+PLACE_FLAG_BASE = 1 << 62
+_PLACE_FIELDS = ((44, 16), (36, 8), (24, 12), (12, 12), (4, 8), (0, 4))  # (shift, bits)
+
+
+def place_flag(header: int, index: int, x: int, z: int, movement: int, direction: int) -> int:
+    """The pseudo flag of object ``index`` of ``header`` placed on ``(x, z)`` with ``movement``
+    and ``direction`` (``placements``)."""
+    out = PLACE_FLAG_BASE
+    for v, (shift, bits) in zip((header, index, x, z, movement, direction), _PLACE_FIELDS):
+        if not 0 <= v < 1 << bits:
+            raise MapReadError(f"placement field {v} out of range")
+        out |= v << shift
+    return out
+
+
+def placements(flags: Collection[int]) -> list[tuple[int, int, int, int, int, int]]:
+    """The placements ``(header, index, x, z, movement, direction)`` a flag set carries."""
+    return sorted(
+        tuple((f >> shift) & ((1 << bits) - 1) for shift, bits in _PLACE_FIELDS)
+        for f in flags
+        if f >= PLACE_FLAG_BASE
+    )
+
+
 VARS_START = 0x4000  # generated/vars_flags.txt:4107
 
 DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))  # N S W E, MapObject_GetDxFromDir order
@@ -842,16 +875,26 @@ class Walk:
         self.starts.setdefault(f, set()).add(sight)
 
 
-CoordRule = Callable[[int, Coord, "bool | None"], "str | None"]
+class CoordEffect(NamedTuple):
+    """``Walker.coord_rule``'s answer for a coord script the player walks on through: the var
+    writes ``(var, value)`` it makes and the live objects of the coord's header it places
+    ``(index, x, z, movement, direction)`` (``place_flag``)."""
+
+    writes: tuple[tuple[int, int], ...] = ()
+    place: tuple[tuple[int, int, int, int, int], ...] = ()
+
+
+CoordRule = Callable[[int, Coord, "bool | None"], "str | CoordEffect | None"]
 
 
 class _State(NamedTuple):
     """A player state of the walk. ``moved``: the objects standing off their event tiles,
     sorted: ``(header, object index, x, z)`` for a trainer who walked up to the player before a
     sight fight (``Sighting.moved``), ``(header, object index, x, z, y)`` for a pushed Strength
-    boulder (``y`` its fx32 height there: the push path, not a straight line, decides it). A warp
-    re-creates every object at its event tile (``src/field_map_change.c:341-360``), so a warp
-    landing has none. ``flags`` holds ``STRENGTH_ACTIVE`` once the player turned Strength on."""
+    boulder (``y`` its fx32 height there: the push path, not a straight line, decides it),
+    ``(header, object index, x, z, movement, direction)`` for an object a coord script placed
+    (``CoordEffect``, ``place_flag``). A warp re-creates every object at its event tile
+    (``src/field_map_change.c:341-360``), so a warp landing has none. ``flags`` holds ``STRENGTH_ACTIVE`` once the player turned Strength on."""
 
     pos: Pos
     y: int
@@ -867,7 +910,8 @@ class Walker:
     ``moves``: the field moves the walk may use (``FieldMoves``). ``ignore(header, obj)``: an
     object that never blocks and never sees (the partner who follows the player). ``vars``: the
     known values of coord variables. ``coord_rule(header, coord, matches)``: ``"pass"``,
-    ``"block"`` (the script takes the player: the tile is not entered) or None for the default: in
+    ``"block"`` (the script takes the player: the tile is not entered), a ``CoordEffect`` (the
+    player stays on the tile; the script writes vars and places objects) or None for the default: in
     a ``strict`` header (every header when None) a matching coord raises and one on an unknown var
     blocks (its script may start a battle or move the player: Building 75's on 0x407A starts
     406; Route 213's on 0x40FA where the state does not carry the var); in another header a
@@ -978,6 +1022,16 @@ class Walker:
         (each step on the plate nearest its height, ``MapObject_RecalculatePositionHeight``,
         ``src/map_object_move.c:1036-1047``); a boulder entry carries its height."""
         o = self._relocated.get(entry)
+        if o is None and len(entry) == 6:
+            # a placement (``place_flag``): the height is recalculated on the new tile from the
+            # object's own (``MapObject_RecalculateObjectHeight``; ``Area.object_height``)
+            _, index, x, z, movement, direction = entry
+            obj = area.object_by_index(index)
+            if obj is None:
+                raise MapReadError(f"header {area.header}: no object {index} to place")
+            o = self._relocated[entry] = obj._replace(
+                x=x, z=z, movement=movement, direction=direction
+            )
         if o is None and len(entry) == 5:
             _, index, x, z, y = entry
             obj = next((c for c in area.objects if c.index == index), None)
@@ -999,6 +1053,17 @@ class Walker:
                 y = y if h is None else h
             o = self._relocated[entry] = obj._replace(x=x, z=z, y=y)
         return o
+
+    def objects(self, area: Area, flags: Collection[int] = ()) -> tuple[MapObject, ...]:
+        """The objects of ``area`` in object order, each one ``flags`` places (``place_flag``)
+        on its placed tile with its placed movement type and direction."""
+        placed = {p[1]: p for p in placements(flags) if p[0] == area.header}
+        if not placed:
+            return area.objects
+        return tuple(
+            o if o.index not in placed else self._relocate(area, placed[o.index])
+            for o in area.objects
+        )
 
     def objects_on(self, area: Area, x: int, z: int, moved: tuple = ()) -> list[MapObject]:
         """The objects of the area on ``(x, z)`` with the ``moved`` ones (``_State.moved``) on
@@ -1057,7 +1122,7 @@ class Walker:
         if hit is not None:
             return hit
         out: set[tuple[int, int]] = set()
-        for o in area.objects:
+        for o in self.objects(area, flags):
             if not self._inert(o) or self.hidden(o, flags):
                 continue
             if o.range_x < 0 or o.range_z < 0:
@@ -1197,9 +1262,14 @@ class Walker:
         table = self._sight.get(key)
         if table is None:
             table = {}
-            for o in area.objects:
+            for o in self.objects(area, flags):
                 t = o.trainer
-                if t is None or t in defeated or self._ignored(header, o, flags):
+                if (
+                    t is None
+                    or t in defeated
+                    or t in self.beaten
+                    or self._ignored(header, o, flags)
+                ):
                     continue
                 look = self.facing(o)
                 if look is None:
@@ -1225,9 +1295,14 @@ class Walker:
         out = self._lines.get(key)
         if out is None:
             tiles = set()
-            for o in area.objects:
+            for o in self.objects(area, flags):
                 t = o.trainer
-                if t is None or t in defeated or self._ignored(area.header, o, flags):
+                if (
+                    t is None
+                    or t in defeated
+                    or t in self.beaten
+                    or self._ignored(area.header, o, flags)
+                ):
                     continue
                 look = self.facing(o)
                 if look is None:
@@ -1297,6 +1372,12 @@ class Walker:
         out = set(moved)
         for seer in movers:
             obj = next(o for o in area.objects if o.index == seer.index)
+            placed = next(
+                (e for e in out if len(e) == 6 and e[:2] == (area.header, obj.index)), None
+            )
+            if placed is not None:  # a placed trainer walks from its placed tile
+                out.discard(placed)
+                obj = self._relocate(area, placed)
             dx = (pos.x > obj.x) - (pos.x < obj.x)
             dz = (pos.z > obj.z) - (pos.z < obj.z)
             steps = abs(pos.x - obj.x) + abs(pos.z - obj.z) - 1
@@ -1324,7 +1405,10 @@ class Walker:
                 walkers.append(partner)
             for o in walkers:
                 if steps > 0:
-                    out.add((area.header, o.index, o.x + dx * steps, o.z + dz * steps))
+                    to = (area.header, o.index, o.x + dx * steps, o.z + dz * steps)
+                    out.add(to if o is not obj or placed is None else (*to, *placed[4:]))
+                elif o is obj and placed is not None:
+                    out.add(placed)
         return self._intern(tuple(sorted(out)))
 
     def _fight(self, seeing: list[Seer]) -> Fight | None:
@@ -1396,14 +1480,18 @@ class Walker:
             out = out | {var_flag(var, value)}
         return self._intern(frozenset(out))
 
-    def _coord_step(self, pos: Pos, walk: Walk, flags: Collection[int] = ()) -> bool:
-        """Apply the coord events of a tile entered; False when a script takes the player.
+    def _coord_step(
+        self, pos: Pos, walk: Walk, flags: Collection[int] = ()
+    ) -> tuple[CoordEffect, ...] | None:
+        """Apply the coord events of a tile entered: None when a script takes the player, else
+        the effects of the scripts that run (``CoordEffect``; ``with_effects``).
 
         The game runs only the first coord of the tile, in event order, whose var matches
         (``sub_0203CC14``, ``src/unk_0203C954.c:217-221``; one script, ``field_control.c:769-773``):
         a known match ends the loop. A coord whose var is unknown may or may not be that one,
         so its action applies (by default it blocks) and the later coords are applied too."""
         area = self.maps.area(pos.header)
+        effects: list[CoordEffect] = []
         for c in area.coords:
             if not c.covers(pos.x, pos.z):
                 continue
@@ -1423,11 +1511,42 @@ class Walker:
                 else:
                     action = "pass"
             if action == "block":
-                return False
+                return None
+            if isinstance(action, CoordEffect):
+                if not matches:
+                    raise MapReadError(f"coord script {c.script} at {pos}: an effect needs a match")
+                effects.append(action)
             walk.crossed.append((pos, c))
             if matches:
                 break
-        return True
+        return tuple(effects)
+
+    def with_effects(self, s: _State, effects: tuple[CoordEffect, ...]) -> _State:
+        """``s`` after the coord ``effects`` of its tile (``_coord_step``): each var write
+        replaces the var's pseudo flag (``var_flag``); each placement replaces the object's
+        placement flag and ``moved`` entry (``place_flag``)."""
+        if not effects:
+            return s
+        h = s.pos.header
+        flags, moved = set(s.flags), list(s.moved)
+        for e in effects:
+            for var, value in e.writes:
+                cur = var_value(flags, var)
+                if cur is not None:
+                    flags.discard(var_flag(var, cur))
+                flags.add(var_flag(var, value))
+            for index, x, z, movement, direction in e.place:
+                flags = {
+                    f
+                    for f in flags
+                    if not (f >= PLACE_FLAG_BASE and placements([f])[0][:2] == (h, index))
+                }
+                flags.add(place_flag(h, index, x, z, movement, direction))
+                moved = [m for m in moved if m[:2] != (h, index)]
+                moved.append((h, index, x, z, movement, direction))
+        return s._replace(
+            flags=self._intern(frozenset(flags)), moved=self._intern(tuple(sorted(moved)))
+        )
 
     # -- movement
 
@@ -1721,7 +1840,13 @@ class Walker:
                 ly = self.arrival_height(landing)
                 # a warp clears Strength (FieldSystem_InitFlagsWarp,
                 # field_map_change_flags.c:68, from field_map_change.c:257)
-                lf = self._enter_flags(landing.header, here.flags - {STRENGTH_ACTIVE})
+                # and re-creates every object from its event: placements end (``place_flag``)
+                lf = self._enter_flags(
+                    landing.header,
+                    frozenset(
+                        f for f in here.flags if f != STRENGTH_ACTIVE and f < PLACE_FLAG_BASE
+                    ),
+                )
                 la = self.maps.area(landing.header)
                 lb = la.behaviour(landing.x, landing.z) == BRIDGE_START
                 # the warp re-creates every object at its event tile: moved is empty
@@ -1754,13 +1879,18 @@ class Walker:
                         states.add(target)
                         queue.append(target)
                         continue
-                    if not self._coord_step(target.pos, walk, target.flags):
+                    effects = self._coord_step(target.pos, walk, target.flags)
+                    if effects is None:
+                        continue
+                    warped = target is not here
+                    target = self.with_effects(target, effects)
+                    if warped:
+                        walk.seen.setdefault(here.pos, s.pos)
+                    if target in states:
                         continue
                     states.add(target)
                     walk.seen.setdefault(target.pos, s.pos)
                     queue.append(target)
-                    if target is not here:
-                        walk.seen.setdefault(here.pos, s.pos)
         self._reached |= walk.headers()
         return walk
 
@@ -1867,7 +1997,7 @@ class Walker:
         label: dict[tuple, int] = {}
         expanded: dict[tuple, int] = {}
         blocked: set[tuple] = set()  # step targets whose coord takes the player
-        entered: set[tuple] = set()  # step targets whose coords ran
+        entered: dict[tuple, tuple] = {}  # step targets whose coords ran -> their effects
         near: deque[tuple] = deque()
         far: deque[tuple] = deque()
         queued: set[tuple] = set()
@@ -1899,25 +2029,28 @@ class Walker:
             ):
                 push((s.pos, s.y, s.bridge, s.flags), bit(s.moved))
 
-        def enter(kind: str, t: _State, here: _State, frm: Pos, rec: Walk) -> bool:
-            """``_bfs``'s part for a move's target: False when it is not entered (the sight
-            check spots a stay; a coord takes a step)."""
+        def enter(kind: str, t: _State, here: _State, frm: Pos, rec: Walk) -> tuple | None:
+            """``_bfs``'s part for a move's target: None when it is not entered (the sight
+            check spots a stay; a coord takes a step), else its coord effects."""
             if kind == "stay":
-                return not self._spotted(
+                spotted = self._spotted(
                     rec, t.pos, t.y, "sight", defeated, removable, t.flags, t.bridge, t.moved
                 )
+                return None if spotted else ()
             b = (t.pos, t.y, t.bridge, t.flags)
             if b in blocked:
-                return False
-            if b not in entered:
-                if not self._coord_step(t.pos, walk, t.flags):
+                return None
+            effects = entered.get(b)
+            if effects is None:
+                effects = self._coord_step(t.pos, walk, t.flags)
+                if effects is None:
                     blocked.add(b)
-                    return False
-                entered.add(b)
+                    return None
+                entered[b] = effects
             walk.seen.setdefault(t.pos, frm)
             if t is not here:
                 walk.seen.setdefault(here.pos, frm)
-            return True
+            return effects
 
         while near or far:
             base = near.popleft() if near else far.popleft()
@@ -1946,15 +2079,22 @@ class Walker:
                         group = self._same_reads(reads, pending, i, tiles_of, on_tile, on_line)
                     pending &= ~group
                     self._merge(walk, rec, layouts, i, group)
-                    for (kind, t, _, warped), ok in outs:
-                        if ok:
-                            tb = (t.pos, t.y, t.bridge, t.flags)
-                            if warped:
-                                push(tb, bit(()))
-                            elif t.moved == lay:
-                                push(tb, group)
-                            else:
-                                push(tb, bit(t.moved))
+                    for (kind, t, _, warped), effects in outs:
+                        if effects is None:
+                            continue
+                        after = self.with_effects(t, effects)
+                        tb = (after.pos, after.y, after.bridge, after.flags)
+                        if warped or t.moved != lay:
+                            push(tb, bit(after.moved))
+                        elif after.moved == lay:
+                            push(tb, group)
+                        else:  # a coord placed an object: on each layout of the group
+                            g = group
+                            while g:
+                                j = (g & -g).bit_length() - 1
+                                g &= g - 1
+                                moved_j = self.with_effects(t._replace(moved=layouts[j]), effects)
+                                push(tb, bit(moved_j.moved))
         walk.layouts = sum(v.bit_count() for v in label.values())
         self._reached |= walk.headers()
         return walk
@@ -2062,7 +2202,9 @@ class Walker:
             # script reads the party (ScrCmd_CheckHasTwoAliveMons, src/scrcmd_trainer.c:283-289),
             # not the partner flag
             lone = t in self.doubles and not self.two_alive
-            if t is not None and t not in defeated and not self._inert(o) and not lone:
+            # a beaten trainer's talk starts no battle (GoToIfDefeated, scripts_battles.s:18)
+            beaten = t in defeated or t in self.beaten
+            if t is not None and not beaten and not self._inert(o) and not lone:
                 # a talk starts no approach: no one moves (scripts_battles.s:8-24)
                 walk.sighted((t,), Sighting(pos, "talk", s.y, s.flags, s.bridge, s.moved))
             return o
@@ -3089,16 +3231,35 @@ ROUTE_204 = ChainSpec(members=(15, 13, 14), headers=(346,), entries=(Pos(346, 18
 ROUTE_213_HEALERS = ((376, 1),)
 # Route 213's coords on 0x40FA (header 373, scr 459 entries 9-13): value 3 battle 692+693 (sets
 # 4), value 4 battle 694+695 (sets 5), value 5 a party check (one live non-egg: battle 466, sets
-# 7), value 7 a cutscene (sets 8; then coord 13's row at x 668 starts battle 491), value 8
-# battle 491 (sets 9). Each takes the player into a non-member battle or toward one: a matching
-# one blocks (``route_213_coord_rule``); one on an unknown value blocks by default.
+# 7), value 7 a cutscene (sets 8), value 8 battle 491 (sets 9). The battles and the party check
+# take the player: a matching one blocks (``route_213_coord_rule``); one on an unknown value
+# blocks by default.
 ROUTE_213_COORDS = frozenset({9, 10, 11, 12, 13})
+# Coord 12 (value 7, tile (699, 832)), scr 459 script 12 @477-649 (the ROM test pins it): a
+# camera cutscene. It moves object 6 (trainer 491, talk script 14, trainer type 0: no sight)
+# away and back: SetPosition (668, 832) @477, its walks, SetPosition (668, 810) facing 1 @629,
+# its event tile and direction. It places object 4 (local id 4: trainer 107, event (704, 832)
+# movement 43) on (700, 832) facing 1 (south) @521 and sets its movement type to 0
+# (MOVEMENT_TYPE_NONE, generated/movement_types.txt:1) @533: until the next map load 107 stands
+# there and looks south (``place_flag``). The player is never moved (the moves name the camera
+# object 241 and objects 4 and 6; no move of the player, local id 255). The map-local vars
+# 0x4015-0x4017 it sets @594-606 are the arguments of Kaizo's command 0x9C @612, which sets the
+# overworld weather 4 (docs/kaizo/rom_diff.md:292; a battle input, e1-mechanics-ledger G-23, not
+# a walk fact); no coord of the header reads them. Then 0x40FA = 8 @643: a pass
+# (``ROUTE_213_CUTSCENE``); coord 13 (x 668, z 810-816) then matches and blocks.
+ROUTE_213_CUTSCENE_COORD = 12
+ROUTE_213_CUTSCENE = CoordEffect(writes=((ROUTE_213_VAR, 8),), place=((4, 700, 832, 0, 1),))
 
 
-def route_213_coord_rule(header: int, coord: Coord, matches: bool | None) -> str | None:
-    """``Walker.coord_rule`` of Route 213: a matching 0x40FA story coord blocks."""
+def route_213_coord_rule(
+    header: int, coord: Coord, matches: bool | None
+) -> str | CoordEffect | None:
+    """``Walker.coord_rule`` of Route 213: the cutscene coord passes with its effect
+    (``ROUTE_213_CUTSCENE``); another matching 0x40FA story coord blocks."""
     if header == 373 and coord.var == ROUTE_213_VAR and coord.script in ROUTE_213_COORDS:
-        return "block" if matches else None
+        if not matches:
+            return None
+        return ROUTE_213_CUTSCENE if coord.script == ROUTE_213_CUTSCENE_COORD else "block"
     return None
 
 
