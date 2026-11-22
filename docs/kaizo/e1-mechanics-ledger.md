@@ -2999,6 +2999,17 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
   - Commits: SHOULD 1 debebc81, SHOULD 2 f4ba0c2e; NITs 0fbf718a (the faster-imprisoner test is a draw pin), 3af34fac
     (Open F: either side), 6f5c7f48 (ppUps zeroing cites), 1b2a436c (`replacement_known` docstring). No table rebuild:
     no id or table input changed.
+  - Ruling on the known-Metronome gap (coordinator, 22 Nov): every move a line can reach goes through the ROM-change
+    check. New `coverage.reached_moves`: the moves plus, when one is Metronome, every call `metronome_calls` gives a
+    Pokemon knowing none (BtlCmd_Metronome, bs:4535-4562; the holder's own moves are in the list already).
+    `rom_change_refusals` and `terrain_refusal` read it, so a known Metronome on either side, a gained one, and
+    prep's per-candidate and per-move asks (`prep.pool`, `prep.problem._rom_change_refusal`, its `terrain`) all reach
+    the calls. The 16 lock moves stay in `extra` for a known caller. Added Kaizo ROM-change refusals today: none, since
+    neither condition in the built Kaizo manifest lists a move (`arm9 MapHeader_GetMapLabelTextID`, and
+    `arm9 gFieldScriptCommands` with its 240 trainers). Terrain: a prep candidate with Metronome against a trainer whose
+    terrain is unknown is now refused (Secret Power, Nature Power and Camouflage are calls). Tests:
+    `test_a_known_metronomes_calls_reach_the_rom_change_check[player|opp]`,
+    `test_a_metronome_reads_the_terrain_through_its_calls`.
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

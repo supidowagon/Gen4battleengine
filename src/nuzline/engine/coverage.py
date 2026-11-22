@@ -846,6 +846,19 @@ def fight_calls(tables: Tables, party: Sequence[PokemonSpec]) -> list[int]:
 _NO_MOVES = SimpleNamespace(moves=(0, 0, 0, 0))
 
 
+def reached_moves(tables: Tables, moves: Sequence[int]) -> list[int]:
+    """``moves`` and, when one of them is Metronome, every move ``BtlCmd_Metronome`` can call
+    (battle_script.c:4535-4562; ``metronome_calls`` of a Pokemon knowing none: its holder's own
+    moves, which it skips, are in ``moves`` already), distinct: the moves a line holding
+    ``moves`` can reach, for the checks that read every move of the fight (the Kaizo ROM
+    changes, the terrain)."""
+    effect = np.asarray(tables.move_effect)
+    out = [int(m) for m in moves if m]
+    if any(int(effect[m]) == EffectId.METRONOME for m in out):
+        out += metronome_calls(tables, _NO_MOVES)
+    return list(dict.fromkeys(out))
+
+
 # Decomp battle effects (tables.move_ai_effect; generated/move_battle_effects.txt, line N is id
 # N - 1) that lock the user into the move it is using, ``moveLockedInto = moveCur``
 # (Battler_LockMoveChoice, battle_lib.c:1828-1832): BtlCmd_LockMoveChoice in Bide's
@@ -977,6 +990,8 @@ def rom_change_refusals(
         name for name, on in (("trick_room", area.trick_room), ("gravity", area.gravity)) if on
     }
     moves = {int(m) for s in specs for m in s.moves if m} | {int(m) for m in extra_moves}
+    # A Metronome's calls are moves of the fight too (``reached_moves``), known or gained.
+    moves = set(reached_moves(tables, sorted(moves)))
     # Nature Power's call runs its own effect script and data (terrain_calls).
     moves |= set(terrain_calls(tables, trainer, sorted(moves)))
     items = {int(s.item) for s in specs}
@@ -1033,7 +1048,8 @@ def terrain_refusal(
     tiles give and the three sources checked, ledger G-18) or unplaced; else None. Every
     move Nature Power calls is modelled (ledger G-21)."""
     effect = np.asarray(tables.move_ai_effect)
-    hit = sorted({int(m) for m in moves if m and int(effect[m]) in TERRAIN_EFFECTS})
+    reached = reached_moves(tables, moves)  # a Metronome's calls read the terrain too
+    hit = sorted({m for m in reached if int(effect[m]) in TERRAIN_EFFECTS})
     if not hit or trainer.terrain != TERRAIN_UNKNOWN:
         return None
     if trainer.terrains:

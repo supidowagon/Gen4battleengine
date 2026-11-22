@@ -472,6 +472,46 @@ def test_a_sketched_metronome_calls_are_graded_for_the_holder(tables, names):
     )
 
 
+@pytest.mark.parametrize("side", ["player", "opp"])
+def test_a_known_metronomes_calls_reach_the_rom_change_check(tables, names, vanilla_manifest, side):
+    """A known Metronome can call any move ``Move_CanBeMetronomed`` allows (BtlCmd_Metronome,
+    battle_script.c:4535-4562), so a Kaizo ROM-change condition on such a move refuses the fight
+    (``rom_change_refusals`` through ``reached_moves``), on either side, as a gained one's calls
+    do; without the Metronome nothing reaches it. Gyro Ball is a call (no NO_METRONOME flag)."""
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import check_opponent, reached_moves, rom_change_refusals
+    from tests.engine.helpers import kaizo_names_with, roark_party, roark_trainer
+
+    gyro, metronome = names.move("Gyro Ball"), names.move("Metronome")
+    assert gyro in reached_moves(tables, [metronome]) and gyro not in reached_moves(tables, [1])
+    kaizo = kaizo_names_with(vanilla_manifest, [{"moves": [gyro]}])
+    roark, plain = roark_trainer(), roark_party(names)
+    holder = replace(plain[0], moves=(metronome, *plain[0].moves[1:]))
+    with_holder = [holder, *plain[1:]]
+    assert rom_change_refusals(tables, kaizo, roark, plain) == []
+    assert rom_change_refusals(tables, kaizo, roark, with_holder) == ["c"]
+    opp, player = (with_holder, ()) if side == "opp" else (plain, [holder])
+    report = check_opponent(tables, kaizo, roark, opp, 0, player)
+    assert any(m.startswith("Kaizo ROM: c is not modelled") for m in report.missing), report.missing
+
+
+def test_a_metronome_reads_the_terrain_through_its_calls(tables, names):
+    """Metronome can call Secret Power (no NO_METRONOME flag), whose script reads the terrain
+    (``TERRAIN_EFFECTS``): ``terrain_refusal`` refuses a Metronome alone, as prep asks it per
+    move, against a trainer of unknown terrain, and names Secret Power."""
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import TERRAIN_UNKNOWN, terrain_refusal
+    from tests.engine.helpers import roark_trainer
+
+    unplaced = replace(roark_trainer(), terrain=TERRAIN_UNKNOWN, terrains=())
+    line = terrain_refusal(tables, names, unplaced, [names.move("Metronome")])
+    assert line is not None and "Secret Power" in line
+    assert terrain_refusal(tables, names, unplaced, [names.move("Tackle")]) is None
+    assert terrain_refusal(tables, names, roark_trainer(), [names.move("Metronome")]) is None
+
+
 def test_a_gained_metronomes_calls_stay_on_the_holders_lines(tables, names, monkeypatch):
     """A sketched Metronome's calls are the holder's: the fight's terrain check reads them
     (``extra_calls``), but the AI's Mimic and Transform pool (``foe_moves``) does not. Mimic
