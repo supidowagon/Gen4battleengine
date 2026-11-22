@@ -8430,7 +8430,8 @@ def _sketch(tables, s: RefState, side: int, target: int, shielded: bool) -> None
     4839-4884): fails on a defender with a Substitute, a Transformed user (:4847), a defender's
     ``moveSketched`` that is MOVE_NONE or forbidden (``SKETCH_FORBIDDEN``, :4848-4851) or a move
     the user knows in a slot that is not Sketch (:4855-4860); else the user's first Sketch slot
-    takes the move with its table PP (no cap), a copied Last Resort zeroes ``lastResortCount``
+    takes the move with its table PP (no cap; the slot's ``pp_ups`` stays, item_use_pokemon.c:187
+    gives a Sketch slot none), a copied Last Resort zeroes ``lastResortCount``
     (:4876-4878), and the party Pokemon keeps it (no shadow: ``BtlIOCmd_UpdatePartyMon``
     writes every unflagged slot, battle_io_command.c:575-587)."""
     last = s.battlers[target].sketch_move

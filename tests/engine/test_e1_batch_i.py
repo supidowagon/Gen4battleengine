@@ -488,3 +488,17 @@ def test_a_reflected_move_is_the_movers_sketch_move(tables, names):
     assert int(out.sketch_move[0]) == names.move("Magic Coat")
     nxt = assert_matches_reference(tables, out, A("Sketch", "Leer", out, names), _o())
     assert leer in nxt.moves[0, 0].tolist()
+
+
+def test_a_sketched_slot_keeps_its_pp_ups(tables, names):
+    """TrySketch writes the slot's move and ``ppCur`` = table PP (battle_script.c:4868-4870), not
+    its ``ppUps``. The slot's max PP (MoveTable_CalcMaxPP, move_table.c:25-34) is the copy's table
+    PP with the slot's PP Ups, none on a Sketch slot (PP Up needs a max PP of 5 or more,
+    item_use_pokemon.c:20, :187). Engine == reference."""
+    from nuzline.engine.hooks import max_pp
+
+    s = _sketcher(tables, names)
+    out = assert_matches_reference(tables, s, A("Sketch", "Rock Throw", s, names), _o())
+    rock = names.move("Rock Throw")
+    assert out.pp_ups[0, 0].tolist() == s.pp_ups[0, 0].tolist()
+    assert int(max_pp(tables, out, 0, 0)[0]) == int(tables.move_pp[rock]) == int(out.pp[0, 0, 0])

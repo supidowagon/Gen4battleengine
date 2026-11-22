@@ -2955,6 +2955,11 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
     reflected pass has `ready_t` False (step.py, `_set_sketch`). Reference: the nested holder pass runs no `_actions`
     write. Sketch itself has no MOVE_FLAG_MAGIC_COAT (res/moves/sketch/data.json:21). Test:
     `test_a_reflected_move_is_the_movers_sketch_move`.
+  - Max PP of a sketched slot: TrySketch writes `moves` and `ppCur` = table PP (bs:4868-4870), not `ppUps`.
+    UpdatePartyMon copies move and PP only (battle_io_command.c:581-582). So the max PP (`hooks.max_pp`,
+    MoveTable_CalcMaxPP, move_table.c:25-34) is the copy's table PP with the Sketch slot's PP Ups. That is 0 in
+    play: PP Up needs a max PP of 5 or more (item_use_pokemon.c:20, :187), and Sketch has 1. Both engines leave
+    `pp_ups` alone. Test: `test_a_sketched_slot_keeps_its_pp_ups`.
 
 ## Stream state (restart point, 2026-11-19)
 
