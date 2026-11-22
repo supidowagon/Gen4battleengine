@@ -2990,8 +2990,39 @@ def _starf_kept(tables, s: RefState) -> list[bool]:
             return hazards or mon.hp <= _pinch_limit(tables, s, mon)
 
         mons = _party_of(s, b).mons
-        holder = any(i != sd.active and can(m) for i, m in enumerate(mons))
+        bench = _replacement_bench(s, b)  # not a shared party's partner active slot
+        holder = any(ok and can(m) for ok, m in zip(bench, mons, strict=True))
         out.append(not s.over and _awaits_replacement(s, b) and holder)
+    active = _starf_kept_active(tables, s)
+    return [k or a for k, a in zip(out, active, strict=True)]
+
+
+def _starf_kept_active(tables, s: RefState) -> list[bool]:
+    """``step.starf_kept_active``: the battler's active Pokemon holds a Starf Berry it can eat
+    (``_held``: no Klutz, no Embargo, lib.c:5352-5363; a stat below +6, lib.c:5281-5286) at its
+    pinch while a replacement is pending or a newcomer's states wait (a Future Sight hit after
+    ITEM_CONDITION, bcp.c:1758-1783; the next ShowBattleMon's held-item check,
+    battle_lib.c:4151-4165, eats it with the replacement's draw: modulo 5 where its five stats
+    are all at +4 or below, else whole). The pinch test halves the param for the effective
+    Gluttony (``_pinch_limit`` reads ``_ability``: none under Gastro Acid, lib.c:3088-3093,
+    :5273-5278; review 4, must 1)."""
+    waiting = any(_awaits_replacement(s, b) for b in range(_fmt(s).B)) or any(
+        sd.entry_pending for sd in s.battlers
+    )
+    out = []
+    for b in range(_fmt(s).B):
+        mon = _active(s, b)
+        out.append(
+            bool(
+                not s.over
+                and waiting
+                and mon.species
+                and mon.hp
+                and _item_effect(tables, mon, s) == ItemId.STARF_BERRY
+                and any(s.battlers[b].stages[x] < STAGE_MAX for x in STARF_STATS)
+                and mon.hp <= _pinch_limit(tables, s, mon)
+            )
+        )
     return out
 
 
@@ -8781,9 +8812,12 @@ def ref_step(
     # The faint replacement's draw is kept in entry 0 where ``ref_replace`` can read it; 0 at a
     # pause.
     kept = _starf_kept(tables, out)
-    for sd, keep, draw in zip(out.battlers, kept, outcome.starf, strict=True):
+    active = _starf_kept_active(tables, out)
+    for sd, keep, held, draw in zip(out.battlers, kept, active, outcome.starf, strict=True):
+        # Modulo 5 where the check meets five stats below +6 (``step.step_events``).
+        whole = held and any(sd.stages[x] > STAGE_MAX - 2 for x in STARF_STATS)
         first = (
-            int(draw[1]) % len(STARF_STATS)
+            (int(draw[1]) if whole else int(draw[1]) % len(STARF_STATS))
             if keep and not (out.pivot_battler or out.learn_site)
             else 0
         )
