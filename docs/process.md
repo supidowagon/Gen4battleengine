@@ -114,7 +114,7 @@ per day is the rate used for estimates.
   `nuzline.engine` was not imported by the collected modules (a tool test). Any other run exits
   at once, naming the first disallowed ids: send them to the quick lane below. An allowed run
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
-  20 GB), a message every 60 s, giving up after `NUZLINE_RAMGATE_TIMEOUT` minutes (default 30).
+  6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, giving up after `NUZLINE_RAMGATE_TIMEOUT` minutes (default 30).
   `--collect-only` is allowed without a wait. A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
   weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured

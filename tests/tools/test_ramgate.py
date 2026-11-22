@@ -181,12 +181,24 @@ def test_gate_skipped_on_pod_and_in_nested_runs():
 
 
 def test_gate_weight_is_the_heaviest_collected_item_not_the_args():
-    unknown = item("tests/zzz.py::t", "tmp_path")  # no key = 20
+    unknown = item("tests/zzz.py::t", "tmp_path")  # no key: 20 with the engine loaded
+    env = {rg.ENV_TIMEOUT: "0", rg.ENV_ROM_GATE: "1"}
+    assert gate([PLAIN, unknown], free=25.9, modules=ENGINE, env=env)[0] == "TIMEOUT"
+    assert gate([PLAIN, unknown], free=26.1, modules=ENGINE, env=env)[0] == "GO"
     env = {rg.ENV_TIMEOUT: "0"}
-    assert gate([PLAIN, unknown], free=25.9, env=env)[0] == "TIMEOUT"
-    assert gate([PLAIN, unknown], free=26.1)[0] == "GO"
     assert gate([PLAIN], free=11.5)[0] == "GO"  # weight 5 -> needs > 11
     assert gate([PLAIN], free=10.9, env=env)[0] == "TIMEOUT"
+
+
+def test_an_engine_free_item_without_a_key_weighs_six():
+    new_tool_test = item("tests/tools/test_new.py::t", "tmp_path")  # no weights.txt line
+    assert rg.ENGINE_FREE_WEIGHT == 6.0
+    assert rg.item_weight(new_tool_test, TABLE, {}, engine_free=True) == 6.0
+    assert rg.item_weight(new_tool_test, TABLE, {}) == 20.0  # the engine can load: 20
+    assert rg.item_weight(PLAIN, TABLE, {}, engine_free=True) == 5.0  # a key still wins
+    env = {rg.ENV_TIMEOUT: "0"}
+    assert gate([new_tool_test], free=12.1, modules=NO_ENGINE, env=env)[0] == "GO"  # > 6 + 6
+    assert gate([new_tool_test], free=11.9, modules=NO_ENGINE, env=env)[0] == "TIMEOUT"
 
 
 def test_rom_only_items_weigh_fourteen_until_measured():

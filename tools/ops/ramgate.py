@@ -4,7 +4,8 @@ Rule (owner, 22 Nov 2026): no engine tests on the PC. A local pytest run is allo
 selected test is ROM-only (needs a local input the pod does not have) or the run is engine-free
 (after collection `nuzline.engine` is not imported). Everything else goes to the pod through the
 dispatcher's quick lane. An allowed run waits for free RAM > 6 GB + its weight (weights.txt, the
-longest key matching an id; no key = 20 GB). The root conftest.py applies it at collection.
+longest key matching an id; no key = 6 GB in an engine-free run, else 20 GB). The root conftest.py
+applies it at collection.
 
 CLI, for `tools.kaizo.*` runs and table builds:
     python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate | --build]
@@ -28,7 +29,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS = ROOT / "tools" / "ops" / "day" / "pod" / "weights.txt"
 
-DEFAULT_WEIGHT = 20.0
+DEFAULT_WEIGHT = 20.0  # an item with no weights.txt key in a run that loads the engine
+ENGINE_FREE_WEIGHT = 6.0  # the same in an engine-free run (the blocker is on): what tools tests measure
 POD_WEIGHT = 8.0
 RESERVE_GB = 6.0
 BUILD_KEY = "tools/build_tables.py"  # the weights.txt line a table build waits for
@@ -105,9 +107,9 @@ def lookup(ident: str, table: Mapping[str, float]) -> float | None:
     return best[1] if best else None
 
 
-def weight(ident: str, table: Mapping[str, float]) -> float:
+def weight(ident: str, table: Mapping[str, float], default: float = DEFAULT_WEIGHT) -> float:
     w = lookup(ident, table)
-    return DEFAULT_WEIGHT if w is None else w
+    return default if w is None else w
 
 
 def load_rom_weights(path: str | Path = ROM_WEIGHTS) -> dict[str, float]:
@@ -225,16 +227,19 @@ def is_rom_only(item) -> bool:
     )
 
 
-def item_weight(item, table: Mapping[str, float], rom_table: Mapping[str, float]) -> float:
+def item_weight(
+    item, table: Mapping[str, float], rom_table: Mapping[str, float], engine_free: bool = False
+) -> float:
     """Pod weights come from runs where ROM-only tests skip: a ROM-only item weighs the figure of
-    rom_weights.txt (measured locally), else 14 GB or its pod weight (if it has a key) when higher."""
+    rom_weights.txt (measured locally), else 14 GB or its pod weight (if it has a key) when higher.
+    Any other item weighs its weights.txt key; without one 6 GB in an engine-free run, else 20."""
     if is_rom_only(item):
         measured = lookup(item.nodeid, rom_table)
         if measured is not None:
             return measured
         pod = lookup(item.nodeid, table)
         return ROM_UNMEASURED_GB if pod is None else max(ROM_UNMEASURED_GB, pod)
-    return weight(item.nodeid, table)
+    return weight(item.nodeid, table, ENGINE_FREE_WEIGHT if engine_free else DEFAULT_WEIGHT)
 
 
 def engine_loaded(modules: Iterable[str]) -> bool:
@@ -305,11 +310,10 @@ def pytest_gate(
         return "SKIP", "inside a gated run"
     if collect_only:  # --collect-only only imports test modules: allowed, no wait
         return "GO", "ramgate: collect-only"
-    bad = (
-        []
-        if _flag(env, ENV_ROM_GATE)
-        else disallowed(items, sys.modules if modules is None else modules)
-    )
+    items = list(items)
+    modules = sys.modules if modules is None else modules
+    engine_free = not engine_loaded(modules)
+    bad = [] if _flag(env, ENV_ROM_GATE) else disallowed(items, modules)
     if bad:
         more = f" and {len(bad) - MAX_LISTED} more" if len(bad) > MAX_LISTED else ""
         return "REFUSE", (
@@ -323,7 +327,7 @@ def pytest_gate(
         return "GO", "ramgate: GO (no wait)"
     table = load_weights() if table is None else table
     rom_table = load_rom_weights() if rom_table is None else rom_table
-    w = max((item_weight(i, table, rom_table) for i in items), default=0.0)
+    w = max((item_weight(i, table, rom_table, engine_free) for i in items), default=0.0)
     try:
         timeout = float(env.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
     except ValueError:
