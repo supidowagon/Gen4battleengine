@@ -28,7 +28,11 @@ Tables (keys are ROM trainer ids unless said otherwise):
   ``live_next`` (the next-fight table by the live count, a list of rows ``{ fought, live,
   next, headers }`` plus ``gap`` on a plain row after a fight and ``to``, ``at`` on a change
   row: ``nuzline.data.gauntlet.LiveRow``; absent: the walk does not depend on the count and
-  the table is the orders' prefixes; ``GauntletFacts.live_next``). Gap k follows
+  the table is the orders' prefixes; ``GauntletFacts.live_next``). With ``live_next``,
+  ``leave_gaps``, ``heal_gaps`` and ``pc_gaps`` are present exactly when the table's gap
+  facts give one list for every order and live count (that list), and absent when they
+  depend on the order or the count (``nuzline.data.gauntlet.flat_gaps``); either way
+  round is an error. Gap k follows
   the k-th fight of an order. Each fact has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
   read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
@@ -65,11 +69,11 @@ import tomllib
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from collections.abc import Mapping as MappingABC
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from itertools import permutations
 from pathlib import Path
 
-from nuzline.data.gauntlet import GauntletFacts, LiveRow, Partner
+from nuzline.data.gauntlet import FLAT_GAP_FIELDS, GauntletFacts, LiveRow, Partner
 from tools.kaizo.trainer_map import (
     Mapping,
     MappingError,
@@ -308,15 +312,20 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
     """The group's game facts, all or none (``FACT_KEYS``)."""
     if not any(k in t for k in (*FACT_KEYS, *FACT_SOURCES, "partner")):
         return None
-    missing = [k for k in (*FACT_KEYS, "orders_source") if k not in t]
+    # A gap field the group's live_next makes order- or count-dependent is absent: required
+    # without live_next, checked against it with one (GauntletFacts, flat_gaps).
+    optional = set(FLAT_GAP_FIELDS) if "live_next" in t else set()
+    missing = [k for k in (*FACT_KEYS, "orders_source") if k not in t and k not in optional]
     if missing:
         raise OverridesError(f"{entry}: facts are all or none; missing {', '.join(missing)}")
     orders = _orders(entry, t["orders"], trainers)
     sizes = [len(o) for o in orders]
     n = min(sizes)
     orders_source = _fact_source(entry, t, "orders_source", "")
-    raw_leave = t["leave_gaps"]
-    if raw_leave == "all":
+    raw_leave = t.get("leave_gaps")
+    if raw_leave is None:
+        leave = None
+    elif raw_leave == "all":
         leave = tuple(tuple(range(1, s)) for s in sizes)
     elif isinstance(raw_leave, list) and raw_leave and all(isinstance(g, list) for g in raw_leave):
         if len(raw_leave) != len(orders):
@@ -332,28 +341,27 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
     def source(key: str) -> str:
         return _fact_source(entry, t, f"{key}_source", orders_source)
 
-    facts = GauntletFacts(
-        name=name,
-        source=src,
-        orders=orders,
-        orders_source=orders_source,
-        leave_gaps=leave,
-        leave_gaps_source=source("leave_gaps"),
-        escape=_bool(entry, "escape", t["escape"]),
-        escape_source=source("escape"),
-        pc_gaps=_gaps(entry, "pc_gaps", t["pc_gaps"], n),
-        pc_gaps_source=source("pc_gaps"),
-        heal_gaps=_gaps(entry, "heal_gaps", t["heal_gaps"], n),
-        heal_gaps_source=source("heal_gaps"),
-        locked_gaps=_gaps(entry, "locked_gaps", t["locked_gaps"], n),
-        locked_gaps_source=source("locked_gaps"),
-        partner=None if p is None else _partner(entry, p, n, orders_source),
-        fight_headers=heads,
-    )
-    if "live_next" not in t:
-        return facts
+    live = _live_next(entry, t["live_next"]) if "live_next" in t else ()
     try:
-        return replace(facts, live_next=_live_next(entry, t["live_next"]))
+        return GauntletFacts(
+            name=name,
+            source=src,
+            orders=orders,
+            orders_source=orders_source,
+            leave_gaps=leave,
+            leave_gaps_source=source("leave_gaps"),
+            escape=_bool(entry, "escape", t["escape"]),
+            escape_source=source("escape"),
+            pc_gaps=_gaps(entry, "pc_gaps", t["pc_gaps"], n) if "pc_gaps" in t else None,
+            pc_gaps_source=source("pc_gaps"),
+            heal_gaps=_gaps(entry, "heal_gaps", t["heal_gaps"], n) if "heal_gaps" in t else None,
+            heal_gaps_source=source("heal_gaps"),
+            locked_gaps=_gaps(entry, "locked_gaps", t["locked_gaps"], n),
+            locked_gaps_source=source("locked_gaps"),
+            partner=None if p is None else _partner(entry, p, n, orders_source),
+            fight_headers=heads,
+            live_next=live,
+        )
     except ValueError as e:
         if isinstance(e, OverridesError):
             raise

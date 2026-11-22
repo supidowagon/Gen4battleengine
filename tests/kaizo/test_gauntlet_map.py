@@ -35,6 +35,7 @@ from tools.kaizo.gauntlet_map import (
     bdhc_heights,
     chain_facts,
     eterna_clock_tables,
+    gap_fields,
     gym_reach,
     live_table,
     pc_reachable,
@@ -384,6 +385,33 @@ def test_live_table_revive_row_reopens_a_double_battle_trainer():
     assert table[(((1,),), 1, "bag")] == [[5]]
 
 
+def test_gap_fields_are_absent_where_the_live_table_makes_them_order_dependent():
+    # Two orders of 1, 2: a healer at the gap after 1 first only (order-dependent heal), a
+    # leave at the gap after 2 first at one live only (count-dependent leave), no PC anywhere
+    # (flat). The flat field must be the two-live value; a dependent one is None.
+    def row(fought, live, nxt, gap):
+        return {"fought": fought, "live": live, "next": nxt, "headers": [], "gap": gap}
+
+    live_next = [
+        {"fought": [], "live": 1, "next": [[1], [2]], "headers": []},
+        {"fought": [], "live": 2, "next": [[1], [2]], "headers": []},
+        row([[1]], 1, [[2]], ["heal"]),
+        row([[1]], 2, [[2]], ["heal"]),
+        row([[2]], 1, [[1]], ["leave"]),
+        row([[2]], 2, [[1]], []),
+    ]
+    facts = {
+        "orders": [[[1], [2]], [[2], [1]]],
+        "leave_gaps": [[], []],
+        "heal_gaps": [],
+        "pc_gaps": [],
+    }
+    assert gap_fields(facts, None) == {"leave_gaps": [[], []], "heal_gaps": [], "pc_gaps": []}
+    assert gap_fields(facts, live_next) == {"leave_gaps": None, "heal_gaps": None, "pc_gaps": []}
+    with pytest.raises(MapReadError, match="pc_gaps"):
+        gap_fields({**facts, "pc_gaps": [1]}, live_next)
+
+
 def test_a_hidden_object_neither_blocks_nor_spots():
     # Ruling (1): an object whose hidden flag is set is not created on the map load
     # (map_object.c:607-624). Trainer 1 (flag 600) watches the corridor, an NPC (flag 601)
@@ -678,11 +706,15 @@ def _fights(order):
 def test_the_tool_re_derives_the_committed_facts(derived, name):
     f = _committed()[name].facts
     d = derived[name]
-    assert {_fights(o): tuple(g) for o, g in zip(d["orders"], d["leave_gaps"], strict=True)} == {
-        _fights(o): g for o, g in zip(f.orders, f.leave_gaps, strict=True)
-    }
+    if f.leave_gaps is None:
+        assert d["leave_gaps"] is None
+    else:
+        assert {
+            _fights(o): tuple(g) for o, g in zip(d["orders"], d["leave_gaps"], strict=True)
+        } == {_fights(o): g for o, g in zip(f.orders, f.leave_gaps, strict=True)}
     assert d["escape"] is f.escape
-    assert (tuple(d["pc_gaps"]), tuple(d["heal_gaps"]), tuple(d["locked_gaps"])) == (
+    flat = lambda v: None if v is None else tuple(v)
+    assert (flat(d["pc_gaps"]), flat(d["heal_gaps"]), tuple(d["locked_gaps"])) == (
         f.pc_gaps,
         f.heal_gaps,
         f.locked_gaps,
@@ -735,7 +767,9 @@ def test_route_213_without_surf_is_a_beach_line_from_either_end(derived):
         (106, 103, 105, 111, 110),
         (110, 111, 105, 103, 106),
     }
-    assert d["leave_gaps"] == [[1, 2, 3, 4]] * 2 and d["heal_gaps"] == []
+    # the healer's reach depends on the order: no flat heal_gaps (live_next holds it)
+    assert d["leave_gaps"] == [[1, 2, 3, 4]] * 2 and d["heal_gaps"] is None
+    assert d["pc_gaps"] == []
 
 
 @pytest.mark.slow
@@ -1147,7 +1181,8 @@ def test_rom_route_204_live_next_follows_the_count(rom_files, derived):
     # and a faint or a revive between fights switches the continuation. No gym trainer is one,
     # and the Wayward pairs fight with the partner, who counts two: only Route 204 North's walk
     # depends on the count. Route 213's table is stored for its per-order heal (the lobby healer
-    # is reached at every gap after 106 first, at none after 110 first; heal_gaps is one list).
+    # is reached at every gap after 106 first, at none after 110 first; heal_gaps is absent).
+    # Route 204 North's leave depends on the count (after 13: at one live, not at two).
     from tools.kaizo.gauntlet_map import GYM_FIGHTS, read_double_trainers
 
     doubles = read_double_trainers(rom_files)
@@ -1175,3 +1210,10 @@ def test_rom_route_204_live_next_follows_the_count(rom_files, derived):
         ((106,), (103,), (105,)),
         ((106,), (103,), (105,), (111,)),
     }
+    absent = {
+        (n, k)
+        for n, d in derived.items()
+        for k in ("leave_gaps", "heal_gaps", "pc_gaps")
+        if d[k] is None
+    }
+    assert absent == {("Route 204 North", "leave_gaps"), ("Route 213", "heal_gaps")}

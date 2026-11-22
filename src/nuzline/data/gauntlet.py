@@ -23,7 +23,7 @@ import enum
 import re
 import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -356,6 +356,26 @@ def prefix_live_rows(
     return tuple(rows)
 
 
+# The gap fields a ``live_next`` table can make order- or count-dependent: field -> the
+# ``LiveRow.gap`` kind it lists.
+FLAT_GAP_FIELDS = {"leave_gaps": "leave", "heal_gaps": "heal", "pc_gaps": "pc"}
+
+
+def flat_gaps(rows: Sequence[LiveRow], kind: str) -> tuple[int, ...] | None:
+    """The gaps where ``kind`` (one of ``GAP_KINDS``) holds, read from the plain rows of a
+    ``live_next`` table, when that is the same for every path and live count: gap k holds it
+    in every row after k fights, or in none. None when some gap k holds it in one row and not
+    in another (it depends on the order or the live count): the group then has no flat list
+    for it, and a reader takes ``live_next`` (``GauntletFacts.gap_holds``)."""
+    by_k: dict[int, set[bool]] = {}
+    for r in rows:
+        if r.gap is not None:
+            by_k.setdefault(len(r.fought), set()).add(kind in r.gap)
+    if any(len(v) > 1 for v in by_k.values()):
+        return None
+    return tuple(sorted(k for k, v in by_k.items() if True in v))
+
+
 def check_live_rows(name: str, rows: Sequence[LiveRow], orders: Sequence[Order]) -> None:
     """A stored ``live_next`` table: well-formed rows, one per key, both roots, a plain row
     for every state a row's fights lead to (both counts) and for every change row, and the
@@ -414,19 +434,22 @@ def check_live_rows(name: str, rows: Sequence[LiveRow], orders: Sequence[Order])
 @dataclass(frozen=True)
 class GauntletFacts:
     """The tracked game facts of one group (design section 2). ``leave_gaps`` holds one
-    tuple of gaps per order of ``orders``."""
+    tuple of gaps per order of ``orders``. ``leave_gaps``, ``heal_gaps`` and ``pc_gaps`` are
+    None (absent) exactly when the group's ``live_next`` makes them depend on the order or the
+    live count (``flat_gaps``); a reader then answers from ``live_next`` (``gap_holds``), never
+    from an empty list."""
 
     name: str
     source: str
     orders: tuple[Order, ...]
     orders_source: str
-    leave_gaps: tuple[tuple[int, ...], ...]
+    leave_gaps: tuple[tuple[int, ...], ...] | None
     leave_gaps_source: str
     escape: bool
     escape_source: str
-    pc_gaps: tuple[int, ...]
+    pc_gaps: tuple[int, ...] | None
     pc_gaps_source: str
-    heal_gaps: tuple[int, ...]
+    heal_gaps: tuple[int, ...] | None
     heal_gaps_source: str
     locked_gaps: tuple[int, ...]
     locked_gaps_source: str
@@ -440,27 +463,53 @@ class GauntletFacts:
     live_next: tuple[LiveRow, ...] = ()
 
     def __post_init__(self):
-        if len(self.leave_gaps) != len(self.orders):
+        if self.leave_gaps is not None and len(self.leave_gaps) != len(self.orders):
             raise ValueError(f"{self.name}: leave_gaps needs one entry per order")
-        if self.live_next:
-            check_live_rows(self.name, self.live_next, self.orders)
+        if not self.live_next:
+            absent = [k for k in FLAT_GAP_FIELDS if getattr(self, k) is None]
+            if absent:
+                raise ValueError(
+                    f"{self.name}: {', '.join(absent)} absent without a live_next table "
+                    "(only a table that makes a field order- or count-dependent drops it)"
+                )
+            return
+        check_live_rows(self.name, self.live_next, self.orders)
+        for key, kind in FLAT_GAP_FIELDS.items():
+            flat = flat_gaps(self.live_next, kind)
+            value = getattr(self, key)
+            if flat is None:
+                if value is not None:
+                    raise ValueError(
+                        f"{self.name}: {key} must be absent: its live_next gap facts "
+                        f"({kind!r}) depend on the order or the live count"
+                    )
+                continue
+            if key == "leave_gaps":
+                flat = tuple(tuple(k for k in flat if k < len(o)) for o in self.orders)
+            if value != flat:
+                raise ValueError(
+                    f"{self.name}: {key} {value} is not the list its live_next gap facts "
+                    f"({kind!r}) give for every order and live count: {flat}"
+                )
 
     @classmethod
     def from_dict(cls, d: Mapping) -> GauntletFacts:
         """The ``gauntlet_facts`` row of ``trainers.json`` (lists read as tuples)."""
         p = d.get("partner")
-        facts = cls(
+        return cls(
             name=d["name"],
             source=d["source"],
             orders=tuple(tuple(tuple(f) for f in o) for o in d["orders"]),
             orders_source=d["orders_source"],
-            leave_gaps=tuple(tuple(g) for g in d["leave_gaps"]),
+            leave_gaps=None
+            if d.get("leave_gaps") is None
+            else tuple(tuple(g) for g in d["leave_gaps"]),
             leave_gaps_source=d["leave_gaps_source"],
             escape=bool(d["escape"]),
             escape_source=d["escape_source"],
-            pc_gaps=tuple(d["pc_gaps"]),
+            pc_gaps=None if d.get("pc_gaps") is None else tuple(d["pc_gaps"]),
             pc_gaps_source=d["pc_gaps_source"],
-            heal_gaps=tuple(d["heal_gaps"]),
+            heal_gaps=None if d.get("heal_gaps") is None else tuple(d["heal_gaps"]),
             heal_gaps_source=d["heal_gaps_source"],
             locked_gaps=tuple(d["locked_gaps"]),
             locked_gaps_source=d["locked_gaps_source"],
@@ -468,41 +517,50 @@ class GauntletFacts:
             if p is None
             else Partner(p["trainer"], tuple(p["join_before"]), p["source"]),
             fight_headers=tuple(tuple(h) for h in d.get("fight_headers", ())),
+            live_next=tuple(LiveRow.from_dict(r) for r in d.get("live_next") or ()),
         )
-        rows = d.get("live_next")
-        if not rows:
-            return facts
-        return replace(facts, live_next=tuple(LiveRow.from_dict(r) for r in rows))
 
     def to_dict(self) -> dict:
-        """The inverse of ``from_dict`` (JSON-ready)."""
+        """The inverse of ``from_dict`` (JSON-ready). A field that is empty or absent is
+        omitted, as in ``data/kaizo/overrides.toml``: ``fight_headers`` and ``live_next`` when
+        empty, and a gap field the group's ``live_next`` makes order- or count-dependent."""
         p = self.partner
-        return {
+        out: dict[str, Any] = {
             "name": self.name,
             "source": self.source,
             "orders": [[list(f) for f in o] for o in self.orders],
             "orders_source": self.orders_source,
-            "leave_gaps": [list(g) for g in self.leave_gaps],
-            "leave_gaps_source": self.leave_gaps_source,
-            "escape": self.escape,
-            "escape_source": self.escape_source,
-            "pc_gaps": list(self.pc_gaps),
-            "pc_gaps_source": self.pc_gaps_source,
-            "heal_gaps": list(self.heal_gaps),
-            "heal_gaps_source": self.heal_gaps_source,
-            "locked_gaps": list(self.locked_gaps),
-            "locked_gaps_source": self.locked_gaps_source,
-            "partner": None
-            if p is None
-            else {"trainer": p.trainer, "join_before": list(p.join_before), "source": p.source},
-            "fight_headers": [list(h) for h in self.fight_headers],
-            "live_next": [r.to_dict() for r in self.live_next] or None,
         }
+        if self.leave_gaps is not None:
+            out["leave_gaps"] = [list(g) for g in self.leave_gaps]
+        out["leave_gaps_source"] = self.leave_gaps_source
+        out["escape"] = self.escape
+        out["escape_source"] = self.escape_source
+        if self.pc_gaps is not None:
+            out["pc_gaps"] = list(self.pc_gaps)
+        out["pc_gaps_source"] = self.pc_gaps_source
+        if self.heal_gaps is not None:
+            out["heal_gaps"] = list(self.heal_gaps)
+        out["heal_gaps_source"] = self.heal_gaps_source
+        out["locked_gaps"] = list(self.locked_gaps)
+        out["locked_gaps_source"] = self.locked_gaps_source
+        out["partner"] = (
+            None
+            if p is None
+            else {"trainer": p.trainer, "join_before": list(p.join_before), "source": p.source}
+        )
+        if self.fight_headers:
+            out["fight_headers"] = [list(h) for h in self.fight_headers]
+        if self.live_next:
+            out["live_next"] = [r.to_dict() for r in self.live_next]
+        return out
 
     def live_rows(self) -> tuple[LiveRow, ...]:
         """The next-fight table: ``live_next``, or the orders' prefixes when it is empty."""
         if self.live_next:
             return self.live_next
+        assert self.leave_gaps is not None and self.pc_gaps is not None
+        assert self.heal_gaps is not None  # __post_init__: absent only with live_next
         return prefix_live_rows(
             self.orders,
             self.leave_gaps,
@@ -529,19 +587,59 @@ class GauntletFacts:
         """The first trainer id of each fight; the name every setting uses for a fight."""
         return tuple(fight[0] for fight in order)
 
+    def gap_holds(self, order: Order, k: int, kind: str) -> bool | None:
+        """Whether gap k of ``order`` holds ``kind`` (``"leave"``, ``"heal"`` or ``"pc"``):
+        from the flat field where the group has one, else from ``live_next`` (its plain rows
+        after ``order[:k]``, under both live counts). None when the two counts disagree: the
+        answer depends on the live count."""
+        key = next(f for f, g in FLAT_GAP_FIELDS.items() if g == kind)
+        flat = getattr(self, key)
+        i = self._index(order)
+        if flat is not None:
+            return k in (flat[i] if key == "leave_gaps" else flat)
+        fought = tuple(order[:k])
+        seen = {kind in r.gap for r in self.live_next if r.fought == fought and r.gap is not None}
+        if not seen:
+            raise ValueError(f"{self.name}: live_next has no gap row after {fought}")
+        return seen.pop() if len(seen) == 1 else None
+
+    def _escape_at(self, order: Order, k: int) -> bool:
+        """``escape`` holds at gap k and no partner is set yet (the partner who joins before
+        fight J is set at gaps J and later; gap k is after fight k)."""
+        if not self.escape or not 1 <= k < self.n_fights(order):
+            return False
+        return self.partner is None or k < self.partner.joins
+
+    def walkout_at(self, order: Order, k: int) -> bool | None:
+        """Whether the player can leave the map at gap k of ``order`` (design section 3):
+        ``escape`` with no partner set, or a leave on foot (``gap_holds``). None when that
+        depends on the live count."""
+        return True if self._escape_at(order, k) else self.gap_holds(order, k, "leave")
+
     def leave_gaps_of(self, order: Order) -> tuple[int, ...]:
-        return self.leave_gaps[self._index(order)]
+        """The gaps of ``order`` where the player can leave on foot: ``leave_gaps``, or read
+        from ``live_next`` where the group has no flat list. Raises ``ValueError`` when one
+        depends on the live count."""
+        if self.leave_gaps is not None:
+            return self.leave_gaps[self._index(order)]
+        out = []
+        for k in range(1, self.n_fights(order)):
+            holds = self.gap_holds(order, k, "leave")
+            if holds is None:
+                raise ValueError(
+                    f"{self.name}: leaving at gap {k} of {list(self.fight_ids(order))} depends "
+                    "on the live count (live_next)"
+                )
+            if holds:
+                out.append(k)
+        return tuple(out)
 
     def walkout_gaps(self, order: Order) -> tuple[int, ...]:
-        """Gaps where the player can leave the map: ``leave_gaps`` of the order plus every
-        gap where ``escape`` holds and no partner is set (design section 3). The partner
-        who joins before fight J is set at gaps J and later (gap k is after fight k)."""
+        """Gaps where the player can leave the map: ``leave_gaps_of`` the order plus every
+        gap where ``escape`` holds and no partner is set (design section 3). Raises
+        ``ValueError`` when a gap depends on the live count (``walkout_at`` answers per gap)."""
         gaps = set(self.leave_gaps_of(order))
-        if self.escape:
-            joins = None if self.partner is None else self.partner.joins
-            for k in range(1, self.n_fights(order)):
-                if joins is None or k < joins:
-                    gaps.add(k)
+        gaps |= {k for k in range(1, self.n_fights(order)) if self._escape_at(order, k)}
         return tuple(sorted(gaps))
 
 
@@ -970,10 +1068,14 @@ def open_orders(
     return tuple(kept)
 
 
-def _gap_allows(facts: GauntletFacts, order: Order, k: int, need: str) -> bool:
-    if k in facts.walkout_gaps(order):
+def _gap_allows(facts: GauntletFacts, order: Order, k: int, need: str) -> bool | None:
+    """Whether the map gives ``need`` at gap k of ``order``: a walk-out, or the gap's own
+    heal or PC. None when that depends on the live count (``live_next``)."""
+    out = facts.walkout_at(order, k)
+    own = facts.gap_holds(order, k, need)
+    if out or own:
         return True
-    return k in (facts.heal_gaps if need == "heal" else facts.pc_gaps)
+    return None if out is None or own is None else False
 
 
 def _map_refusal(facts: GauntletFacts, orders: Sequence[Order], k: int, need: str) -> str | None:
@@ -981,16 +1083,23 @@ def _map_refusal(facts: GauntletFacts, orders: Sequence[Order], k: int, need: st
     is open, a value is refused only when refused under every open order in which gap k
     exists."""
     open_ = [o for o in orders if 1 <= k <= len(o) - 1]
-    if not open_ or any(_gap_allows(facts, o, k, need) for o in open_):
+    allows = [_gap_allows(facts, o, k, need) for o in open_]
+    if not open_ or True in allows:
         return None
     what, listed, src = (
         ("a free full heal", facts.heal_gaps, facts.heal_gaps_source)
         if need == "heal"
         else ("a PC", facts.pc_gaps, facts.pc_gaps_source)
     )
+    if None in allows:
+        return (
+            f"whether the map gives {what} at gap {k} depends on the live count there "
+            f"(live_next: {facts.orders_source}), which the settings do not fix"
+        )
+    gaps = "by order and live count, live_next" if listed is None else f"gaps {list(listed)}"
     return (
         f"the map gives {what} at gap {k} under no open order "
-        f"(gaps {list(listed)}: {src}; walk-out gaps: {facts.leave_gaps_source}, "
+        f"({gaps}: {src}; walk-out gaps: {facts.leave_gaps_source}, "
         f"{facts.escape_source})"
     )
 

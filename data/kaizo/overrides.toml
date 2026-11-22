@@ -481,7 +481,9 @@ source = "Elite Four Split:298"
 # fight is one battle); gap k follows the k-th fight. The first order is the one the sheet's
 # fight ids come from (a fight's id is its first trainer id). fight_headers: the map header
 # each fight starts on (one header for every fight here). live_next: the next-fight table by
-# the live count (nuzline.data.gauntlet.LiveRow), only where it is not the orders' prefixes.
+# the live count (nuzline.data.gauntlet.LiveRow), only where it is not the orders' prefixes;
+# there leave_gaps, heal_gaps and pc_gaps are omitted when its gap facts depend on the order
+# or the count (nuzline.data.gauntlet.flat_gaps).
 # Field moves follow the badges of the splits before the group's split
 # (FieldMoves.for_split). A ROM-backed test
 # (tests/kaizo/test_gauntlet_map.py) re-derives every value below.
@@ -513,13 +515,14 @@ escape_source = "rom:header 199 map type 3 escape bit 1"
 # walk depends on the count: live_next is the next fight after the fights fought (in order)
 # by the count at the last fight's end (live), and at a revive in the gap (at "bag", to 2).
 # A faint in the twins' fight leaves 13 next; after 13 at two live, 14 or 15; after 13, 14 at
-# one live the chain ends and a revive reopens 15.
+# one live the chain ends and a revive reopens 15. No leave_gaps: leaving depends on the count
+# (after 13 at one live the walk can leave, at two it cannot); live_next holds it (gap
+# "leave"). pc_gaps and heal_gaps are [] under every order and count.
 [[gauntlet]]
 name = "Route 204 North"
 trainers = [15, 13, 14]
 source = "Gardenia Split:59"
 orders = [[[15], [13], [14]]]
-leave_gaps = [1, 2]
 escape = false
 pc_gaps = []
 heal_gaps = []
@@ -635,7 +638,8 @@ source = "Wake Split:215"
 # four spectators (objs 33-38, flag 482) stand until the player enters the lobby (scr 462
 # entry 1 @37, @152). Same orders and gaps either way. live_next: the walk does not depend on
 # the live count, but the healer's reach does depend on the order: after 106 first it is
-# reached at every gap (gap "heal", a heal change row), after 110 first at none.
+# reached at every gap (gap "heal", a heal change row), after 110 first at none. No
+# heal_gaps: the heal depends on the order, so it is read from live_next only.
 orders = [
   [[106], [103], [105], [111], [110]],
   [[110], [111], [105], [103], [106]],
@@ -643,7 +647,6 @@ orders = [
 leave_gaps = "all"
 escape = false
 pc_gaps = []
-heal_gaps = []
 locked_gaps = []
 fight_headers = 373
 live_next = [

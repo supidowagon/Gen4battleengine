@@ -5,7 +5,12 @@ import tomllib
 
 import pytest
 
-from nuzline.data.gauntlet import GauntletFacts, Partner
+from nuzline.data.gauntlet import (
+    GauntletFacts,
+    GauntletSettingsError,
+    Partner,
+    check_swap_gap,
+)
 from tools.kaizo.overrides import (
     DEFAULT_PATH,
     AreaException,
@@ -249,8 +254,12 @@ def _toml_row(r: dict) -> str:
     return "{ " + ", ".join(f"{k} = {value(v)}" for k, v in r.items()) + " }"
 
 
-def live_text(rows=LIVE_ROWS) -> str:
-    three = FACTS.replace("[[[1], [2]]]", "[[[1], [2], [3]]]").replace("[1]\n", "[1, 2]\n", 1)
+def live_text(rows=LIVE_ROWS, leave=None) -> str:
+    # LIVE_ROWS leave at gap 1 after 1 first only: leaving depends on the order, so the group
+    # has no flat leave_gaps (``leave``: a line to put one back).
+    three = FACTS.replace("[[[1], [2]]]", "[[[1], [2], [3]]]").replace(
+        "leave_gaps = [1]\n", "" if leave is None else f"leave_gaps = {leave}\n"
+    )
     table = "live_next = [\n" + "".join(f"  {_toml_row(r)},\n" for r in rows) + "]\n"
     return gauntlet_text("[1, 2, 3]", three + "fight_headers = 7\n" + table)
 
@@ -266,7 +275,45 @@ def test_gauntlet_live_next_rows_load_and_round_trip(tmp_path):
     assert row["live_next"] == LIVE_ROWS
     assert GauntletFacts.from_dict(row) == f
     plain = load_overrides(write(tmp_path, gauntlet_text())).gauntlets[0].facts
-    assert plain.live_next == () and plain.to_dict()["live_next"] is None
+    assert plain.live_next == () and "live_next" not in plain.to_dict()
+    assert f.leave_gaps is None and "leave_gaps" not in row and f.heal_gaps == f.pc_gaps == ()
+
+
+@pytest.mark.parametrize(
+    "text, match",
+    [
+        # leave depends on the order in LIVE_ROWS: a flat list is refused, whatever it holds
+        (lambda: live_text(leave="[1]"), "leave_gaps must be absent"),
+        (lambda: live_text(leave="[]"), "leave_gaps must be absent"),
+        # heal is [] under every order and count: it keeps its flat list
+        (lambda: live_text().replace("heal_gaps = []\n", ""), "heal_gaps None is not the list"),
+        (lambda: live_text().replace("pc_gaps = []\n", "pc_gaps = [1]\n"), "pc_gaps"),
+        # without live_next every gap field is required
+        (lambda: gauntlet_text().replace("heal_gaps = []\n", ""), "missing heal_gaps"),
+    ],
+)
+def test_gauntlet_gap_fields_follow_the_live_table(tmp_path, text, match):
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, text()))
+
+
+def test_a_gap_that_depends_on_the_live_count_is_refused_not_read_as_empty(tmp_path):
+    # After 1 the walk leaves at one live only: a swap at gap 1 (it needs a PC or a walk-out;
+    # pc_gaps is []) is refused with the live-count reason, not as "no walk-out".
+    rows = [
+        {**r, "gap": []} if r["fought"] == [[1]] and r["live"] == 2 and "at" not in r else r
+        for r in LIVE_ROWS
+    ]
+    f = load_overrides(write(tmp_path, live_text(rows))).gauntlets[0].facts
+    order = f.orders[0]
+    assert f.leave_gaps is None and f.gap_holds(order, 1, "leave") is None
+    assert f.walkout_at(order, 1) is None and f.gap_holds(order, 2, "leave") is False
+    with pytest.raises(ValueError, match="depends on the live count"):
+        f.leave_gaps_of(order)
+    with pytest.raises(GauntletSettingsError, match="depends on the live count"):
+        check_swap_gap(f, order, 1)
+    with pytest.raises(GauntletSettingsError, match="under no open order"):
+        check_swap_gap(f, order, 2)
 
 
 def test_gauntlet_without_live_next_is_the_orders_prefixes(tmp_path):
@@ -340,6 +387,21 @@ def test_route_204_north_a_faint_switches_the_continuation():
     # twins planned after a revive back to two live (a bag item on the player's tile)
     assert nxt([13, 14], 1, 2, "bag") == ((15,),)
     assert all(r.headers == (346,) * len(r.next) for r in f.live_rows())
+    # leaving depends on the count (after 13: at one live, not at two): no flat leave_gaps;
+    # the order's gaps are read from live_next
+    assert f.leave_gaps is None and f.heal_gaps == f.pc_gaps == ()
+    assert f.leave_gaps_of(f.orders[0]) == (1, 2)
+
+
+def test_route_213_heal_is_read_from_live_next_by_order():
+    # The lobby healer is reached at every gap after 106 first, at none after 110 first: no
+    # flat heal_gaps, and no reader takes it as empty.
+    f = next(g for g in load_overrides().gauntlets if g.name == "Route 213").facts
+    assert f.heal_gaps is None and "heal_gaps" not in f.to_dict()
+    assert f.pc_gaps == () and f.leave_gaps == ((1, 2, 3, 4),) * 2
+    east, west = sorted(f.orders, key=lambda o: o[0] != (106,))
+    assert [f.gap_holds(east, k, "heal") for k in range(1, 5)] == [True] * 4
+    assert [f.gap_holds(west, k, "heal") for k in range(1, 5)] == [False] * 4
 
 
 def test_missing_file_is_empty(tmp_path):

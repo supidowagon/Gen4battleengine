@@ -2136,6 +2136,33 @@ def chain_live_next(
     return table
 
 
+def gap_fields(facts: Mapping, live_next: list[dict] | None) -> dict:
+    """``leave_gaps``, ``heal_gaps`` and ``pc_gaps`` of a group as stored: the two-live
+    values of ``facts`` (``chain_facts``) where the group has no ``live_next``; with one, a
+    field whose table gap facts depend on the order or the live count is None (absent:
+    ``nuzline.data.gauntlet.flat_gaps``), and a flat one must be the two-live value."""
+    from nuzline.data.gauntlet import FLAT_GAP_FIELDS, LiveRow, flat_gaps
+
+    out = {k: facts[k] for k in FLAT_GAP_FIELDS}
+    if live_next is None:
+        return out
+    rows = [LiveRow.from_dict(r) for r in live_next]
+    for key, kind in FLAT_GAP_FIELDS.items():
+        flat = flat_gaps(rows, kind)
+        if flat is None:
+            out[key] = None
+            continue
+        want = list(flat)
+        if key == "leave_gaps":
+            want = [[k for k in flat if k < len(o)] for o in facts["orders"]]
+        if want != out[key]:
+            raise MapReadError(
+                f"{key}: the live table gives {want} for every order and count, the two-live "
+                f"walk {out[key]}"
+            )
+    return out
+
+
 def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
     """The facts of every gauntlet group, read from the ROM: ``orders`` (a list of orders, each
     a list of fights, each a list of trainer ids), ``leave_gaps`` and ``fight_headers`` (one
@@ -2148,8 +2175,9 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
     after it, and a double-battle trainer is not fought at all (``trainer_encounter.c:94-118``,
     ``field_control.c:181-186``; talked to, ``res/field/scripts/scripts_battles.s:19-22``).
     The facts above are the two-live ones; ``live_next`` is the next-fight table by the count
-    (``live_table``), or None when the walk does not depend on it. The planner picks by the
-    party."""
+    (``live_table``), or None when the walk does not depend on it. With a table,
+    ``leave_gaps``, ``heal_gaps`` and ``pc_gaps`` are None where its gap facts depend on the
+    order or the count (``gap_fields``). The planner picks by the party."""
     maps = RomMaps(files)
     scripts = ScriptReader(files, decomp)
     doubles = read_double_trainers(files)
@@ -2170,14 +2198,16 @@ def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
             for c in (1, 2)
         }
         facts = chain_facts(maps, walkers[2], spec, group, **kw)
+        live_next = chain_live_next(maps, walkers, spec, group, doubles, **kw)
+        gaps = gap_fields(facts, live_next)
         out[name] = _facts(
             facts["orders"],
-            facts["leave_gaps"],
+            gaps["leave_gaps"],
             facts["fight_headers"],
             group_escape(maps, facts["fight_headers"]),
-            pc_gaps=facts["pc_gaps"],
-            heal_gaps=facts["heal_gaps"],
-            live_next=chain_live_next(maps, walkers, spec, group, doubles, **kw),
+            pc_gaps=gaps["pc_gaps"],
+            heal_gaps=gaps["heal_gaps"],
+            live_next=live_next,
         )
 
     chain("Oreburgh Mine", OREBURGH, OREBURGH.members)
