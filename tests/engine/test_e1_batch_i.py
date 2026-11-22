@@ -364,7 +364,7 @@ def _talker_under_sketch(tables, names, order):
     )
 
 
-@pytest.mark.slow  # pod e1-igf-a4fe340: 46 GB peak; slow without compile (701 s warm)
+@pytest.mark.slow  # pod e1-igf-a4fe340: 46 GB peak, 701 s warm, from 12 eager step_events; re-time
 def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names):
     """The decomp's draw: the Smeargle's Sketch puts Ember in its first slot (battle_script.c:
     4868), Sleep Talk then flags every move an imprisoner knows (BtlCmd_TrySleepTalk, :4927;
@@ -372,17 +372,23 @@ def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names)
     :3316-3338) and redraws uniformly over the rest (:4931-4933): of the 12 call values, 6 call
     Tackle and 6 Thunder, none Ember. Engine == reference on each. A pin of the decomp's draw,
     not a regression test: ``step`` played ``call % count`` on the live set before the gate fix
-    too. The regression test is ``test_the_call_law_follows_an_imprisoners_sketch[player]``."""
+    too. The regression test is ``test_the_call_law_follows_an_imprisoners_sketch[player]``.
+    One compiled ``step_events`` serves the 12 values: an eager call retraced the action loop's
+    fresh ``while_loop`` body and compiled it anew each time (46 GB peak before)."""
+    import jax
+
     from nuzline.engine.step import step_events
 
     s = _talker_under_sketch(tables, names, "player")
-    acts = A("Sketch", "Sleep Talk", s, names)
+    acts = jnp.asarray(A("Sketch", "Sleep Talk", s, names), jnp.int32)
+    program = jax.jit(step_events)
     seen = []
     for u in range(12):
         o = _o()._replace(call=jnp.asarray([0, u], jnp.int16))
-        out = assert_matches_reference(tables, s, acts, o)
+        out, events = program(tables, s, acts, o)
+        assert_matches_reference(tables, s, acts, o, out=out)
         assert int(out.moves[0, 0, 0]) == names.move("Ember")
-        seen.append(int(step_events(tables, s, acts, o)[1]["called"][1]))
+        seen.append(int(events["called"][1]))
     assert seen.count(names.move("Tackle")) == 6 and seen.count(names.move("Thunder")) == 6
 
 
