@@ -593,3 +593,63 @@ def test_absorb_holder_active_or_untyped_move_hit_draws_none(tables, names):
     ball = rain._replace(move_hit=rain.move_hit.at[1].set(names.move("Weather Ball")))
     assert switching_refusals(tables, ball) == []
     assert K.ABSORB not in switch_sites(tables, ball).tolist()
+
+
+@pytest.mark.fullset
+def test_vanilla_switch_sites_bound_every_accepted_trainer(tables, names):
+    """``SWITCH_SITES`` (9) bounds the candidate draws of every vanilla trainer whose party the
+    flat layout accepts (every move in ``commands.MOVE_EFFECTS``, ``policy._refused``), the four
+    parts read as ``KAIZO_SWITCH_SITES``' are, for any player active type pair ``T``:
+    a draw needs a move whose flags hold SUPER_EFFECTIVE against ``T`` (a superset here: a 2x
+    chart row against either type; ``BattleSystem_CalcEffectiveness``, battle_lib.c:2681-2730,
+    has no power test, so Stealth Rock counts). Keep draws (trainer_ai.c:3576-3592): the active's
+    such moves; Wonder Guard draws (:3315-3344) exist only when the active has none (:3300-3311),
+    so the larger of the two counts; absorb draws (:3681-3708): bench Pokemon with Flash Fire,
+    Water Absorb or Volt Absorb; the passes (:3756-3804): each bench Pokemon's such moves, twice
+    only when one attacking type is immune on one of its types and resisted on the other
+    (``UpateMoveStatusForTypeMul``, battle_lib.c:2782-2805) or it can have Wonder Guard."""
+    from nuzline.ai.commands import MOVE_EFFECTS
+    from nuzline.data.forms import personal_row
+    from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+    from nuzline.engine.ids import AbilityId
+    from tests.engine.helpers import INTERMEDIATE
+
+    chart = np.asarray(tables.type_chart)  # tenths: 0 immune, 5 resisted, 20 super effective
+    move_type = np.asarray(tables.move_type)
+    types_of = np.asarray(tables.species_types)
+    abilities_of = np.asarray(tables.species_abilities)
+    variable = {names.move(m) for m in ("Hidden Power", "Weather Ball", "Natural Gift", "Judgment")}
+    absorb = {AbilityId.FLASH_FIRE, AbilityId.WATER_ABSORB, AbilityId.VOLT_ABSORB}
+    n_types = chart.shape[0]
+    pairs = [(a, b) for a in range(n_types) for b in range(a, n_types)]
+
+    def se(moves, t):
+        return sum(
+            1 for m in moves if m and (m in variable or chart[move_type[m], list(t)].max() == 20)
+        )
+
+    inter = IntermediateData(INTERMEDIATE)
+    fits, worst = [], 0
+    for trainer in load_trainers(INTERMEDIATE):
+        party = build_trainer_party(trainer, inter)
+        if not party or any(m and m not in MOVE_EFFECTS for mon in party for m in mon.moves):
+            continue
+        fits.append(trainer.id)
+        rows = [personal_row(tables, mon.species, mon.form) for mon in party]
+        both = []
+        for r in rows:
+            t1, t2 = (int(x) for x in types_of[r])
+            twice = t1 != t2 and any(
+                {int(chart[x, t1]), int(chart[x, t2])} == {0, 5} for x in range(n_types)
+            )
+            both.append(2 if twice or AbilityId.WONDER_GUARD in abilities_of[r] else 1)
+        for a in range(len(party)):
+            bench = [b for b in range(len(party)) if b != a]
+            held = sum(1 for b in bench if absorb & set(abilities_of[rows[b]].tolist()))
+            for t in pairs:
+                keep = se(party[a].moves, t)
+                guard = sum(se(party[b].moves, t) for b in bench)
+                passes = sum(both[b] * se(party[b].moves, t) for b in bench)
+                worst = max(worst, max(keep, guard) + held + passes)
+    assert 246 in fits  # Roark
+    assert worst <= SWITCH_SITES, (worst, fits)

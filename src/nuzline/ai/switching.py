@@ -149,6 +149,19 @@ from nuzline.engine.ids import AbilityId, ItemId, Type
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
+# Its bound for every vanilla trainer the flat layout accepts (every party move in
+# ``commands.MOVE_EFFECTS``: Roark, id 246, and four one-Pokemon parties with Tackle): a draw needs
+# a move flagged SUPER_EFFECTIVE (``BattleSystem_CalcEffectiveness``, battle_lib.c:2681-2730, no
+# power test, so Stealth Rock counts): Geodude and Onix hold two (Rock), Cranidos one (Pursuit).
+# The keep draws (trainer_ai.c:3576-3592) are the active's, at most 2; the Wonder Guard draws
+# (:3315-3344) only when the active has none (:3300-3311), at most 2 + 2 from the bench; no bench
+# Pokemon can be in both passes (:3756-3804; that needs one attacking type immune on one of its
+# types and resisted on the other, battle_lib.c:2782-2805: none for Rock / Ground, and Cranidos
+# has one type) and none has an absorb ability (:3681-3708): passes at most 2 + 2. So at most
+# max(2, 4) + 4 = 8 draws; not relied on: Roark's every Pokemon has a move super effective on a
+# Bug / Ghost Shedinja, which drops the guard draws and leaves 5.
+# ``tests/ai/test_switching.py::test_vanilla_switch_sites_bound_every_accepted_trainer``
+# recomputes it from the trainer data.
 SWITCH_NONE = SWITCH_SITES  # switch_stop when no draw stops the check (vanilla layout)
 # Every candidate draw of a party of six (module docstring; rulings G-33 and 19 Nov), the four
 # parts each at its bound: the Wonder Guard draws (5 bench Pokemon x 4 moves, trainer_ai.c:
