@@ -74,6 +74,15 @@ def test_kaizo_trainer_maps_file(kaizo_rom_dir):
     assert TRAINER_MAPS_FILE in _json(kaizo_rom_dir / "rom_sources.json")
 
 
+def test_kaizo_trainer_map_labels(kaizo_rom_dir):
+    # Each trainer's map_labels: the labels of its map headers (the same join as the terrain).
+    trainers = _json(kaizo_rom_dir / "trainers.json")
+    maps = _json(kaizo_rom_dir / TRAINER_MAPS_FILE)
+    assert trainers[250]["map_labels"] == [7, 119]  # Byron, headers 2 and 34 (E3-B3-5.a)
+    assert trainers[858]["map_labels"] == [82]  # header 454
+    assert all(bool(t["map_labels"]) == bool(maps.get(str(t["id"]))) for t in trainers)
+
+
 def test_kaizo_self_pairs_are_one_trainer_doubles(kaizo_rom_dir):
     # StartTrainerBattle t, t is BATTLE_TYPE_TRAINER_DOUBLES (src/encounter.c:736-737).
     trainers = _json(kaizo_rom_dir / "trainers.json")

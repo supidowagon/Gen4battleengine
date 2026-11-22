@@ -100,7 +100,6 @@ def fingerprint(
         # Only when set, so a checkpoint without one keeps its digest.
         **({"field_move": problem.field_move} if problem.field_move else {}),
         **({"enemy_2_class": problem.enemy_2_class} if problem.enemy_2_class is not None else {}),
-        **({"map_label": problem.map_label} if problem.map_label is not None else {}),
         **({"terrain": problem.trainer.terrain} if run_terrain(problem.trainer) else {}),
     }
     knobs = {k: v for k, v in _plain(settings).items() if k != "budget_seconds"}

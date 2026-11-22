@@ -132,7 +132,10 @@ def setup_specs(
     if not starts_with_friendship(classes):
         return specs
     return battle_start_party(
-        tables if tables is not None else _default_tables(), specs, classes, problem.map_label
+        tables if tables is not None else _default_tables(),
+        specs,
+        classes,
+        problem.trainer.map_labels,
     )
 
 

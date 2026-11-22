@@ -25,7 +25,8 @@ refuse intermediates older than an edit to them.
 Each trainer's battle terrain (``trainers.json`` ``terrain``/``terrains``, K3b2 Task 9) comes
 from the same trainer -> map join, read through ``maps.trainer_terrain_rows``
 (``tools/terrain.py``); for Kaizo the ROM diff must leave the terrain code alone
-(``maps.check_terrain_code``).
+(``maps.check_terrain_code``). Its ``map_labels`` (the headers' map label text ids,
+``maps.map_header_labels``, through ``extract_decomp.map_label_fields``) come from the same join.
 
 Battle command operands that are variables no constant reaches on some walked script path
 (``tools.rom.readers.maps.UnresolvedOperand``) place no trainer; each is printed to stderr
@@ -57,6 +58,7 @@ from tools.extract_decomp import (
     extract_charmap,
     extract_move_lists,
     extract_static,
+    map_label_fields,
 )
 from tools.rom.inputs import (
     REPO_ROOT,
@@ -340,6 +342,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
     from tools.rom.readers.maps import (
+        map_header_labels,
         map_header_rows,
         trainer_start_conditions,
         trainer_terrain_rows,
@@ -408,7 +411,10 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "trainers": read_trainers(rom, decomp, smap, charmap, starts, layout=game),
         }
         terrains = trainer_terrain_rows(rom, decomp, smap, where, len(starts))
-        tables["trainers"] = [{**t, **terrains[t["id"]]} for t in tables["trainers"]]
+        labels = map_label_fields(len(starts), where, map_header_labels(rom, smap))
+        tables["trainers"] = [
+            {**t, **terrains[t["id"]], **labels[t["id"]]} for t in tables["trainers"]
+        ]
         for name, data in tables.items():
             _write(stage / f"{name}.json", data)
         if changed is not None:

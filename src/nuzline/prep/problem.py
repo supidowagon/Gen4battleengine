@@ -38,7 +38,6 @@ from nuzline.engine.coverage import (
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Status
 from nuzline.engine.state import MAX_DEATH_BUDGET
-from nuzline.prep.friendship import battle_start_party
 from nuzline.prep.pool import Candidate, pool_candidates
 from nuzline.saves.save import SaveFile
 
@@ -388,10 +387,9 @@ class PrepProblem:
     # so every setup starts as ``start_condition`` says (clear), the save's own party too.
     script_weather_warp: bool = False
     # Battle-start friendship (ledger E3-B3-5.a; ``prep.friendship``): the class id of the fight's
-    # second enemy trainer (None: one enemy), and the map label text id of the fight's header
-    # (None: not read; ``battle_start_spec``). ``trainer.class_id`` is enemy 1's.
+    # second enemy trainer (None: one enemy). ``trainer.class_id`` is enemy 1's, and
+    # ``trainer.map_labels`` the map label text ids of its headers (``battle_start_spec``).
     enemy_2_class: int | None = None
-    map_label: int | None = None
 
 
 def _lookup(lookup: Callable[[str], int], name: str, what: str) -> int:
@@ -419,7 +417,6 @@ def build_problem(
     field_move: int = 0,
     script_weather_warp: bool = False,
     opponent_2: Trainer | None = None,
-    map_label: int | None = None,
 ) -> tuple[PrepProblem, list[str]]:
     """The save's pool at ``cap`` as a :class:`PrepProblem`, and the warnings (every
     exclusion and trim, reserved items missing from the bag). ``ValueError`` for a ``deaths``
@@ -429,9 +426,7 @@ def build_problem(
     candidates' own moves, ``setups.knows_field_move``).
 
     Battle-start friendship (``prep.friendship``): ``opponent_2`` is the fight's second enemy
-    trainer, ``map_label`` the map label text id of the fight's header; a candidate with a
-    nonzero egg location in a Gym, Elite Four or Champion fight with no ``map_label`` is a
-    ``ValueError`` (whether its egg location matches is unknown)."""
+    trainer; the fight's map labels are ``trainer.map_labels``."""
     if not 0 <= deaths <= MAX_DEATH_BUDGET:
         raise ValueError(f"deaths {deaths} outside [0, {MAX_DEATH_BUDGET}]")
     reserved = [_lookup(names.item, name, "item") for name in reserve]
@@ -502,14 +497,6 @@ def build_problem(
         field_move=field_move,
         script_weather_warp=script_weather_warp,
         enemy_2_class=None if opponent_2 is None else opponent_2.class_id,
-        map_label=map_label,
-    )
-    # a refusal now, not in the middle of the search (``setups.setup_specs`` raises it too)
-    battle_start_party(
-        tables,
-        [c.spec for c in problem.candidates],
-        (trainer.class_id, problem.enemy_2_class),
-        map_label,
     )
     if field_move and not any(field_move in c.spec.moves for c in problem.candidates):
         raise ValueError(

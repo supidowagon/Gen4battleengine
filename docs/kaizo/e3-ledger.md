@@ -2137,3 +2137,23 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Stage B's learn nodes and the `_play` key lines are unchanged. Not wired: `playout`/`player` still call `resolve_learns` without `answers`; GT-9's chain playout passes the per-row array.
   Deviations: the HM guard is in the policy (the plan builder does not know the slots' moves); no reference-engine differential (the policy is search-side; `test_differential.py` already covers `learn` with every option).
   Tests: tests/search/test_learn_policy.py (6). Local run green; fail-before: the new names do not exist on the old source.
+
+- E3-B3-5a fix (merge-gate review, must-fix 1): map labels in the tables; closes E3-B3-5a (b). Table input changed:
+  `trainers.json` gains `map_labels` (vanilla and Kaizo).
+  (a) Data: each trainer's `map_labels` = the sorted `mapLabelTextID` of its map headers over the trainer -> map join
+  the start conditions and terrain use (`tools/extract_decomp.py` `map_label_fields`). Vanilla decomp: the header's
+  `LocationNames_Text_*` constant (`include/data/map_headers.h`) numbered by `res/text/location_names.json`. ROM:
+  `tools/rom/readers/maps.py` `map_header_labels`, the low byte of the u16 at 18 (`include/map_header.h:21`;
+  Kaizo's d_test.narc member, `docs/kaizo/rom_diff.md` MapHeader_GetMapLabelTextID), joined in by `tools/extract_rom.py`.
+  The vanilla round trip compares the two sides. Roark 246: [8] in both; Kaizo Byron 250: [7, 119]; Kaizo 858: [82];
+  Kaizo 261-264, 267 (unplaced until B4-19): [].
+  (b) Rule: `prep.friendship.egg_location_matches`: the +1 of `src/pokemon.c:2668-2670` applies to a change that is
+  always positive for this event (`:2626`), so over several headers the worst case for the player is the smaller gain:
+  a match only when every label equals the egg location; no label is no match. Egg location 0 matches a label-0 header
+  (`LocationNames_Text_MysteryZone`, text id 0). The `ValueError` and `PrepProblem.map_label` are gone; `setup_specs`,
+  `cli rank`/`solve`/`line` pass `trainer.map_labels`; the checkpoint digest is unchanged (the key was only written when set).
+  (c) `code_tables.gym_e4_champion_classes` decodes the ROM's `TrainerIsGymLeaderE4OrChampion` switch
+  (`src/battle/battle_main.c:1376-1397`, overlay16, Kaizo shift 0): both ROMs give the 13 classes of `GYM_E4_CHAMPION_CLASSES`.
+  Tests: tests/prep/test_gauntlet_start.py, tests/prep/test_problem.py (`test_a_hatched_member_in_a_gym_prep_runs`),
+  tests/tools/rom/test_maps.py (labels vs decomp, Kaizo labels), tests/tools/rom/test_extract_rom.py (Kaizo trainer labels),
+  tests/tools/rom/test_code_tables.py (class switch).

@@ -1070,7 +1070,7 @@ def _rank(args) -> int:
     from nuzline.engine.coverage import start_gravity, start_trick_room
     from nuzline.prep.friendship import battle_start_party
 
-    player = battle_start_party(tables, player, (trainer.class_id,))
+    player = battle_start_party(tables, player, (trainer.class_id,), trainer.map_labels)
 
     state = make_state(
         tables,
@@ -1171,7 +1171,7 @@ def _solve(args) -> int:
     from nuzline.engine.coverage import start_gravity, start_trick_room
     from nuzline.prep.friendship import battle_start_party
 
-    player = battle_start_party(tables, player, (trainer.class_id,))
+    player = battle_start_party(tables, player, (trainer.class_id,), trainer.map_labels)
 
     state = make_state(
         tables,
@@ -1495,7 +1495,7 @@ def line_setup(
     from nuzline.engine.coverage import start_gravity, start_trick_room
     from nuzline.prep.friendship import battle_start_party
 
-    player = battle_start_party(tables, player, (trainer.class_id,))
+    player = battle_start_party(tables, player, (trainer.class_id,), trainer.map_labels)
 
     state = make_state(
         tables,

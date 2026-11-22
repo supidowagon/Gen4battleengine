@@ -31,7 +31,7 @@ import csv
 import json
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from tools.battle_scripts import (
@@ -1026,7 +1026,8 @@ def _ai_flag_bits(decomp: Path) -> dict[str, int]:
 
 
 def _map_headers(decomp: Path) -> dict[str, dict[str, str]]:
-    """``include/data/map_headers.h``: MAP_HEADER_* -> its scripts, events and weather."""
+    """``include/data/map_headers.h``: MAP_HEADER_* -> its scripts, events, weather and map
+    label text id constant (``mapLabelTextID``)."""
     path = decomp / "include" / "data" / "map_headers.h"
     src = path.read_text(encoding="utf-8")
     out = {}
@@ -1035,12 +1036,39 @@ def _map_headers(decomp: Path) -> dict[str, dict[str, str]]:
     ):
         fields = dict(re.findall(r"\.(\w+) = ([^,\n]+),", body))
         try:
-            out[name] = {k: fields[k] for k in ("scriptsArchiveID", "eventsArchiveID", "weather")}
+            out[name] = {
+                k: fields[k]
+                for k in ("scriptsArchiveID", "eventsArchiveID", "weather", "mapLabelTextID")
+            }
         except KeyError as e:
             raise ExtractError(f"{path}: {name} has no {e.args[0]}") from None
     if len(out) != src.count("\n    [MAP_HEADER_"):
         raise ExtractError(f"{path}: parsed {len(out)} map headers, file has more")
     return out
+
+
+def map_label_fields(
+    n_trainers: int, where: dict[int, Iterable[int]], labels: Sequence[int]
+) -> list[dict]:
+    """Per trainer id, the ``trainers.json`` field ``map_labels``: the sorted map label text
+    ids (``labels``, by header id) of the map headers ``where[id]`` its battle starts on. The
+    battle's ``mapLabelTextID`` is its header's (``MapHeader_GetMapLabelTextID``,
+    src/field_battle_data_transfer.c:263; ``battleSys->mapHeader``, battle_main.c:1054), which
+    ``Pokemon_UpdateFriendship`` compares with the egg location (src/pokemon.c:2668-2670);
+    ``prep.friendship`` takes the worst case over several. Empty: no map places the trainer."""
+    return [
+        {"map_labels": sorted({labels[h] for h in where.get(tid, ())})} for tid in range(n_trainers)
+    ]
+
+
+def _decomp_map_labels(decomp: Path, headers: dict[str, dict[str, str]]) -> dict[str, int]:
+    """MAP_HEADER_* -> its ``mapLabelTextID`` as a number: the message index of the
+    ``LocationNames_Text_*`` constant in ``res/text/location_names.json`` (a bank's text ids
+    number its messages in file order)."""
+    bank = _load_json(decomp / "res" / "text" / "location_names.json")
+    names = [m["id"] for m in bank["messages"]]
+    label = _index(names, "map label text")
+    return {name: label(h["mapLabelTextID"]) for name, h in headers.items()}
 
 
 def _weather_conditions(decomp: Path) -> dict[str, set[str]]:
@@ -1375,6 +1403,8 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       (``tools.terrain``, K3b2 Task 9): a ``TERRAIN_*`` id (``generated/battle_terrains.txt``)
       and every terrain the maps can give; ``terrain`` is ``TERRAIN_UNKNOWN`` (-1) when
       they give several (mixed) or none (no map places the trainer).
+    * ``map_labels`` are the map label text ids of the trainer's map headers
+      (``map_label_fields``): the battle's location for the friendship rule.
     """
     decomp, out_dir = Path(decomp_root), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1412,6 +1442,12 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     from tools.terrain import header_names
 
     header_id = _index(header_names(decomp), "map header")
+    by_label = _decomp_map_labels(decomp, headers)
+    labels = map_label_fields(
+        len(trainers),
+        {tid: [header_id(h) for h in where.get(c, ())] for tid, c in enumerate(trainers)},
+        [by_label[h] for h in header_names(decomp)],
+    )
 
     out = []
     for tid, const in enumerate(trainers):
@@ -1476,6 +1512,7 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 "start_condition": start,
                 "fog_headers": fog if start == "fog" else [],
                 **terrains[tid],
+                **labels[tid],
             }
         )
     lone_walk_formats(out)

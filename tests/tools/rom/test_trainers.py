@@ -14,9 +14,10 @@ def test_trainers_match_decomp_except_start(vanilla_files, decomp, symbols, char
     want = json.loads((tmp_path / "trainers.json").read_text("utf-8"))
     starts = [t["start_condition"] for t in want]
     got = read_trainers(vanilla_files, decomp, symbols, charmap, starts, layout="vanilla")
-    # The terrain fields are joined in by extract_rom (maps.trainer_terrain_rows); the
-    # round trip (test_extract_rom.py) compares them.
-    assert got == [{k: v for k, v in t.items() if k not in ("terrain", "terrains")} for t in want]
+    # The terrain fields and map labels are joined in by extract_rom (maps.trainer_terrain_rows,
+    # extract_decomp.map_label_fields); the round trip (test_extract_rom.py) compares them.
+    joined = ("terrain", "terrains", "map_labels")
+    assert got == [{k: v for k, v in t.items() if k not in joined} for t in want]
 
 
 def test_rom_trainer_format_from_battle_type(vanilla_files, decomp, symbols, charmap, decomp_inter):

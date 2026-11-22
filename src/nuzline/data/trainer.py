@@ -239,6 +239,11 @@ class Trainer:
     ``TERRAIN_UNKNOWN`` when ``terrains``, every terrain those maps can give, has several
     values (mixed) or none (no map places the trainer); tools/terrain.py, K3b2 Task 9.
 
+    ``map_labels`` are the map label text ids of the trainer's map headers (the same trainer ->
+    map join; ``extract_decomp.map_label_fields``): the battle's ``mapLabelTextID``, which the
+    battle-start friendship raise compares with the egg location (``prep.friendship``). Empty:
+    no map places the trainer.
+
     A ``Trainer`` is unhashable: ``sources`` is a dict, so the
     derived ``__hash__`` raises ``TypeError``; key caches by ``Trainer.id``."""
 
@@ -268,6 +273,7 @@ class Trainer:
     sources: dict[str, str] = field(default_factory=dict)
     terrain: int = TERRAIN_UNKNOWN
     terrains: tuple[int, ...] = ()
+    map_labels: tuple[int, ...] = ()
 
 
 def run_terrain(trainer: Trainer) -> bool:
@@ -335,6 +341,10 @@ def load_trainers(dir: Path) -> list[Trainer]:
         raise ValueError(
             f"{Path(dir) / 'trainers.json'} has no battle terrain: re-run tools/extract_decomp.py"
         )
+    if rows and "map_labels" not in rows[0]:
+        raise ValueError(
+            f"{Path(dir) / 'trainers.json'} has no map_labels: re-run tools/extract_decomp.py"
+        )
     if rows and "walking_partner" not in rows[0]:
         raise ValueError(
             f"{Path(dir) / 'trainers.json'} has no walking_partner: re-run tools/extract_decomp.py"
@@ -371,6 +381,7 @@ def load_trainers(dir: Path) -> list[Trainer]:
             sources=dict(t.get("sources", {})),
             terrain=t["terrain"],
             terrains=tuple(t["terrains"]),
+            map_labels=tuple(t["map_labels"]),
         )
         for t in rows
     ]

@@ -674,6 +674,9 @@ def trainer_record(
         f"rom: CalcTerrain over the tiles of the trainer's map headers (headers {where}; "
         "tools/terrain.py)"
     )
+    sources["map_labels"] = (
+        f"rom: map label text id (d_test.narc byte 18) of the trainer's map headers (headers {where})"
+    )
     if len([x for x in t.get("terrains", ()) if x != TERRAIN_UNKNOWN]) > 1:
         # Manager ruling 1 (ledger G-18): several start-tile terrains are the run's route;
         # the other two sources were checked and hold no terrain.

@@ -288,6 +288,7 @@ def _kaizo_row(**fields):
         "walking_partner": [],
         "terrain": 9,
         "terrains": [9],
+        "map_labels": [8],
     }
     return {**row, **fields}
 

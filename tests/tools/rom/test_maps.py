@@ -7,10 +7,11 @@ import struct
 import pytest
 
 from tools.battle_scripts import Op
-from tools.extract_decomp import extract_trainers
+from tools.extract_decomp import _decomp_map_labels, _map_headers, extract_trainers
 from tools.rom.readers.maps import (
     ScriptDecodeError,
     command_table,
+    map_header_labels,
     script_battles,
     script_ops,
     trainer_start_conditions,
@@ -133,6 +134,27 @@ def test_vanilla_start_conditions_match_decomp(vanilla_files, decomp, symbols, t
         "hail": 29,
         "sandstorm": 12,
     }
+
+
+def test_vanilla_map_labels_match_decomp(vanilla_files, decomp, symbols):
+    # MapHeader.mapLabelTextID (include/map_header.h:21): the ROM's sMapHeaders byte 18 against
+    # include/data/map_headers.h's LocationNames_Text_* constant, numbered by location_names.json.
+    from tools.terrain import header_names
+
+    labels = _decomp_map_labels(decomp, _map_headers(decomp))
+    want = [labels[h] for h in header_names(decomp)]
+    assert map_header_labels(vanilla_files, symbols) == want
+    gym = header_names(decomp).index("MAP_HEADER_OREBURGH_CITY_GYM")
+    assert want[gym] == 8  # LocationNames_Text_OreburghCity (map_headers.h:1089)
+
+
+def test_kaizo_map_labels(kaizo_files, symbols):
+    # Kaizo's getter reads byte 18 of the d_test.narc member (docs/kaizo/rom_diff.md); header 454,
+    # the rematch trainers' map, has label 82 and headers 2 and 34 (Byron 250) labels 7 and 119
+    # (ledger E3-B3-5.a).
+    labels = map_header_labels(kaizo_files, symbols)
+    assert len(labels) == 618
+    assert (labels[454], labels[2], labels[34]) == (82, 7, 119)
 
 
 def test_start_conditions_overrides_none_means_none(vanilla_files, decomp, symbols):

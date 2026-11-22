@@ -20,6 +20,7 @@ from nuzline.prep.friendship import (
     battle_start_friendship,
     battle_start_party,
     battle_start_spec,
+    egg_location_matches,
     starts_with_friendship,
 )
 from nuzline.prep.gauntlet import CapSitOut, cap_sit_out
@@ -115,7 +116,7 @@ def _spec(names, **kw):
 def test_battle_start_spec_applies_every_term(tables, names):
     soothe = names.item("Soothe Bell")
     spec = _spec(names, friendship=50, item=soothe, friend_bonus=1, egg_location=77)
-    got = battle_start_spec(tables, spec, 77)
+    got = battle_start_spec(tables, spec, (77,))
     assert got.friendship == 50 + 7  # (3 + 1 + 1) * 150 / 100
     assert got == replace(spec, friendship=57)
 
@@ -123,26 +124,38 @@ def test_battle_start_spec_applies_every_term(tables, names):
 def test_the_egg_location_is_compared_with_the_label_text_id_not_the_header_id(tables, names):
     header_id, label = 454, 82  # Kaizo header 454's label text id is 82 (ledger E3-B3-5.a)
     spec = _spec(names, friendship=50, item=0, egg_location=label)
-    assert battle_start_spec(tables, spec, label).friendship == 54
-    assert battle_start_spec(tables, spec, header_id).friendship == 53
+    assert battle_start_spec(tables, spec, (label,)).friendship == 54
+    assert battle_start_spec(tables, spec, (header_id,)).friendship == 53
 
 
-def test_an_unread_label_is_refused_only_for_a_nonzero_egg_location(tables, names):
+def test_several_labels_take_the_smaller_gain(tables, names):
+    # Kaizo Byron (250) is fought on headers 2 and 34, labels 7 and 119 (ledger E3-B3-5.a): the
+    # +1 of src/pokemon.c:2668-2670 only adds, so the worst case is no match unless every label is
+    # the egg location; no label (an unplaced trainer, any header) is no match.
+    hatched = _spec(names, friendship=50, item=0, egg_location=7)
+    assert battle_start_spec(tables, hatched, (7,)).friendship == 54
+    assert battle_start_spec(tables, hatched, (7, 119)).friendship == 53
+    assert battle_start_spec(tables, hatched, ()).friendship == 53
+    assert egg_location_matches(7, (7, 7)) and not egg_location_matches(7, (7, 119))
+    assert not egg_location_matches(0, ())
+
+
+def test_egg_location_0_matches_a_label_0_header(tables, names):
+    # MON_DATA_EGG_LOCATION is 0 for a Pokemon not hatched; LocationNames_Text_MysteryZone is
+    # text id 0 (res/text/location_names.json), the label of 33 Kaizo headers (ledger E3-B3-5.a).
     plain = _spec(names, friendship=50, item=0, egg_location=0)
-    assert battle_start_spec(tables, plain, None).friendship == 53
-    hatched = _spec(names, friendship=50, item=0, egg_location=77)
-    with pytest.raises(ValueError, match="map label text id"):
-        battle_start_spec(tables, hatched, None)
+    assert battle_start_spec(tables, plain, (0,)).friendship == 54
+    assert battle_start_spec(tables, plain, (8,)).friendship == 53
 
 
 def test_a_party_is_raised_only_against_a_gym_class(tables, names):
     party = [_spec(names, friendship=f, item=0, egg_location=0) for f in (0, 100, 200)]
-    raised = battle_start_party(tables, party, (62, None))
+    raised = battle_start_party(tables, party, (62, None), (8,))
     assert [s.friendship for s in raised] == [3, 102, 201]
     assert [s.friendship for s in party] == [0, 100, 200]  # the input is not changed
-    e4 = battle_start_party(tables, party, (13, 66))
+    e4 = battle_start_party(tables, party, (13, 66), (15,))
     assert [s.friendship for s in e4] == [3, 102, 201]
-    assert battle_start_party(tables, party, (13, None)) == party
+    assert battle_start_party(tables, party, (13, None), (8,)) == party
 
 
 # --- the prep problem's states ------------------------------------------------------------
@@ -181,14 +194,14 @@ def test_the_raise_follows_the_setups_held_item(tables, names):
 def test_the_map_label_reaches_the_egg_location_test(tables, names):
     party = sample_party(names)
     cand = candidate(names, replace(party[0], friendship=50, item=0, egg_location=82), 0)
-    prob = replace(problem(tables, names, [cand]), trainer=roark_trainer(), map_label=82)
+    trainer = replace(roark_trainer(), map_labels=(82,))
+    prob = replace(problem(tables, names, [cand]), trainer=trainer)
     setup = Setup((base_member(prob, 0),))
     assert setup_specs(prob, setup, tables)[0].friendship == 54
-    prob = replace(prob, map_label=454)
+    prob = replace(prob, trainer=replace(trainer, map_labels=(82, 119)))  # two headers: worst
     assert setup_specs(prob, setup, tables)[0].friendship == 53
-    prob = replace(prob, map_label=None)
-    with pytest.raises(ValueError, match="map label text id"):
-        setup_specs(prob, setup, tables)
+    prob = replace(prob, trainer=replace(trainer, map_labels=(454,)))  # a header id, not a label
+    assert setup_specs(prob, setup, tables)[0].friendship == 53
 
 
 def _damage_both(tables, state, move):
@@ -204,7 +217,8 @@ def test_return_in_the_first_turn_reads_the_raised_friendship(tables, names):
     ret, frustration = names.move("Return"), names.move("Frustration")
     foes = roark_party(names)
     spec = _spec(names, friendship=99, item=0, friend_bonus=0, egg_location=0)
-    (raised,) = battle_start_party(tables, [spec], (roark_trainer().class_id,))
+    roark = roark_trainer()
+    (raised,) = battle_start_party(tables, [spec], (roark.class_id,), roark.map_labels)
     assert raised.friendship == 102
     start = make_state(tables, [raised], foes)
     assert int(start.friendship[0, 0]) == int(start.party_friendship[0, 0]) == 102

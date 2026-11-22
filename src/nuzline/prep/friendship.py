@@ -28,6 +28,7 @@ __all__ = [
     "battle_start_friendship",
     "battle_start_party",
     "battle_start_spec",
+    "egg_location_matches",
     "starts_with_friendship",
 ]
 
@@ -38,8 +39,9 @@ BEAT_GYM_FRIENDSHIP = (3, 2, 1)
 
 # The 13 classes of TrainerIsGymLeaderE4OrChampion (src/battle/battle_main.c:1376-1397) by class
 # id: line N of generated/trainer_classes.txt is id N-1 (LEADER_ROARK 62, LEADER_BYRON 64,
-# ELITE_FOUR_AARON..LUCIAN 65-68, CHAMPION_CYNTHIA 69, LEADER_GARDENIA..VOLKNER 74-79). Kaizo
-# keeps the class ids (Roark 246/858 is 62 in data/intermediate_kaizo/trainers.json).
+# ELITE_FOUR_AARON..LUCIAN 65-68, CHAMPION_CYNTHIA 69, LEADER_GARDENIA..VOLKNER 74-79). Both
+# ROMs' compiled switch returns TRUE for exactly these (``code_tables.gym_e4_champion_classes``,
+# tests/tools/rom/test_code_tables.py).
 GYM_E4_CHAMPION_CLASSES = frozenset({62, 64, 65, 66, 67, 68, 69, 74, 75, 76, 77, 78, 79})
 
 
@@ -63,25 +65,23 @@ def battle_start_friendship(friendship: int, *, luxury: bool, egg_match: bool, s
     return max(0, min(MAX_FRIENDSHIP, friendship + change))
 
 
-def battle_start_spec(tables: Tables, spec: PokemonSpec, map_label: int | None) -> PokemonSpec:
-    """``spec`` with its friendship after the battle-start raise. ``map_label`` is the map
-    label text id of the fight's header, which is what ``Pokemon_UpdateFriendship`` receives as
-    ``mapID`` (``battleSys->mapHeader = dto->mapLabelTextID``, battle_main.c:1054;
-    ``dto->mapLabelTextID = MapHeader_GetMapLabelTextID(mapHeaderID)``,
-    src/field_battle_data_transfer.c:263; not the header id). ``None``: not read. Then a member
-    whose egg location is 0 gets no match (no Gym, Elite Four or Champion fight placement in the
-    Kaizo headers has label 0: ledger E3-B3-5.a) and a member with a nonzero egg location is
-    refused with ``ValueError``: whether it matches is unknown."""
-    if map_label is None:
-        if spec.egg_location:
-            raise ValueError(
-                f"egg location {spec.egg_location} may add 1 friendship at the start of a Gym, "
-                "Elite Four or Champion fight (src/pokemon.c:2668-2670), and the fight's map "
-                "label text id is not known: pass it"
-            )
-        egg_match = False
-    else:
-        egg_match = spec.egg_location == map_label
+def egg_location_matches(egg_location: int, map_labels: Sequence[int]) -> bool:
+    """Whether ``Pokemon_UpdateFriendship``'s egg location test (``MON_DATA_EGG_LOCATION ==
+    mapID``, src/pokemon.c:2668-2670) passes in a fight whose header is one of ``map_labels``
+    (``Trainer.map_labels``: the map label text ids of the trainer's map headers; ``mapID`` is
+    the battle header's label, ``battleSys->mapHeader = dto->mapLabelTextID``,
+    battle_main.c:1054; src/field_battle_data_transfer.c:263). A pass adds 1 to a change that is
+    always positive for this event (:2626, :2668), so the worst case for the player over several
+    headers is the smaller gain: a match only when every label is the egg location. No label (no
+    map places the trainer, so any header may hold the fight) is no match. A Pokemon not
+    hatched has egg location 0, which matches a header with label 0 (Mystery Zone)."""
+    return bool(map_labels) and all(label == egg_location for label in map_labels)
+
+
+def battle_start_spec(tables: Tables, spec: PokemonSpec, map_labels: Sequence[int]) -> PokemonSpec:
+    """``spec`` with its friendship after the battle-start raise in a fight on a header with one
+    of ``map_labels`` (:func:`egg_location_matches`)."""
+    egg_match = egg_location_matches(spec.egg_location, map_labels)
     soothe = int(np.asarray(tables.item_hold_effect)[spec.item]) == HOLD_EFFECT_FRIENDSHIP_UP
     friendship = battle_start_friendship(
         spec.friendship, luxury=bool(spec.friend_bonus), egg_match=egg_match, soothe=soothe
@@ -93,11 +93,12 @@ def battle_start_party(
     tables: Tables,
     specs: Sequence[PokemonSpec],
     class_ids: Iterable[int | None],
-    map_label: int | None = None,
+    map_labels: Sequence[int],
 ) -> list[PokemonSpec]:
     """``specs`` (party 0 in party order) as they stand when the battle's party copy is made
-    against enemies of ``class_ids``: every member raised by :func:`battle_start_spec` when one
-    class is a Gym Leader, Elite Four or Champion class, else unchanged."""
+    against enemies of ``class_ids`` on a header with one of ``map_labels`` (enemy 1's
+    ``Trainer.map_labels``): every member raised by :func:`battle_start_spec` when one class is
+    a Gym Leader, Elite Four or Champion class, else unchanged."""
     if not starts_with_friendship(class_ids):
         return list(specs)
-    return [battle_start_spec(tables, s, map_label) for s in specs]
+    return [battle_start_spec(tables, s, map_labels) for s in specs]
