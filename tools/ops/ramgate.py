@@ -130,14 +130,14 @@ def load_rom_weights(path: str | Path = ROM_WEIGHTS) -> dict[str, float]:
 
 
 def _relative(arg: str, rootdir: Path, invocation_dir: Path | None) -> str:
-    path, sep, node = arg.partition("::")
+    path, sep, node = arg.replace("\\", "/").partition("::")  # before Path: POSIX keeps backslashes
     p = Path(path)
     if not p.is_absolute():
         p = (invocation_dir or rootdir) / p
     try:
         rel = p.resolve().relative_to(rootdir.resolve()).as_posix()
     except ValueError:
-        rel = path.replace("\\", "/")
+        rel = path
     rel = rel.removeprefix("./").rstrip("/") or "."
     return rel + sep + node
 
