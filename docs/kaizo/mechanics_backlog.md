@@ -166,25 +166,25 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 1 | 1 | 1 |
-| Gardenia Split | 28 | 410 (65) | 1 | 1 | 0 |
-| Fantina Split | 38 | 463 (69) | 1 | 1 | 0 |
-| Maylene Split | 47 | 480 (73) | 1 | 1 | 0 |
-| Wake Split | 54 | 482 (71) | 1 | 1 | 0 |
-| Byron Split | 65 | 486 (72) | 1 | 1 | 0 |
-| Candice Split | 74 | 486 (72) | 1 | 1 | 0 |
-| Galactic Split | 100 | 493 (73) | 1 | 1 | 0 |
-| Volkner Split | 84 | 487 (73) | 1 | 1 | 0 |
-| Elite Four Split | 100 | 493 (73) | 1 | 1 | 0 |
-| **Whole game** | | | 1 | 1 | 1 |
+| Roark Split | 16 | 358 (64) | 0 | 0 | 0 |
+| Gardenia Split | 28 | 410 (65) | 0 | 0 | 0 |
+| Fantina Split | 38 | 463 (69) | 0 | 0 | 0 |
+| Maylene Split | 47 | 480 (73) | 0 | 0 | 0 |
+| Wake Split | 54 | 482 (71) | 0 | 0 | 0 |
+| Byron Split | 65 | 486 (72) | 0 | 0 | 0 |
+| Candice Split | 74 | 486 (72) | 0 | 0 | 0 |
+| Galactic Split | 100 | 493 (73) | 0 | 0 | 0 |
+| Volkner Split | 84 | 487 (73) | 0 | 0 | 0 |
+| Elite Four Split | 100 | 493 (73) | 0 | 0 | 0 |
+| **Whole game** | | | 0 | 0 | 0 |
 
-Of your 1 groups, 0 are also needed by opposing trainers and 1 are player-only.
+Of your 0 groups, 0 are also needed by opposing trainers and 0 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
+| Roark Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -194,13 +194,12 @@ Of your 1 groups, 0 are also needed by opposing trainers and 1 are player-only.
 | Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **0** | **1** | **0** | **0** | **0** | **0** | **1** |
+| **Whole game** | **0** | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
 
 ### Player-only groups
 
 | Kind | Group | First split |
 |---|---|---|
-| move effects | move effect #95: Sketch | Roark Split |
 
 ### Hold effects with no battle effect (not counted)
 
