@@ -293,15 +293,19 @@ def test_a_trainer_behind_a_table_starts_a_talk_fight():
     assert Walker(StaticMaps([a])).talk_tiles(Pos(1, 0, 0), 1, 9) == [(1, 0)]
 
 
-def test_a_walking_member_raises_and_a_walking_non_member_is_taken_as_beaten():
-    walker = trainer(3, 0, 0, EAST, 4, movement=41)
+def test_a_walking_member_raises_and_a_walking_non_member_stands_for_its_box():
+    walker = trainer(3, 0, 0, EAST, 4, movement=41)  # range 0: its box is its event tile
     a = area(1, ["......"], [walker])
     with pytest.raises(MapReadError, match="walks"):
         Walker(StaticMaps([a]), members={3}).sight_tiles(1, walker)
     other = Walker(StaticMaps([a]), members={4})
     assert other.sight_tiles(1, walker) == [] and other.sight_at(1, 1, 0, frozenset()) == []
-    assert Pos(1, 5, 0) in other.walk(Pos(1, 4, 0)).seen
-    assert (3,) not in other.walk(Pos(1, 4, 0)).spot  # not even talked to
+    # unbeaten: its lines from the box (every facing) close (1-4, 0); beaten: only its tile
+    assert other.walk(Pos(1, 4, 0)).held
+    beaten = Walker(StaticMaps([a]), members={4}, beaten={3})
+    assert Pos(1, 1, 0) in beaten.walk(Pos(1, 5, 0)).seen
+    assert Pos(1, 0, 0) not in beaten.walk(Pos(1, 5, 0)).seen
+    assert (3,) not in beaten.walk(Pos(1, 5, 0)).spot  # not even talked to
 
 
 def test_a_matching_coord_raises_unless_the_caller_models_it():
@@ -1380,15 +1384,16 @@ def test_the_unknown_var_coords_of_the_strict_headers_are_the_listed_ones(
     rom_files, derived_and_reached
 ):
     # In a group's strict headers (its own and the healer's) a coord on a var the walk does not
-    # know blocks, except UNKNOWN_COORDS_PASSED (Route 213's 0x40FA story coords, open). The
-    # list of such coords in the headers the walks reach is pinned: a new one fails here.
+    # know blocks; Route 213's 0x40FA story coords read the var from the walk state
+    # (ROUTE_213_COORDS: 7 from the lobby, unknown from the west entry). The list of such coords
+    # in the headers the walks reach is pinned: a new one fails here.
     from tools.kaizo.gauntlet_map import (
         BUILDINGS,
         OREBURGH,
         ROUTE_204,
         ROUTE_213,
+        ROUTE_213_COORDS,
         ROUTE_213_HEALERS,
-        UNKNOWN_COORDS_PASSED,
         RomMaps,
         literal_coord,
     )
@@ -1405,7 +1410,7 @@ def test_the_unknown_var_coords_of_the_strict_headers_are_the_listed_ones(
     for name, strict in groups.items():
         for h in sorted(set(strict) & reached[name]):
             found |= {(h, c.script, c.var) for c in maps.area(h).coords if literal_coord(c) is None}
-    assert found == {(75, 2, 0x407A)} | {(h, s, 0x40FA) for h, s in UNKNOWN_COORDS_PASSED}
+    assert found == {(75, 2, 0x407A)} | {(373, s, 0x40FA) for s in ROUTE_213_COORDS}
 
 
 def _committed():
@@ -1445,6 +1450,7 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
     assert [MoveCase.from_dict(c) for c in d["cases"]] == list(f.cases)
     # the skips behind a pushed boulder (wayward_skip)
     assert [Skip.from_dict(k) for k in d.get("skips", [])] == list(f.skips)
+    assert d.get("requires_beaten", []) == list(f.requires_beaten)
     if f.partner is None:
         assert d["partner"] is None
     else:
@@ -2006,3 +2012,83 @@ def test_a_move_met_but_never_needed_is_not_relevant():
     # a subset with no full sequence (None) differs from one with facts
     by = {(): None, ("strength",): a}
     assert changing_moves(by, {"strength"}) == ("strength",)
+
+
+@pytest.mark.slow
+def test_rom_writers_of_route_213_var_are_exactly_the_cited_ones(rom_files, decomp):
+    # Ruling of 22 Nov: the value of 0x40FA at the group's start comes from its writers
+    # (ROUTE_213_LOBBY_VAR); every command of the archive that names the var is a
+    # SetVarFromValue of VAR_40FA_WRITERS or a compare.
+    from tools.kaizo.gauntlet_map import ROUTE_213_VAR, VAR_40FA_WRITERS
+    from tools.rom.readers.maps import SCRIPTS_NARC, ScriptDecodeError, _walk, command_table
+
+    table = command_table(decomp)
+    scr = rom_files.narc(SCRIPTS_NARC)
+    writes, other = set(), set()
+    for m in range(len(scr)):
+        try:
+            decoded = _walk(scr[m], table, f"scr {m}")[0]
+        except ScriptDecodeError:
+            continue  # init-script files hold no commands (test_rom_flag_writers_...)
+        for at, (op, values, _) in decoded.items():
+            if ROUTE_213_VAR not in values:
+                continue
+            name = table.constants[op]
+            if name == "SCRCMD_SETVARFROMVALUE" and values[0] == ROUTE_213_VAR:
+                writes.add((m, at, values[1]))
+            elif name != "SCRCMD_COMPAREVARTOVALUE":
+                other.add((m, at, name))
+    assert writes == set(VAR_40FA_WRITERS) and other == set()
+
+
+# --- Route 213's var in the walk state, walking non-members (B3 fix 3 C7) ---------------------
+
+
+def test_a_var_carried_in_the_state_decides_a_coord():
+    from tools.kaizo.gauntlet_map import var_flag
+
+    maps = _healer_maps([Coord(7, 2, 0, 1, 1, 1, 0x4100)])
+    # the value 0 in the start state's flags: the coord (value 1) does not run
+    known = Walker(maps, strict=[1, 2], flags={var_flag(0x4100, 0)}).walk(Pos(1, 0, 0))
+    assert known.talk == {(2, 5): Pos(2, 3, 0)}
+
+    def block(header, coord, matches):
+        return "block" if matches else None
+
+    held = Walker(maps, strict=[1, 2], flags={var_flag(0x4100, 1)}, coord_rule=block)
+    assert held.walk(Pos(1, 0, 0)).talk == {}
+    # unknown (no pseudo flag, no vars): blocks in a strict header
+    assert Walker(maps, strict=[1, 2]).walk(Pos(1, 0, 0)).talk == {}
+
+
+def test_a_warp_writes_the_var_unless_it_holds_the_kept_value():
+    from tools.kaizo.gauntlet_map import var_flag, var_value
+
+    w = Walker(StaticMaps([area(2, ["."])]), enter_vars={2: ((0x40FA, 7, 9),)})
+    assert var_value(w._enter_flags(2, frozenset({var_flag(0x40FA, 3)})), 0x40FA) == 7
+    assert var_value(w._enter_flags(2, frozenset({var_flag(0x40FA, 9)})), 0x40FA) == 9
+    assert var_value(w._enter_flags(2, frozenset()), 0x40FA) is None  # unknown may be 9
+    assert var_value(w._enter_flags(3, frozenset({var_flag(0x40FA, 3)})), 0x40FA) == 3
+
+
+def _wanderer(rx=1, rz=0):
+    # trainer 50, movement 41 (MOVEMENT_TYPE_WALK_NORTH_EAST_SOUTH_WEST), at (4, 0), sight 1
+    return MapObject(50, 50, 41, 1, 3049, SOUTH, 1, 4, 0, range_x=rx, range_z=rz)
+
+
+def test_a_walking_non_member_blocks_its_box_and_unbeaten_its_sight_area():
+    maps = StaticMaps([area(1, [".........", ".........", "........."], [_wanderer()])])
+    unbeaten = Walker(maps, members={9}).walk(Pos(1, 0, 2))
+    # box (3-5, 0); its lines reach row 1 below it and (2, 0), (6, 0): row 2 stays open
+    assert Pos(1, 8, 2) in unbeaten.seen
+    assert not {Pos(1, x, 1) for x in range(3, 6)} & set(unbeaten.seen)
+    assert Pos(1, 2, 0) not in unbeaten.seen and Pos(1, 4, 0) not in unbeaten.seen
+    beaten = Walker(maps, members={9}, beaten={50}).walk(Pos(1, 0, 2))
+    assert Pos(1, 4, 1) in beaten.seen and Pos(1, 2, 0) in beaten.seen
+    assert Pos(1, 4, 0) not in beaten.seen  # the box itself
+
+
+def test_a_walking_non_member_with_an_unbounded_range_raises():
+    maps = StaticMaps([area(1, ["....."], [_wanderer(rx=-1)])])
+    with pytest.raises(MapReadError, match="unbounded"):
+        Walker(maps, members={9}).walk(Pos(1, 0, 0))

@@ -238,6 +238,27 @@ BOULDER_GFX = 0x54
 # FLAG_STRENGTH_ACTIVE (generated/vars_flags.txt:2409, counted as C enum values: the names
 # FLAG_UNK_0x095F, FLAG_BAG_ACQUIRED, FLAG_HAS_PARTNER before it give 0x962).
 STRENGTH_ACTIVE = 0x962
+# A coord var's known value is carried in the walk state's flag set as a pseudo flag
+# (``var_flag``), far above every real flag id (flags are u16): the state then says which value
+# the var holds, or nothing (unknown), and a warp's OnTransition script may write it
+# (``Walker.enter_vars``).
+VAR_FLAG_BASE = 1 << 40
+
+
+def var_flag(var: int, value: int) -> int:
+    """The pseudo flag of ``var`` holding ``value`` (``Walker.coord_matches``)."""
+    return VAR_FLAG_BASE | var << 16 | value
+
+
+def var_value(flags: Collection[int], var: int) -> int | None:
+    """The value of ``var`` a flag set carries (``var_flag``), or None (unknown)."""
+    lo = VAR_FLAG_BASE | var << 16
+    found = [f - lo for f in flags if lo <= f < lo + 0x10000]
+    if len(found) > 1:
+        raise MapReadError(f"var {var:#x} holds two values {found}")
+    return found[0] if found else None
+
+
 VARS_START = 0x4000  # generated/vars_flags.txt:4107
 
 DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))  # N S W E, MapObject_GetDxFromDir order
@@ -405,6 +426,11 @@ class MapObject(NamedTuple):
     y: int = 0
     flag: int = 0
     gfx: int = 0
+    # the movement range around the event tile (``movement_range_x/z``, s16 at record bytes 20
+    # and 22, ``tools/jsoncnv/event.py:68-69``; -1 = unbounded, ``MapObject_IsOutOfRange``,
+    # ``src/map_object_move.c:675-705``)
+    range_x: int = 0
+    range_z: int = 0
 
     @property
     def trainer(self) -> int | None:
@@ -568,9 +594,12 @@ def parse_events(
     objects = []
     for i, r in enumerate(records[1]):
         v = struct.unpack_from("<8H", r)  # id gfx movement trainer-type flag script dir data0
+        rx, rz = struct.unpack_from("<2h", r, 20)
         x, z = struct.unpack_from("<2H", r, 24)
         (y,) = struct.unpack_from("<i", r, 28)
-        objects.append(MapObject(i, v[0], v[2], v[3], v[5], v[6], v[7], x, z, y, v[4], v[1]))
+        objects.append(
+            MapObject(i, v[0], v[2], v[3], v[5], v[6], v[7], x, z, y, v[4], v[1], rx, rz)
+        )
     warps = [Warp(i, *struct.unpack_from("<4H", r)) for i, r in enumerate(records[2])]
     coords = []
     for r in records[3]:
@@ -840,10 +869,13 @@ class Walker:
     known values of coord variables. ``coord_rule(header, coord, matches)``: ``"pass"``,
     ``"block"`` (the script takes the player: the tile is not entered) or None for the default: in
     a ``strict`` header (every header when None) a matching coord raises and one on an unknown var
-    blocks (its script may start a battle or move the player: Route 213's coords on 0x40FA,
-    header 373 scripts 9, 10, 13 start battles 692+693, 694+695, 491; Building 75's on 0x407A
-    starts 406), except ``UNKNOWN_COORDS_PASSED`` (open); in another header a matching or
-    unknown-var coord blocks too, so the walk grants nothing a coord script could take away.
+    blocks (its script may start a battle or move the player: Building 75's on 0x407A starts
+    406; Route 213's on 0x40FA where the state does not carry the var); in another header a
+    matching or unknown-var coord blocks too, so the walk grants nothing a coord script could
+    take away. A var's value in the state's flags (``var_flag``) comes before ``vars``.
+    ``enter_vars``: header -> ``(var, value, keep)``: its OnTransition script sets ``var`` to
+    ``value`` unless it holds ``keep``; an unknown var stays unknown when ``keep`` is set.
+    ``beaten``: non-member trainers known beaten (``wander_tiles``).
     ``doubles``: the double-battle trainers (``read_double_trainers``). ``two_alive``: the party
     has two live Pokemon (``Party_HasTwoAliveMons``); ``partner``: the partner flag is set. Sight
     takes two when either holds (``field_control.c:182-186``); a talk reads the party only
@@ -869,6 +901,8 @@ class Walker:
         partner: bool = False,
         flags: Collection[int] = (),
         on_enter: Mapping[int, Collection[int]] | None = None,
+        enter_vars: Mapping[int, Collection[tuple[int, int, int | None]]] | None = None,
+        beaten: Collection[int] = (),
     ):
         self.maps = maps
         self.members = frozenset(members)
@@ -882,6 +916,9 @@ class Walker:
         self.partner = partner
         self.flags = frozenset(flags)
         self.on_enter = {h: frozenset(f) for h, f in (on_enter or {}).items()}
+        self.enter_vars = {h: tuple(v) for h, v in (enter_vars or {}).items()}
+        self.beaten = frozenset(beaten)
+        self._wander: dict[tuple, frozenset] = {}
         self._sight: dict[tuple, dict[tuple[int, int], list[tuple[Seer, int]]]] = {}
         self._lines: dict[tuple, frozenset] = {}
         self._sight_raw: dict[tuple, tuple] = {}
@@ -929,7 +966,11 @@ class Walker:
         return object_hidden(o, self.flags if flags is None else flags)
 
     def _ignored(self, header: int, o: MapObject, flags: frozenset | None = None) -> bool:
-        return self.hidden(o, flags) or (self.ignore is not None and self.ignore(header, o))
+        return (
+            self.hidden(o, flags)
+            or (self.ignore is not None and self.ignore(header, o))
+            or self._inert(o)
+        )
 
     def _relocate(self, area: Area, entry: tuple) -> MapObject:
         """The object of a ``moved`` entry ``(header, index, x, z)`` on its new tile, at the
@@ -1000,8 +1041,56 @@ class Walker:
         dx, dz = DIRS[d]
         return self._collides_from(area, frm, (frm[0] + dx, frm[1] + dz), y, d)
 
+    def wander_tiles(self, area: Area, flags: frozenset | None = None) -> frozenset:
+        """The tiles the player may not stand on because of a walking non-member trainer
+        (``_inert``): it walks anywhere inside its range box (``MapObject_IsOutOfRange``,
+        ``src/map_object_move.c:675-705``), so every tile of the box may hold it, and while it
+        is not beaten (``Script_IsTrainerDefeated``, ``src/script_manager.c:517-520``; the walk
+        knows only ``beaten``) it may face any direction from any tile of the box: every tile
+        its line reaches from there (up to its range, before a tile that collides for it) may
+        start its battle. The walk is then right whatever the trainer's place and facing (fewer
+        paths only). Not an object for steps or sight lines: these tiles stand for it. An
+        unbounded box raises."""
+        flags = self.flags if flags is None else flags
+        key = (area.header, flags)
+        hit = self._wander.get(key)
+        if hit is not None:
+            return hit
+        out: set[tuple[int, int]] = set()
+        for o in area.objects:
+            if not self._inert(o) or self.hidden(o, flags):
+                continue
+            if o.range_x < 0 or o.range_z < 0:
+                raise MapReadError(
+                    f"header {area.header} trainer {o.trainer} walks with an unbounded range"
+                )
+            box = [
+                (x, z)
+                for x in range(o.x - o.range_x, o.x + o.range_x + 1)
+                for z in range(o.z - o.range_z, o.z + o.range_z + 1)
+            ]
+            out.update(box)
+            if o.trainer in self.beaten:
+                continue
+            h = area.object_height(o)
+            for bx, bz in box:
+                for d, (dx, dz) in enumerate(DIRS):
+                    for k in range(1, o.sight + 1):
+                        x, z = bx + dx * k, bz + dz * k
+                        if self._collides_from(area, (bx, bz), (x, z), h, d):
+                            break
+                        out.add((x, z))
+        hit = frozenset(out)
+        self._wander[key] = hit
+        return hit
+
+    def wanderers(self, area: Area) -> list[int]:
+        """The walking non-member trainers of ``area`` (``wander_tiles``)."""
+        return sorted({o.trainer for o in area.objects if self._inert(o)})
+
     def _inert(self, obj: MapObject) -> bool:
-        """A non-member trainer with a walking movement type: taken as beaten before the group."""
+        """A non-member trainer with a walking movement type: no fixed tile or line; it stands
+        for its range box and the lines from it (``wander_tiles``)."""
         t = obj.trainer
         if t is None or obj.movement not in MOVING:
             return False
@@ -1263,7 +1352,10 @@ class Walker:
         moved: tuple = (),
     ) -> bool:
         """Record the fights the tile starts (each with the objects moved after it); True when
-        the player cannot stand on it."""
+        the player cannot stand on it (also a tile of ``wander_tiles``)."""
+        # the same under every object layout (``walk_layouts`` records no read for it)
+        if (pos.x, pos.z) in self.wander_tiles(self.maps.area(pos.header), flags):
+            return True
         fights, passable = self._approaches(
             self.sight_at(pos.header, pos.x, pos.z, defeated, removable, y, flags, moved)
         )
@@ -1275,17 +1367,36 @@ class Walker:
 
     # -- coords
 
-    def coord_matches(self, coord: Coord) -> bool | None:
+    def coord_matches(self, coord: Coord, flags: Collection[int] = ()) -> bool | None:
         """Whether a coord event runs: a literal var by its number (``literal_coord``); else by
-        the known ``vars`` (None: unknown)."""
+        the value the state's ``flags`` carry (``var_flag``), else by the known ``vars`` (None:
+        unknown)."""
         literal = literal_coord(coord)
         if literal is not None:
             return literal
+        held = var_value(flags, coord.var)
+        if held is not None:
+            return held == coord.value
         if coord.var in self.vars:
             return self.vars[coord.var] == coord.value
         return None
 
-    def _coord_step(self, pos: Pos, walk: Walk) -> bool:
+    def _enter_flags(self, header: int, flags: frozenset) -> frozenset:
+        """The flags after a warp lands on ``header``: its OnTransition flags (``on_enter``) and
+        var writes (``enter_vars``)."""
+        out = flags | self.on_enter.get(header, frozenset())
+        for var, value, keep in self.enter_vars.get(header, ()):
+            cur = var_value(out, var)
+            if cur is None and keep is not None:
+                continue  # unknown: it may hold ``keep``
+            if cur is not None and cur == keep:
+                continue
+            if cur is not None:
+                out = out - {var_flag(var, cur)}
+            out = out | {var_flag(var, value)}
+        return self._intern(frozenset(out))
+
+    def _coord_step(self, pos: Pos, walk: Walk, flags: Collection[int] = ()) -> bool:
         """Apply the coord events of a tile entered; False when a script takes the player.
 
         The game runs only the first coord of the tile, in event order, whose var matches
@@ -1296,15 +1407,13 @@ class Walker:
         for c in area.coords:
             if not c.covers(pos.x, pos.z):
                 continue
-            matches = self.coord_matches(c)
+            matches = self.coord_matches(c, flags)
             if matches is False:
                 continue
             action = self.coord_rule(pos.header, c, matches) if self.coord_rule else None
             if action is None:
                 foreign = self.strict is not None and pos.header not in self.strict
-                if foreign or (
-                    matches is None and (pos.header, c.script) not in UNKNOWN_COORDS_PASSED
-                ):
+                if foreign or matches is None:
                     action = "block"
                 elif matches:
                     raise MapReadError(
@@ -1612,10 +1721,7 @@ class Walker:
                 ly = self.arrival_height(landing)
                 # a warp clears Strength (FieldSystem_InitFlagsWarp,
                 # field_map_change_flags.c:68, from field_map_change.c:257)
-                lf = self._intern(
-                    (here.flags - {STRENGTH_ACTIVE})
-                    | self.on_enter.get(landing.header, frozenset())
-                )
+                lf = self._enter_flags(landing.header, here.flags - {STRENGTH_ACTIVE})
                 la = self.maps.area(landing.header)
                 lb = la.behaviour(landing.x, landing.z) == BRIDGE_START
                 # the warp re-creates every object at its event tile: moved is empty
@@ -1648,7 +1754,7 @@ class Walker:
                         states.add(target)
                         queue.append(target)
                         continue
-                    if not self._coord_step(target.pos, walk):
+                    if not self._coord_step(target.pos, walk, target.flags):
                         continue
                     states.add(target)
                     walk.seen.setdefault(target.pos, s.pos)
@@ -1804,7 +1910,7 @@ class Walker:
             if b in blocked:
                 return False
             if b not in entered:
-                if not self._coord_step(t.pos, walk):
+                if not self._coord_step(t.pos, walk, t.flags):
                     blocked.add(b)
                     return False
                 entered.add(b)
@@ -2956,25 +3062,75 @@ BUILDINGS = ChainSpec(
 # (``ENTER_FLAGS``). The west entry (from the Pastoria gate, header 374) holds either state: a
 # lobby visit before the group is the player's history.
 LOBBY_FLAGS = frozenset({482})
+# Route 213's story var 0x40FA (``VAR_UNUSED_0x40FA`` in vanilla, generated/vars_flags.txt:4361:
+# Kaizo's own). Its writers in the whole script archive (``VAR_40FA_WRITERS``, pinned by a ROM
+# test) are the Valor Lakefront festival (scr 416), its west house (scr 419), Route 213 itself
+# (scr 459: coords and trainer 491) and the lobby's OnTransition (scr 462 entry 1 @31: 7 unless
+# it holds 9). The lobby-end entries are reached out of the lobby, so its OnTransition ran
+# last: 7, or 9 when trainer 491 (Beauty Chelle; 9 is written only by her battle @702 and her
+# talk @774) was beaten before. The Wake split lists her after the group (sheet Wake Split:265,
+# the group's rows 215-255): 7 (``ROUTE_213_LOBBY_VAR``). With 9 coord 12 would not run: more
+# paths, so the facts of 7 hold as a safe subset. The west entry's value depends on the history
+# (0-5 before the lobby, 7, 8 or 9 after): unknown, every 0x40FA coord blocks there. A warp
+# into the lobby writes it again (``ENTER_VARS``).
+ROUTE_213_VAR = 0x40FA
+ROUTE_213_LOBBY_VAR = 7
+ROUTE_213_LOBBY = frozenset({*LOBBY_FLAGS, var_flag(ROUTE_213_VAR, ROUTE_213_LOBBY_VAR)})
 ROUTE_213 = ChainSpec(
     members=(106, 103, 105, 111, 110),
     headers=(373,),
     entries=(Pos(373, 706, 819), Pos(373, 706, 814), Pos(373, 647, 812)),
-    entry_flags=((LOBBY_FLAGS,), (LOBBY_FLAGS,), (frozenset(), LOBBY_FLAGS)),
+    entry_flags=((ROUTE_213_LOBBY,), (ROUTE_213_LOBBY,), (frozenset(), ROUTE_213_LOBBY)),
 )
 OREBURGH = ChainSpec(members=(195, 196), headers=(199,), entries=(Pos(199, 15, 1),))
 ROUTE_204 = ChainSpec(members=(15, 13, 14), headers=(346,), entries=(Pos(346, 180, 699),))
 # The lobby healer of Route 213: header 376 object 1 at (11, 4), talked to across the table tile
 # (11, 5); scr 462 entry 2 runs HealParty (@74).
 ROUTE_213_HEALERS = ((376, 1),)
-# Open (needs a manager ruling): Route 213's coords on 0x40FA (header 373, scr 459 entries 9-13:
-# value 3 battle 692+693 sets 4, value 4 battle 694+695 sets 5, value 5 a party check, value 7 a
-# cutscene that moves the player and sets 8, value 8 battle 491 sets 9) lie on the chain's path:
-# blocked, the chain has no full sequence. The var's value at the group's start is not read, so
-# these pass as before (unsafe: the walk may skip a scripted battle or a forced move). Every other
-# unknown-var coord in a strict header blocks; a ROM test pins the list.
-UNKNOWN_COORDS_PASSED = frozenset({(373, 9), (373, 10), (373, 11), (373, 12), (373, 13)})
+# Route 213's coords on 0x40FA (header 373, scr 459 entries 9-13): value 3 battle 692+693 (sets
+# 4), value 4 battle 694+695 (sets 5), value 5 a party check (one live non-egg: battle 466, sets
+# 7), value 7 a cutscene (sets 8; then coord 13's row at x 668 starts battle 491), value 8
+# battle 491 (sets 9). Each takes the player into a non-member battle or toward one: a matching
+# one blocks (``route_213_coord_rule``); one on an unknown value blocks by default.
+ROUTE_213_COORDS = frozenset({9, 10, 11, 12, 13})
+
+
+def route_213_coord_rule(header: int, coord: Coord, matches: bool | None) -> str | None:
+    """``Walker.coord_rule`` of Route 213: a matching 0x40FA story coord blocks."""
+    if header == 373 and coord.var == ROUTE_213_VAR and coord.script in ROUTE_213_COORDS:
+        return "block" if matches else None
+    return None
+
+
+# Every write of 0x40FA in the script archive: (script file, offset, value) (ROM test).
+# Every write of 0x40FA in the script archive: (script file, offset, value), all
+# ``SetVarFromValue`` (ROM test): the festival (416: 1, 2, 3, and 1 again), its west house
+# (419: 7), Route 213 (459: 4, 5 after the coord battles, 7 after the party check, 8 after the
+# cutscene, 9 after trainer 491's battle @702 and talk @774), the lobby (462: 7 unless 9).
+VAR_40FA_WRITERS: frozenset[tuple[int, int, int]] = frozenset(
+    {
+        (416, 664, 1),
+        (416, 798, 2),
+        (416, 901, 3),
+        (416, 1444, 1),
+        (416, 1562, 1),
+        (416, 1680, 1),
+        (416, 1798, 1),
+        (416, 1916, 1),
+        (416, 2036, 1),
+        (419, 6, 7),
+        (459, 359, 4),
+        (459, 448, 5),
+        (459, 643, 8),
+        (459, 702, 9),
+        (459, 774, 9),
+        (459, 1086, 7),
+        (462, 31, 7),
+    }
+)
 B2B_HEADER = 256
+
+GROUP_COORD_RULES: dict[str, CoordRule] = {"Route 213": route_213_coord_rule}
 
 # The split of each group: the sheet section that lists it (the [[gauntlet]] ``source`` of
 # data/kaizo/overrides.toml; the ROM test checks the two agree).
@@ -3049,6 +3205,11 @@ GROUP_FLAGS: dict[str, frozenset[int]] = {
 }
 # header -> the flags its OnTransition script sets on every path (``Walker.on_enter``).
 ENTER_FLAGS: dict[int, frozenset[int]] = {376: LOBBY_FLAGS}
+# header -> (var, value, keep) its OnTransition script writes (``Walker.enter_vars``): the lobby
+# sets 0x40FA to 7 unless it holds 9 (scr 462 entry 1 @24, @31).
+ENTER_VARS: dict[int, tuple[tuple[int, int, int | None], ...]] = {
+    376: ((ROUTE_213_VAR, ROUTE_213_LOBBY_VAR, 9),)
+}
 
 
 def object_hidden(obj: MapObject, flags: Collection[int]) -> bool:
@@ -3294,6 +3455,8 @@ def derive_groups(
         if not wanted(name):
             return
 
+        beaten: frozenset[int] = frozenset()
+
         def walkers_for(moves: FieldMoves) -> dict[int, Walker]:
             return {
                 c: Walker(
@@ -3306,20 +3469,39 @@ def derive_groups(
                     two_alive=c == 2,
                     flags=GROUP_FLAGS[name],
                     on_enter=ENTER_FLAGS,
+                    enter_vars=ENTER_VARS,
+                    coord_rule=GROUP_COORD_RULES.get(name),
+                    beaten=beaten,
                 )
                 for c in (1, 2)
             }
 
-        facts = chain_group_facts(
-            maps,
-            walkers_for,
-            FieldMoves.for_split(GROUP_SPLITS[name]),
-            spec,
-            group,
-            doubles,
-            reached=seen.setdefault(name, set()),
-            **kw,
-        )
+        def derive() -> dict:
+            return chain_group_facts(
+                maps,
+                walkers_for,
+                FieldMoves.for_split(GROUP_SPLITS[name]),
+                spec,
+                group,
+                doubles,
+                reached=seen.setdefault(name, set()),
+                **kw,
+            )
+
+        # A walking non-member blocks its range box and, unbeaten, its sight area from it
+        # (``Walker.wander_tiles``). When the chain cannot complete so, it is derived with the
+        # walking non-members of its headers beaten, and needs them beaten (``requires_beaten``:
+        # the run reads their trainer flags from the save or refuses).
+        try:
+            facts = derive()
+            needs: list[int] = []
+        except NoFullSequence:
+            probe = Walker(maps, spec.members)
+            needs = sorted({t for h in spec.headers for t in probe.wanderers(maps.area(h))})
+            if not needs:
+                raise
+            beaten = frozenset(needs)
+            facts = derive()
         escape_ = group_escape(maps, facts["fight_headers"])
         for case in facts["cases"]:
             if case["orders"] and group_escape(maps, case["fight_headers"]) != escape_:
@@ -3335,6 +3517,7 @@ def derive_groups(
             live_next=facts["live_next"],
             field_moves=facts["field_moves"],
             cases=facts["cases"],
+            **({"requires_beaten": needs} if needs else {}),
         )
 
     chain("Oreburgh Mine", OREBURGH, OREBURGH.members)

@@ -88,6 +88,8 @@ class SaveFile:
     # VarsFlags.vars (``layout.VARS``, ``NUM_VARS``), by id - VARS_START: the script state a
     # map script's weather window reads (ledger G-24).
     vars: tuple[int, ...] = ()
+    # VarsFlags.flags (``layout.FLAGS``, ``NUM_FLAGS / 8`` bytes)
+    flags: bytes = b""
 
     def var(self, var_id: int) -> int:
         """The saved value of variable ``var_id`` (0x4000 up; VarsFlags_GetVarAddress,
@@ -96,6 +98,18 @@ class SaveFile:
         if not 0 <= index < len(self.vars):
             raise ValueError(f"variable {var_id:#x} is not a saved variable")
         return self.vars[index]
+
+    def flag(self, flag_id: int) -> bool:
+        """The saved flag ``flag_id`` (1 up to NUM_FLAGS - 1; VarsFlags_CheckFlag,
+        src/vars_flags.c:30-34, :52-58). ``ValueError`` outside the saved range."""
+        if not 0 < flag_id < 8 * len(self.flags):
+            raise ValueError(f"flag {flag_id:#x} is not a saved flag")
+        return bool(self.flags[flag_id // 8] & (1 << (flag_id % 8)))
+
+    def trainer_defeated(self, trainer: int) -> bool:
+        """Whether trainer ``trainer`` is beaten (Script_IsTrainerDefeated,
+        src/script_manager.c:517-520)."""
+        return self.flag(L.TRAINER_DEFEATED_FLAGS_START + trainer)
 
 
 def read_image(data: bytes) -> bytes:
@@ -382,6 +396,7 @@ def load_save(
         map_header=_u32(normal, L.MAP_HEADER),
         overworld_weather=_u16(normal, L.OVERWORLD_WEATHER),
         vars=tuple(_u16(normal, L.VARS + 2 * i) for i in range(L.NUM_VARS)),
+        flags=bytes(normal[L.FLAGS : L.FLAGS + L.NUM_FLAGS // 8]),
         trainer=SaveTrainer(
             id=trainer_id,
             gender=normal[L.TRAINER_GENDER],

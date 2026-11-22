@@ -700,6 +700,12 @@ class GauntletFacts:
     # player, the planner's choice); empty: none.
     skips: tuple[Skip, ...] = ()
     skips_source: str = ""
+    # Non-member trainers that must be beaten before the group (a walking trainer whose
+    # range box and sight area close the chain while it is unbeaten:
+    # ``tools/kaizo/gauntlet_map.py`` ``Walker.wander_tiles``); the run reads their
+    # defeated flags from the save (``SaveFile.trainer_defeated``) or refuses.
+    requires_beaten: tuple[int, ...] = ()
+    requires_beaten_source: str = ""
 
     def __post_init__(self):
         _check_gap_facts(
@@ -712,6 +718,8 @@ class GauntletFacts:
         check_skips(self.name, self.skips, self.orders)
         if self.skips and not self.skips_source:
             raise ValueError(f"{self.name}: skips need skips_source")
+        if self.requires_beaten and not self.requires_beaten_source:
+            raise ValueError(f"{self.name}: requires_beaten needs requires_beaten_source")
         where = f"{self.name}: field_moves {list(self.field_moves)}"
         if self.field_moves != tuple(m for m in FIELD_MOVES if m in self.field_moves):
             raise ValueError(f"{where}: distinct names of {FIELD_MOVES}, in that order")
@@ -758,6 +766,8 @@ class GauntletFacts:
             cases=tuple(MoveCase.from_dict(c) for c in d.get("cases", ())),
             skips=tuple(Skip.from_dict(s) for s in d.get("skips") or ()),
             skips_source=d.get("skips_source", ""),
+            requires_beaten=tuple(d.get("requires_beaten") or ()),
+            requires_beaten_source=d.get("requires_beaten_source", ""),
         )
 
     def to_dict(self) -> dict:
@@ -801,6 +811,9 @@ class GauntletFacts:
         if self.skips:
             out["skips"] = [s.to_dict() for s in self.skips]
             out["skips_source"] = self.skips_source
+        if self.requires_beaten:
+            out["requires_beaten"] = list(self.requires_beaten)
+            out["requires_beaten_source"] = self.requires_beaten_source
         return out
 
     def case(self, moves: Collection[str]) -> MoveCase:

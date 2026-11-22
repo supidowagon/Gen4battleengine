@@ -372,6 +372,12 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
             cases=cases,
             skips=_skips(entry, t["skips"]) if "skips" in t else (),
             skips_source=_fact_source(entry, t, "skips_source", "") if "skips" in t else "",
+            requires_beaten=tuple(_ints(entry, "requires_beaten", t["requires_beaten"]))
+            if "requires_beaten" in t
+            else (),
+            requires_beaten_source=_fact_source(entry, t, "requires_beaten_source", "")
+            if "requires_beaten" in t
+            else "",
         )
     except ValueError as e:
         if isinstance(e, OverridesError):
@@ -585,6 +591,8 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
                 "case",
                 "skips",
                 "skips_source",
+                "requires_beaten",
+                "requires_beaten_source",
                 *FACT_KEYS,
                 *FACT_SOURCES,
             ),
