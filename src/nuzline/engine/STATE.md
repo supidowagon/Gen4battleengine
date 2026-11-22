@@ -381,8 +381,12 @@ three structs has a row.
   the project's `% n` convention): k = 0 the turn's, which `step._action_phase` copies into
   `starf_roll` so `hooks.held_item_check` and `hooks.pluck_berry` read it; k = 1 a faint
   replacement's, which `step_events` keeps in `starf_roll` at the turn's end where a replacement
-  can send in a living Starf holder (`step.starf_kept`; `step.replace` reads it, then clears it),
-  else 0, and 0 at a pause (states merge). Per battler, hidden. The battle start's checks run with
+  can send in a living Starf holder, or where the side's active holder can eat at its pinch while
+  a replacement is pending or a newcomer's states wait (a Future Sight hit after its
+  ITEM_CONDITION; `step.starf_kept`, `step.starf_kept_active`; `step.replace` /
+  `switch_in.show_battle_mon4` read it, `replace` then clears it), else 0, and 0 at a pause
+  (states merge). Stored modulo 5 where the check meets five stats below +6 (a replacement; an
+  active holder with all five at +4 or below), else whole (the law's 60 values). Per battler, hidden. The battle start's checks run with
   `starf_roll` = `STARF_UNDRAWN`: a lead's berry is eaten and its stat waits in **`starf_open`**
   (per battler, no decomp field: the draw the decomp makes there, `battle_lib.c:5273-5294`) for
   the root's draw (`step.root_belief`, `step.sample_root`, `hooks.resolve_starf`).

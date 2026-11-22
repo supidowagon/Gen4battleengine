@@ -39,10 +39,10 @@ import pytest
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS
 from nuzline.engine.enumerate import enumerate_outcomes, outcome_laws
 from nuzline.engine.format import DOUBLES
-from nuzline.engine.ids import STARF_DRAWS, AbilityId, EffectId, Stat, Status
+from nuzline.engine.ids import STARF_DRAWS, STARF_STATS, AbilityId, EffectId, Stat, Status
 from nuzline.engine.outcome import Outcome, empty_outcome
 from nuzline.engine.state import make_state
-from tests.engine.d2_states import four, with_ability, with_hp, with_moves
+from tests.engine.d2_states import four, party_of, with_ability, with_hp, with_moves
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_enumerate import rows, step_bytes
 from tests.engine.test_pivot import _mon
@@ -190,16 +190,18 @@ def test_the_partner_switch_trace_chain_law_reads_all_draws(tables, names):
     assert bool(laws.relevant.starf[0, 0]) and bool(laws.starf_loose[0, 0])
 
 
-def _product_check(tables, s, acts, laws, count):
-    """For one enumerated group (every draw but ``starf[1, 0]`` fixed), the children of the law's
-    rows equal those of the full product, that cell at each of the 60 values. ``count``: the
-    distinct children of the 60 values (the eligible stats at the eat), so the cell is read."""
+def _product_check(tables, s, acts, laws, count, cell=(1, 0), first=0):
+    """For one enumerated group (every draw but ``starf[cell]`` fixed: the group of row
+    ``first``), the children of the law's rows equal those of the full product, that cell at each
+    of the 60 values. ``count``: the distinct children of the 60 values (the eligible stats at the
+    eat, or the stored draws), so the cell is read."""
+    d, k = cell
     outcomes, probs = enumerate_outcomes(laws)
     starf = np.asarray(outcomes.starf).copy()
-    starf[:, 1, 0] = 0
+    starf[:, d, k] = 0
     base = outcomes._replace(starf=starf)
-    keys = [b"".join(np.asarray(f)[k].tobytes() for f in base) for k in range(len(probs))]
-    group = np.flatnonzero([key == keys[0] for key in keys])
+    keys = [b"".join(np.asarray(f)[i].tobytes() for f in base) for i in range(len(probs))]
+    group = np.flatnonzero([key == keys[first] for key in keys])
     total = float(np.sum(probs[group]))
     got: dict[bytes, float] = {}
     for key, p in zip(
@@ -208,7 +210,7 @@ def _product_check(tables, s, acts, laws, count):
         got[key] = got.get(key, 0.0) + float(p) / total
     full = rows(base, np.full(STARF_DRAWS, group[0]))
     cells = np.asarray(full.starf).copy()
-    cells[:, 1, 0] = np.arange(STARF_DRAWS)
+    cells[:, d, k] = np.arange(STARF_DRAWS)
     want: dict[bytes, float] = {}
     for key in step_bytes(tables, s, acts, Outcome(*full)._replace(starf=cells)):
         want[key] = want.get(key, 0.0) + 1 / STARF_DRAWS
@@ -240,7 +242,7 @@ def test_the_tight_control_law_has_five_values_and_matches_the_full_product(tabl
     _product_check(tables, s, acts, laws, 5)
 
 
-def _foreseen(tables, names):
+def _foreseen(tables, names, spa=0):
     """Singles: side 1's Blissey holds a Starf Berry two HP above its pinch, and a Future Sight
     (2 damage) lands on it this turn (count 1). Side 0's lead, a poisoned Bidoof at 1 HP, faints
     at the poison tick; its bench is a Geodude. Both use Growl. Blissey's ITEM_CONDITION
@@ -249,7 +251,7 @@ def _foreseen(tables, names):
     ReplaceFainted (bcp.c:1848) sends the Geodude in, and the next ShowBattleMon's held-item check
     over every battler (bcp.c:256, battle_lib.c:4151-4165; the engine's ``replace``) eats the
     berry with its own RandNext() % 5 (battle_lib.c:5273-5294): the replacement's draw,
-    ``Outcome.starf[1, 1]`` (``step.starf_kept_active``)."""
+    ``Outcome.starf[1, 1]`` (``step.starf_kept_active``). ``spa``: Blissey's Sp. Atk stage."""
     s = make_state(
         tables,
         [_mon(names, "Bidoof", ["Growl"], 5), _mon(names, "Geodude", ["Growl"], 5)],
@@ -265,6 +267,7 @@ def _foreseen(tables, names):
         future_move=s.future_move.at[1].set(move),
         future_attacker=s.future_attacker.at[1].set(1),
         future_sight=s.future_sight.at[1].set(1),
+        stages=s.stages.at[1, Stat.SPA].set(spa),
     )
     acts = jnp.asarray([names.move_slot(s, 0, "Growl"), names.move_slot(s, 1, "Growl")], jnp.int32)
     o = empty_outcome()
@@ -273,35 +276,197 @@ def _foreseen(tables, names):
 
 def test_the_future_sight_holder_law_reads_the_replacement_draw(tables, names):
     """The law alone (fast): side 1's replacement draw is read for its own active holder, five
-    values (0 + 0 + 1 + 2 below +6). 008ff3e5 read it only for a bench holder."""
+    values: highest 0 + gain 0 + 1 + 2 * own = 3, below +6 (``own`` is 1: Blissey holds the berry
+    on the field and the Future Sight can take HP, ``held_eat`` through ``hp_drop``). 008ff3e5
+    read it only for a bench holder."""
     s, acts, _ = _foreseen(tables, names)
     laws = _laws(tables, s, acts)
     assert bool(laws.relevant.starf[1, 1]) and not bool(laws.starf_loose[1, 1])
 
 
 @pytest.mark.slow  # a both-engine step plus replace, as the other step checks here
-def test_the_future_sight_holder_eats_at_the_replacement_with_its_draw(tables, names):
+@pytest.mark.parametrize(
+    ("spa", "draw", "stored", "stat", "stage"),
+    [(0, 8, 3, Stat.SPA, 2), (0, 0, 0, Stat.ATK, 1), (5, 7, 7, Stat.SPE, 2)],
+    ids=["mod5-spa", "mod5-atk", "whole-spe"],
+)
+def test_the_future_sight_holder_eats_at_the_replacement_with_its_draw(
+    tables, names, spa, draw, stored, stat, stage
+):
     """Both engines: the turn leaves Blissey at its pinch with its berry and side 0 to replace;
-    ``replace`` eats it with ``starf[1, 1]``: draw 3 is Sp. Atk (rank 3 of five), draw 0 Attack
-    (Growl's -1 makes it +1). 008ff3e5 read 0 for both."""
+    ``replace`` eats it with ``starf[1, 1]``, kept in ``starf_roll[1, 0]``: modulo 5 while its
+    five stats are all at +4 or below (draw 8 is kept as 3: Sp. Atk, rank 3 of five; draw 0
+    Attack, Growl's -1 makes it +1), whole with Sp. Atk at +5 (the law's 60 values: draw 7 is
+    kept as 7; the eat meets five stats below +6, rank 2, Speed). 008ff3e5 read 0 for every
+    draw; f840758b kept draw 8 whole."""
     from nuzline.data.tables import to_numpy
     from nuzline.engine.step import replace
     from nuzline.reference.convert import from_ref, to_ref
     from nuzline.reference.engine import ref_replace
 
-    s, acts, base = _foreseen(tables, names)
+    s, acts, base = _foreseen(tables, names, spa)
     top = int(s.max_hp[1, 0])
-    for draw, stat, stage in ((3, Stat.SPA, 2), (0, Stat.ATK, 1)):
-        o = base._replace(starf=base.starf.at[1, 1].set(draw))
-        out = assert_matches_reference(tables, s, acts, o)
-        assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == top // 4
-        assert int(out.item[1, 0]) != 0  # not eaten yet: the hit came after ITEM_CONDITION
-        sent = replace(tables, out, 0, 1)
-        ref = from_ref(ref_replace(to_numpy(tables), to_ref(out), 0, 1))
-        for name, x, y in zip(sent._fields, sent, ref, strict=True):
+    o = base._replace(starf=base.starf.at[1, 1].set(draw))
+    out = assert_matches_reference(tables, s, acts, o)
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == top // 4
+    assert int(out.item[1, 0]) != 0  # not eaten yet: the hit came after ITEM_CONDITION
+    assert np.asarray(out.starf_roll[1]).tolist() == [stored, 0, 0]
+    sent = replace(tables, out, 0, 1)
+    ref = from_ref(ref_replace(to_numpy(tables), to_ref(out), 0, 1))
+    for name, x, y in zip(sent._fields, sent, ref, strict=True):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
+    assert int(sent.item[1, 0]) == 0
+    assert int(np.asarray(sent.stages[1])[stat]) == stage
+
+
+@pytest.mark.slow  # enumerates and steps every row, as the other product checks here
+def test_the_future_sight_holder_rows_match_the_full_product(tables, names):
+    """Review 3, must 1: the tight index-1 law (five values) on ``_foreseen``: for the group whose
+    Future Sight hits, the five rows' children equal the 60-value product's over ``starf[1, 1]``.
+    Five distinct children: the kept draw is stored modulo 5 (f840758b stored it whole: 60)."""
+    s, acts, _ = _foreseen(tables, names)
+    laws = _laws(tables, s, acts)
+    assert bool(laws.relevant.starf[1, 1]) and not bool(laws.starf_loose[1, 1])
+    outcomes, _ = enumerate_outcomes(laws)
+    hit = int(np.argmax(np.asarray(outcomes.future_hit)[:, 1]))
+    _product_check(tables, s, acts, laws, 5, cell=(1, 1), first=hit)
+
+
+def _waiting(tables, names, variant="eats"):
+    """Singles, the state after a ``_foreseen`` turn: side 0's lead fainted, a Geodude to send in;
+    side 1's Blissey at its pinch with its Starf Berry. ``variant``: ``eats`` (it can eat),
+    ``klutz`` / ``embargo`` (``Battler_HeldItem`` gives ITEM_NONE, lib.c:5352-5363), ``maxed``
+    (all five stats at +6, lib.c:5281-5286)."""
+    s = make_state(
+        tables,
+        [_mon(names, "Bidoof", ["Growl"], 5), _mon(names, "Geodude", ["Growl"], 5)],
+        [_mon(names, "Blissey", ["Growl"], 100, "Starf Berry")],
+    )
+    top = int(s.max_hp[1, 0])
+    s = s.replace_hp(1, 0, top // 4).replace_hp(0, 0, 0)
+    if variant == "klutz":
+        s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.KLUTZ))
+    elif variant == "embargo":
+        s = s._replace(embargo=s.embargo.at[1].set(2))
+    elif variant == "maxed":
+        stages = s.stages
+        for x in STARF_STATS:
+            stages = stages.at[1, int(x)].set(6)
+        s = s._replace(stages=stages)
+    return s
+
+
+@pytest.mark.parametrize("variant", ["eats", "klutz", "embargo", "maxed"])
+def test_only_a_holder_that_can_eat_keeps_its_draw(tables, names, variant):
+    """Review 3, must 2 (fast, both engines): ``starf_kept_active`` needs the effective item
+    (Klutz, Embargo: lib.c:5352-5363, read by TriggerHeldItemOnStatus at :4970) and a stat below
+    +6 (lib.c:5281-5286), as the law's ``standing``. f840758b kept it for all four."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.step import starf_kept, starf_kept_active
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _starf_kept, _starf_kept_active
+
+    s = _waiting(tables, names, variant)
+    want = [False, variant == "eats"]
+    assert np.asarray(starf_kept_active(tables, s)).tolist() == want
+    assert np.asarray(starf_kept(tables, s)).tolist() == want
+    np_tables, rs = to_numpy(tables), to_ref(s)
+    assert _starf_kept_active(np_tables, rs) == want
+    assert _starf_kept(np_tables, rs) == want
+
+
+@pytest.mark.parametrize(("spa", "roll", "stat"), [(0, 3, Stat.SPA), (6, 7, Stat.SPD)])
+def test_the_b2_replace_eats_the_active_holder_with_entry_0(tables, names, spa, roll, stat):
+    """Review 3, not verified (B = 2): ``replace``'s ``hooks.switch_in_effects`` runs the foe's
+    ``after_damage_items`` (bcp.c:256, battle_lib.c:4151-4165) and Blissey's eat reads
+    ``starf_roll[1, 0]`` (``starf_taken`` 0): roll 3 of five is Sp. Atk; with Sp. Atk at +6 roll 7
+    is rank 3 of four, Sp. Def. Both engines."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.step import replace
+    from nuzline.reference.convert import from_ref, to_ref
+    from nuzline.reference.engine import ref_replace
+
+    s = _waiting(tables, names)
+    s = s._replace(
+        stages=s.stages.at[1, Stat.SPA].set(spa),
+        starf_roll=s.starf_roll.at[1].set(jnp.asarray([roll, 0, 0], s.starf_roll.dtype)),
+    )
+    sent = replace(tables, s, 0, 1)
+    ref = from_ref(ref_replace(to_numpy(tables), to_ref(s), 0, 1))
+    for name, x, y in zip(sent._fields, sent, ref, strict=True):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
+    assert int(sent.item[1, 0]) == 0 and int(np.asarray(sent.stages[1])[stat]) == 2
+
+
+def _doubles_waiting(tables, names, holder, fainted):
+    """DOUBLES (battler b's party is b & 1, every Pokemon a Bulbasaur): battler ``holder``'s
+    active Pokemon holds a Starf Berry at its pinch, battler ``fainted``'s active Pokemon is at
+    0 HP with a bench to send in; turn 1, no newcomer waiting."""
+    s = four(tables, names, DOUBLES)
+    s = s._replace(entry_pending=jnp.zeros_like(s.entry_pending), turn=jnp.asarray(1, s.turn.dtype))
+    p, slot = party_of(s, holder), int(s.active[holder])
+    top = int(s.max_hp[p, slot])
+    s = with_hp(s, holder, top // 4)
+    s = s._replace(item=s.item.at[p, slot].set(names.item("Starf Berry")))
+    return with_hp(s, fainted, 0)
+
+
+def test_the_partner_active_holder_is_not_the_replacement_bench(tables, names):
+    """Review 3, should 3 (fast, B = 4, shared party): battler 0's pinched active holder is not on
+    battler 2's replacement bench (``actions.replacement_bench``, bcp.c:4096-4107): battler 2's
+    ``starf_kept`` is False (f840758b: True, ``slots != active[2]`` counted slot 0); battler 0
+    keeps its own draw (``starf_kept_active``). Both engines."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.step import starf_kept
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _starf_kept
+
+    s = _doubles_waiting(tables, names, 0, 2)
+    want = [True, False, False, False]
+    assert np.asarray(starf_kept(tables, s)).tolist() == want
+    assert _starf_kept(to_numpy(tables), to_ref(s)) == want
+
+
+@pytest.mark.parametrize(
+    ("holder", "fainted", "pick"), [(1, 0, 2), (0, 2, 2)], ids=["foe-holder", "partner-holder"]
+)
+def test_the_b4_active_holder_eats_at_the_next_show_battle_mon(
+    tables, names, holder, fainted, pick
+):
+    """Review 3, not verified (B = 4, G-32 / ``entry_pending``): ``replace_round`` sends the
+    newcomer in, its states wait (``entry_pending``, D3-13), the active holder's kept draw stays
+    in ``starf_roll`` entry 0 (``starf_kept_active``), the other battlers' are 0, and
+    ``show_battle_mon4``'s SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (battle_lib.c:4151-4165, every
+    battler) eats it with that draw: roll 3 is Sp. Atk. Both engines."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.engine.step import replace_round
+    from nuzline.engine.switch_in import show_battle_mon4
+    from nuzline.reference.convert import from_ref, to_ref
+    from nuzline.reference.engine import ref_replace_round, ref_show_battle_mon4
+
+    s = _doubles_waiting(tables, names, holder, fainted)
+    s = s._replace(starf_roll=s.starf_roll.at[holder, 0].set(3))
+    picks = np.full(4, -1, np.int8)
+    picks[fainted] = pick
+    np_tables = to_numpy(tables)
+
+    def same(x_state, ref_state):
+        ref = from_ref(ref_state)
+        for name, x, y in zip(x_state._fields, x_state, ref, strict=True):
             np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
-        assert int(sent.item[1, 0]) == 0
-        assert int(np.asarray(sent.stages[1])[stat]) == stage
+
+    waiting = replace_round(tables, s, picks)
+    same(waiting, ref_replace_round(np_tables, to_ref(s), list(picks)))
+    assert int(waiting.entry_pending[fainted]) == 1
+    rolls = np.asarray(waiting.starf_roll)
+    assert rolls[holder].tolist() == [3, 0, 0]
+    assert not np.any(np.delete(rolls, holder, axis=0))
+    ties = (0,) * 6
+    shown = show_battle_mon4(tables, waiting, np.asarray(ties, np.int32))
+    same(shown, ref_show_battle_mon4(np_tables, to_ref(waiting), list(ties)))
+    p, slot = party_of(shown, holder), int(shown.active[holder])
+    assert int(shown.item[p, slot]) == 0
+    assert int(np.asarray(shown.stages[holder])[Stat.SPA]) == 2
 
 
 _SPREAD = (

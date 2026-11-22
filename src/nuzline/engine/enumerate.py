@@ -157,7 +157,10 @@ of the turn:
   Plucks / Bug Bites a foe holding one, or Recycles one; or a battle-start berry is still open
   (``starf_open``). Five values while the count of stats below +6 stays 5, else all 60
   (``_starf_reads``). ``starf[d, 1]``: a faint replacement's draw (five values), where a holder
-  can enter at its pinch after the turn (``step.starf_kept`` keeps it). ``starf[d, 2]`` (F-O3,
+  can enter at its pinch after the turn (``step.starf_kept`` keeps it); also ``d``'s own holder
+  on the field or entering when a Future Sight hit lands this turn (``step.starf_kept_active``:
+  it can stand at its pinch with its berry until the next ShowBattleMon), five values while
+  the count stays 5, else all 60 (stored modulo 5 or whole to match). ``starf[d, 2]`` (F-O3,
   G-27): battler ``d``'s second eat this turn, where two of its eat sources can meet in one call
   (a U-turn / Baton Pass newcomer eats after the pause, from the resumed outcome's ``[d, 0]``);
   five values where the later eater is a fresh Roar newcomer, else as ``[d, 0]`` with one more +2.
@@ -3053,7 +3056,9 @@ def _starf_gain(
       earlier copy, either foe's entry (``_armed_trace`` pairs ``d`` with ``d ^ 1`` only), a
       diagonal foe's ability (ChooseTraceTarget's third branch, :7774-7778), or a resumed
       pivot of either foe. Still one copy per stint: traceAnnounced (:3726) and
-      downloadAnnounced (:3838) are set once, so a chain gives ``d`` one raise, +1. A
+      downloadAnnounced (:3838) are set once, so a chain gives ``d`` one raise, +1. So at
+      B = 4 this term reads neither ``dragged`` nor the switch actions; the B = 4 diagonal-drag
+      ``dragged`` gap (D6-D7) concerns only the fresh newcomer's term. A
       Trace that Skill Swap / Role Play hands ``d`` is in their +2. Faint replacements come at
       TurnEnd (bcp.c:1848), after every eat of index 0; the replacement's own check is
       ``_starf_reads``' index 1.
