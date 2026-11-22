@@ -364,7 +364,7 @@ def _talker_under_sketch(tables, names, order):
     )
 
 
-@pytest.mark.slow  # pod e1-igf-a4fe340: 46 GB peak, 701 s warm, from 12 eager step_events; re-time
+@pytest.mark.slow  # pod q-e1-f8727f3: 316 s call (cold), 9 GB peak after one shared jit (was 46 GB)
 def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names):
     """The decomp's draw: the Smeargle's Sketch puts Ember in its first slot (battle_script.c:
     4868), Sleep Talk then flags every move an imprisoner knows (BtlCmd_TrySleepTalk, :4927;
