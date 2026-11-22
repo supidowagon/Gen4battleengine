@@ -281,7 +281,9 @@ def test_committed_manifest_is_the_code_version(
     assert json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"] == MANIFEST_VERSION
 
 
-@pytest.mark.parametrize("manifest", ['{"version": 7}', "{}"])
+@pytest.mark.parametrize(
+    "manifest", ['{"version": 7}', "{}", json.dumps({"version": MANIFEST_VERSION - 1})]
+)
 def test_old_tables_are_refused(tmp_path, manifest):  # no npz needed: check_manifest runs first
     (tmp_path / "manifest.json").write_text(manifest)
     for load in (load_tables, load_names, load_learnsets):
