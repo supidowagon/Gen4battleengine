@@ -19,7 +19,8 @@
 #   writes run.sh and body.json (receive code "<code>") but sends nothing.
 #   run.sh first writes /work/<name>/reads (the capture dir a compare reads; empty for a
 #   capture), then /work/<name>/times.txt: START, SYNC_RC=<n> (a failed uv sync stops here,
-#   without ALL_DONE), SNAP_LOCK <epoch>, CAPTURE_START or COMPARE_START, CAPTURE_RC=<n> <epoch> or
+#   without ALL_DONE; it runs under timeout -k 30 1800: rc 124 or 137 once it hangs),
+#   SNAP_LOCK <epoch>, CAPTURE_START or COMPARE_START, CAPTURE_RC=<n> <epoch> or
 #   COMPARE_RC=<n> <epoch>, ALL_DONE. Before the job run.sh checks /proc/sys/vm/max_map_count: under
 #   1048576 (a pod with 65530 aborts JAX processes, rc 134) or unreadable ends times.txt with
 #   MAP_COUNT_LOW <value|none> <epoch>, without ALL_DONE.
@@ -30,6 +31,10 @@
 #   After the job ends run.sh stops what is left of it (snapstop; JOB_LEFT <pids> <epoch> in
 #   times.txt when anything was) before COMPARE_RC/CAPTURE_RC is followed by ALL_DONE. A TERM
 #   writes TERM <epoch> to times.txt, stops the job the same way and exits 143, without ALL_DONE.
+#   A job process still live (not a zombie) after the KILL (SNAPSTOP_MAX_S, default 40 s; a
+#   process stuck in the kernel, e.g. on the network volume) ends times.txt with JOB_STUCK <pids>
+#   <epoch>: run.sh exits 1 (143 after a TERM) without the store and ALL_DONE and keeps the pod
+#   lock, which the next job judges stale once those processes are gone (snaplive).
 #   Env: SNAP_GATE_GB (default 88): run.sh starts the capture or compare only while container
 #   memory without reclaimable page cache (cgused) is under it, or once no pack unit has been
 #   live on the pod for IDLE_WAIT_S s (default 300; GATE_IDLE_START <epoch> in times.txt);
@@ -193,15 +198,19 @@ snapwatch() { local p q o
   wait "$1"; }
 # snapstop <times.txt>: stop what is left of the job: every process, other than this shell, that
 # is not a zombie and belongs to a group in SG (pruned on every scan, sgprune). Logs "JOB_LEFT
-# <pids> <epoch>" in <times.txt> when any is left, TERMs them, KILLs what is left after 30 s and
-# returns once none is left (at most 40 s).
-snapstop() { local i
-  for ((i = 0; i <= 40; i++)); do procscan; sgprune; snapmembers "$SG" "$$"
+# <pids> <epoch>" in <times.txt> when any is left, TERMs them, KILLs what is left after
+# SNAPSTOP_KILL_S s (default 30) and returns 0 once none is left. One still live after
+# SNAPSTOP_MAX_S s (default 40; at least the KILL time): logs "JOB_STUCK <pids> <epoch>" and
+# returns 1, so run.sh keeps the pod lock rather than reporting the job stopped.
+snapstop() { local i k="${SNAPSTOP_KILL_S:-30}" m="${SNAPSTOP_MAX_S:-40}"
+  case "$k" in ''|*[!0-9]*) k=30;; esac; case "$m" in ''|*[!0-9]*) m=40;; esac; [ "$m" -ge "$k" ] || m=$k
+  for ((i = 0; i <= m; i++)); do procscan; sgprune; snapmembers "$SG" "$$"
     [ -n "$SM" ] || return 0
     if [ "$i" = 0 ]; then echo "JOB_LEFT$SM $(date +%s)" >> "$1"; kill -TERM $SM 2>/dev/null; fi
-    [ "$i" -ge 30 ] && kill -KILL $SM 2>/dev/null
-    sleep 1
-  done; }
+    [ "$i" -ge "$k" ] && kill -KILL $SM 2>/dev/null
+    [ "$i" = "$m" ] || sleep 1
+  done
+  echo "JOB_STUCK$SM $(date +%s)" >> "$1"; return 1; }
 # snapgate <gate GB> <times.txt>: return once container memory without page cache (cgused) is
 # under <gate GB>. While it is not, run.out gets "gate wait <time>: memory <GB> GB without page
 # cache, gate <GB> GB, <n> pack units live" every 30 s. Once no pack unit has been live on the
@@ -354,19 +363,20 @@ $(declare -f cgused procscan snapmembers snaplive snaplock snapunlock sgprune sn
 L=/work/.snaplock; SG=\$\$
 # Exit (TERM included) releases the pod lock; a TERM first writes TERM <epoch> to times.txt and
 # stops the job (snapstop: run.sh's process group, which it leads under setsid, and every group
-# snapwatch saw a descendant in), then exits 143.
+# snapwatch saw a descendant in), then exits 143. A job process snapstop could not stop
+# (JOB_STUCK) keeps the lock: the EXIT trap is dropped, so the next job waits until it is gone.
 trap 'snapunlock "\$L"' EXIT
-trap 'trap "" TERM; echo "TERM \$(date +%s)" >> "\$W/times.txt"; snapstop "\$W/times.txt"; exit 143' TERM
+trap 'trap "" TERM; echo "TERM \$(date +%s)" >> "\$W/times.txt"; snapstop "\$W/times.txt" || trap - EXIT; exit 143' TERM
 echo "START \$(date +%s)" > "\$W/times.txt"
 m=\$(tr -dc 0-9 < /proc/sys/vm/max_map_count 2>/dev/null); [ "\${m:-0}" -ge 1048576 ] 2>/dev/null || { echo "MAP_COUNT_LOW \${m:-none} \$(date +%s)" >> "\$W/times.txt"; exit 1; }
-(uv sync --frozen -q) > "\$W/sync.log" 2>&1; rc=\$?; echo "SYNC_RC=\$rc \$(date +%s)" >> "\$W/times.txt"; [ "\$rc" = 0 ] || exit 1
+(timeout -k 30 1800 uv sync --frozen -q) > "\$W/sync.log" 2>&1; rc=\$?; echo "SYNC_RC=\$rc \$(date +%s)" >> "\$W/times.txt"; [ "\$rc" = 0 ] || exit 1
 export CACHE_PY="\$W/repo/.venv/bin/python"
 snaplock "\$L" "\$W/times.txt"; echo "SNAP_LOCK \$(date +%s)" >> "\$W/times.txt"
 $PRE
 snapgate $GATE "\$W/times.txt"; echo "${JOB}_START \$(date +%s)" >> "\$W/times.txt"
 $CMD &
 snapwatch \$! "\$L"; rc=\$?; echo "${JOB}_RC=\$rc \$(date +%s)" >> "\$W/times.txt"
-snapstop "\$W/times.txt"
+snapstop "\$W/times.txt" || { trap - EXIT; echo "ERROR: job processes still live after the KILL (JOB_STUCK in times.txt): the pod lock stays held until they are gone"; exit 1; }
 $POST
 echo ALL_DONE >> "\$W/times.txt"
 EOS
