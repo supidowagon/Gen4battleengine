@@ -994,7 +994,7 @@ three structs has a row.
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleScript` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleMons` | `active` | mapped |
-| `BattleContext.moveTemp` | `ts_move_temp` | mapped: per-action scratch `step` recomputes inside the turn, kept only for an action paused at a party list (the paused action's moveTemp, which its resumed tail's UpdateMoveBuffers reads, bcp.c:3917-3946; E2-ML-4) |
+| `BattleContext.moveTemp` | `ts_move_temp` | mapped |
 | `BattleContext.moveCur` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.movePrev` | `move_prev` | mapped |
 | `BattleContext.moveLockedInto` | `locked_move` | mapped |
@@ -1007,7 +1007,7 @@ three structs has a row.
 | `BattleContext.moveCopiedHit` | `move_copied_hit` | mapped |
 | `BattleContext.moveSketched` | — | later (M6) |
 | `BattleContext.moveSelected` | — | not needed because its one reader, FightCommand's branch 1.5 (bcp.c:1889), runs only for a battler that picked a move this turn, which wrote it first (:446, :527): a Struggling, encored or locked battler takes an earlier branch (:1866-1888). It is not reset every turn (zeroed only by BattleContext_New, bcp.c:182; BattleContext_Init, battle_lib.c:1974-2017, leaves it), but a stale value is never read; the learn prompt that replaces the slot is `reselected` (E3-B2-21) |
-| `BattleContext.moveSlot` | `move_slot` | mapped: written only at a FIGHT selection that picks a move (bcp.c:445 the Encore slot, :526 the chosen slot), never reset (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182), so a locked battler keeps its last one: CalcTurnOrder's priority (battle_lib.c:1375-1397) and TryGrudge (common.h:8) read it (E2-ML-5) |
+| `BattleContext.moveSlot` | `move_slot` | mapped |
 | `BattleContext.conversion2Move` | `conv2_move` | mapped |
 | `BattleContext.conversion2Battler` | `conv2_battler` | mapped |
 | `BattleContext.conversion2Type` | `conv2_type` | mapped |
