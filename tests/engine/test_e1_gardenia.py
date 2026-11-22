@@ -616,9 +616,13 @@ def test_a_carried_pursuit_is_mask_sound(tables, names):
 @pytest.mark.slow  # compiles the action phase (one engine)
 def test_turn_muls_read_this_turns_selection(tables, names):
     """Review 5 #1: the search's turn powerMul (``playout.turn_muls``, through
-    ``step.replacement_power_mul``) reads this turn's TEMP_VALUE, as step does (``ts_power_mul``):
-    the foe picks Pursuit while its last selection was Tackle (20), and Tackle after a Pursuit
-    selection (10)."""
+    ``step.replacement_power_mul``) reads this turn's TEMP_VALUE, as step does: the foe picks
+    Pursuit while its last selection was Tackle (20), and Tackle after a Pursuit selection (10).
+    Step's own value is the chase it plays (``shown["pursuit"]``: TryPursuit,
+    battle_script.c:6884-6935, from the switch, subscript_switch_pokemon.s:11), the condition its
+    ``_action_phase`` gives ``replacement_power_mul`` on the selected state. ``ts_power_mul`` is
+    written only at a stop (``_execute_actions``' stop dict), so this unpaused turn leaves it 0.
+    A raw-state ``turn_muls`` (84278d86) reads the previous TEMP_VALUE: 10 then 20."""
     from nuzline.engine.step import NORMAL_POWER_MUL, PURSUIT_POWER_MUL, _action_phase
     from nuzline.search.playout import turn_muls
 
@@ -632,7 +636,9 @@ def test_turn_muls_read_this_turns_selection(tables, names):
     for last_temp, foe_action, want in ((1, 1, PURSUIT_POWER_MUL), (2, 0, NORMAL_POWER_MUL)):
         board = s._replace(selected_temp=s.selected_temp.at[1].set(last_temp))
         acts = jnp.asarray([MOVE_ACTIONS + 1, foe_action], jnp.int32)
-        stepped = int(phase(tables, board, acts, O)[0].ts_power_mul)
+        shown = phase(tables, board, acts, O)[1]
+        chased = bool(int(shown["pursuit"]))
+        stepped = PURSUIT_POWER_MUL if chased else NORMAL_POWER_MUL
         assert stepped == want
         assert int(turn_muls(tables, board, acts)[0]) == stepped
 
