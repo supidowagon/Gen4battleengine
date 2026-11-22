@@ -2298,6 +2298,8 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & ~jnp.any(last == jnp.asarray(MIMIC_FORBIDDEN, _I32))
         & (state.transformed[side] == 0)  # :4482, VOLATILE_CONDITION_TRANSFORM
         & (last != 0)
+        # BtlCmd_TryMimic's own test (:4483): the defender's VOLATILE_CONDITION_SUBSTITUTE only.
+        # subscript_mimic.s has no CheckSubstitute, so not ``h.shielded``'s SUBSTITUTE_HIT.
         & (state.substitute_hp[h.target_side] == 0)
         & ~jnp.any(moves == last)
     )
@@ -2346,7 +2348,7 @@ def _sketch(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (
         (h.effect == _E.SKETCH)
         & h.landed
-        & (state.substitute_hp[h.target_side] == 0)  # subscript_sketch.s:5
+        & ~h.shielded  # subscript_sketch.s:5, BtlCmd_CheckSubstitute (battle_script.c:9180-9181)
         & (state.transformed[side] == 0)  # :4847, VOLATILE_CONDITION_TRANSFORM
         & (last != 0)
         & ~jnp.any(last == jnp.asarray(SKETCH_FORBIDDEN, _I32))

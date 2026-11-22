@@ -4756,7 +4756,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.MIMIC and landed:
         _mimic(tables, s, side, target)
     elif effect == EffectId.SKETCH and landed:
-        _sketch(tables, s, side, target)
+        _sketch(tables, s, side, target, _shielded(turn, s, target))
     elif effect == EffectId.TRANSFORM and landed:
         if _transform(tables, s, side, target):
             # SYNCHRONIZE_STATUS's TriggerFormChange first (lib.c:4536-4544, bcp.c:3665-3672): a
@@ -8425,7 +8425,7 @@ def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
     )
 
 
-def _sketch(tables, s: RefState, side: int, target: int) -> None:
+def _sketch(tables, s: RefState, side: int, target: int, shielded: bool) -> None:
     """Sketch (effect_script_0095.s:5; subscript_sketch.s:5-6, ``BtlCmd_TrySketch``, script.c:
     4839-4884): fails on a defender with a Substitute, a Transformed user (:4847), a defender's
     ``moveSketched`` that is MOVE_NONE or forbidden (``SKETCH_FORBIDDEN``, :4848-4851) or a move
@@ -8437,7 +8437,7 @@ def _sketch(tables, s: RefState, side: int, target: int) -> None:
     mon, sd = _active(s, side), s.battlers[side]
     if (
         sd.transformed
-        or s.battlers[target].substitute_hp
+        or shielded  # subscript_sketch.s:5, BtlCmd_CheckSubstitute (script.c:9180-9181)
         or not last
         or last in SKETCH_FORBIDDEN
         or last in mon.moves
@@ -8463,7 +8463,7 @@ def _mimic(tables, s: RefState, side: int, target: int) -> None:
         last in MIMIC_FORBIDDEN
         or not last
         or sd.transformed  # :4482
-        or s.battlers[target].substitute_hp
+        or s.battlers[target].substitute_hp  # :4483, the volatile only: no CheckSubstitute
         or last in mon.moves
     ):
         return
