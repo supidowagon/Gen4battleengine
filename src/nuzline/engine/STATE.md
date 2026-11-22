@@ -718,7 +718,10 @@ three structs has a row.
   its own FIGHT ran, whose selection wrote TEMP_VALUE (1 + the slot, or 0 under an Encore), and a
   switch-in is not locked. Readers: Pursuit
   (battle_script.c:6909) and Me First (:7296), through `order.battler_selected_move`; a locked
-  battler reads the value of its last selection, not its lock's move. Written by
+  battler reads the value of its last selection, not its lock's move. Where no slot holds the
+  move TryPursuit takes (a carried IV-word Pursuit), Battler_SlotForMove gives 4
+  (battle_lib.c:2376-2387) and TryPursuit reads and spends `ppCur[4]`, the byte after `ppCur`:
+  `ppUps[0]` (battle_mon.h:99-100), so `pp_ups[..., 0]` (`step._pursuit_pp`, review 7). Written by
   `order.with_selection` (`step._action_phase`, `step.replacement_power_mul`, the laws' entry
   points) and the reference's `_ref_step`. Not in `VOLATILE_FIELDS`.
 - The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
@@ -771,7 +774,7 @@ three structs has a row.
 | `BattleMon.pressureAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in (the message's AI reveal, ruling G-10, is `ai_ability_known`) |
 | `BattleMon.padding0028_0B` | — | not needed because it is padding |
 | `BattleMon.ppCur` | `pp`, `shadow_pp`, `mimic_slots` | mapped |
-| `BattleMon.ppUps` | `pp_ups` | mapped; also `ppCur[4]`, the byte after `ppCur` (battle_mon.h:99-100), which TryPursuit reads and spends where no slot holds its move (Battler_SlotForMove gives 4, battle_lib.c:2376-2387; `step._pursuit_pp`, review 7) |
+| `BattleMon.ppUps` | `pp_ups` | mapped |
 | `BattleMon.level` | `level` | mapped |
 | `BattleMon.friendship` | `friendship`, `party_friendship` | mapped |
 | `BattleMon.nickname` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
