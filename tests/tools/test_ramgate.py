@@ -838,7 +838,15 @@ def test_the_lock_is_freed_when_its_holder_dies_without_unconfigure(tmp_path):
     finally:
         holder.kill()  # no release, no unconfigure: a crash
         holder.wait(30)
-    assert mine.acquire() and mine.owned  # the kernel freed it at once
+    import time
+
+    # the kernel frees it when the holder ends; on Windows a venv python.exe is a launcher whose
+    # real python child ends a moment after the launcher is killed
+    for _ in range(100):
+        if mine.acquire():
+            break
+        time.sleep(0.1)
+    assert mine.owned
     mine.release()
 
 
@@ -1160,3 +1168,45 @@ def test_rom_ids_prints_one_command_with_the_rom_only_ids(mini):
     assert run.returncode == 0, run.stdout + run.stderr
     cmds = [ln for ln in run.stdout.splitlines() if ln.startswith("python -m pytest")]
     assert cmds == ["python -m pytest -p no:cacheprovider -q tests/test_mix.py::test_rom"]
+
+
+def _fake_proc(root, rows):
+    """A /proc tree: rows = {pid: (state, ppid)}, plus a non-pid entry and an unreadable one."""
+    for pid, (state, ppid) in rows.items():
+        (root / str(pid)).mkdir(parents=True)
+        (root / str(pid) / "stat").write_text(
+            f"{pid} (py thon) {state} {ppid} {pid} {pid} 0 -1 4194560 1 2 3 4 5 6 7 8 20 0 1 0 1234\n",
+            encoding="utf-8",
+        )
+    (root / "self").mkdir()
+    (root / "99").mkdir()  # no stat file: skipped
+
+
+def test_a_zombie_counts_as_gone_in_the_process_table(tmp_path):
+    _fake_proc(tmp_path, {1: ("S", 0), 10: ("S", 1), 11: ("Z", 10), 12: ("R", 10), 13: ("X", 10)})
+    table = rg.proc_table(tmp_path)
+    assert table == {1: 0, 10: 1, 12: 10}  # 11 (zombie) and 13 (dead) have ended
+    born = {1: 0.0, 10: 1.0, 11: 2.0, 12: 3.0}.get
+    sent = []
+    killed = rg.kill_tree(10, table, started=born, kill=lambda pid, sig: sent.append(pid))
+    assert killed == [12] and sent == [12]  # a zombie is never killed again
+    assert rg.lineage(11, table, born) == []  # nor anyone's ancestor
+    lock = rg.MachineLock(tmp_path / "l", procs=lambda: table, started=born, me=12)
+    assert not lock.in_lineage(11) and lock.in_lineage(10)
+
+
+def test_the_lock_wait_says_once_when_no_holder_is_named(tmp_path):
+    path = tmp_path / "ramgate.lock"
+    other = rg.MachineLock(path)
+    assert other.acquire()
+    path.write_bytes(b"")  # held, but its line is gone: no holder named
+    lines = []
+    clock = Clock()
+    mine = rg.MachineLock(path, me=1)
+    ok = rg.wait_for_ram(
+        1.0, timeout_min=1, lock=mine, free=lambda: 100.0, sleep=clock.sleep, clock=clock.now,
+        say=lines.append,
+    )  # fmt: skip
+    assert not ok and len(clock.sleeps) == 6 and len(lines) == 1
+    assert "an unnamed process" in lines[0]
+    other.release()

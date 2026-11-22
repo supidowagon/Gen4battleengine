@@ -221,7 +221,8 @@ def on_pod(env: Mapping[str, str], platform: str = sys.platform) -> bool:
 
 
 def process_table() -> dict[int, int]:
-    """pid -> parent pid of every live process (Windows: a Toolhelp32 snapshot; else /proc)."""
+    """pid -> parent pid of every live process (Windows: a Toolhelp32 snapshot; else /proc, where
+    a zombie counts as gone: proc_table)."""
     if sys.platform == "win32":
         import ctypes
         from ctypes import wintypes
@@ -260,14 +261,23 @@ def process_table() -> dict[int, int]:
         finally:
             k32.CloseHandle(snap)
         return out
-    out = {}
-    for name in os.listdir("/proc"):
+    return proc_table()
+
+
+def proc_table(root: str | Path = "/proc") -> dict[int, int]:
+    """pid -> parent pid from a /proc tree. A zombie (state Z) or dead (X) process has ended: it
+    only waits for its parent to reap it (a pod's PID 1 may never do), so it is left out, for
+    kill_tree, lineage and the machine lock alike."""
+    out: dict[int, int] = {}
+    for name in os.listdir(root):
         if name.isdigit():
             try:
-                stat = Path("/proc", name, "stat").read_text(encoding="utf-8", errors="replace")
-            except OSError:
+                stat = Path(root, name, "stat").read_text(encoding="utf-8", errors="replace")
+                state, ppid = stat.rsplit(")", 1)[1].split()[:2]
+            except (OSError, ValueError):
                 continue
-            out[int(name)] = int(stat.rsplit(")", 1)[1].split()[1])
+            if state not in ("Z", "X", "x"):
+                out[int(name)] = int(ppid)
     return out
 
 
@@ -581,10 +591,13 @@ class Watchdog(threading.Thread):
 def interrupt_pytest(watchdog: Watchdog, grace_s: float = 30.0) -> None:
     """on_fire of the pytest gate: KeyboardInterrupt in the main thread, so pytest ends the
     session (unconfigure releases the lock); if it is still running after grace_s (stuck in C
-    code), the process exits at once with EXIT_WATCHDOG (the lock then goes stale)."""
+    code), the process exits at once with EXIT_WATCHDOG (the kernel then frees its OS lock)."""
     _thread.interrupt_main()
     if not watchdog.halted.wait(grace_s):
         os._exit(EXIT_WATCHDOG)
+
+
+_NOT_TOLD = object()
 
 
 def wait_for_ram(
@@ -603,7 +616,7 @@ def wait_for_ram(
     timeout: False after timeout_min minutes."""
     need = RESERVE_GB + weight_gb
     deadline = clock() + timeout_min * 60
-    told = None
+    told: object = _NOT_TOLD
     while True:
         f = free()
         if f > need:
@@ -612,9 +625,9 @@ def wait_for_ram(
             if clock() >= deadline:
                 return False
             pid = lock.holder()[0]
-            if pid != told or told is None:
+            if pid != told:  # once per holder; "no holder named" counts as one too
                 say(lock.busy_message())
-                told = pid if pid is not None else -1
+                told = pid
             sleep(LOCK_POLL_S)
             continue
         if clock() >= deadline:
