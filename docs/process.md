@@ -224,8 +224,9 @@ per day is the rate used for estimates.
 - **Gen draws and source literals.** `draw_inputs` draws with Hypothesis's local-constants pool
   empty (`snap_compare.no_local_constants`), so a new literal of the project's own imported
   modules (Hypothesis `ConstantVisitor`'s filter, `hypothesis/internal/constants_ast.py:113-145`:
-  integers with |v| >= 100, finite non-zero floats, strings of up to 20 characters, bytes; `tests/`
-  too) does not shift the `gen` part's draws. `tools/differential.py` draws with the pool on, so
+  integers with |v| >= 100, non-zero non-infinite floats (NaN too), strings of up to 20 characters, bytes up to 50; a module
+  under a `test` / `tests` folder or a `test_*` / `*_test` file is skipped, `constants_ast.py:260-283`)
+  does not shift the `gen` part's draws. `tools/differential.py` draws with the pool on, so
   its inputs at a seed differ from the snapshot's. This change altered every gen draw once: a main capture
   made before it needs a fresh capture of main with this code before the first compare.
 - **Snapshot seeds in tests.** No test may redraw snapshot seeds through the live generator; a

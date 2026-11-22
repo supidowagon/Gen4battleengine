@@ -1111,18 +1111,34 @@ def test_no_local_constants_pool_does_not_shift_draws(monkeypatch):
 
 
 def test_draw_inputs_draws_inside_no_local_constants(monkeypatch):
-    """draw_inputs enters no_local_constants before any draw: a stand-in that stops at entry is
-    reached (``saved`` set, so no step program is loaded and the stub ctx is never read)."""
+    """draw_inputs makes its first draw inside no_local_constants: the stand-in marks the block,
+    and the first strategy (``supported_state``) records whether it runs inside it. ``saved`` is
+    set, so no step program is loaded; the stub ctx is passed to the stand-in strategy only."""
     import contextlib
 
-    class Entered(Exception):
+    from tests import strategies
+
+    inside = [False]
+    seen = []
+
+    class Drawn(Exception):
         pass
 
     @contextlib.contextmanager
-    def stop():
-        raise Entered
-        yield
+    def marked():
+        inside[0] = True
+        try:
+            yield
+        finally:
+            inside[0] = False
 
-    monkeypatch.setattr(sc, "no_local_constants", stop)
-    with pytest.raises(Entered):
-        sc.draw_inputs(object(), 0, saved={"seed 0 turn 0": {}})
+    def first_draw(*_):
+        seen.append(inside[0])
+        raise Drawn
+
+    monkeypatch.setattr(sc, "no_local_constants", marked)
+    monkeypatch.setattr(strategies, "supported_state", first_draw)
+    ctx = type("Ctx", (), {"tables": None, "names": None})()
+    with pytest.raises(Drawn):
+        sc.draw_inputs(ctx, 0, saved={"seed 0 turn 0": {}})
+    assert seen and all(seen)  # Hypothesis replays the failing example: each draw is inside

@@ -180,10 +180,12 @@ other entry; a raise; a different step list) is a divergence and fails the part
 (``classify_gen``): a .gen part fails on a changed rebuild, never on a changed draw.
 
 The draws do not depend on the source: ``draw_inputs`` runs ``no_local_constants``, which empties
-Hypothesis's local-constants pool (a literal of the checkout's modules, drawn for about 5% of
-integer and float choices), so a new literal of the project's own imported modules (``ConstantVisitor``'s filter,
-hypothesis/internal/constants_ast.py:113-145: integers with |v| >= 100, finite non-zero floats,
-strings of up to 20 characters, bytes; tests too) no longer shifts every later draw. That change altered every gen draw once: a capture made before it (a main
+Hypothesis's local-constants pool (a literal of the checkout's modules, taken by an integer,
+string or bytes draw with p = 0.05 and a float draw with p = 0.15, providers.py:773-778, :845,
+:970, :1033, :1076), so a new literal of the project's own imported modules (``ConstantVisitor``'s filter,
+hypothesis/internal/constants_ast.py:113-145: integers with |v| >= 100, non-zero non-infinite floats (NaN too),
+strings of up to 20 characters, bytes up to 50; modules under a ``test`` / ``tests`` folder and
+``test_*`` / ``*_test`` files are skipped, constants_ast.py:260-283) no longer shifts every later draw. That change altered every gen draw once: a capture made before it (a main
 capture) compares as generator drift at its first seed; capture main again with this code
 before the first compare.
 
@@ -1000,12 +1002,14 @@ def ai_outputs(ctx: Ctx, s) -> dict:
 def no_local_constants():
     """Hypothesis's local-constants pool empty inside the block (restored after). Draws must
     not depend on source literals: ``HypothesisProvider._maybe_draw_constant`` returns, for
-    about 5% of integer and float choices, a constant that ``_get_local_constants`` took from
+    an integer, string or bytes draw with p = 0.05 and a float draw with p = 0.15 (providers.py:
+    773-778, :845, :970, :1033, :1076), a constant that ``_get_local_constants`` took from
     the checkout's imported modules (hypothesis/internal/conjecture/providers.py:775-827,
     325-380, 6.170.13; the filter: constants_ast.py:113-145), so any new literal there shifts every
     later draw. The
     provider reads the function at each test case; ``CONSTANTS_CACHE`` (providers.py:137)
-    keeps the pool per key, so it is cleared on entry and exit."""
+    keeps the pool per key, so it is cleared on entry and exit. It swaps a module global, so it
+    holds for one thread only: parts run as processes (``PartPool``), never threads."""
     from hypothesis.internal.conjecture import providers
     from hypothesis.internal.constants_ast import Constants
 
