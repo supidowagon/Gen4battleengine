@@ -2816,6 +2816,17 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   - Closing compare: branch `e1-close-h-7` = 507220df with the class A, B, C and D reverts, against the 38099359
     capture with the same allow-new. Expected: COMPARE_RC=0. (`e1-close-h-5`, cut before the train merge, was
     cancelled.)
+  - Result `snapcmp-e1closeh7-5ba6b5b` (5ba6b5bc): `compare: ok`, COMPARE_RC=0, 102 ok, 0 diverged, 0 error, 0 sampler
+    drift, 20 generator drift. Log `_scratch/rent/out/snapcmp-e1closeh7-5ba6b5b/fetch-1795307088/compare.log`. All
+    step, jitstep, sample, rest, ai, roark.trace and roark.rank parts are identical, so batch H's gate holds.
+  - The 20 gen parts still drift, and that is expected. A gen part passes as generator drift only when every
+    differing entry is an input `tests/strategies.py` draws (`classify_gen`, tools/snap_compare.py:172-179). A
+    batch that implements more mechanics changes what the strategies may draw. A different draw then shifts every
+    later draw of the same seed, while the engine's outputs on any one saved input stay identical: the step parts
+    check those outputs. With class D reverted, the first drift moves from turn 1 to later turns (seed 3 turn 4
+    `speed_rec`, seed 11 turn 4 `in_actions`, seed 32 turn 2 `curled`, seed 81 turn 2 `in_outcome.call`). So at
+    least one more batch H change alters the draws; its cause is being named in
+    `_scratch/e1/h-next/close-h7-gen-report.md`.
   - Should-fix `REVEALS_ON` (Insomnia / Vital Spirit / Limber on `STATUS_CURE`) is batch I group I-6 (`_scratch/e1/i-next/sheets/ability-status-cure-reveals.md`).
 
 ## Stream state (restart point, 2026-11-19)
