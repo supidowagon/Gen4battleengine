@@ -396,10 +396,11 @@ def _marker(
     env: dict[str, str] | None = None,
     stubs: tuple[str, ...] = ("flock", "ps", "uv"),
     chash: str = "",
+    chv: str = "",
 ) -> subprocess.CompletedProcess:
     e = _lane_env(tmp_path, stubs) | (env or {})
     return _bash(
-        f". '{_p(POD / 'lane.sh')}'; lane_write_marker {stream} {commit} '{_p(repo)}' '{key}' '{tree}' '{chash}'",
+        f". '{_p(POD / 'lane.sh')}'; lane_write_marker {stream} {commit} '{_p(repo)}' '{key}' '{tree}' '{chash}' '{chv}'",
         e,
         check=False,
     )
@@ -465,6 +466,7 @@ def _make_run(
     weights: str = "",
     ochash: str = "",
     nchash: str = "",
+    chv: str = "1",
 ) -> Path:
     d = tmp_path / "work" / name
     assert _build_delta(src["repo"], old, new, d).returncode == 0
@@ -489,7 +491,7 @@ def _make_run(
         d / "meta.env",
         f"MODE=delta\nOLD={old}\nNEW={new}\nOLD_TREE={_tree(tmp_path, src, old)}\nNEW_TREE={new_tree or _tree(tmp_path, src, new)}\n"
         f"OLD_TABLES_KEY={okey}\nTABLES_KEY={nkey}\nCOMMIT={new}\nDECOMP={decomp}\nGATE_VERSION=2\nPOD_SCRIPTS=ps1\n"
-        f"POD_WEIGHTS=pw1\nOLD_TABLES_CHASH={ochash}\nTABLES_CHASH={nchash}\nWATCH_F=secretf\nWATCH_D=secretd\n",
+        f"POD_WEIGHTS=pw1\nTABLES_CHASH_V={chv}\nOLD_TABLES_CHASH={ochash}\nTABLES_CHASH={nchash}\nWATCH_F=secretf\nWATCH_D=secretd\n",
     )
     if tables:
         (d / "t").mkdir()
@@ -551,10 +553,10 @@ def _digest(root: Path) -> dict[str, str]:
     }
 
 
-def _setup_lane(tmp_path, src, commit: str | None = None, chash: str = "") -> Path:
+def _setup_lane(tmp_path, src, commit: str | None = None, chash: str = "", chv: str = "1") -> Path:
     commit = commit or src["c1"]
     repo = _run_repo(tmp_path, src, commit=commit)
-    assert _marker(tmp_path, repo, commit, _tree(tmp_path, src, commit), chash=chash).returncode == 0
+    assert _marker(tmp_path, repo, commit, _tree(tmp_path, src, commit), chash=chash, chv=chv).returncode == 0
     return repo
 
 
@@ -1342,9 +1344,15 @@ def test_the_delta_ships_tables_only_when_the_content_hash_differs(src, tmp_path
     (rent / f"tables/tables_k{ka[:16]}.meta").unlink()
     r = _pack(src, tmp_path, src["c1"], src["c2"], "q-e4-ccccccc", ids)
     assert r.returncode == 3 and "tables key changed (old aaaaaaaaaaaaaaaa, new bbbbbbbbbbbbbbbb)" in r.stdout
-    # ... unless an earlier send of the old commit recorded its hash in its kept meta.env
-    _w(rent / "out/e4-a0m-1111111/meta.env", f"COMMIT={src['c1']}\nTABLES_KEY={ka[:16]}\nTABLES_CHASH={h2}\n")
-    r = _pack(src, tmp_path, src["c1"], src["c2"], "q-e4-ddddddd", ids)
+    # ... unless an earlier send of the old commit recorded its hash in its kept meta.env, under the
+    # current hash version: one of another version, or of none, is unknown and the key decides
+    for n, v in (("ddddddd", None), ("eeeeeee", "2")):
+        vl = "" if v is None else f"TABLES_CHASH_V={v}\n"
+        _w(rent / "out/e4-a0m-1111111/meta.env", f"COMMIT={src['c1']}\nTABLES_KEY={ka[:16]}\n{vl}TABLES_CHASH={h2}\n")
+        r = _pack(src, tmp_path, src["c1"], src["c2"], f"q-e4-{n}", ids)
+        assert r.returncode == 3 and "tables key changed (old aaaaaaaaaaaaaaaa, new bbbbbbbbbbbbbbbb)" in r.stdout, (v, r.stdout)
+    _w(rent / "out/e4-a0m-1111111/meta.env", f"COMMIT={src['c1']}\nTABLES_KEY={ka[:16]}\nTABLES_CHASH_V=1\nTABLES_CHASH={h2}\n")
+    r = _pack(src, tmp_path, src["c1"], src["c2"], "q-e4-fffffff", ids)
     assert "tables key changed" not in r.stdout and "tables content changed" not in r.stdout, r.stdout
 
 
@@ -1416,19 +1424,29 @@ def test_without_a_content_hash_the_key_decides_as_before(src, tmp_path):
     run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"], okey="z" * 16, nkey="n" * 16, nchash="1" * 64)
     assert _quick(tmp_path, run, cg).returncode == 3
     assert "FALLBACK_FULL tables key of the lane" in _log(run)
+    # equal hashes of another definition (the delta's TABLES_CHASH_V is not the marker's, or empty): the key decides
+    for i, v in enumerate(("2", "")):
+        run = _make_run(tmp_path, src, f"q-e4-c{i}ccccc", src["c1"], src["c2"], okey="z" * 16, nkey="n" * 16,
+                        ochash="1" * 64, nchash="1" * 64, chv=v)  # fmt: skip
+        assert _quick(tmp_path, run, cg).returncode == 3
+        assert "FALLBACK_FULL tables key of the lane" in _log(run), v
 
 
 def test_the_marker_keeps_the_content_hash_and_setup_passes_it(src, tmp_path):
     repo = _run_repo(tmp_path, src)
     tree = _tree(tmp_path, src, src["c1"])
     h = "9" * 64
-    assert _marker(tmp_path, repo, src["c1"], tree, chash=h).returncode == 0
-    assert _kv(tmp_path / "work/_lane/e4.sha")["TABLES_CHASH"] == h
-    # a marker written without one (an old caller) has an empty TABLES_CHASH
+    assert _marker(tmp_path, repo, src["c1"], tree, chash=h, chv="1").returncode == 0
+    m = _kv(tmp_path / "work/_lane/e4.sha")
+    assert m["TABLES_CHASH"] == h and m["TABLES_CHASH_V"] == "1"
+    # a marker written without one (an old caller) has an empty TABLES_CHASH and version
     assert _marker(tmp_path, repo, src["c1"], tree).returncode == 0
-    assert _kv(tmp_path / "work/_lane/e4.sha")["TABLES_CHASH"] == ""
+    m = _kv(tmp_path / "work/_lane/e4.sha")
+    assert m["TABLES_CHASH"] == "" and m["TABLES_CHASH_V"] == ""
     setup = (POD / "setup.sh").read_text(encoding="utf-8")
-    assert '"${TABLES_KEY:-}" "${TREE:-}" "${TABLES_CHASH:-}"' in setup
+    assert '"${TABLES_KEY:-}" "${TREE:-}" "${TABLES_CHASH:-}" "${TABLES_CHASH_V:-}"' in setup
+    quick = (POD / "quick.sh").read_text(encoding="utf-8")
+    assert '"${TABLES_CHASH:-}" "${TABLES_CHASH_V:-}" || broken "marker not written"' in quick
 
 
 def test_the_body_env_carries_spacing_and_the_sweep_knobs_and_setup_records_them():
@@ -1454,4 +1472,5 @@ def test_pack_puts_night_and_the_tables_hash_into_meta_env():
     text = (DAY / "pack.sh").read_text(encoding="utf-8")
     # TABLES_CHASH in both meta.env formats (full and delta), OLD_TABLES_CHASH in the delta's only
     assert len(re.findall(r"(?<!OLD_)TABLES_CHASH=%s", text)) == 2 and text.count("OLD_TABLES_CHASH=%s") == 1
+    assert text.count("TABLES_CHASH_V=%s") == 2 and text.count('"$TABLE_CHASH_V"') == 2
     assert text.count("NIGHT=%s") == 2 and "SWEEP_NIGHT" in text

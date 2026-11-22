@@ -105,10 +105,13 @@ pack_sent_key() { local f k
   done < <(ls -t "$RENT"/out/*/meta.env 2>/dev/null); return 0; }
 
 # pack_sent_chash <full sha>: as pack_sent_key, for TABLES_CHASH (64 hex): the content hash an
-# earlier send of that commit recorded.
-pack_sent_chash() { local f k
+# earlier send of that commit recorded, only from a meta.env whose TABLES_CHASH_V is TABLE_CHASH_V
+# (table_key16.sh): a hash of another definition, or of none, is unknown and the key decides.
+pack_sent_chash() { local f k v
   while IFS= read -r f; do
     grep -qx "COMMIT=$1" "$f" || continue
+    v=$(sed -n 's/^TABLES_CHASH_V=//p' "$f" | tail -1 | tr -d '')
+    [ -n "$v" ] && [ "$v" = "${TABLE_CHASH_V:-}" ] || continue
     k=$(sed -n 's/^TABLES_CHASH=//p' "$f" | tail -1 | tr -d '\r')
     echo "$k" | grep -qE '^[0-9a-f]{64}$' && { echo "$k"; return 0; };
   done < <(ls -t "$RENT"/out/*/meta.env 2>/dev/null); return 0; }

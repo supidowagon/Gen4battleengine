@@ -157,9 +157,17 @@ def test_build_tables_meta_writes_key_and_content_hash_once_and_read_only(tmp_pa
     # the meta file sits beside the archive, under its name (KA minus .tar.xz), where table_key16.sh
     # table_chash reads it for a keyed archive in $RENT/tables; it is read-only, its copy writable
     keyed = arch.with_suffix("").with_suffix(".meta")
-    assert keyed.is_file() and not os.access(keyed, os.W_OK)
-    assert os.access(tmp_path / "rent" / "tables_abc1234.meta", os.W_OK)
+    assert keyed.is_file() and not keyed.stat().st_mode & 0o222  # mode bits: os.access says True for root
+    assert (tmp_path / "rent" / "tables_abc1234.meta").stat().st_mode & 0o200
     assert not list((tmp_path / "rent").glob("*tmp*"))
+    # a meta file of another hash version (or none) is rewritten, read-only again; the copy follows
+    for old in (f"KEY={key}\nCONTENT_HASH_V=0\nCONTENT_HASH={'0' * 64}\n", f"KEY={key}\nCONTENT_HASH={'0' * 64}\n"):
+        os.chmod(keyed, 0o644)
+        keyed.write_text(old, encoding="utf-8", newline="\n")
+        os.chmod(keyed, 0o444)
+        r = _meta_step(tmp_path, arch, key)
+        assert r.returncode == 0 and r.stdout == one + one, r.stdout + r.stderr
+        assert not keyed.stat().st_mode & 0o222
 
 
 def test_build_tables_documents_the_meta_file():

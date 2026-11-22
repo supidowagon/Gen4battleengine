@@ -36,7 +36,7 @@
 # The payload's bin/ also holds sweep/ (tools/ops/sweep/*.py from git at HEAD of the checkout that
 # runs pack.sh, pack_lib.sh pack_sweep_tools): sweep.sh uses it for a repo without tools/ops/sweep.
 # meta.env also gets NIGHT (yyyymmdd: SWEEP_NIGHT, else the packing date; the sweep's collect.py takes
-# the tip from COMMIT and the night from it when the run name has no date), TABLES_CHASH (and a delta's OLD_TABLES_CHASH) and GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
+# the tip from COMMIT and the night from it when the run name has no date), TABLES_CHASH (and a delta's OLD_TABLES_CHASH) with TABLES_CHASH_V (table_key16.sh TABLE_CHASH_V; pack_sent_chash and the pod's marker compare need it) and GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
 # pod_sum: the packed *.sh and weights.py) and POD_WEIGHTS (pod_wsum: weights.txt); setup.sh copies
 # them to gate.env for podcheck.sh, which podcheck_body.sh runs before every pack,
 # and WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
@@ -131,10 +131,10 @@ NIGHT="${SWEEP_NIGHT:-$(date +%Y%m%d)}"   # meta.env NIGHT: tools/ops/sweep/coll
 echo "$NIGHT" | grep -qE '^[0-9]{8}$' || refuse "SWEEP_NIGHT is not yyyymmdd" "$NIGHT"
 PODSUM=$(pod_sum "$P/bin"); PODW=$(pod_wsum "$P/bin")
 if [ "$DELTA" = 0 ]; then
-  printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nTREE=%s\nTABLES_KEY=%s\nTABLES_CHASH=%s\nNIGHT=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$PODW" "$TREE" "$TKEY" "$TCH" "$NIGHT" "$WF" "$WD" > "$P/meta.env"
+  printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nTREE=%s\nTABLES_KEY=%s\nTABLES_CHASH_V=%s\nTABLES_CHASH=%s\nNIGHT=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$PODW" "$TREE" "$TKEY" "$TABLE_CHASH_V" "$TCH" "$NIGHT" "$WF" "$WD" > "$P/meta.env"
   CT=$(tar -tf "$P/code.tar")
 else
-  printf 'MODE=delta\nOLD=%s\nNEW=%s\nOLD_TREE=%s\nNEW_TREE=%s\nOLD_TABLES_KEY=%s\nTABLES_KEY=%s\nOLD_TABLES_CHASH=%s\nTABLES_CHASH=%s\nCOMMIT=%s\nDECOMP=%s\nOPS=%s\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nNIGHT=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$OLD" "$NEW" "$OLD_TREE" "$NEW_TREE" "$OKEY" "$NKEY" "$OCH" "$NCH" "$COMMIT" "$DECOMP" "$OPS" "$PODSUM" "$PODW" "$NIGHT" "$WF" "$WD" > "$P/meta.env"
+  printf 'MODE=delta\nOLD=%s\nNEW=%s\nOLD_TREE=%s\nNEW_TREE=%s\nOLD_TABLES_KEY=%s\nTABLES_KEY=%s\nTABLES_CHASH_V=%s\nOLD_TABLES_CHASH=%s\nTABLES_CHASH=%s\nCOMMIT=%s\nDECOMP=%s\nOPS=%s\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nNIGHT=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$OLD" "$NEW" "$OLD_TREE" "$NEW_TREE" "$OKEY" "$NKEY" "$TABLE_CHASH_V" "$OCH" "$NCH" "$COMMIT" "$DECOMP" "$OPS" "$PODSUM" "$PODW" "$NIGHT" "$WF" "$WD" > "$P/meta.env"
   CT=$(tar -tf "$P/delta.tar")
 fi
 TALL=""; T=""

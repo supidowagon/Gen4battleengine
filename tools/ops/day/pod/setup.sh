@@ -111,7 +111,7 @@ PY
 cat collected.txt
 # Quick lane marker (DAYBOX.md "Quick lane"): this run's repo is now the stream's last synced state.
 RUNNAME=$(basename "$D")
-if STREAM=$(lane_stream "$RUNNAME"); then lane_write_marker "$STREAM" "$COMMIT" "$R" "${TABLES_KEY:-}" "${TREE:-}" "${TABLES_CHASH:-}" || echo "WARNING: lane marker of stream $STREAM not written"
+if STREAM=$(lane_stream "$RUNNAME"); then lane_write_marker "$STREAM" "$COMMIT" "$R" "${TABLES_KEY:-}" "${TREE:-}" "${TABLES_CHASH:-}" "${TABLES_CHASH_V:-}" || echo "WARNING: lane marker of stream $STREAM not written"
 else echo "WARNING: no stream in the run name $RUNNAME; no lane marker"; fi
 echo "SETUP_END $(date +%s)"
 nohup bash "$D/bin/runner.sh" > "$D/runner.log" 2>&1 < /dev/null &
