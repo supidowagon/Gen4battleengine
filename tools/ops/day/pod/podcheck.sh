@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# POD SIDE. Usage: podcheck.sh [<root> [<POD_SCRIPTS> [<POD_WEIGHTS>]]]   (root default /work). The PC's
+# POD SIDE. Usage: podcheck.sh [<root> [<POD_SCRIPTS> [<POD_WEIGHTS> [<volume quota GB>]]]]   (root default /work). The PC's
 # tools/ops/day/podcheck_body.sh prints the exec-pod body that writes this script and gate.sh to
 # /work/_podcheck/ and runs it with the POD_SCRIPTS and POD_WEIGHTS of the checkout's HEAD
 # (DAYBOX.md "Send a run" step 3). Lists every active run under <root>/*/ and <root>/*/*/ (folders starting with _
@@ -13,15 +13,22 @@
 # then:
 #   memory <GB> GB limit <GB GB|max|none>   gate.sh cgmem (cgroup v2, else v1); "none" when no file
 #                                           is readable; limit "max": no limit (v2 "max", or v1 at 2^60 or more)
-#   volume /vol free <GB> GB entries <n> captures <m> | volume none
-#        the network volume when /vol (CACHE_VOL) is a mountpoint (cache_sync.sh): free space,
-#        compile cache entries (jax/*/*-cache) and stored captures (snap/*); none: no volume
+#   volume /vol used <GB|?> GB of <quota> GB entries <n> captures <m> | volume none
+#        the network volume when /vol (CACHE_VOL) is a mountpoint (cache_sync.sh): used space
+#        (du -sk, GiB rounded up, under timeout CACHE_DU_TIMEOUT s, default 10, so a slow mount
+#        cannot hang the check: "?" on timeout or failure; df of the mount shows the whole storage
+#        cluster, not the volume), the quota (4th argument, else CACHE_VOL_QUOTA_GB, default 30:
+#        the volume's size, which the pod cannot read), compile cache entries (jax/*/*-cache)
+#        and stored captures (snap/*); none: no volume. Then, when quota minus used is under 3:
+#   WARNING volume /vol has <GB> GB left of <quota> GB (under 3 GB): tell the owner
 #   claim <run>.<unit> age <s> s weight <GB> GB runner <alive|not-runner|dead>   for each file in
 #        <root>/.claims (not-runner: the pid is alive but runs no runner*.sh, a reused pid)
 # and the last line: PODCHECK OK (exit 0: no active old-script run and, when <POD_SCRIPTS> is
 # given, no active run with other scripts; other weights alone never fail it), or PODCHECK MIXED old=<names,|-> other=<names,|->
 # (exit 1). Prints nothing from meta.env (beacon codes).
 R="${1:-/work}"; WANT="${2:-}"; WANTW="${3:-}"; NO_W_FILE_GB="${DEFAULT_WEIGHT_GB:-12}"
+Q="${4:-${CACHE_VOL_QUOTA_GB:-30}}"; [[ "$Q" =~ ^[1-9][0-9]*$ ]] || Q=30
+DUT="${CACHE_DU_TIMEOUT:-10}"; [[ "$DUT" =~ ^[1-9][0-9]*$ ]] || DUT=10
 . "$(cd "$(dirname "$0")" && pwd)/gate.sh"   # cgmem, pidlive, podgate
 old=""; other=""; wother=""
 for d in "$R"/*/ "$R"/*/*/; do d=${d%/}; n=${d#"$R"/}
@@ -45,10 +52,12 @@ lim=none; b=$(cgmem max) && case "$b" in max) lim=max;; ''|*[!0-9]*) lim="?";;
 echo "memory $cur limit $lim"
 V="${CACHE_VOL:-/vol}"   # the network volume (cache_sync.sh)
 if [ -d "$V" ] && { [ "${CACHE_VOL_MOUNTCHECK:-1}" = 0 ] || mountpoint -q "$V" 2>/dev/null; }; then
-  fr=$(df -Pk "$V" 2>/dev/null | awk 'NR == 2 {printf "%d", $4 / 1048576}')
+  k=$(timeout -k 2 "$DUT" du -sk "$V" 2>/dev/null | awk 'NR == 1 {print $1}'); used="?"
+  [[ "$k" =~ ^[0-9]+$ ]] && used=$(( (k + 1048575) / 1048576 ))
   ne=$(find "$V/jax" -mindepth 2 -maxdepth 2 -type f -name '*-cache' ! -name '.*' 2>/dev/null | wc -l)
   nc=$(find "$V/snap" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | wc -l)
-  echo "volume $V free ${fr:-?} GB entries $ne captures $nc"
+  echo "volume $V used $used GB of $Q GB entries $ne captures $nc"
+  [ "$used" != "?" ] && [ $(( Q - used )) -lt 3 ] && echo "WARNING volume $V has $(( Q - used )) GB left of $Q GB (under 3 GB): tell the owner"
 else echo "volume none"; fi
 now=$(date +%s)
 for c in "$R"/.claims/*; do [ -f "$c" ] || continue; read -r e w p < "$c"

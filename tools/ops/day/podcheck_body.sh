@@ -2,7 +2,7 @@
 # PC SIDE (Git Bash). Usage: podcheck_body.sh
 # Prints the exec-pod body of DAYBOX.md "Send a run" step 3: it writes tools/ops/day/pod/gate.sh
 # and podcheck.sh, as committed at this checkout's HEAD, to /work/_podcheck/ on the pod and runs
-# podcheck.sh /work <POD_SCRIPTS> <POD_WEIGHTS> of HEAD (common.sh pod_bin, pod_sum, pod_wsum: the
+# podcheck.sh /work <POD_SCRIPTS> <POD_WEIGHTS> <quota GB> of HEAD (common.sh pod_bin, pod_sum, pod_wsum: the
 # same files and sums pack.sh writes into meta.env). Its last line is PODCHECK OK or PODCHECK
 # MIXED old=... other=... (pod/podcheck.sh), or PODCHECK REFUSED vm.max_map_count=<value> (see
 # MAPCHECK below). Sends nothing; the scripts travel base64-encoded inside the body, in argv items of at most 4000 characters (common.sh exec_body: exec-pod's
@@ -20,6 +20,9 @@ SUM=$(pod_sum "$T/bin"); WSUM=$(pod_wsum "$T/bin")
 # are read (tr -dc 0-9), so ${m:-0} is one word without quotes (exec_body refuses double quotes;
 # an empty value tests as 0).
 MAPCHECK="m=\$(tr -dc 0-9 < /proc/sys/vm/max_map_count); [ \${m:-0} -ge 1048576 ] || { echo PODCHECK REFUSED vm.max_map_count=\$m, need 1048576 or more; exit 1; }"
-BODY=$(exec_body "$MAPCHECK; bash \$W/podcheck.sh /work $SUM $WSUM" "gate.sh=$T/bin/gate.sh" "podcheck.sh=$T/bin/podcheck.sh") || { echo "$BODY"; exit 3; }
+# The volume's quota (GB) for the pod check's volume line: CACHE_VOL_QUOTA_GB on the PC, default 30
+# (the volume's size, DAYBOX.md "Network volume" step 1; the pod cannot read it).
+QGB="${CACHE_VOL_QUOTA_GB:-30}"; [[ "$QGB" =~ ^[1-9][0-9]*$ ]] || { echo "REFUSED: CACHE_VOL_QUOTA_GB '$QGB' is not a whole number of GB"; exit 3; }
+BODY=$(exec_body "$MAPCHECK; bash \$W/podcheck.sh /work $SUM $WSUM $QGB" "gate.sh=$T/bin/gate.sh" "podcheck.sh=$T/bin/podcheck.sh") || { echo "$BODY"; exit 3; }
 echo "== exec-pod body (pod scripts of HEAD $(git -C "$TOP" rev-parse --short HEAD), POD_SCRIPTS ${SUM:0:12}):"
 echo "$BODY"
