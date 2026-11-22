@@ -2970,6 +2970,19 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
     play: PP Up needs a max PP of 5 or more (item_use_pokemon.c:20, :187), and Sketch has 1. Both engines leave
     `pp_ups` alone. Test: `test_a_sketched_slot_keeps_its_pp_ups`.
 
+- Batch I delta-review fixes (`_scratch/e1/i-next/review-delta.md`; report `_scratch/e1/i-next/gate-fix-report.md`):
+  - SHOULD 1 `coverage.sketch_calls` closes its superset. (a) Copycat calls `movePrev` under `Move_CanBeMetronomed`
+    (battle_script.c:7333-7336); Transform is not in sCannotMetronomeMoves (battle_lib.c:7152-7177), so with a
+    Transform in the player's party a foe's Copycat joins the copiers and the party's moves join the pool. (b) A lock
+    or charge move sets `moveLockedInto = moveCur` (lib.c:1828-1832 via subscript_bide_start.s:6,
+    subscript_vanish_on_charge_turn.s:10, bs:5667-5669; `BTLVAR_ATTACKER_LOCKED_MOVE` in subscript_thrash.s:8,
+    subscript_uproar.s:5), a called move's `moveCur` is the called move (bs:2118), the next turn's `moveTemp` is it
+    (bcp.c:1885-1888) and UpdateMoveBuffers writes it to `moveSketched` (:3952-3954). New `LOCK_EFFECTS` (decomp
+    effects 26 27 39 75 117 145 151 155 159 255 256 263 272: 16 vanilla moves) and `locked_calls`: a pool with
+    Metronome, Copycat (bs:7333-7336), Mirror Move (`moveCopied` = `moveTemp`, bcp.c:4480-4485) or Me First
+    (bs:7286-7312) adds every lock move. Recharge (80) is left out: its turn prints no attack message
+    (subscript_recharging.s, bcp.c:2514-2522). Tests: `test_a_sketch_can_copy_a_party_move_a_foe_copycat_transformed_into`,
+    `test_a_sketch_can_copy_a_lock_move_a_foe_called`, `test_a_metronome_called_lock_move_is_graded_for_the_sketch_holder`.
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

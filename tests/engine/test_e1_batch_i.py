@@ -470,6 +470,81 @@ def test_a_sketched_metronome_calls_are_graded_for_the_holder(tables, names):
     )
 
 
+@pytest.mark.parametrize("transform", [True, False])
+def test_a_sketch_can_copy_a_party_move_a_foe_copycat_transformed_into(tables, names, transform):
+    """A foe's Copycat calls ``movePrev`` when ``Move_CanBeMetronomed`` allows it
+    (battle_script.c:7333-7336), Transform included (sCannotMetronomeMoves, battle_lib.c:
+    7152-7177): after the player's Transform it becomes the player's active and carries a party
+    move in its slot, so ``sketch_calls`` lists the party's moves and the Smeargle's own Gyro
+    Ball line is graded. Without a Transform in the player's party Copycat copies none."""
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import check_coverage, sketch_calls
+    from tests.engine.helpers import roark_party, roark_trainer, sample_party
+
+    gyro = names.move("Gyro Ball")
+    smeargle = _slow_smeargle(names, "Tackle")
+    mate_moves = (gyro, names.move("Transform") if transform else 0, 0, 0)
+    mate = replace(sample_party(names)[1], moves=mate_moves)
+    opp = roark_party(names)
+    opp[0] = replace(opp[0], moves=(names.move("Copycat"), *opp[0].moves[1:]))
+    calls = sketch_calls(tables, list(smeargle.moves), opp, [m for m in mate_moves if m])
+    assert (gyro in calls) == transform
+    report = check_coverage(tables, names, [smeargle, mate], roark_trainer(), opp, 0)
+    line = [m for m in report.missing if "SMEARGLE" in m.upper() and "Gyro Ball with Speed" in m]
+    assert bool(line) == transform, report.missing
+
+
+@pytest.mark.parametrize("invoker", ["Metronome", "Copycat", "Mirror Move", "Me First", None])
+def test_a_sketch_can_copy_a_lock_move_a_foe_called(tables, names, invoker):
+    """A called lock or charge move (Outrage: subscript_thrash.s:8; Fly: subscript_vanish_on_
+    charge_turn.s:10) is ``moveLockedInto = moveCur``, the called move (battle_lib.c:1831,
+    battle_script.c:2118); the next turn ``moveTemp`` is it (bcp.c:1885-1888) and so the foe's
+    ``moveSketched`` (:3952-3954). ``sketch_calls`` lists every lock move for a foe with an
+    invoker that calls a move it does not know, none without one (``locked_calls``)."""
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import locked_calls, sketch_calls
+    from tests.engine.helpers import roark_party
+
+    smeargle = _slow_smeargle(names, "Tackle")
+    opp = roark_party(names)
+    if invoker is not None:
+        opp[0] = replace(opp[0], moves=(names.move(invoker), *opp[0].moves[1:]))
+    calls = sketch_calls(tables, list(smeargle.moves), opp)
+    locks = {names.move(m) for m in ("Outrage", "Fly", "Rollout", "Bide", "Uproar")}
+    assert locks <= set(locked_calls(tables, [names.move("Metronome")]))
+    assert names.move("Hyper Beam") not in locked_calls(tables, [names.move("Metronome")])
+    assert (locks <= set(calls)) == (invoker is not None)
+    if invoker is None:
+        assert not locks & set(calls)
+
+
+def test_a_metronome_called_lock_move_is_graded_for_the_sketch_holder(tables, names):
+    """A foe's Metronome-called Outrage is a move its next turn's Sketch can copy: with Outrage
+    unmodelled the Smeargle gets its "Sketch move effect" line; against a party with no invoker
+    it gets none."""
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import check_coverage
+    from tests.engine.helpers import roark_party, roark_trainer, unmodelled
+
+    outrage = names.move("Outrage")
+    broken = unmodelled(tables, outrage)
+    smeargle = _slow_smeargle(names, "Tackle")
+    plain = roark_party(names)
+    opp = list(plain)
+    opp[0] = replace(opp[0], moves=(names.move("Metronome"), *opp[0].moves[1:]))
+    for party, want in ((opp, True), (plain, False)):
+        report = check_coverage(broken, names, [smeargle], roark_trainer(), party, 0)
+        line = [
+            m
+            for m in report.missing
+            if "Sketch move effect" in m and "SMEARGLE" in m.upper() and "Outrage" in m
+        ]
+        assert bool(line) == want, report.missing
+
+
 def test_a_reflected_move_is_the_movers_sketch_move(tables, names):
     """A Magic Coat reflection: LoopSpreadMoves swaps the attacker back to the mover
     (``magicCoatMon``, bcp.c:3831-3835) before UpdateMoveBuffers writes moveSketched (:3952-3954),

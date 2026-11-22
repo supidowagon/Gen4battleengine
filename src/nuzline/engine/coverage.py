@@ -846,6 +846,37 @@ def fight_calls(tables: Tables, party: Sequence[PokemonSpec]) -> list[int]:
 _NO_MOVES = SimpleNamespace(moves=(0, 0, 0, 0))
 
 
+# Decomp battle effects (tables.move_ai_effect; generated/move_battle_effects.txt, line N is id
+# N - 1) that lock the user into the move it is using, ``moveLockedInto = moveCur``
+# (Battler_LockMoveChoice, battle_lib.c:1828-1832): BtlCmd_LockMoveChoice in Bide's
+# subscript_bide_start.s:6 (26) and the charge moves' subscript_vanish_on_charge_turn.s:10 (39,
+# 75, 145, 151, 155, 255, 256, 263, 272), BtlCmd_CalcRolloutPower (battle_script.c:5667-5669;
+# 117, Rollout and Ice Ball), and ``BTLVAR_ATTACKER_LOCKED_MOVE = BTLVAR_CURRENT_MOVE`` in
+# subscript_thrash.s:8 (27) and subscript_uproar.s:5 (159). A called move's ``moveCur`` is the
+# called move (BtlCmd_GoToMoveScript, battle_script.c:2118), so the next turn ``moveTemp`` is it
+# (bcp.c:1885-1888), and UpdateMoveBuffers writes it to ``moveSketched`` and ``movePrevByBattler``
+# (bcp.c:3936-3954). The recharge turn (80, subscript_recharge_turn.s:6) locks too, but prints no
+# attack message (subscript_recharging.s, bcp.c:2514-2522), so it writes neither: not listed.
+LOCK_EFFECTS = (26, 27, 39, 75, 117, 145, 151, 155, 159, 255, 256, 263, 272)
+# The invokers whose call can be a move the user does not know: Metronome (BtlCmd_Metronome,
+# battle_script.c:4535-4562), Copycat (``movePrev``, :7333-7336), Mirror Move (``moveCopied``,
+# bcp.c:4480-4485) and Me First (the target's chosen move, battle_script.c:7286-7312).
+FOREIGN_INVOKERS = (EffectId.METRONOME, EffectId.COPYCAT, EffectId.MIRROR_MOVE, EffectId.ME_FIRST)
+
+
+def locked_calls(tables: Tables, moves: Sequence[int]) -> list[int]:
+    """The moves a holder of ``moves`` can be locked into without knowing them: every move with a
+    ``LOCK_EFFECTS`` effect when one of ``moves`` is a ``FOREIGN_INVOKERS`` move, else none. Its
+    next turn's ``moveTemp`` is the locked move (bcp.c:1885-1888), which becomes its
+    ``moveSketched`` (Sketch's copy, battle_script.c:4839-4884) and its ``movePrevByBattler``
+    (Mimic's copy, :4476-4524). A superset: any lock move, whichever invoker and chain calls it."""
+    effect = np.asarray(tables.move_effect)
+    if not any(m and int(effect[m]) in FOREIGN_INVOKERS for m in moves):
+        return []
+    ai_effect = np.asarray(tables.move_ai_effect)
+    return [m for m in range(1, METRONOME_DRAW + 1) if int(ai_effect[m]) in LOCK_EFFECTS]
+
+
 def sketch_calls(
     tables: Tables,
     known: Sequence[int],
@@ -859,18 +890,25 @@ def sketch_calls(
     (``SKETCH_FORBIDDEN``) nor already known. A foe that can copy a move of the player's party
     carries it in a slot too: Mimic's copy (``BtlCmd_TryMimic``, battle_script.c:4476-4524) and
     Transform's four moves (``BtlCmd_Transform``, :5346-5348), Transform also through Metronome
-    (not in ``sCannotMetronomeMoves``, battle_lib.c:7152-7177). Then ``party_moves`` (the moves
-    of the player's party and their ``learnable_moves``) join, as the Sketch holder itself may
-    not know them. A superset: the foe may not use it. The checks that read every move of the
-    fight (``move_effect_line``, the AI's ``player_move_refusal``, the holder's own
-    ``halved_defense_line`` and ``gyro_speed_line``, its Metronome calls, the terrain and the ROM
-    changes) run over them, as over the Metronome calls (``fight_calls``)."""
+    (not in ``sCannotMetronomeMoves``, battle_lib.c:7152-7177) and, when the player's party has
+    it, through Copycat (``movePrev``, the player's Transform, ``Move_CanBeMetronomed``,
+    battle_script.c:7333-7336). Then ``party_moves`` (the moves of the player's party and their
+    ``learnable_moves``) join, as the Sketch holder itself may not know them. A foe slot with a
+    ``FOREIGN_INVOKERS`` move adds the moves it can be locked into (``locked_calls``): a called
+    Outrage or SolarBeam is its next turn's ``moveSketched``. A superset: the foe may not use it.
+    The checks that read every move of the fight (``move_effect_line``, the AI's
+    ``player_move_refusal``, the holder's own ``halved_defense_line`` and ``gyro_speed_line``, its
+    Metronome calls, the terrain and the ROM changes) run over them, as over the Metronome calls
+    (``fight_calls``)."""
     if MOVE_SKETCH not in known:
         return []
     effect = np.asarray(tables.move_effect)
-    copier = (EffectId.MIMIC, EffectId.TRANSFORM, EffectId.METRONOME)
+    copier = {EffectId.MIMIC, EffectId.TRANSFORM, EffectId.METRONOME}
+    if any(m and int(effect[m]) == EffectId.TRANSFORM for m in party_moves):
+        copier.add(EffectId.COPYCAT)
     copies = any(m and int(effect[m]) in copier for mon in opp for m in mon.moves)
-    pool = [m for mon in opp for m in mon.moves] + (list(party_moves) if copies else [])
+    slots = [m for mon in opp for m in mon.moves] + (list(party_moves) if copies else [])
+    pool = slots + locked_calls(tables, slots)
     banned = {*known, *SKETCH_FORBIDDEN}
     return sorted({m for m in pool if m and m not in banned})
 
