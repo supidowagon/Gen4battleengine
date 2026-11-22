@@ -187,7 +187,7 @@ def test_the_partner_switch_trace_chain_law_reads_all_draws(tables, names):
     """The law alone (fast, B = 4): the chain's copied Download makes battler 0's first eat loose
     (``_starf_gain``'s B = 4 armed-Trace term; 008ff3e5 gave the five-value law)."""
     laws = _laws(tables, *_partner_chain(tables, names))
-    assert bool(laws.relevant.starf[1, 0]) and bool(laws.starf_loose[1, 0])
+    assert bool(laws.relevant.starf[0, 0]) and bool(laws.starf_loose[0, 0])
 
 
 def _product_check(tables, s, acts, laws, count, cell=(1, 0), first=0):
