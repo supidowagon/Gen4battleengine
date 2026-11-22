@@ -347,6 +347,8 @@ from nuzline.engine.outcome import (
     roar_levels,
     secondary_chance,
     self_lock,
+    trace_copies,
+    trace_whole,
 )
 from nuzline.engine.outcome import (
     kings_rock_chance as outcome_kings_rock_chance,
@@ -525,7 +527,8 @@ def _entry_abilities(tables: Tables, state: BattleState, actions) -> jnp.ndarray
 def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarray:
     """``bool[B]``: side ``d``'s active Pokemon, or the one it switches in this turn, has one
     of ``abilities``: the incoming one by its own ability or the one it traces on entry
-    (``_entry_abilities``; both, so a Trace newcomer counts as Trace too)."""
+    (``_entry_abilities``; both, so a Trace newcomer counts as Trace too), or either one by the
+    copy its armed Trace can make at a MoveEnd this turn (``outcome.trace_copies``)."""
     fmt = format_of(state)
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
     sides = jnp.arange(fmt.B)
@@ -533,7 +536,7 @@ def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarra
     entry = _any_of(battler_ability(state, sides, incoming), abilities) | _any_of(
         _entry_abilities(tables, state, actions), abilities
     )
-    return now | (entry & is_switch(actions))
+    return now | (entry & is_switch(actions)) | trace_copies(tables, state, actions, abilities)
 
 
 def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarray:
@@ -1633,6 +1636,9 @@ def damage_inputs_can_change(
       status, which the foe's earlier move (its wake-up, thaw, Rest, Refresh, Psycho Shift, a
       contact status, Synchronize) or an earlier hit of the side's move (a secondary status, the
       holder's status berry) can change;
+    * **trace**: an armed Trace on the field (``outcome.trace_copies``) copies an ability at the
+      MoveEnd of the foe's earlier action (any action: bcp.c:1971-1973, :3973, :4008), which can
+      change every ability factor of the hit, and its Intimidate, Download or weather ability;
     * **own move**: a later hit of a move other than ``MULTI_HIT``, ``TRIPLE_KICK`` and
       ``BEAT_UP`` (Twineedle's second hit, B13-1: its first can poison a Synchronize holder;
       Triple Kick's and Beat Up's own hits change no input but the HP and contact clauses',
@@ -1807,6 +1813,11 @@ def damage_inputs_can_change(
         | hp_sensitive
     )
     foe_action = live & (foes(is_switch(actions)) | foes(is_item(actions)) | foe_move)
+    # The trace clause: an armed Trace on the field (outcome.trace_copies) fires at the MoveEnd of
+    # the foe's earlier action, whatever it was, and the copy can change any ability factor of the
+    # hit (either battler's), its Intimidate or Download a stage it reads, its weather ability the
+    # weather.
+    foe_action = foe_action | (live & jnp.any(trace_copies(tables, state, actions)))
 
     # A White Herb resets its holder's lowered stages to 0 (hooks.held_item_check,
     # battle_lib.c:4875-4887). The hit reads two stages only, the attacker's Attack / Sp. Atk
@@ -2064,7 +2075,13 @@ def outcome_laws(
     # copy is BattleMon.ability's (battle_script.c:5342-5348).
     foe_charm = foes(state.ability[party(fmt, sides), mons] == AbilityId.CUTE_CHARM)
     charm_copied = xform & foe_charm & lovers(gender[sides, mons], attacker_gender)
-    charm = (charm_now | charm_later | charm_copied) & calm
+    # An armed Trace that can copy Cute Charm at a MoveEnd (outcome.trace_copies), on the holder
+    # active then (the one it switches in, if it switches).
+    holder_gender = jnp.where(switch, gender[sides, incoming], gender[sides, mons])
+    charm_traced = trace_copies(tables, state, actions, (AbilityId.CUTE_CHARM,)) & lovers(
+        holder_gender, attacker_gender
+    )
+    charm = (charm_now | charm_later | charm_copied | charm_traced) & calm
     if loose:
         charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
     holders = holders | charm
@@ -2126,6 +2143,11 @@ def outcome_laws(
         | ((param0 == Status.FREEZE) & (ignorable == AbilityId.MAGMA_ARMOR))
     )
     insomnia = (param0 == Status.SLEEP) & sleepless(ignorable)  # Vital Spirit too (G-47)
+    # An armed Trace of the attacker that can copy Mold Breaker at a MoveEnd before its move
+    # (outcome.trace_copies) ignores the ignorable blocks below (Battler_IgnorableAbility, the
+    # attacker's Mold Breaker test, battle_lib.c:3108-3122): none of them is sure then. (The
+    # absorbs of ``flinch_sure`` stay: a sure flinch needs the first move, before any MoveEnd.)
+    pierce = trace_copies(tables, state, actions, (AbilityId.MOLD_BREAKER,))
     single = ~multi
 
     def takes(status) -> jnp.ndarray:
@@ -2155,6 +2177,8 @@ def outcome_laws(
         status_blocked = confused_blocked = flinch_blocked = jnp.zeros((fmt.B,), bool)
     status_blocked, confused_blocked = status_blocked & ~lock, confused_blocked & ~lock
     flinch_blocked = flinch_blocked & ~lock
+    status_blocked, confused_blocked = status_blocked & ~pierce, confused_blocked & ~pierce
+    flinch_blocked = flinch_blocked & ~pierce
     confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER)) | chatter_user
     # Attract on the foe's active Pokemon (effects._attract); in love at the start, read
     # unless the source switches out first (step._source_leaves).
@@ -2164,7 +2188,7 @@ def outcome_laws(
     if not loose:
         attract = attract & lovers(gender[sides, mons], foes(gender[sides, mons])) & foe_calm
         # subscript_infatuate.s:5: an ignorable Oblivious stops it (effects._attract, H-2).
-        attract = attract & (ignorable != AbilityId.OBLIVIOUS)
+        attract = attract & ((ignorable != AbilityId.OBLIVIOUS) | pierce)
         infatuated_own = infatuated_own & ~foes(switch)
     # Focus Band (effects.play_hit, step._use_move; G-1): the defender's roll on every hit of a
     # non-status move, the foe's active Pokemon or the one it switches in (no implemented path
@@ -2271,8 +2295,14 @@ def outcome_laws(
             | (
                 damaging
                 & contact
-                & (battler_ability(state, sides, mons) == AbilityId.SYNCHRONIZE)
-                & (foes(battler_ability(state, sides, mons)) == AbilityId.STATIC)
+                & (
+                    (battler_ability(state, sides, mons) == AbilityId.SYNCHRONIZE)
+                    | trace_copies(tables, state, actions, (AbilityId.SYNCHRONIZE,))
+                )
+                & foes(
+                    (battler_ability(state, sides, mons) == AbilityId.STATIC)
+                    | trace_copies(tables, state, actions, (AbilityId.STATIC,))
+                )
             )
             | fling_paralyzes
         ),
@@ -2891,6 +2921,8 @@ def outcome_laws(
             # A foe whose Transform copies the side's own Wonder Guard (G-69): the raw
             # BattleMon.ability (battle_script.c:5342-5348).
             | (foes(xform) & (state.ability[party(fmt, sides), mons] == AbilityId.WONDER_GUARD))
+            # A foe's armed Trace that can copy one (outcome.trace_copies).
+            | foes(trace_copies(tables, state, actions, (AbilityId.WONDER_GUARD,)))
         ),
     )
     kind = jnp.where(
@@ -2948,7 +2980,8 @@ def outcome_laws(
         hit_possible=possible,
         hit_later_thresholds=later_thr,
         hit_later_possible=later_ok,
-        hit_whole=lock,
+        # A lock aimed at its user, or an armed Trace on the field (outcome.trace_whole).
+        hit_whole=lock | trace_whole(tables, state, actions),
         crit_variants=odds_variants,
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored); not for a
