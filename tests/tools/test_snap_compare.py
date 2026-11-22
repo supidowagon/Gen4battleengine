@@ -1108,3 +1108,21 @@ def test_no_local_constants_pool_does_not_shift_draws(monkeypatch):
     providers.CONSTANTS_CACHE.cache.clear()
     assert draws() == base
     assert providers._get_local_constants is original  # restored
+
+
+def test_draw_inputs_draws_inside_no_local_constants(monkeypatch):
+    """draw_inputs enters no_local_constants before any draw: a stand-in that stops at entry is
+    reached (``saved`` set, so no step program is loaded and the stub ctx is never read)."""
+    import contextlib
+
+    class Entered(Exception):
+        pass
+
+    @contextlib.contextmanager
+    def stop():
+        raise Entered
+        yield
+
+    monkeypatch.setattr(sc, "no_local_constants", stop)
+    with pytest.raises(Entered):
+        sc.draw_inputs(object(), 0, saved={"seed 0 turn 0": {}})

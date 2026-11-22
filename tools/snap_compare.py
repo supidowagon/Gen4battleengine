@@ -49,7 +49,8 @@ ROM, a save, the calc archive or the docs sheet. A part whose built file is miss
 SKIPPED with the file named; a skip is a failure (exit 1).
 
 capture: per seed of tools/differential.py's generator (tests.strategies, Hypothesis @seed, no
-shrink), 5 drawn turns: the drawn input state, actions and outcome, and each segment of a turn
+shrink; here with the local-constants pool off, ``no_local_constants``, so differential.py's own
+inputs at a seed differ), 5 drawn turns: the drawn input state, actions and outcome, and each segment of a turn
 that pauses at a party list (the pick and a fresh outcome drawn as tests/test_differential.py's
 _step_both draws them). Per segment: jit(step_events), jit(step), ref_step via from_ref,
 jit(sample_outcome)(PRNGKey(seed)), enumerate_turn (or its refusal), jit(decision_actions),
@@ -180,8 +181,9 @@ other entry; a raise; a different step list) is a divergence and fails the part
 
 The draws do not depend on the source: ``draw_inputs`` runs ``no_local_constants``, which empties
 Hypothesis's local-constants pool (a literal of the checkout's modules, drawn for about 5% of
-integer and float choices), so a new literal of 100 or more in src or tools no longer shifts
-every later draw. That change altered every gen draw once: a capture made before it (a main
+integer and float choices), so a new literal of the project's own imported modules (``ConstantVisitor``'s filter,
+hypothesis/internal/constants_ast.py:113-145: integers with |v| >= 100, finite non-zero floats,
+strings of up to 20 characters, bytes; tests too) no longer shifts every later draw. That change altered every gen draw once: a capture made before it (a main
 capture) compares as generator drift at its first seed; capture main again with this code
 before the first compare.
 
@@ -1000,7 +1002,8 @@ def no_local_constants():
     not depend on source literals: ``HypothesisProvider._maybe_draw_constant`` returns, for
     about 5% of integer and float choices, a constant that ``_get_local_constants`` took from
     the checkout's imported modules (hypothesis/internal/conjecture/providers.py:775-827,
-    325-380, 6.170.13), so any new literal of 100 or more shifts every later draw. The
+    325-380, 6.170.13; the filter: constants_ast.py:113-145), so any new literal there shifts every
+    later draw. The
     provider reads the function at each test case; ``CONSTANTS_CACHE`` (providers.py:137)
     keeps the pool per key, so it is cleared on entry and exit."""
     from hypothesis.internal.conjecture import providers
@@ -1018,7 +1021,8 @@ def no_local_constants():
 
 def draw_inputs(ctx: Ctx, seed_value: int, saved: dict | None = None) -> list[tuple[str, dict]]:
     """``[(key, {in_state, in_actions, in_outcome})]`` (plain dicts) drawn as
-    tools/differential.py draws a seed (TURNS examples, no shrink), each pause resumed as
+    tools/differential.py draws a seed (TURNS examples, no shrink), but with the local-constants pool
+    off (``no_local_constants``: differential.py's inputs at a seed differ), each pause resumed as
     _step_both resumes it, then per example ``(key, {in_ai_state})``: a state the vanilla AI
     accepts (``gated_states``), drawn after the segments: the segments of a seed's first example
     draw as without it, later examples do not (Hypothesis shares one random across the examples
