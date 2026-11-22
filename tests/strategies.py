@@ -2099,38 +2099,33 @@ def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     a["choice_lock"][side] = draw(st.sampled_from([0, 0, *moves]))
 
 
-def _draw_selection(draw, a: dict, b: int, moves, p: int, tables: Tables) -> None:
+def _draw_selection(draw, a: dict, b: int, moves, p: int) -> None:
     """Battler ``b``'s carried selection values (review 5): ``move_slot`` (E2-ML-5,
     ``BattleContext.moveSlot``) and ``selected_temp`` (E2-ML-8, ``battlerActions[b][TEMP_VALUE]``)
     as a reachable earlier selection left them.
 
-    A locked battler (``locked_move``) picks no command (bcp.c:333-337), so it keeps the values
+    A locked battler (``locked_move``) picks no command (bcp.c:334-338), so it keeps the values
     of the FIGHT that started its lock, which wrote both at once: moveSlot the chosen slot and
-    TEMP_VALUE 1 + it (bcp.c:525-526): the slot holding the lock's move, or, for a called lock
-    (Copycat's Uproar, ``_draw_uproar``), an invoker's slot (``order.call_kind``). A lock whose
-    move and every invoker a later draw overwrote has no source (a lock starts only by running
-    its move, selected or called): the lock's move is taught back into a slot (an empty one where
-    there is one), which then is the selection's. Free draws made unreachable boards (pod at
-    a0cbec2d: a locked battler ordered by another slot's priority, CalcTurnOrder's
-    ``moves[moveSlot]``, battle_lib.c:1375-1397). Any other battler draws them freely: a
+    TEMP_VALUE 1 + it (bcp.c:525-526). Where a slot holds the lock's move that is its slot (a
+    Pokemon knows a move once). Where none does, the lock was called (an invoker's slot) or a
+    level-up learn replaced the lock's slot (BattleScript_GetExpTask, battle_script.c:
+    10168-10176, then BattleSystem_ReloadPokemon, battle_lib.c:183-189, which rewrites the moves
+    and keeps the lock's statusVolatile and moveSlot; E3-B2-21 models the learn): any held slot,
+    drawn. Only the player's side learns; the opponent's such boards are kept as drawn (an
+    over-approximation the laws must cover anyway). A held lock whose move an invoker called
+    (moveSlot the invoker's) is not drawn: whether that invoker can call it is not checked here.
+    Free draws made a locked battler ordered by an unrelated slot's priority (CalcTurnOrder's
+    ``moves[moveSlot]``, battle_lib.c:1377-1394). Any other battler draws them freely: a
     Struggling one (bcp.c:433-434) carries an older selection's, and those of a switch
     (TEMP_VALUE the party slot, bcp.c:595; moveSlot kept) or an Encore (moveSlot the Encore slot,
-    TEMP_VALUE 0, :444-447) need not tie; every other selection rewrites both. ``selected_temp``: 0, ``1 + a slot it holds`` or a slot
-    of its party ``p`` (5 reads ``moves[4]``, the IV word), bounded by the party size."""
-    from nuzline.engine.order import CALL_NONE, call_kind
-
+    TEMP_VALUE 0, :444-447) need not tie; every other selection rewrites both. ``selected_temp``:
+    0, ``1 + a slot it holds`` or a slot of its party ``p`` (5 reads ``moves[4]``, the IV word),
+    bounded by the party size. Drawn after every teach (``supported_state``)."""
     held = [k for k in range(4) if int(moves[k])]
     lock = int(a["locked_move"][b])
-    if lock:
+    if lock and held:
         own = [k for k in held if int(moves[k]) == lock]
-        calls = [k for k in held if int(call_kind(tables, int(moves[k]))) != CALL_NONE]
-        if own or calls:
-            slot = (own or calls)[0]
-        else:  # no source: teach the lock's move back
-            empty = [k for k in range(4) if not int(moves[k])]
-            slot = empty[0] if empty else draw(st.integers(0, 3))
-            moves[slot] = lock
-            a["pp"][p, int(a["active"][b]), slot] = int(tables.move_pp[lock])
+        slot = own[0] if own else draw(st.sampled_from(held))  # called, or learned over
         a["move_slot"][b] = slot
         a["selected_temp"][b] = slot + 1
         return
@@ -2310,10 +2305,14 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_klutz(draw, tables, a, side, active, names)
         _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
-        _draw_selection(draw, a, side, a["moves"][side, active], side, tables)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.
     _share_with_sleep_talk(draw, tables, a, names)
+    # The carried selection last, after every draw that teaches a move (the other side's
+    # ``_teach`` calls, ``_share_with_sleep_talk``), so it reads the final movesets (review 9).
+    for side in (0, 1):
+        active = int(a["active"][side])
+        _draw_selection(draw, a, side, a["moves"][side, active], side)
     # No battler on the field sleeps at a turn start during an uproar (B5-7: the turn end woke
     # it): the other side's draws above may have put one to sleep after the uproar was drawn.
     if np.any(a["uproar"] > 0):
@@ -2707,7 +2706,7 @@ def _draw_battler(draw, tables: Tables, a: dict, fmt: Format, b: int) -> None:
     a["disabled_move"][b] = disabled
     turns = draw(st.integers(0, _DISABLE_MAX))
     a["disable_turns"][b] = turns if disabled else 0
-    _draw_selection(draw, a, b, a["moves"][p, active], p, tables)
+    _draw_selection(draw, a, b, a["moves"][p, active], p)
     if b < 2:
         a["stealth_rock"][side] = draw(st.integers(0, 1))
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
