@@ -347,8 +347,14 @@ def test_script_ops_unknown_opcode_raises(table):
 
 def test_rom_battle_structures_match(vanilla_files, decomp, symbols, charmap, decomp_inter):
     want = json.loads((decomp_inter / "trainers.json").read_text("utf-8"))
+    # Only the battle structures are compared below: no fog headers needed, one empty list each.
     got = read_trainers(
-        vanilla_files, decomp, symbols, charmap, [t["start_condition"] for t in want]
+        vanilla_files,
+        decomp,
+        symbols,
+        charmap,
+        [t["start_condition"] for t in want],
+        [[] for _ in want],
     )
 
     def key(t):

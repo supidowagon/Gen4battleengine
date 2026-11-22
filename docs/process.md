@@ -285,6 +285,14 @@ per day is the rate used for estimates.
   PC (Windows) than on the pod (Linux) from the same seed and content hash. A stream rebuilds
   a diverged part only from the capture's `<part>.inputs.pkl.gz`: it asks the managing
   session, which copies those files from the pod with `snap.sh fetch` (DAYBOX.md) into `<scratch>/rent/out/<snapshot folder>/fetch-<epoch>/`.
+- **Gen draws and source literals.** `draw_inputs` draws with Hypothesis's local-constants pool
+  empty (`snap_compare.no_local_constants`), so a new literal of the project's own imported
+  modules (Hypothesis `ConstantVisitor`'s filter, `hypothesis/internal/constants_ast.py:113-145`:
+  integers with |v| >= 100, non-zero non-infinite floats (NaN too), strings of up to 20 characters, bytes up to 50; a module
+  under a `test` / `tests` folder or a `test_*` / `*_test` file is skipped, `constants_ast.py:260-283`)
+  does not shift the `gen` part's draws. `tools/differential.py` draws with the pool on, so
+  its inputs at a seed differ from the snapshot's. This change altered every gen draw once: a main capture
+  made before it needs a fresh capture of main with this code before the first compare.
 - **Snapshot seeds in tests.** No test may redraw snapshot seeds through the live generator; a
   test that needs a compare state pins the state.
 - **Snapshot jobs and the runner.** A capture or compare is outside the runner's chunk count
@@ -303,12 +311,20 @@ per day is the rate used for estimates.
   fall); a part held by the gate prints `gate wait` about once a minute.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
-  files, about 40 for other files. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
+  files, about 40 for other files. An `A` run of `tests/ai/test_kaizo_policy.py` takes two
+  lines, `tests/ai/test_kaizo_policy.py 57` and then `tests/ai/test_kaizo_policy.py 2 A`: the
+  first cuts the fast ids, the second only the slow and `fullset` ids left (an id an earlier
+  line queued is skipped). Its slow ids (117 of 1247, 21 Nov) cost 60-900 s each on the pod
+  (each new layout traces and compiles for about 40 s), so a 57-id `A` chunk ran over 2 h
+  (run train-e3-82e5446, u_098: 25 ids in 2.2 h) while its fast ids cost 0.3-0.5 s after the
+  first of each test function. Measured chunk peaks (7183 chunks of 120 pod runs, 20 Nov):
   median 7 GB, 90th percentile 12 GB, 99th 24 GB, largest 92 GB. Every chunk has an expected peak: its heaviest id in
   `tools/ops/day/pod/weights.txt` (every file any run measured, at its largest chunk and
   at least 4 GB, plus hand-kept per-test lines, each citing its run; `UNMEASURED_FILE_GB` 20 GB for a
   file never measured; a test that passed alone in a 1-id chunk at least 4 GB under its
-  file's line has its own line; a multi-id chunk weighs the max over its ids), raised to the list line's `<GB>G` field when that is larger. A
+  file's line has its own line; a multi-id chunk weighs the max over its ids), raised to the list line's `<GB>G` field when that is larger.
+  Refresh `weights.txt` (DAYBOX.md, Send a run step 2) after every merge wave and after any
+  change that moves a test's memory by more than 20%. A
   live chunk of a run packed before weights (no `out/<unit>.w`) counts `DEFAULT_WEIGHT_GB`
   12 GB: the 90th percentile of 7183 measured chunks, as those runs are mostly fast-tier
   chunks of measured files. Start a chunk only while container memory (`/sys/fs/cgroup/memory.current`, on cgroup v1

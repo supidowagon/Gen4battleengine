@@ -12,13 +12,15 @@ The observation is ``engine.observe``'s, projected from ``step``'s own events
 (``step.step_events``, ``observe.observation``) of the state after the replacement.
 
 Every batched program (``ai_rows``, ``laws_rows``, ``step_rows``, ``replace_rows``) runs
-in calls of a fixed number of rows: ``CHUNK``, except ``ai_rows``, whose calls have a
-power-of-two bucket of its rows (``bucket_rows``, 256 to ``CHUNK``), so a small frontier
-does not pay for ``CHUNK`` rows. A call's rows are rounded up to a multiple of the device
-count (padding = copies of the call's row 0, dropped after the call), sharded over the
-host devices as ``stage_a.rank_actions`` shards and exported through ``cached_export``, so
-a solve compiles each program once per call shape (``ai_rows``: at most 7 buckets) and
-device count, and a row's result depends on neither (``_ai``).
+in calls of a fixed number of rows: ``CHUNK``, except ``ai_rows`` and ``laws_rows``, whose
+calls have a power-of-two bucket of their rows (``bucket_rows``, 256 to ``CHUNK``), so a
+small frontier does not pay for ``CHUNK`` rows; ``laws_rows`` caps its bucket at
+``LAWS_CHUNK`` (4096) rows, because its per-row temporaries are large (E3-B2-35). A call's
+rows are rounded up to a multiple of the device count (padding = copies of the call's row 0,
+dropped after the call), sharded over the host devices as ``stage_a.rank_actions`` shards
+and exported through ``cached_export``, so a solve compiles each program once per call shape
+(``ai_rows``: at most 7 buckets; ``laws_rows``: at most 5) and device count, and a row's
+result depends on neither (``_ai``).
 
 ``expand`` enumerates each request's outcomes with ``enumerate_outcomes`` (float64
 probabilities from the integer laws, ruling 3: rolls are not pre-merged), streams the
@@ -124,6 +126,11 @@ __all__ = [
 
 CHUNK = 16384  # rows per program call, before padding to the device count
 AI_MIN_ROWS = 256  # ai_rows' smallest call (bucket_rows)
+# laws_rows' largest call. ``_laws`` needs ~4.2 MB of XLA temporaries per row (96.8% of it
+# the end-of-turn speed-tie test's pred[2016, 2016] per row, enumerate.outcome_laws), and
+# XLA CPU allocates a call's temporaries as one arena: 16384 rows = 68.8 GB (OOM on a
+# 32 GB PC), 4096 rows = 17.2 GB (E3-B2-35).
+LAWS_CHUNK = 4096
 
 # The pytrees of the programs' arguments and results, for ``jax.export`` serialization
 # (``Tables`` and ``BattleState`` are registered by ``stage_a``).
@@ -144,9 +151,10 @@ class Child:
 
 
 def bucket_rows(n: int) -> int:
-    """The rows of one ``ai_rows`` program call for ``n`` rows: the smallest power of two
-    at least ``n``, between ``AI_MIN_ROWS`` and ``CHUNK`` (above ``CHUNK``, ``CHUNK``-row
-    calls). So at most 7 shapes (256 .. 16384) are compiled per device count."""
+    """The rows of one ``ai_rows`` program call for ``n`` rows (``laws_rows``: capped at
+    ``LAWS_CHUNK``): the smallest power of two at least ``n``, between ``AI_MIN_ROWS`` and
+    ``CHUNK`` (above ``CHUNK``, ``CHUNK``-row calls). So at most 7 shapes (256 .. 16384) are
+    compiled per device count."""
     return min(CHUNK, max(AI_MIN_ROWS, 1 << max(n - 1, 0).bit_length()))
 
 
@@ -221,14 +229,20 @@ def _laws(tables: Tables, states: BattleState, actions, calls, takens) -> Outcom
     )
 
 
-def laws_rows(tables: Tables, states: BattleState, actions, calls, takens=None) -> OutcomeLaws:
+def laws_rows(
+    tables: Tables, states: BattleState, actions, calls, takens=None, per_call: int | None = None
+) -> OutcomeLaws:
     """``outcome_laws`` of each of ``N`` (state, ``int32[2]`` actions, ``int32[2]`` call,
     ``bool[2]`` takeover tag) rows, numpy (``enumerate.call_variants`` gives the calls and tags;
-    no tag: none taken)."""
+    no tag: none taken). The calls have ``min(LAWS_CHUNK, bucket_rows(N))`` rows (``per_call``
+    overrides it, for tests); the laws are int32 and bool, so a row's result does not depend
+    on the call size."""
     actions = np.asarray(actions, np.int32)
     calls = np.asarray(calls, np.int32)
     takens = np.zeros(calls.shape, bool) if takens is None else np.asarray(takens, bool)
-    return _run(_laws, "expand_laws", tables, (states, actions, calls, takens), len(actions))
+    n = len(actions)
+    per_call = min(LAWS_CHUNK, bucket_rows(n)) if per_call is None else per_call
+    return _run(_laws, "expand_laws", tables, (states, actions, calls, takens), n, None, per_call)
 
 
 def _calls(tables: Tables, states: BattleState, actions) -> CallLaws:

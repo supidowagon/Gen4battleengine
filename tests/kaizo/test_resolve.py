@@ -349,7 +349,7 @@ def test_two_placement_trick_room_rule():
 def _trainer(tid, **kw):
     t = {"id": tid, "name": f"T{tid}", "party": [], "start_condition": "none",
          "format": "single", "opponent_2": None, "partner": [], "walking_partner": [],
-         "class_gender": 0, "class_id": 0}  # fmt: skip
+         "class_gender": 0, "class_id": 0, "fog_headers": []}  # fmt: skip
     return {**t, **kw}
 
 
@@ -410,6 +410,35 @@ def test_sight_pair_of_a_lone_walk_enemy_is_a_multi_beside_the_walking_partner()
         assert (t["format"], t["partner"], t["walking_partner"]) == ("multi", want, ids)
         assert t["sources"]["format"] == SIGHT_CITE.format(header=203)
         assert t["sources"]["walking_partner"] == t["sources"]["format"]
+
+
+def test_rom_row_without_fog_headers_raises():
+    # extract_rom writes fog_headers on every ROM row (maps.trainer_fog_headers, G-15): a
+    # trainers.json from before it is refused by name, not with a bare KeyError.
+    from tools.kaizo.resolve import Sources, TrainerContext, trainer_record
+
+    src = Sources({"learnsets": {}, "species": []}, [], [], {1: [5]}, {}, {})
+    ctx = TrainerContext({}, {}, {}, {})
+    t = {k: v for k, v in _trainer(1).items() if k != "fog_headers"}
+    with pytest.raises(ResolveError, match="trainer 1: trainers.json has no fog_headers"):
+        trainer_record(t, ctx, Overrides(), src, {}, {}, {})
+
+
+def test_rom_fog_headers_must_match_the_join():
+    # A fog start's ROM fog_headers must be the trainer -> map join's weather-14 headers.
+    from tools.kaizo.resolve import Sources, TrainerContext, trainer_record
+
+    weather = (0,) * 5 + (14,)  # header 5: OVERWORLD_WEATHER_FOG
+    src = Sources({"learnsets": {}, "species": []}, [], [], {1: [5]}, {}, {}, weather)
+    ctx = TrainerContext({}, {}, {}, {})
+    ok = trainer_record(
+        _trainer(1, start_condition="fog", fog_headers=[5]), ctx, Overrides(), src, {}, {}, {}
+    )
+    assert ok["area_condition"]["fog_headers"] == [5] and "fog_headers" not in ok
+    with pytest.raises(ResolveError, match=r"fog_headers \[\] disagree"):
+        trainer_record(
+            _trainer(1, start_condition="fog", fog_headers=[]), ctx, Overrides(), src, {}, {}, {}
+        )
 
 
 def test_headers_that_disagree_give_unknown():  # M3
