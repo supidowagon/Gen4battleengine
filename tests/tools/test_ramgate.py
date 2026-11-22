@@ -450,6 +450,7 @@ _PYTEST_START = re.compile(
     r"|\buv\s+run(\s+--?[\w=-]+)*\s+pytest\b"  # uv run [opts] pytest
     r"|(^|[;&|`]|\$\(|^\s*\(|\b(exec|then|do|else)\b)\s*(\w+=\S*\s+)*pytest(\s|$)"  # a command
     r"|\S*/pytest(\s|[\"']|$)"  # a path to the binary: .venv/bin/pytest, "$repo"/.venv/bin/pytest
+    r"|(^|[\s;&|(])pytest\s+-"  # behind any word with options: timeout 900 pytest -q, nohup pytest -x
 )
 _SEARCHES = re.compile(r"\b(pgrep|pkill|grep|egrep|fgrep)\b[^;&|]*")  # a pattern, not a start
 _UNSETS = re.compile(r"\bunset\s+([\w\s]*\s)?NUZLINE_ON_POD\b|\benv\s+(-\S+\s+)*-u\s*NUZLINE_ON_POD\b|\benv\s+(-\S+\s+)*-i\b|\benv\s+--ignore-environment\b|\benv\s+--unset[= ]NUZLINE_ON_POD\b")
@@ -566,6 +567,9 @@ def test_the_pod_marker_check_catches_each_way_to_miss_it(tmp_path):
         '"$repo/.venv/bin/pytest" tests\n',
         '"$repo"/.venv/bin/pytest\n',
         "nice -n 5 /work/r/.venv/bin/pytest -x\n",
+        "timeout 900 pytest -q tests\n",
+        "if pytest -q tests; then echo ok; fi\n",
+        "nohup pytest -x tests &\n",
     ],
 )
 def test_the_pod_marker_check_sees_every_way_to_start_pytest(tmp_path, start):
@@ -1233,6 +1237,8 @@ def _fake_proc(root, rows):
         )
     (root / "self").mkdir()
     (root / "99").mkdir()  # no stat file: skipped
+    (root / "98").mkdir()
+    (root / "98" / "stat").write_text("98 (cut", encoding="utf-8")  # no ")": skipped
 
 
 def test_a_zombie_counts_as_gone_in_the_process_table(tmp_path):

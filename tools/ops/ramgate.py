@@ -274,7 +274,7 @@ def proc_table(root: str | Path = "/proc") -> dict[int, int]:
             try:
                 stat = Path(root, name, "stat").read_text(encoding="utf-8", errors="replace")
                 state, ppid = stat.rsplit(")", 1)[1].split()[:2]
-            except (OSError, ValueError):
+            except (OSError, ValueError, IndexError):  # IndexError: a stat text with no ")"
                 continue
             if state not in ("Z", "X", "x"):
                 out[int(name)] = int(ppid)
