@@ -618,6 +618,7 @@ def test_absorb_bench_matches_loose(
     _assert_switch_equals_loose(t, s)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("suppressed", [False, True])
 def test_gastro_acid_trap_gate_matches_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party, suppressed
