@@ -2819,14 +2819,44 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   - Result `snapcmp-e1closeh7-5ba6b5b` (5ba6b5bc): `compare: ok`, COMPARE_RC=0, 102 ok, 0 diverged, 0 error, 0 sampler
     drift, 20 generator drift. Log `_scratch/rent/out/snapcmp-e1closeh7-5ba6b5b/fetch-1795307088/compare.log`. All
     step, jitstep, sample, rest, ai, roark.trace and roark.rank parts are identical, so batch H's gate holds.
-  - The 20 gen parts still drift, and that is expected. A gen part passes as generator drift only when every
-    differing entry is an input `tests/strategies.py` draws (`classify_gen`, tools/snap_compare.py:172-179). A
-    batch that implements more mechanics changes what the strategies may draw. A different draw then shifts every
-    later draw of the same seed, while the engine's outputs on any one saved input stay identical: the step parts
-    check those outputs. With class D reverted, the first drift moves from turn 1 to later turns (seed 3 turn 4
-    `speed_rec`, seed 11 turn 4 `in_actions`, seed 32 turn 2 `curled`, seed 81 turn 2 `in_outcome.call`). So at
-    least one more batch H change alters the draws; its cause is being named in
-    `_scratch/e1/h-next/close-h7-gen-report.md`.
+  - The 20 gen parts of close-h-7 still drift; class D (above) and class E (below) account for all of it. A gen
+    part passes as generator drift when every differing entry is an input `tests/strategies.py` draws
+    (`classify_gen`, tools/snap_compare.py:172-179). That alone does not make it harmless: some drawn inputs
+    come from engine functions (`legal_action_pair` draws from `engine.actions.legal_actions`,
+    strategies.py:2313-2324; the strategies also call `hooks.battle_start` and `calc_stats`), so a legality or
+    switch-in change would show only as drift. Each gen class is therefore named and reverted, and the gate
+    is a closing compare with gen drift 0. With class D reverted, the first drift still appears in all 20 gen parts. In 16 of them
+    it comes at a later seed or turn than in close-h-6, and in 4 (seeds 20, 100, 150, 170) it is unchanged (for example seed 3 turn 4 `speed_rec`, seed 11 turn 4 `in_actions`, seed 32
+    turn 2 `curled`, seed 81 turn 2 `in_outcome.call`). Six still drift at turn 1: seeds 20, 100, 150, 161, 170 and
+    185. Seed 20's `speed_rec[1]` 167 -> 236 is the same as in close-h-6, and `speed_rec` is a raw `st.integers`
+    draw (tests/strategies.py:2174), so the stream moves before it within that example.
+  - Generator drift, class E (H-5, 6567c627, the literal 421): the cause of all 20 remaining gen drifts. Hypothesis
+    6.170.13 keeps a pool of "local constants". On about 5% of integer and float choices,
+    `HypothesisProvider._maybe_draw_constant` (hypothesis/internal/conjecture/providers.py:775-827) returns a
+    literal from that pool instead of a random value. The pool is every int literal with |v| >= 100, plus floats,
+    strings and bytes, taken from every imported non-test module (`_get_local_constants`, providers.py:325-380;
+    `ConstantVisitor`, hypothesis/internal/constants_ast.py:105-180). H-5 adds one new such literal, 421
+    (`SPECIES_CHERRIM`, engine/ids.py:1309, and its `Constant` row, data/game_constants.py:602). That changes which
+    constant a constant draw takes. The first one changed is `speed_rec` (strategies.py:2174, 167 -> 236): the
+    turn-1 drift of seeds 20, 100, 150, 161, 170 and 185. Seed 81's `call` 426 -> 421 is the literal itself.
+    Draw-only: on both commits every draw makes the same choice types under the same constraints, and only the
+    values at constant draws differ. No engine function in the draw path (`legal_actions`, `battle_start`,
+    `calc_stats`) gives a different result, and the Cherrim rule (battle_lib.c:6366) never runs during
+    generation. Windows runs do not show it: there Hypothesis counts the uv-managed stdlib as local, so the pool is
+    about 1044 ints. With the pod's pool copied (`_scratch/e1/tmp/podsite/sitecustomize.py`), close-h-7 reproduces
+    the pod's first drift for seeds 3, 11, 20, 32, 81 and 100. Writing the value as `420 + 1` makes all six
+    identical. The single change a closing compare reverts: 421 written as `420 + 1` in those two lines.
+    Report: `_scratch/e1/h-next/close-h7-gen-report.md`. Every new int literal of 100 or more, float or short string
+    in an imported `src/` or `tools/` module shifts gen draws the same way. Turning the pool off in `draw_inputs`
+    would stop that, but it changes every draw once and needs a fresh main capture: a process item for the
+    manager.
+  - Final closing compare: branch `e1-close-h-8` (e50e2349) = `e1-close-h-7` plus the class E revert, so classes A
+    to E are all reverted. It runs against the 38099359 capture with the same allow-new. Expected: `compare: ok`
+    with 0 generator drift.
+  - Baseline: the closing compares of the merged tip use the train-tip capture 38099359 (82e54463, the
+    `train/e3-slowfix-nmw` tip, plus an off-site test change), not main. 507220df contains that train
+    (merge c592ddf9), which merges into main before batch H. Against main, the compare would also show the train's
+    own changes. Against the train tip, every difference is batch H's.
   - Should-fix `REVEALS_ON` (Insomnia / Vital Spirit / Limber on `STATUS_CURE`) is batch I group I-6 (`_scratch/e1/i-next/sheets/ability-status-cure-reveals.md`).
 
 ## Stream state (restart point, 2026-11-19)
