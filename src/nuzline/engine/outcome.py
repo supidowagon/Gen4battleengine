@@ -667,6 +667,22 @@ def _future_fields(tables: Tables, state: BattleState, actions, uses, effect) ->
 
 
 def future_thresholds(
+    tables: Tables, state: BattleState, actions, moves=None, **grid
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(bool[B, 101], bool[B])``: per defender battler ``d``, ``values[d, t]`` holds when ``t``
+    (0-100) is a threshold ``_future_grid`` finds possible for its Future Sight hit (the grid's
+    thresholds clipped to 0-100, as ``hit_class`` clips them), and ``loose`` as there. Only this
+    set is read (``enumerate._future_hit``, the sampler's ``hit_class_mask``), so the grid, K
+    values per row, is reduced here inside the jit and never leaves it (the laws output keeps
+    101 bools per defender, not K int32 and K bools). ``grid`` is ``_future_grid``'s other
+    arguments (the B = 4 ``dsets`` / ``targets`` of e2-d67 8fa1a6a2 go through it)."""
+    thresholds, possible, loose = _future_grid(tables, state, actions, moves, **grid)
+    clipped = jnp.clip(thresholds, 0, 100)
+    reduce = jax.vmap(lambda t, p: jnp.zeros(101, _I32).at[t].max(p.astype(_I32)))
+    return reduce(clipped, possible) > 0, loose
+
+
+def _future_grid(
     tables: Tables, state: BattleState, actions, moves=None
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """``(int32[B, K], bool[B, K], bool[B])``: per defender side ``d``, every threshold its
@@ -1382,6 +1398,12 @@ def hit_class(u, thresholds, possible) -> jnp.ndarray:
     return jnp.where(misses_all, 0, low)
 
 
+def hit_class_mask(u, values) -> jnp.ndarray:
+    """``hit_class`` over the thresholds ``t`` in 0-100 with ``values[..., t]`` set: the same
+    class value (the smallest roll of its interval, 0 where ``u`` misses at all of them)."""
+    return hit_class(u, jnp.arange(101, dtype=_I32), values)
+
+
 def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
     """``int32``: ``side``'s ``move`` crits 1 in N with ``state`` as it is when the move runs
     (``BattleSystem_CalcCriticalMulti``, battle_lib.c:7105-7133, reads the attacker's held item,
@@ -2075,7 +2097,7 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=N
         """``RandNext() % n`` for each element."""
         return jax.random.randint(k[i], shape, 0, n, dtype=_I32)
 
-    future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
+    future_values, future_loose = future_thresholds(tables, state, actions, moves)
     future_roll = jax.random.randint(jax.random.fold_in(key, 28), (fmt.B,), 1, 101, dtype=_I32)
     # The roll u = RandNext() % 100 + 1 (battle_controller_player.c:2976), as its class.
     # A Triple Kick hit after the first rolls its own check without the overrides (B13-6):
@@ -2141,9 +2163,9 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=N
         < chance[:, 0],
         "duration": duration,
         # The Future Sight hit's CheckMoveHit roll at the turn's end (bcp.c:2976, RandNext() % 100
-        # + 1), as its class over future_thresholds (the raw roll where loose).
+        # + 1), as its class over future_thresholds' values (the raw roll where loose).
         "future_hit": jnp.where(
-            future_loose, future_roll, hit_class(future_roll, future_thr, future_ok)
+            future_loose, future_roll, hit_class_mask(future_roll, future_values)
         ),
     }
 
