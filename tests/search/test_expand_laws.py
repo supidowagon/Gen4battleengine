@@ -48,9 +48,11 @@ def _specs(rows: int):
     return spec, pair, pair, jax.ShapeDtypeStruct((rows, 2), jnp.bool_)
 
 
+@pytest.mark.slow
 def test_laws_shapes_at_the_cap(tables):
     """Invariant: every ``OutcomeLaws`` field at ``LAWS_CHUNK`` rows has the per-row shape and
-    dtype it has at ``CHUNK`` rows, all int32 or bool (so no call-size rounding)."""
+    dtype it has at ``CHUNK`` rows, all int32 or bool (so no call-size rounding). Slow: 71 s on the pod
+    (e3-lm-b694acd)."""
     capped = jax.eval_shape(expand_mod._laws, tables, *_specs(LAWS_CHUNK))
     full = jax.eval_shape(expand_mod._laws, tables, *_specs(expand_mod.CHUNK))
     assert capped._fields == full._fields
@@ -94,7 +96,8 @@ def test_laws_rows_do_not_depend_on_the_call_size(tables, names, monkeypatch):
     monkeypatch.setattr(expand_mod, "CHUNK", 1024)  # calls_rows' call; laws are bucketed
     rows = _frontier(tables, names)
     n = len(rows[1])
-    assert n > 32
+    # Not a multiple of 32: the last 32-row call is padded and trimmed.
+    assert n > 32 and n % 32 != 0, n
     one = laws_rows(tables, *rows)
     small = laws_rows(tables, *rows, per_call=32)
     for name, a, b in zip(one._fields, one, small, strict=True):
