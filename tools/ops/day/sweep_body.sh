@@ -3,7 +3,8 @@
 # Prints the exec-pod body that starts the nightly soundness sweep (tools/ops/nightly_brief.md,
 # "Soundness sweep"; DAYBOX.md "Soundness sweep"): bin/sweep.sh of the already set-up run
 # /work/<run> (pod/sweep.sh travels in the run's bin/ when the run was packed from a checkout at
-# main that has it), detached (setsid, nohup), SWEEP_* knobs from the PC's environment passed on.
+# main that has it), detached (setsid, nohup), SWEEP_P and SWEEP_W from the PC's environment
+# passed on, SWEEP_CAP only when set (unset: sweep.sh takes the cap from the pod's memory limit).
 # The jobs file (tools/ops/sweep/seeds.py output, one `<node id> <short name> <seed>` per line) is
 # too long for a body, so it travels in sweep.tar with start.sh by a detached `runpodctl send`
 # ($RENT/podcheck/, as stop_body.sh) and the body checks the tar's sha256 before it unpacks
@@ -24,7 +25,7 @@ for d in "$RENT"/podcheck/*/; do grep -q '^SEND_RC=' "$d/send.log" 2>/dev/null &
 T="$RENT/podcheck/$(date +%s)-$$"; mkdir "$T"; trap '[ -n "${CODE:-}" ] || rm -rf "$T"' EXIT
 tr -d '\r' < "$2" | grep -v '^[[:space:]]*\(#\|$\)' > "$T/sweep_jobs.txt"
 { echo "# POD SIDE: start.sh of sweep_body.sh"
-  echo "R=/work/$1; export SWEEP_P=${SWEEP_P:-5} SWEEP_W=${SWEEP_W:-13} SWEEP_CAP=${SWEEP_CAP:-190}"
+  echo "R=/work/$1; export SWEEP_P=${SWEEP_P:-5} SWEEP_W=${SWEEP_W:-13}${SWEEP_CAP:+ SWEEP_CAP=$SWEEP_CAP}"
   cat <<'START'
 [ -d "$R" ] || { echo "SWEEP_REFUSED no folder $R"; exit 1; }
 [ -f "$R/bin/sweep.sh" ] || { echo "SWEEP_REFUSED no $R/bin/sweep.sh (the run was packed before sweep.sh)"; exit 1; }

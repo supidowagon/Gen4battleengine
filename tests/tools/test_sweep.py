@@ -206,6 +206,49 @@ def test_extract_cuts_the_draws_out_of_a_log(tmp_path):
     assert extract.examples(_fail_log(NODE_B, 6, "X", 1, REPRO_1).splitlines())[0][2] == "'X'"
 
 
+def _group_log(log: str) -> str:
+    """The falsifier as pytest prints it inside an exception group: `E       | ` before each
+    line, `+-` separator lines around it."""
+    out = ["E     +-+---------------- 1 ----------------"]
+    for ln in log.splitlines():
+        out.append("E       | " + ln[1:].lstrip() if ln.startswith("E") else ln)
+    out.insert(-1, "E       +------------------------------------")
+    return "\n".join(out) + "\n"
+
+
+def test_extract_reads_draws_behind_an_exception_group_pipe(tmp_path):
+    lines = _group_log(_fail_log(NODE_B, 6, "X Attack", 3, REPRO_1)).splitlines()
+    assert any(ln.startswith("E       | Draw 1: ") for ln in lines)
+    ex = extract.examples(lines)
+    assert len(ex) == 1 and set(ex[0]) == {1, 2, 3, 4, 5}
+    assert ex[0][1].startswith("BattleState(") and "|" not in ex[0][1] and "[403, 408]" in ex[0][1]
+    assert ex[0][2] == "'X Attack'" and ex[0][3] == "3" and ex[0][5] == "170886"
+    logs, out = tmp_path / "logs", tmp_path / "ex"
+    logs.mkdir()
+    (logs / f"{SHORT_B}_6.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(ROOT / "tools/ops/sweep/extract.py"), str(logs), str(out)],
+                       check=True, capture_output=True, text=True)  # fmt: skip
+    assert f"{SHORT_B}_6 {SHORT_B} item='X Attack' choice=3 seed=170886 ok" in r.stdout
+    assert (out / f"{SHORT_B}_6" / "item.txt").read_text().strip() == "'X Attack'"
+
+
+def test_extract_goes_on_past_a_draw_that_is_not_a_literal(tmp_path):
+    logs, out = tmp_path / "logs", tmp_path / "ex"
+    logs.mkdir()
+    bad = _fail_log(NODE_B, 6, "X Attack", 3, REPRO_1).replace(
+        "E       Draw 3: 3", "E       Draw 3: <Act 3>"
+    )
+    (logs / f"{SHORT_B}_6.log").write_text(bad, encoding="utf-8")
+    (logs / f"{SHORT_B}_7.log").write_text(
+        _fail_log(NODE_B, 7, "Potion", 1, REPRO_2), encoding="utf-8"
+    )
+    r = subprocess.run([sys.executable, str(ROOT / "tools/ops/sweep/extract.py"), str(logs), str(out)],
+                       check=True, capture_output=True, text=True)  # fmt: skip
+    assert "choice=<Act 3>" in r.stdout
+    assert "PROBLEMS: choice (Draw 3) not a literal: SyntaxError" in r.stdout
+    assert f"{SHORT_B}_7 {SHORT_B} item='Potion' choice=1 seed=170886 ok" in r.stdout
+
+
 # --- collect -----------------------------------------------------------------------------------
 
 
@@ -259,6 +302,28 @@ def test_collect_marks_a_missing_or_failed_replay_unreplayed(tmp_path, replay, r
         f"(UNREPLAYED, {SHORT_B}, X Attack)" in text and f"(UNREPLAYED, {SHORT_B}, Potion)" in text
     )
     assert reason in text
+
+
+def test_collect_reads_night_and_tip_from_the_run_folder_above_sweep_out(tmp_path):
+    run = tmp_path / "sweep-20261122-abcdef01"
+    run.mkdir()
+    out = _sweep_out(run, "sweep_out")
+    assert collect.main([str(out)]) == 0
+    first = (out / "sweep_failures.txt").read_text(encoding="utf-8").splitlines()[0]
+    assert first.startswith("SWEEP 20261122 abcdef01: 6 processes")
+
+
+def test_collect_marks_examples_past_the_last_repro_line(tmp_path):
+    out = _sweep_out(tmp_path)
+    log = _fail_log(NODE_B, 6, "X Attack", 3, REPRO_1)
+    draws = [ln for ln in log.splitlines() if "Draw" in ln or ln.startswith("E              [403")]
+    two = log.replace("E       Explanation:", "\n".join(draws) + "\nE       Explanation:", 1)
+    (out / f"{SHORT_B}_6.log").write_text(two, encoding="utf-8")
+    assert collect.main([str(out)]) == 0
+    text = (out / "sweep_failures.txt").read_text(encoding="utf-8")
+    a = text.split(f"== {SHORT_B}_6  ", 1)[1].split("\n\n", 1)[0]
+    b = text.split(f"== {SHORT_B}_6_b  ", 1)[1].split("\n\n", 1)[0]
+    assert REPRO_1 in a and "(repro line not matched)" in b and REPRO_1 not in b
 
 
 def test_collect_clean_sweep_first_line_and_exit_zero(tmp_path):
@@ -320,6 +385,7 @@ def test_sweep_body_ships_the_jobs_in_a_tar_and_stays_short(tmp_path):
         text=True,
     ).stdout
     assert "R=/work/sweep-20261122-abc" in start and "setsid nohup bash bin/sweep.sh" in start
+    assert "SWEEP_CAP" not in start  # unset: sweep.sh takes the cap from the pod's limit
     bad = tmp_path / "bad.txt"
     bad.write_text("tests/x.py::t only_two\n", encoding="utf-8")
     r2, _, _ = _tool_body(
@@ -361,12 +427,19 @@ def _run_folder(tmp_path: Path) -> Path:
     return d
 
 
-def _env(tmp_path: Path, mem_bytes: int, **kw: str) -> dict[str, str]:
+def _env(
+    tmp_path: Path, mem_bytes: int, limit: str | None = str(128 * 2**30), **kw: str
+) -> dict[str, str]:
+    """A fake cgroup (memory.current; memory.max = <limit>, no file when None), a gate lock, a
+    claims folder and a /work of the test's own."""
     cg = tmp_path / "cg"
     cg.mkdir(exist_ok=True)
     (cg / "memory.current").write_text(f"{mem_bytes}\n", encoding="utf-8", newline="\n")
+    if limit is not None:
+        (cg / "memory.max").write_text(f"{limit}\n", encoding="utf-8", newline="\n")
     return {**_clean_env(), "CGROOT": _posix(cg), "FAKE_TRACE": _posix(tmp_path / "trace.txt"), "SWEEP_SPACING": "0",
-            "SWEEP_POLL": "0.2", "SWEEP_TOOLS": _posix(tmp_path / "tools"), **kw}  # fmt: skip
+            "SWEEP_POLL": "0.2", "SWEEP_TOOLS": _posix(tmp_path / "tools"), "RUNNER_LOCK": _posix(tmp_path / "lock"),
+            "CLAIMS": _posix(tmp_path / "claims"), "WORK": _posix(tmp_path / "work"), **kw}  # fmt: skip
 
 
 def _jobs(tmp_path: Path, seeds_: list[int]) -> Path:
@@ -409,7 +482,8 @@ def test_sweep_runs_the_jobs_under_the_p_cap_and_writes_the_results(tmp_path):
     assert len(starts) == 6
     assert all(" explore " in ln for ln in starts)
     assert all(
-        f"-p no:cacheprovider -q -x {NODE_A} --hypothesis-seed=" in ln and ln.endswith("-m")
+        f"-p no:cacheprovider -q -x {NODE_A} --hypothesis-seed=" in ln
+        and ln.rstrip().endswith("-m")  # `echo "$*"` ends `-m ` (the empty -m "")
         for ln in starts
     )
     rows = [ln.split("\t") for ln in (out / "summary.txt").read_text().splitlines()]
@@ -471,6 +545,88 @@ def test_sweep_stops_when_no_memory_reader_exists(tmp_path):
     )
     assert r.returncode == 1 and "no cgroup memory file" in r.stderr
     assert not (d / "sweep_out" / "SWEEP_DONE").exists()
+
+
+@linux
+@pytest.mark.parametrize(
+    ("limit", "cap"),
+    [
+        ("max", 88),
+        (str(2**63 - 4096), 88),
+        (str(128 * 2**30), 88),
+        (str(256 * 2**30), 200),
+        (str(100 * 10**9), 60),
+    ],
+)
+def test_sweep_cap_comes_from_the_container_limit(tmp_path, limit, cap):
+    d = _run_folder(tmp_path)
+    r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, []))], check=False,
+                       capture_output=True, text=True, env=_env(tmp_path, 10**9, limit), timeout=60)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f" CAP={cap} (limit " in (d / "sweep_out" / "driver.log").read_text()
+
+
+@linux
+@pytest.mark.parametrize(
+    ("limit", "why"),
+    [(None, "container memory limit unreadable"), ("lots", "container memory limit unreadable"),
+     (str(50 * 10**9), "cap 10GB (limit 50GB) is under one job's weight SWEEP_W 13GB")],
+)  # fmt: skip
+def test_sweep_refuses_without_a_limit_or_with_too_small_a_cap(tmp_path, limit, why):
+    d = _run_folder(tmp_path)
+    r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1]))], check=False,
+                       capture_output=True, text=True, env=_env(tmp_path, 10**9, limit), timeout=60)  # fmt: skip
+    assert r.returncode == 1 and why in r.stderr, r.stderr
+    assert not (tmp_path / "trace.txt").exists()
+    assert not (d / "sweep_out" / "SWEEP_DONE").exists()
+
+
+@linux
+def test_sweep_holds_its_starts_while_a_gate_claim_exists(tmp_path):
+    d = _run_folder(tmp_path)
+    claims = tmp_path / "claims"
+    claims.mkdir()
+    holder = subprocess.Popen([BASH, "-c", "sleep 60"])  # a live pid for the claim
+    claim = claims / "gate-run.u001"
+    claim.write_text(f"{int(time.time())} 40 {holder.pid}\n", encoding="utf-8", newline="\n")
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0")
+    p = subprocess.Popen([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1]))], env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)  # fmt: skip
+    try:
+        time.sleep(2)
+        assert p.poll() is None and not (tmp_path / "trace.txt").exists()
+        assert "HOLD claim gate-run.u001" in (d / "sweep_out" / "driver.log").read_text()
+        claim.unlink()
+        assert p.wait(timeout=60) == 0
+    finally:
+        p.kill()
+        holder.kill()
+    assert (tmp_path / "trace.txt").read_text().count("start") == 1
+
+
+@linux
+def test_sweep_term_stops_the_jobs_without_sweep_done(tmp_path):
+    d = _run_folder(tmp_path)
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="30", SWEEP_P="2", SWEEP_POLL="1")
+    p = subprocess.Popen([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1, 2, 3]))], env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)  # fmt: skip
+    trace = tmp_path / "trace.txt"
+    try:
+        for _ in range(100):
+            if trace.exists() and trace.read_text().count("start") == 2:
+                break
+            time.sleep(0.1)
+        p.terminate()
+        assert p.wait(timeout=30) == 143
+    finally:
+        p.kill()
+    time.sleep(1)
+    out = d / "sweep_out"
+    assert (out / "SWEEP_STOPPED").is_file() and not (out / "SWEEP_DONE").exists()
+    assert "STOPPED by TERM" in (out / "driver.log").read_text()
+    left = subprocess.run(["ps", "-eo", "args="], check=True, capture_output=True, text=True).stdout
+    assert _posix(d / "repo") not in left  # the fake pytest processes are gone
+    assert "end" not in trace.read_text().split()
 
 
 def test_sweep_scripts_parse_and_ship_in_the_pod_bin():

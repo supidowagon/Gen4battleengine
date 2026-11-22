@@ -10,7 +10,12 @@ Every log named <node>_<seed>.log in <log dir> that holds a "Failing test case" 
   ..._with_a_trainer_item:            item.txt (Draw 2, the bag item name), choice.txt (Draw 3,
                                       the player action drawn from the legal list), outcome.txt
                                       (Draw 4), seed.txt (Draw 5)
-  reproduce.txt  the @reproduce_failure line, when present
+  reproduce.txt  the @reproduce_failure line, when present (the j-th line for the j-th example;
+                 an example past the last line gets none and PROBLEMS "repro line not matched")
+A falsifier pytest prints inside an exception group has a `| ` after the `E` (`E     | Draw 1: ...`):
+the draws and their continuation lines are read with it stripped, and the group's `+-` separator
+lines end a draw. A drawn item, choice or seed that is not a Python literal is printed raw and
+listed under PROBLEMS; extraction goes on.
 """
 
 import ast
@@ -22,12 +27,16 @@ LAYOUT = {
     "test_mask_sound": ("state", "acts", "outcome", "seed"),
     "test_mask_sound_with_a_trainer_item": ("state", "item", "choice", "outcome", "seed"),
 }
-DRAW = re.compile(r"^E?\s*Draw (\d+): (.*)$")
-END = re.compile(r"^E?\s*(You can reproduce|Explanation:|Draw \d+:)")
+DRAW = re.compile(r"^E?\s*(\| )?\s*Draw (\d+): (.*)$")
+END = re.compile(r"^E?\s*(?:\| )?\s*(You can reproduce|Explanation:|Draw \d+:|\+-)")
+NOT_LITERAL = (ValueError, TypeError, SyntaxError, MemoryError, RecursionError)
+PIPE = re.compile(r"^\s*\|(?: |$)")
 
 
-def strip_e(line: str) -> str:
-    return line.removeprefix("E")
+def strip_e(line: str, pipe: bool = False) -> str:
+    """The line without pytest's `E` (and, inside an exception group, without its `| `)."""
+    line = line.removeprefix("E")
+    return PIPE.sub("", line, count=1) if pipe else line
 
 
 def examples(lines: list[str]) -> list[dict[int, str]]:
@@ -39,12 +48,12 @@ def examples(lines: list[str]) -> list[dict[int, str]]:
         if not m:
             i += 1
             continue
-        n, text = int(m.group(1)), [m.group(2)]
+        pipe, n, text = bool(m.group(1)), int(m.group(2)), [m.group(3)]
         i += 1
         # Until the next draw; blank lines inside a multi-dim array repr belong to it, so a
         # blank line ends the draw only once its brackets are closed.
         while i < len(lines) and not END.match(lines[i]) and lines[i].startswith("E"):
-            line = strip_e(lines[i]).rstrip()
+            line = strip_e(lines[i], pipe).rstrip()
             if not line.strip() and balanced("".join(text)):
                 break
             text.append(line)
@@ -93,14 +102,20 @@ def main() -> None:
             for k, part in enumerate(layout, 1):
                 if k in ex:
                     (d / f"{part}.txt").write_text(ex[k] + "\n")
-            if repro:
-                (d / "reproduce.txt").write_text(repro[min(j, len(repro) - 1)] + "\n")
+            if j < len(repro):
+                (d / "reproduce.txt").write_text(repro[j] + "\n")
+            elif repro:
+                problems.append("repro line not matched")
             summary = []
             for part in ("item", "choice", "acts", "seed"):
                 if part in layout and layout.index(part) + 1 in ex:
                     v = ex[layout.index(part) + 1]
                     if part in ("item", "choice", "seed"):
-                        v = repr(ast.literal_eval(v))
+                        try:
+                            v = repr(ast.literal_eval(v))
+                        except NOT_LITERAL as e:
+                            k = layout.index(part) + 1
+                            problems.append(f"{part} (Draw {k}) not a literal: {type(e).__name__}")
                     summary.append(f"{part}={v}")
             print(
                 name,

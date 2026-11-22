@@ -7,7 +7,10 @@ It writes <out dir>/sweep_failures.txt and prints its first line and its class l
 the result is the file's first line,
   SWEEP <night> <tip sha8>: <n> processes, <p> PASS, <f> FAIL, <k> classes
   SWEEP <night> <tip sha8>: 0 FAIL: none in <n> processes          (clean)
-The night and tip default to the out folder's name (`...-<yyyymmdd>-<sha>`), else "?".
+The night and tip default to the out folder's name (`...-<yyyymmdd>-<sha>`), else its parent's
+(`<run>/sweep_out`, the fetched layout), else "?".
+A log with more falsifying examples than @reproduce_failure lines gives the extra examples
+"(repro line not matched)".
 
 Then the class list (grouped by CLASS KEY, with a count and the seeds), then one block per
 falsifier: node, seed, the @reproduce_failure line, the diverging Outcome field(s) and CLASS KEY
@@ -106,7 +109,9 @@ def falsifiers(out: Path, secs: dict[str, list[str]] | None, why: str) -> list[d
                     "node": node,
                     "seed": seed,
                     "name": name,
-                    "repro": repro[min(j, len(repro) - 1)] if repro else "(no @reproduce_failure)",
+                    "repro": repro[j]
+                    if j < len(repro)
+                    else ("(repro line not matched)" if repro else "(no @reproduce_failure)"),
                     "item": item,
                     "choice": choice,
                     "fields": fields or "-",
@@ -155,7 +160,11 @@ def main(argv: list[str]) -> int:
         print("usage: collect.py <out dir> [--night <yyyymmdd>] [--tip <sha8>]", file=sys.stderr)
         return 0
     out = Path(args[0])
-    m = re.search(r"(\d{8})-([0-9a-f]{7,40})", out.resolve().name)
+    here = out.resolve()
+    m = None
+    for name in (here.name, here.parent.name):  # <run>/sweep_out: the run folder has the name
+        if m := re.search(r"(\d{8})-([0-9a-f]{7,40})", name):
+            break
     night = opts.get("--night") or (m.group(1) if m else "?")
     tip = (opts.get("--tip") or (m.group(2) if m else "?"))[:8]
     rows = read_summary(out)
