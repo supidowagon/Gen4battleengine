@@ -40,6 +40,7 @@ from nuzline.engine.outcome import (
     crit_odds,
     empty_outcome,
     future_thresholds,
+    hit_class,
     hit_threshold,
     hit_thresholds,
     outcome_to_py,
@@ -605,7 +606,7 @@ SWEEP_BAG_ITEMS = (
 
 
 @pytest.mark.slow
-@settings(max_examples=150, derandomize=True, **HYPOTHESIS)
+@settings(max_examples=150, **HYPOTHESIS)
 @given(data=st.data())
 def test_mask_sound_with_a_trainer_item(tables, names, data):
     # test_mask_sound with the opponent's action forced to a bag item: a trainer item acts
@@ -1067,9 +1068,9 @@ def _bag(s, names, item):
 
 def test_a_bag_paralysis_cure_frees_the_end_speed_tie(tables, names):
     # Player Spe 30; the opponent Spe 20 at +1 (30), paralyzed (x1/4): no end speeds tie, a
-    # faint's neutral points (30 against 20) included, until its Full Heal (BattleSystem_UseBagItem's
-    # HEAL_PARALYSIS, battle_system.c:527-541) runs before every move (bcp.c:753-769): the
-    # end-of-turn sort (battle_lib.c:3364-3382) then meets 30 = 30.
+    # faint's neutral points (30 against 20) included, until its Full Heal
+    # (BattleSystem_UseBagItem's HEAL_PARALYSIS, battle_system.c:527-541) runs before every move
+    # (bcp.c:753-769): the end-of-turn sort (battle_lib.c:3364-3382) then meets 30 = 30.
     s = _bag(roark_state(tables, names), names, "Full Heal")
     s = s._replace(
         stats=s.stats.at[0, 0, Stat.SPE - 1].set(30).at[1, 0, Stat.SPE - 1].set(20),
@@ -1081,8 +1082,8 @@ def test_a_bag_paralysis_cure_frees_the_end_speed_tie(tables, names):
 
 
 def test_a_bag_confusion_cure_frees_the_tangled_feet_threshold(tables, names):
-    # A confused Tangled Feet target halves the rate (bcp.c:2944-2946); its Full Heal (HEAL_CONFUSION,
-    # battle_system.c:543-551) ends the confusion before the player's check.
+    # A confused Tangled Feet target halves the rate (bcp.c:2944-2946); its Full Heal
+    # (HEAL_CONFUSION, battle_system.c:543-551) ends the confusion before the player's check.
     s = roark_state(tables, names, player_moves=("Tackle",))
     s = _bag(s, names, "Full Heal")
     s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.TANGLED_FEET))
@@ -1092,6 +1093,31 @@ def test_a_bag_confusion_cure_frees_the_tangled_feet_threshold(tables, names):
     full = int(calm.hit_thresholds[0, 0])
     assert int(confused.hit_thresholds[0, 0]) < full
     assert full in confused.hit_thresholds[0][confused.hit_possible[0]].tolist()
+
+
+def test_a_bag_confusion_cure_hits_on_the_sampled_path(tables, names):
+    # The sampled path of the state above: a roll u = RandNext() % 100 + 1 in (t/2, t]
+    # (bcp.c:2976) takes its class over the laws' grid as sample_outcome does (_move_draws,
+    # hit_class); the Full Heal ends the confusion first (battle_system.c:543-551), so Tackle
+    # hits at the full rate t. A grid without the unconfused variant gives class 0: a miss.
+    s = roark_state(tables, names, player_moves=("Tackle",))
+    s = _bag(s, names, "Full Heal")
+    s = s._replace(
+        ability=s.ability.at[1, 0].set(AbilityId.TANGLED_FEET),
+        confusion=s.confusion.at[1].set(3),
+    )
+    acts = np.array([0, FIRST_ITEM_ACTION], np.int32)
+    laws = laws_of(tables, s, acts)
+    calm = laws_of(tables, s._replace(confusion=s.confusion.at[1].set(0)), acts)
+    full = int(calm.hit_thresholds[0, 0])
+    rolls = np.arange(full // 2 + 1, full + 1)
+    classes = np.asarray(hit_class(rolls, laws.hit_thresholds[0], laws.hit_possible[0]))
+    assert (classes > 0).all()
+    hit = np.broadcast_to(EMPTY.hit, (CHUNK, *EMPTY.hit.shape)).copy()
+    hit[: len(rolls), 0, :] = classes[:, None]
+    rows_ = Outcome(*(np.broadcast_to(f, (CHUNK, *np.shape(f))) for f in EMPTY))._replace(hit=hit)
+    foe_hp = np.asarray(_step(tables, s, acts, rows_).hp)[: len(rolls), 1, int(s.active[1])]
+    assert (foe_hp < int(s.hp[1, s.active[1]])).all()
 
 
 def test_a_bag_x_accuracy_frees_the_future_sight_stage_sum(tables, names):
