@@ -3,8 +3,9 @@
 # tools/ops/day/podcheck_body.sh prints the exec-pod body that writes this script and gate.sh to
 # /work/_podcheck/ and runs it with the POD_SCRIPTS and POD_WEIGHTS of the checkout's HEAD
 # (DAYBOX.md "Send a run" step 3). Lists every active run under <root>/*/ and <root>/*/*/ (folders starting with _
-# skipped; active: a setup.pid or runner.pid process alive and not a zombie):
-#   run <name> gate=<GATE_VERSION|old> scripts=<first 12 of POD_SCRIPTS|old> runner=<alive|setup> live=<units> pending=<units>
+# skipped; active: a setup.pid, runner.pid or quick.pid (a quick lane run, bin/quick.sh) process alive
+# and not a zombie):
+#   run <name> gate=<GATE_VERSION|old> scripts=<first 12 of POD_SCRIPTS|old> runner=<alive|setup|quick> live=<units> pending=<units>
 # GATE_VERSION, POD_SCRIPTS (the *.sh and weights.py) and POD_WEIGHTS (weights.txt) come from the
 # run's gate.env (setup.sh writes it from pack.sh's meta.env); a run without one was packed by an
 # old script: it ignores reserves, the gate lock and claims. Then, when <POD_WEIGHTS> is given and
@@ -37,9 +38,10 @@ DUT="${PODCHECK_DU_TIMEOUT:-10}"; [[ "$DUT" =~ ^[1-9][0-9]*$ ]] || DUT=10; [ "$D
 old=""; other=""; wother=""
 for d in "$R"/*/ "$R"/*/*/; do d=${d%/}; n=${d#"$R"/}
   case "$n" in _*) continue;; esac
-  [ -d "$d/out" ] || [ -f "$d/setup.pid" ] || continue
+  [ -d "$d/out" ] || [ -f "$d/setup.pid" ] || [ -f "$d/quick.pid" ] || continue
   rs=""; pidlive "$(cat "$d/runner.pid" 2>/dev/null)" && rs=alive
   [ -z "$rs" ] && pidlive "$(cat "$d/setup.pid" 2>/dev/null)" && rs=setup
+  [ -z "$rs" ] && pidlive "$(cat "$d/quick.pid" 2>/dev/null)" && rs=quick
   [ -n "$rs" ] || continue
   gv=$(sed -n 's/^GATE_VERSION=//p' "$d/gate.env" 2>/dev/null); ps_=$(sed -n 's/^POD_SCRIPTS=//p' "$d/gate.env" 2>/dev/null)
   if [ -z "$gv" ]; then gv=old; ps_=old; old="$old $n"

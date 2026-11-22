@@ -485,8 +485,8 @@ def snap_dry(tmp_path):
     if BASH is None:
         pytest.skip("no POSIX bash")
     repo, scratch = tmp_path / "repo", tmp_path / "scratch"
-    for rel in ("tools/ops/common.sh", "tools/ops/day/snap.sh", "tools/ops/day/snap_body.sh",
-                "tools/ops/day/pod/gate.sh", "tools/ops/day/pod/cache_sync.sh"):  # fmt: skip
+    for rel in ("tools/ops/common.sh", "tools/ops/day/snap.sh", "tools/ops/day/send_body.sh",
+                "tools/ops/day/table_key16.sh", "tools/ops/day/pod/gate.sh", "tools/ops/day/pod/cache_sync.sh"):  # fmt: skip
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         (repo / rel).write_bytes((ROOT / rel).read_bytes().replace(b"\r", b""))
     (repo / ".gitignore").write_text("external/\n", encoding="utf-8", newline="\n")
@@ -526,7 +526,7 @@ def snap_dry(tmp_path):
         out = scratch / "rent" / "out" / name / "run.sh"
         return r, out.read_text(encoding="utf-8") if out.exists() else ""
 
-    go.old, go.new, go.bash = sha("HEAD~1"), sha("HEAD"), BASH
+    go.old, go.new, go.bash, go.scratch = sha("HEAD~1"), sha("HEAD"), BASH, scratch
     return go
 
 
@@ -577,7 +577,7 @@ def test_snap_sh_old_snap_compare_runs_serially_with_a_note(snap_dry):
 
 
 def _snap_body(snap_dry, mode):
-    """The dry-run exec-pod body (argv) and run.sh of a capture or a compare."""
+    """The dry-run exec-pod body (argv and printed line), run.sh and name of a capture or a compare."""
     import json
 
     if mode == "capture":
@@ -587,86 +587,115 @@ def _snap_body(snap_dry, mode):
         name = f"snapcmp-body-{mode}"
         r, run_sh = snap_dry("compare", snap_dry.new, "/work/snapmain-abc1234/snap", name)
     assert r.returncode == 0, r.stdout + r.stderr
-    body = r.stdout[r.stdout.index("== exec-pod body") :].splitlines()[1]
-    return json.loads(body)["command"], run_sh, name
+    line = r.stdout[r.stdout.index("== exec-pod body") :].splitlines()[1]
+    return json.loads(line)["command"], line, run_sh, name
+
+
+# The most characters of a printed snapshot body: an agent reproduces it in a tool call, so it
+# is one short script (send_body.sh BODY_LIM is 1000; a run.sh in base64 argv items was about
+# 15-20 KB and arrived changed, RUNSH_SHA_MISMATCH, three times on 21 Nov).
+SNAP_BODY_MAX = 800  # about 730 with the dry-run code word; a real code word is about 30 characters
 
 
 @pytest.mark.parametrize("mode", ["capture", "compare"])
-def test_snap_sh_body_stays_within_exec_pod_limits(snap_dry, mode):
-    """exec-pod refuses an argv item over 4096 characters and an argv over 256 items (road test:
-    a 15,124-character run.sh item was refused with 422)."""
-    import base64
-
-    cmd, run_sh, _ = _snap_body(snap_dry, mode)
-    assert len(cmd) <= 256
-    assert max(len(x) for x in cmd) <= 4096
-    assert cmd[:2] == ["sh", "-c"] and cmd[3] == "_"
-    assert len(run_sh) > 4096  # the body really is split: run.sh alone is over one item
-    assert base64.b64decode("".join(cmd[4:])).decode() == run_sh
-
-
-@pytest.mark.parametrize("mode", ["capture", "compare"])
-def test_snap_sh_body_writes_run_sh_and_refuses_a_changed_one(snap_dry, tmp_path, mode):
-    """The body's script joins the chunks, decodes run.sh and goes on only when its sha256 is the
-    PC's; a changed chunk ends RUNSH_SHA_MISMATCH, exit 1, run.sh removed, nothing started."""
+def test_snap_sh_body_is_one_short_script_and_run_sh_travels_in_the_payload(snap_dry, mode):
     import hashlib
+    import tarfile
 
-    from tests.tools.test_pod_gate import _clean_env, _posix_shells
+    cmd, line, run_sh, name = _snap_body(snap_dry, mode)
+    assert cmd[:2] == ["sh", "-c"] and len(cmd) == 3
+    assert len(line) <= SNAP_BODY_MAX, len(line)
+    assert "base64" not in cmd[2] and "receive dry-run-no-code " in cmd[2]
+    o = snap_dry.scratch / "rent" / "out" / name
+    want = hashlib.sha256((o / "payload.tar").read_bytes()).hexdigest()
+    assert f"[ x$s = x{want} ]" in cmd[2]
+    with tarfile.open(o / "payload.tar") as t:
+        names = t.getnames()
+        assert t.extractfile("run.sh").read().decode() == run_sh
+        start = t.extractfile("start.sh").read().decode()
+    assert names == ["code.tar", "tables.tar.xz", "cache_sync.sh", "run.sh", "start.sh"]
+    assert f"setsid nohup bash /work/{name}/run.sh > run.out 2>&1 < /dev/null &" in start
+    assert start.index("DECOMP_MISSING") < start.index("UNPACK_FAILED") < start.index("PREP_OK")
 
-    cmd, run_sh, name = _snap_body(snap_dry, mode)
-    want = hashlib.sha256(run_sh.encode()).hexdigest()
-    assert f"= {want} ]" in cmd[2]
-    # Only the part before the start: the rest receives the payload and starts run.sh.
-    head = cmd[2][: cmd[2].index("chmod +x run.sh")] + "echo RUNSH_OK"
+
+@pytest.mark.parametrize("mode", ["capture", "compare"])
+def test_snap_sh_body_starts_only_a_received_payload_whose_sha_matches(snap_dry, tmp_path, mode):
+    """The body receives payload.tar, checks its sha256 against the PC's and only then unpacks it
+    and runs start.sh; a changed payload ends PAYLOAD_SHA_MISMATCH (payload removed), a failed or
+    timed-out receive RECEIVE_FAILED rc=<n>, each exit 1 with nothing started; a folder holding an
+    earlier attempt ends NAME_USED before any receive."""
+    from tests.tools.test_pod_gate import _clean_env, _pod_receive, _posix, _posix_shells
+
+    cmd, _, _, name = _snap_body(snap_dry, mode)
+    good = snap_dry.scratch / "rent" / "out" / name / "payload.tar"
+    bad = tmp_path / "bad" / "payload.tar"
+    bad.parent.mkdir()
+    bad.write_bytes(good.read_bytes()[:-1] + b"x")
+    # In the foreground (no sleep, no tail): the result is the job's own output and exit code.
+    script = cmd[2].replace("/work/_bin/runpodctl", "runpodctl").replace("bash start.sh", "echo STARTED; ls")
+    script = script.replace(" & sleep 20; tail -c 300 prep.log", "; r=$?; cat prep.log; exit $r")
     for i, sh in enumerate(_posix_shells()):
-        for bad in (False, True):
-            w = tmp_path / f"{mode}{i}{int(bad)}"
-            script = head.replace(f"/work/{name}", f"'{w.as_posix()}'")
-            chunks = list(cmd[4:])
-            if bad:  # a valid base64 chunk with other bytes
-                chunks[0] = "QUJD" + chunks[0][4:]
-            r = subprocess.run([*sh, script, "_", *chunks], capture_output=True, text=True, env=_clean_env(),
-                               check=False)  # fmt: skip
-            if bad:
-                assert r.returncode == 1 and "RUNSH_SHA_MISMATCH" in r.stdout, (sh, r.stdout)
-                assert not (w / "run.sh").exists()
+        for case, src, rc, sl in (("good", good, 0, 0), ("bad", bad, 0, 0), ("fail", good, 1, 0),
+                                  ("slow", good, 0, 30)):  # fmt: skip
+            w = tmp_path / f"{mode}{i}{case}"
+            s = script.replace(f"/work/{name}", f"'{_posix(w)}'")
+            if case == "slow":
+                s = s.replace("timeout -k 10 1800 ", "timeout -k 1 1 ")
+            path = _pod_receive(tmp_path, src, rc=rc, sleep=sl)
+            r = subprocess.run([*sh, f"PATH='{path}':$PATH; {s}"], capture_output=True, text=True,
+                               env=_clean_env(), check=False, timeout=60)  # fmt: skip
+            if case == "good":
+                assert r.returncode == 0 and r.stdout.startswith("STARTED"), (sh, r.stdout, r.stderr)
+                assert {"run.sh", "start.sh", "code.tar"} <= set(r.stdout.split())
+                # The same body again (or another under this name): refused before any receive.
+                again = subprocess.run([*sh, f"PATH='{path}':$PATH; {s}"], capture_output=True, text=True,
+                                       env=_clean_env(), check=False, timeout=60)  # fmt: skip
+                assert again.returncode == 1 and again.stdout.startswith(f"NAME_USED {_posix(w)} holds an earlier "
+                                                                         "attempt"), (sh, again.stdout)  # fmt: skip
             else:
-                assert r.returncode == 0 and r.stdout.strip() == "RUNSH_OK", (sh, r.stderr)
-                assert (w / "run.sh").read_bytes() == run_sh.encode()
+                first = {"bad": "PAYLOAD_SHA_MISMATCH ", "fail": "RECEIVE_FAILED rc=1",
+                         "slow": "RECEIVE_FAILED rc=124"}[case]  # fmt: skip
+                assert r.returncode == 1 and r.stdout.startswith(first), (sh, case, r.stdout)
+                assert "STARTED" not in r.stdout and not (w / "run.sh").exists()
+                if case == "bad":
+                    assert not (w / "payload.tar").exists()
 
 
-def _body_fn(tmp_path, call):
-    """<call> in bash after sourcing tools/ops/day/snap_body.sh, in <tmp_path>."""
-    from tests.tools.test_pod_gate import BASH, ROOT, _clean_env
+def test_snap_sh_start_sh_unpacks_the_checkout_and_starts_run_sh(snap_dry, tmp_path):
+    """start.sh (from the payload): DECOMP_MISSING without the decomp folder; else the checkout,
+    tables and decomp link in repo/, PREP_OK, and run.sh started detached."""
+    import re
+    import tarfile
 
-    if BASH is None:
-        pytest.skip("no POSIX bash")
-    body = (ROOT / "tools" / "ops" / "day" / "snap_body.sh").as_posix()
-    return subprocess.run([BASH, "-c", f". '{body}'; cd '{tmp_path.as_posix()}' && {call}"],
-                          capture_output=True, text=True, env=_clean_env(), check=False)  # fmt: skip
+    if not _setsid():
+        pytest.skip("needs setsid (Linux, the pod)")
 
+    from tests.tools.test_pod_gate import _clean_env
 
-def test_snap_body_refuses_a_run_sh_over_256_argv_items(tmp_path):
-    """252 chunks of 4000 base64 characters (756,000 bytes) is the most run.sh may be."""
-    (tmp_path / "ok.sh").write_bytes(b"x" * 756000)
-    (tmp_path / "big.sh").write_bytes(b"x" * 756001)
-    r = _body_fn(tmp_path, 'body_chunks ok.sh && echo "N ${#CH[@]}"')
-    assert r.returncode == 0 and r.stdout.strip() == "N 252", r.stdout + r.stderr
-    r = _body_fn(tmp_path, "body_chunks big.sh; echo rc $?")
-    assert r.stdout.splitlines() == ["REFUSED: exec body would have 257 argv items, over 256 (run.sh too large)",
-                                     "rc 3"], r.stdout + r.stderr  # fmt: skip
-
-
-def test_snap_body_refuses_a_script_over_4000_characters(tmp_path):
-    import json
-
-    (tmp_path / "r.sh").write_bytes(b"echo hi\n")
-    ok, big = "a" * 3998 + '"\\', "a" * 4001
-    r = _body_fn(tmp_path, f"body_chunks r.sh && body_json '{ok}'")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert json.loads(r.stdout)["command"] == ["sh", "-c", ok, "_", "ZWNobyBoaQo="]
-    r = _body_fn(tmp_path, f"body_chunks r.sh && body_json '{big}'; echo rc $?")
-    assert r.stdout.splitlines() == ["REFUSED: exec body script is 4001 characters, over 4000", "rc 3"], r.stdout
+    _, _, _, name = _snap_body(snap_dry, "capture")
+    o = snap_dry.scratch / "rent" / "out" / name
+    for case in ("nodecomp", "ok"):
+        w = tmp_path / case
+        w.mkdir()
+        with tarfile.open(o / "payload.tar") as t:
+            t.extractall(w, filter="data")
+        (w / "run.sh").write_text("echo RAN > ran\n", encoding="utf-8", newline="\n")
+        dm = tmp_path / "decomp"
+        if case == "ok":
+            dm.mkdir(exist_ok=True)
+        start = (w / "start.sh").read_text(encoding="utf-8")
+        start = re.sub(r"/work/_decomp/[0-9a-f]+", str(dm), start.replace(f"/work/{name}", str(w)))
+        r = subprocess.run(["bash", "-c", start], capture_output=True, text=True, env=_clean_env(),
+                           check=False, timeout=60)  # fmt: skip
+        if case == "nodecomp":
+            assert r.returncode == 1 and r.stdout.startswith("DECOMP_MISSING:"), r.stdout
+            assert not (w / "repo").exists()
+            continue
+        assert r.returncode == 0 and r.stdout.strip() == "PREP_OK", r.stdout + r.stderr
+        assert (w / "repo" / "tools" / "snap_compare.py").is_file()
+        assert (w / "repo" / "data" / "gen4_platinum" / "x.json").is_file()
+        assert (w / "repo" / "external" / "pokeplatinum").resolve() == dm.resolve()
+        assert _until(lambda w=w: (w / "ran").exists(), 10)
 
 
 @pytest.mark.parametrize("knob", ["SNAP_WORKERS", "SNAP_GATE_GB"])
