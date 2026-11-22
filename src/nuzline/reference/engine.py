@@ -8960,13 +8960,14 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             turn.charging = turn.no_pp = False
             # FightCommand (bcp.c:1866-1883, B10-9): after Struggle, an encored battler uses the
             # encored move (its slot's PP and no-PP failure) when the slot holds it, whatever it
-            # chose; else its encore ends and the slot's move (its forced choice) runs.
+            # chose; else its encore ends and the encored slot's move runs (moveTemp =
+            # moves[encoredMoveSlot], :1874-1883), a lock's move included (:1885-1888, E2-ML-3).
             action_slot = actions[side]
             esd, emon = s.battlers[side], _active(s, side)
             if not struggling and esd.encore_move and emon.hp and not s.over:
-                if emon.moves[esd.encore_slot] == esd.encore_move:
-                    move, action_slot = esd.encore_move, esd.encore_slot
-                else:
+                held = emon.moves[esd.encore_slot] == esd.encore_move
+                move, action_slot = emon.moves[esd.encore_slot], esd.encore_slot
+                if not held:
                     esd.encore_move = esd.encore_slot = esd.encore_turns = 0
             turn.move_cur = move
             turn.shell_dealt = 0

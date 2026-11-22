@@ -125,21 +125,21 @@ def selected_move(
 
 def fight_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
     """``int32``: the move ``side``'s move action runs (moveTemp), ``selected_move``'s with
-    BattleControllerPlayer_FightCommand's turn-start Encore (bcp.c:1866-1873): a battler whose
-    encored slot holds the encored move runs it, whatever it chose or is locked into
-    (``moveLockedInto`` comes after, :1885-1888), unless it Struggles (:1866-1868; a locked
-    battler never does unless the pause fixed it, ``step._execute_actions``). The same takeover
-    as ``step._use_move``'s ``encored_now`` (E2-ML-2: a lock, Bide's say, under an Encore of
-    another move). The order keeps ``selected_move`` (CalcTurnOrder)."""
+    BattleControllerPlayer_FightCommand's turn-start Encore (bcp.c:1866-1883): an encored battler
+    runs its encored slot's move, the encored move while the slot holds it (:1869-1873), else
+    whatever that slot holds now (:1874-1883, the encore then ends), whatever it chose or is
+    locked into (``moveLockedInto`` comes after, :1885-1888), unless it Struggles (:1866-1868; a
+    locked battler never does unless the pause fixed it, ``step._execute_actions``). The same
+    takeover as ``step._use_move``'s ``encore_runs`` (E2-ML-2, E2-ML-3). The order keeps
+    ``selected_move`` (CalcTurnOrder)."""
     fmt = format_of(state)
     move, struggling = selected_move(tables, state, side, action)
     paused = (state.pivot_battler != 0) | (state.learn_site != 0)
     struggles = jnp.where(paused, struggling, struggling & (locked_slot(state, side) < 0))
     mon = state.active[side]
-    encored = state.encore_move[side].astype(_I32)
     slot_move = state.moves[party(fmt, side), mon, state.encore_slot[side].astype(_I32)]
-    holds = (encored != 0) & (slot_move.astype(_I32) == encored)
-    return jnp.where(holds & ~struggles, encored, move).astype(_I32)
+    runs = (state.encore_move[side] != 0) & ~struggles
+    return jnp.where(runs, slot_move.astype(_I32), move).astype(_I32)
 
 
 def terrain_index(state: BattleState) -> jnp.ndarray:

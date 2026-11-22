@@ -1151,14 +1151,16 @@ def _use_move(
     # BattleControllerPlayer_FightCommand (bcp.c:1866-1883), B10-9: after Struggle, an encored
     # battler whose encored slot holds the encored move uses it (and that slot's PP: the no-PP
     # failure below), whatever it chose (a foe's faster Encore this turn); a slot that no longer
-    # holds it ends the encore (below).
+    # holds it runs that slot's move (moveTemp = moves[encoredMoveSlot], :1874-1883) and ends the
+    # encore (below): a lock's move gives way to it too (the lock is :1885-1888, E2-ML-3).
     encore_slot = state.encore_slot[side].astype(_I32)
-    encore_holds = (state.encore_move[side] != 0) & (
-        state.moves[party(fmt, side), user, encore_slot] == state.encore_move[side]
-    )
-    encored_now = encore_holds & ~jnp.asarray(struggling, bool) & ~reflected_pass
-    move = jnp.where(encored_now, state.encore_move[side].astype(_I32), move)
-    slot = jnp.where(encored_now, encore_slot, slot)
+    encore_slot_move = state.moves[party(fmt, side), user, encore_slot].astype(_I32)
+    encore_set = state.encore_move[side] != 0
+    encore_holds = encore_set & (encore_slot_move == state.encore_move[side])
+    encore_runs = encore_set & ~jnp.asarray(struggling, bool) & ~reflected_pass
+    encored_now = encore_holds & encore_runs
+    move = jnp.where(encore_runs, encore_slot_move, move)
+    slot = jnp.where(encore_runs, encore_slot, slot)
     # BattleControllerPlayer_FightCommand (bcp.c:1900) fixes the defender with the move after the
     # Encore takeover (``moveTemp``) and the stored target (D2-1) at the action's start: the
     # resolver (``targets.resolve``, D2-4). ``speed_order``: monSpeedOrder, D3's input (B = 2: the

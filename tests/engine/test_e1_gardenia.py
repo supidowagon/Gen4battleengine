@@ -362,6 +362,37 @@ def test_a_turn_start_encore_over_a_lock_is_mask_sound(tables, names):
     _assert_mask_sound(tables, s, np.asarray(acts), arbitrary, 0)
 
 
+def _unheld_encore_board(tables, names):
+    """E2-ML-3: the Bide-locked lead of ``_encored_lock_board`` whose encored slot 1 no longer
+    holds the encored move (Tackle; the slot holds Leer). FightCommand runs moves[encoredMoveSlot]
+    and ends the encore (bcp.c:1874-1883) before the lock (:1885-1888): Leer, not Bide."""
+    s, acts = _encored_lock_board(tables, names)
+    s = s._replace(
+        moves=s.moves.at[0, 0, 1].set(names.move("Leer")),
+        encore_move=s.encore_move.at[0].set(names.move("Tackle")),
+    )
+    return s, acts
+
+
+def test_an_unheld_encore_runs_its_slot_over_a_lock_in_the_laws(tables, names):
+    s, acts = _unheld_encore_board(tables, names)
+    assert int(fight_move(tables, s, 0, 0)) == names.move("Leer")
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    assert bool(laws.relevant.hit[0, 0])  # Leer's accuracy roll; Bide has none
+
+
+@pytest.mark.slow  # two steps against the reference
+def test_an_unheld_encore_runs_its_slot_over_a_lock_in_both_engines(tables, names):
+    s, acts = _unheld_encore_board(tables, names)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.stages[1, Stat.DEF]) == int(s.stages[1, Stat.DEF]) - 1  # Leer ran
+    assert int(out.encore_move[0]) == 0 and int(out.encore_turns[0]) == 0  # the encore ended
+    # A held encore runs the encored move over the lock (E2-ML-2): Scratch hits.
+    s2, acts2 = _encored_lock_board(tables, names)
+    out2 = assert_matches_reference(tables, s2, acts2, O)
+    assert int(out2.hp[1, 0]) < int(s2.hp[1, 0])
+
+
 def test_own_tempo_and_safeguard_stop_the_berry_confusion(tables, names):
     """G-5: subscript_confuse.s:6-8 for a held item: the holder's own Own Tempo, or Safeguard
     on its side, ends the script with no draw; the heal stays."""
