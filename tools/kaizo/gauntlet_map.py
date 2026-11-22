@@ -81,6 +81,23 @@ Method (every rule cited to the decomp; paths relative to ``external/pokeplatinu
   ``src/scrcmd_trainer.c:283-289``, from ``res/field/scripts/scripts_battles.s:21-22``). The
   next-fight table by the count (``live_table``) switches the count at every fight end and, inside
   a gap, where a revive, a PC or a healer changes it.
+- A trainer who spots the player walks toward him and stops next to him: the approach task
+  steps ``distance - 1`` tiles along the sight direction (``ApproachingTrainerTask_CheckNextToPlayer``,
+  ``src/trainer_encounter.c:596-605``, ``_StepTowardsPlayer`` :607-618, ``_WaitStepTowardsPlayer``
+  :620-630), started by the battle script for each trainer of the fight
+  (``ScrCmd_StartApproachingTrainerTask``, ``src/scrcmd_trainer.c:29-62``;
+  ``res/field/scripts/scripts_battles.s:131-135``, ``:156-161``, ``:192-206``). A VS2 fight moves
+  both trainers, each along its own line; a double-battle trainer's partner object walks the
+  same distance in the same direction (``ApproachingTrainer_Init(&trainerTwo, ...,
+  trainer.distance, trainer.direction)``, :120). A talk starts no approach task. The objects
+  stay where they stopped (a battle keeps the field's objects, ``Sighting``) until the map's
+  objects are re-created: a warp deletes and re-creates every object
+  (``FieldMapChange_DeleteObjects`` / ``_CreateObjects``, ``src/field_map_change.c:341-360``),
+  and a seamless header change deletes the old header's non-persistent objects and loads the
+  new header's from their events (``sub_0206184C``, ``src/map_object.c:171-196``, from
+  ``src/overlay005/fieldmap.c:422``). The walk carries the moved objects in its state
+  (``_State.moved``) and drops them on every warp (the matrix is masked to one header, so a
+  warp is the only header change the walk makes).
 - ``FieldInput_Process`` runs the sight check on every field-input frame (``field_control.c:
   181-196``): on every tile entered, on the arrival tile of every warp and on the start tile, not on
   the tiles a spin crosses. A walk may not enter a tile where a fixed-facing undefeated trainer
@@ -659,18 +676,22 @@ class Sighting(NamedTuple):
     ``src/field_transition.c:70-80``; objects are deleted only on a map change,
     ``FieldMapChange_DeleteObjects``, ``src/field_map_change.c:355-360``), so the player's
     status bit ``MAP_OBJ_STATUS_ON_ELEVATED_BRIDGE`` (``include/constants/map_object.h:43``)
-    holds after the fight: the walk after it starts in this state."""
+    holds after the fight: the walk after it starts in this state. ``moved``: the objects off
+    their event tiles when the walk after the fight starts (``_State.moved``): those moved
+    before, plus, after a sight fight, each trainer of the fight next to the player (the
+    approach, ``src/trainer_encounter.c:596-630``); a talk moves no one."""
 
     pos: Pos
     how: str
     y: int = 0
     flags: frozenset = frozenset()
     bridge: bool = False
+    moved: tuple = ()
 
     @property
     def state(self) -> tuple:
         """The start state the walk after the fight depends on (``how`` aside)."""
-        return (self.pos, self.y, self.bridge, self.flags)
+        return (self.pos, self.y, self.bridge, self.flags, self.moved)
 
 
 class Seer(NamedTuple):
@@ -720,10 +741,16 @@ CoordRule = Callable[[int, Coord, "bool | None"], "str | None"]
 
 
 class _State(NamedTuple):
+    """A player state of the walk. ``moved``: the objects standing off their event tiles, as
+    sorted ``(header, object index, x, z)``: trainers who walked up to the player before a sight
+    fight (``Sighting.moved``). A warp re-creates every object at its event tile
+    (``src/field_map_change.c:341-360``), so a warp landing has none."""
+
     pos: Pos
     y: int
     bridge: bool
     flags: frozenset = frozenset()
+    moved: tuple = ()
 
 
 class Walker:
@@ -779,6 +806,7 @@ class Walker:
         self.on_enter = {h: frozenset(f) for h, f in (on_enter or {}).items()}
         self._sight: dict[tuple, dict[tuple[int, int], list[tuple[Seer, int]]]] = {}
         self._walks: dict[tuple, Walk] = {}
+        self._relocated: dict[tuple, MapObject] = {}
 
     def reached_headers(self) -> set[int]:
         """Every header a walk of this walker has reached."""
@@ -797,6 +825,41 @@ class Walker:
     def _ignored(self, header: int, o: MapObject, flags: frozenset | None = None) -> bool:
         return self.hidden(o, flags) or (self.ignore is not None and self.ignore(header, o))
 
+    def _relocate(self, area: Area, entry: tuple) -> MapObject:
+        """The object of a ``moved`` entry ``(header, index, x, z)`` on its new tile, at the
+        height it reaches walking there tile by tile from its event tile in a straight line
+        (each step on the plate nearest its height, ``MapObject_RecalculatePositionHeight``,
+        ``src/map_object_move.c:1036-1047``)."""
+        o = self._relocated.get(entry)
+        if o is None:
+            _, index, x, z = entry
+            obj = next((c for c in area.objects if c.index == index), None)
+            if obj is None or (obj.x != x and obj.z != z):
+                raise MapReadError(f"header {area.header}: no object {index} moves to {(x, z)}")
+            y = area.object_height(obj)
+            dx = (x > obj.x) - (x < obj.x)
+            dz = (z > obj.z) - (z < obj.z)
+            cx, cz = obj.x, obj.z
+            while (cx, cz) != (x, z):
+                cx, cz = cx + dx, cz + dz
+                h = area.plate(cx, cz, y)
+                y = y if h is None else h
+            o = self._relocated[entry] = obj._replace(x=x, z=z, y=y)
+        return o
+
+    def objects_on(self, area: Area, x: int, z: int, moved: tuple = ()) -> list[MapObject]:
+        """The objects of the area on ``(x, z)`` with the ``moved`` ones (``_State.moved``) on
+        their new tiles."""
+        here = area.object_at.get((x, z), ())
+        if not moved:
+            return list(here)
+        gone = {e[1] for e in moved if e[0] == area.header}
+        out = [o for o in here if o.index not in gone]
+        for e in moved:
+            if e[0] == area.header and (e[2], e[3]) == (x, z):
+                out.append(self._relocate(area, e))
+        return sorted(out)
+
     def _object_at(
         self,
         area: Area,
@@ -805,9 +868,11 @@ class Walker:
         y: int,
         removable: bool,
         flags: frozenset | None = None,
+        moved: tuple = (),
     ) -> MapObject | None:
-        """An object on the tile within 2 height units of ``y`` that blocks (``sub_02063F00``)."""
-        for o in area.object_at.get((x, z), ()):
+        """An object on the tile within 2 height units of ``y`` that blocks (``sub_02063F00``),
+        the ``moved`` objects on their new tiles."""
+        for o in self.objects_on(area, x, z, moved):
             if removable and o.cleared(self.moves):
                 continue
             if self._ignored(area.header, o, flags):
@@ -853,11 +918,13 @@ class Walker:
         obj: MapObject,
         removable: bool = True,
         flags: frozenset | None = None,
+        moved: tuple = (),
     ) -> list[tuple[int, int, int, int]]:
         """The tiles ``(x, z, direction, distance)`` where ``obj`` can spot the player
         (``GetTrainerDistToPlayer`` :182-229, ``IsPathInterrupted`` :310-344): every tile up to
         the range that does not collide for the trainer, before the first that does or that
-        holds another object at its height."""
+        holds another object at its height (the ``moved`` objects on their new tiles: a trainer
+        who walked up to the player blocks a line there and frees its event tile)."""
         if obj.trainer is None:
             return []
         look = self.facing(obj)
@@ -873,7 +940,7 @@ class Walker:
                 # every tile is tested from the trainer's own tile and height (sub_02063E94)
                 if self._collides_from(area, (obj.x, obj.z), (x, z), h, d):
                     break
-                if self._object_at(area, x, z, h, removable, flags) is not None:
+                if self._object_at(area, x, z, h, removable, flags, moved) is not None:
                     break
                 out.append((x, z, d, k))
         return out
@@ -894,9 +961,15 @@ class Walker:
         return area.behaviour(*origin) in BLOCKS[d] or attr & BEHAVIOUR_MASK in BLOCKS[OPPOSITE[d]]
 
     def _sight_table(
-        self, header: int, defeated: frozenset[int], removable: bool, flags: frozenset
+        self,
+        header: int,
+        defeated: frozenset[int],
+        removable: bool,
+        flags: frozenset,
+        moved: tuple = (),
     ):
-        key = (header, defeated, removable, flags)
+        moved = tuple(e for e in moved if e[0] == header)
+        key = (header, defeated, removable, flags, moved)
         table = self._sight.get(key)
         if table is None:
             table = {}
@@ -910,7 +983,7 @@ class Walker:
                     continue
                 seer = Seer(o.index, t, look[1])
                 gy = grid_y(area.object_height(o))
-                for sx, sz, _, _ in self.sight_tiles(header, o, removable, flags):
+                for sx, sz, _, _ in self.sight_tiles(header, o, removable, flags, moved):
                     table.setdefault((sx, sz), []).append((seer, gy))
             self._sight[key] = table
         return table
@@ -924,11 +997,12 @@ class Walker:
         removable: bool = True,
         y: int = 0,
         flags: frozenset | None = None,
+        moved: tuple = (),
     ) -> list[Seer]:
         """The undefeated trainers that can spot the player standing on ``(x, z)`` at height
         ``y``, in object order (``sub_02063F00``: the player within 2 height units)."""
         flags = self.flags if flags is None else flags
-        table = self._sight_table(header, frozenset(defeated), removable, flags)
+        table = self._sight_table(header, frozenset(defeated), removable, flags, moved)
         seers = [s for s, gy in table.get((x, z), ()) if abs(grid_y(y) - gy) < 2]
         return sorted(set(seers))
 
@@ -936,18 +1010,67 @@ class Walker:
         """The fights the tile can start and whether the player can stand on it unspotted: each
         set of turning seers that faces the player (fixed ones always do) gives the game's fight
         (``FieldSystem_CheckForTrainersWantingBattle``, ``trainer_encounter.c:84-131``)."""
+        fights, passable = self._approaches(seers)
+        return set(fights), passable
+
+    def _approaches(self, seers: list[Seer]) -> tuple[dict[Fight, set[tuple[Seer, ...]]], bool]:
+        """``encounters`` with, per fight, the seers that walk up to the player: the first, and
+        for VS2 the second (``trainer_encounter.c:98-106``); a double-battle trainer's partner
+        object is found by ``_after``."""
         fixed = [s for s in seers if not s.turning]
         turning = [s for s in seers if s.turning]
-        fights: set[Fight] = set()
+        fights: dict[Fight, set[tuple[Seer, ...]]] = {}
         passable = False
         for r in range(len(turning) + 1):
             for chosen in combinations(turning, r):
-                f = self._fight(sorted([*fixed, *chosen]))
+                seeing = sorted([*fixed, *chosen])
+                f = self._fight(seeing)
                 if f is None:
                     passable = True
-                else:
-                    fights.add(f)
+                    continue
+                movers = tuple(next(s for s in seeing if s.trainer == t) for t in f)
+                fights.setdefault(f, set()).add(movers)
         return fights, passable
+
+    def _after(self, pos: Pos, movers: tuple[Seer, ...], moved: tuple) -> tuple:
+        """``moved`` after the ``movers`` spot the player on ``pos``: each stops on the tile
+        next to him along its line (it steps ``distance - 1`` tiles,
+        ``src/trainer_encounter.c:596-630``); a double-battle trainer's partner object (the
+        first other object with its trainer id, ``FindTrainerPartner`` :356-374) walks the same
+        distance in the same direction (:120)."""
+        area = self.maps.area(pos.header)
+        out = set(moved)
+        for seer in movers:
+            obj = next(o for o in area.objects if o.index == seer.index)
+            dx = (pos.x > obj.x) - (pos.x < obj.x)
+            dz = (pos.z > obj.z) - (pos.z < obj.z)
+            steps = abs(pos.x - obj.x) + abs(pos.z - obj.z) - 1
+            walkers = [obj]
+            if seer.trainer in self.doubles:
+                partner = next(
+                    (
+                        o
+                        for o in area.objects
+                        if o.index != obj.index
+                        and o.trainer == seer.trainer
+                        and not self._ignored(area.header, o)
+                        and (
+                            o.trainer_type in (TRAINER_NORMAL, TRAINER_ALL_DIRECTIONS)
+                            or TRAINER_FACE_FIRST <= o.trainer_type <= TRAINER_FACE_LAST
+                        )
+                    ),
+                    None,
+                )
+                if partner is None:
+                    raise MapReadError(
+                        f"header {area.header}: double-battle trainer {seer.trainer} has no "
+                        "partner object"
+                    )
+                walkers.append(partner)
+            for o in walkers:
+                if steps > 0:
+                    out.add((area.header, o.index, o.x + dx * steps, o.z + dz * steps))
+        return tuple(sorted(out))
 
     def _fight(self, seeing: list[Seer]) -> Fight | None:
         if not seeing:
@@ -971,13 +1094,17 @@ class Walker:
         removable: bool,
         flags: frozenset,
         bridge: bool,
+        moved: tuple = (),
     ) -> bool:
-        """Record the fights the tile starts; True when the player cannot stand on it."""
-        fights, passable = self.encounters(
-            self.sight_at(pos.header, pos.x, pos.z, defeated, removable, y, flags)
+        """Record the fights the tile starts (each with the objects moved after it); True when
+        the player cannot stand on it."""
+        fights, passable = self._approaches(
+            self.sight_at(pos.header, pos.x, pos.z, defeated, removable, y, flags, moved)
         )
-        for f in fights:
-            walk.sighted(f, Sighting(pos, how, y, flags, bridge))
+        for f, ways in fights.items():
+            for movers in ways:
+                after = self._after(pos, movers, moved)
+                walk.sighted(f, Sighting(pos, how, y, flags, bridge, after))
         return not passable
 
     # -- coords
@@ -1054,7 +1181,7 @@ class Walker:
         out = set()
         if self._collides(area, (s.pos.x, s.pos.z), s.y, d):
             out.add("collide")
-        if self._object_at(area, x, z, s.y, removable, s.flags) is not None:
+        if self._object_at(area, x, z, s.y, removable, s.flags, s.moved) is not None:
             out.add("object")
         b = area.behaviour(x, z)
         if b == JUMP[d]:
@@ -1102,7 +1229,7 @@ class Walker:
 
     def _at(self, area: Area, s: _State, x: int, z: int) -> _State:
         y, bridge = self._land(area, x, z, s.y, s.bridge)
-        return _State(Pos(area.header, x, z), y, bridge, s.flags)
+        return _State(Pos(area.header, x, z), y, bridge, s.flags, s.moved)
 
     def _traverse(self, area: Area, s: _State, d: int, kinds: set[int]) -> list[_State] | None:
         """A field-move script that carries the player over the run of ``kinds`` tiles in ``d``
@@ -1168,27 +1295,29 @@ class Walker:
         y: int | None = None,
         flags: Collection[int] | None = None,
         bridge: bool | None = None,
+        moved: tuple = (),
     ) -> Walk:
         """Breadth-first walk from ``start`` (at height ``y``, an arrival when None) with
         ``defeated`` trainers beaten and ``flags`` set (``Walker.flags`` when None; ``bfs2.js``
         ``run``), on the elevated bridge when ``bridge`` (when None: the start tile is a bridge
-        start): sight is checked on the start tile, every tile entered and every warp
-        arrival."""
+        start), with the ``moved`` objects off their event tiles (``_State.moved``): sight is
+        checked on the start tile, every tile entered and every warp arrival."""
         defeated = frozenset(defeated)
         flags = self.flags if flags is None else frozenset(flags)
         if y is None:
             y = self.arrival_height(start)
         if bridge is None:
             bridge = self.maps.area(start.header).behaviour(start.x, start.z) == BRIDGE_START
-        key = (start, y, bridge, defeated, removable, flags)
+        moved = tuple(sorted(moved))
+        key = (start, y, bridge, defeated, removable, flags, moved)
         if key in self._walks:
             return self._walks[key]
         walk = Walk({start: None})
         self._walks[key] = walk
-        if self._spotted(walk, start, y, "arrival", defeated, removable, flags, bridge):
+        if self._spotted(walk, start, y, "arrival", defeated, removable, flags, bridge, moved):
             walk.held = True
             return walk
-        s0 = _State(start, y, bridge, flags)
+        s0 = _State(start, y, bridge, flags, moved)
         walk.states.add(s0)
         return self._bfs(walk, deque([s0]), defeated, removable)
 
@@ -1207,7 +1336,9 @@ class Walker:
         self._walks[key] = walk
         queue: deque[_State] = deque()
         for s in sorted(seeds):
-            if not self._spotted(walk, s.pos, s.y, "sight", defeated, removable, s.flags, s.bridge):
+            if not self._spotted(
+                walk, s.pos, s.y, "sight", defeated, removable, s.flags, s.bridge, s.moved
+            ):
                 walk.states.add(s)
                 queue.append(s)
         return self._bfs(walk, queue, defeated, removable)
@@ -1227,7 +1358,7 @@ class Walker:
                     warp is not None
                     and attr is not None
                     and attr & BEHAVIOUR_MASK == DOOR
-                    and self._object_at(area, nx, nz, s.y, removable, s.flags) is None
+                    and self._object_at(area, nx, nz, s.y, removable, s.flags, s.moved) is None
                 )
                 path = [self._at(area, s, nx, nz)] if door else self._step(area, s, d, removable)
                 if path is None:
@@ -1235,8 +1366,9 @@ class Walker:
                     continue
                 here = path[-1]
                 if not door and self._spotted(
-                    walk, here.pos, here.y, "sight", defeated, removable, here.flags, here.bridge
-                ):
+                    walk, here.pos, here.y, "sight", defeated, removable, here.flags, here.bridge,
+                    here.moved,
+                ):  # fmt: skip
                     continue
                 if not door:
                     forced = self._forced(self.maps.area(here.pos.header), here, d, removable)
@@ -1247,7 +1379,7 @@ class Walker:
                         here = forced[-1]
                         if self._spotted(
                             walk, here.pos, here.y, "sight", defeated, removable, here.flags,
-                            here.bridge,
+                            here.bridge, here.moved,
                         ):  # fmt: skip
                             continue
                 target = here
@@ -1259,6 +1391,7 @@ class Walker:
                         lf = here.flags | self.on_enter.get(landing.header, frozenset())
                         la = self.maps.area(landing.header)
                         lb = la.behaviour(landing.x, landing.z) == BRIDGE_START
+                        # the warp re-creates every object at its event tile: moved is empty
                         if self._spotted(walk, landing, ly, "arrival", defeated, removable, lf, lb):
                             continue
                         target = _State(landing, ly, lb, lf)
@@ -1293,7 +1426,7 @@ class Walker:
         tx, tz = pos.x + dx, pos.z + dz
         if area.behaviour(tx, tz) == TABLE:
             tx, tz = tx + dx, tz + dz
-        for o in area.object_at.get((tx, tz), ()):
+        for o in self.objects_on(area, tx, tz, s.moved):
             if grid_y(area.object_height(o)) != grid_y(s.y) or self.hidden(o, s.flags):
                 continue
             walk.talk.setdefault((area.header, o.local_id), pos)
@@ -1304,7 +1437,8 @@ class Walker:
             # not the partner flag
             lone = t in self.doubles and not self.two_alive
             if t is not None and t not in defeated and not self._inert(o) and not lone:
-                walk.sighted((t,), Sighting(pos, "talk", s.y, s.flags, s.bridge))
+                # a talk starts no approach: no one moves (scripts_battles.s:8-24)
+                walk.sighted((t,), Sighting(pos, "talk", s.y, s.flags, s.bridge, s.moved))
             return
 
     def talk_tiles(
@@ -1393,7 +1527,7 @@ def _chain_fights(walk: Walk, members: frozenset, group: frozenset, done: frozen
 
 
 def _start_walk(walker: Walker, s: Sighting, done: frozenset) -> Walk:
-    return walker.walk(s.pos, done, y=s.y, flags=s.flags, bridge=s.bridge)
+    return walker.walk(s.pos, done, y=s.y, flags=s.flags, bridge=s.bridge, moved=s.moved)
 
 
 def chain_prefixes(
@@ -1603,18 +1737,24 @@ def live_table(
     def go(found: Mapping[Fight, set[Sighting]], done: frozenset, seq: tuple) -> None:
         for f, sights in found.items():
             for s in sorted(sights):
-                rec(s.pos, s.y, s.flags, s.bridge, done | set(f), (*seq, f))
+                rec(s.pos, s.y, s.flags, s.bridge, done | set(f), (*seq, f), s.moved)
 
     def rec(
-        pos: Pos, y: int | None, flags: frozenset, bridge: bool | None, done: frozenset, seq
+        pos: Pos,
+        y: int | None,
+        flags: frozenset,
+        bridge: bool | None,
+        done: frozenset,
+        seq,
+        moved: tuple = (),
     ) -> None:
-        state = (pos, y, flags, bridge, done, seq)
+        state = (pos, y, flags, bridge, done, seq, moved)
         if state in explored:
             return
         explored.add(state)
         gap = bool(seq) and done != members
         for c in (1, 2):
-            walk = walkers[c].walk(pos, done, y=y, flags=flags, bridge=bridge)
+            walk = walkers[c].walk(pos, done, y=y, flags=flags, bridge=bridge, moved=moved)
             found = _chain_fights(walk, members, groups[c], done)
             add((seq, c, c, ""), found)
             if gap:

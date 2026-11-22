@@ -175,7 +175,9 @@ def test_a_warp_into_a_sight_line_starts_that_fight():
 def test_the_start_tile_is_checked_too():
     a = area(1, ["......"], [trainer(1, 4, 0, WEST, 3)])
     w = Walker(StaticMaps([a])).walk(Pos(1, 2, 0))
-    assert w.spot == {(1,): Sighting(Pos(1, 2, 0), "arrival")} and set(w.seen) == {Pos(1, 2, 0)}
+    # trainer 1 (object 1) walks one step up to the player: (4, 0) -> (3, 0)
+    spotted = Sighting(Pos(1, 2, 0), "arrival", moved=((1, 1, 3, 0),))
+    assert w.spot == {(1,): spotted} and set(w.seen) == {Pos(1, 2, 0)}
 
 
 def test_a_defeated_trainer_no_longer_sees():
@@ -469,6 +471,96 @@ def test_a_gap_is_locked_when_one_start_tile_is_held():
     table = live_table(maps, walkers, spec, ())
     after = [r for r in table if r["fought"] == [[1]]]
     assert after and all("locked" in r["gap"] for r in after)  # no change row: none has "at"
+
+
+# A sighting trainer walks distance - 1 tiles and stops next to the player
+# (src/trainer_encounter.c:596-630); a talk moves no one; a warp re-creates the objects at their
+# event tiles (src/field_map_change.c:341-360). Rows of the next three tests: trainer 1 on
+# (6, 0) looks west over (5..1, 0); the player comes up the west side to (0, 0) or the east side
+# to (7, 0) (a talk tile).
+APPROACH_ROWS = ["........", ".######.", "........"]
+
+
+def _approach_walker(warps=(), extra=(), rows=APPROACH_ROWS):
+    a = area(1, rows, [trainer(1, 6, 0, WEST, 5)], warps)
+    return Walker(StaticMaps([a, *extra]), {1})
+
+
+def test_a_sight_fight_frees_the_event_tile_and_blocks_the_tile_next_to_the_player():
+    w = _approach_walker()
+    starts = w.walk(Pos(1, 0, 2)).starts[(1,)]
+    got = {(s.how, s.pos): s.moved for s in starts}
+    assert got[("sight", Pos(1, 1, 0))] == ((1, 1, 2, 0),)  # 4 steps: (6, 0) -> (2, 0)
+    assert got[("talk", Pos(1, 7, 0))] == ()  # a talk: the trainer stays on (6, 0)
+    sight = next(s for s in starts if s.pos == Pos(1, 1, 0))
+    after = w.walk(sight.pos, {1}, y=sight.y, flags=sight.flags, moved=sight.moved)
+    assert Pos(1, 6, 0) in after.seen and Pos(1, 3, 0) in after.seen  # round by the east side
+    assert Pos(1, 2, 0) not in after.seen  # the trainer stands there now
+    talk = next(s for s in starts if s.how == "talk")
+    still = w.walk(talk.pos, {1}, y=talk.y, flags=talk.flags, moved=talk.moved)
+    assert Pos(1, 6, 0) not in still.seen and Pos(1, 2, 0) in still.seen
+    # the DP carries it: the walks after fight 1 are one per start state, moved included
+    spec = ChainSpec((1,), (1,), (Pos(1, 0, 2),))
+    (run,) = runs(w, spec)
+    assert sorted(Pos(1, 6, 0) in x.seen for x in run.states[1]) == [False, True]
+
+
+def test_a_moved_trainer_blocks_a_line_and_its_freed_tile_opens_one():
+    # Trainer 1 on (6, 1) spots the player on (1, 1) and stops on (2, 1), inside trainer 2's
+    # line (north from (2, 4)), which now ends there; trainer 3's line (north from (6, 4)),
+    # which ended at trainer 1, now runs on over (6, 1) and (6, 0).
+    rows = ["........"] * 6
+    objs = [trainer(1, 6, 1, WEST, 5), trainer(2, 2, 4, NORTH, 4), trainer(3, 6, 4, NORTH, 4)]
+    a = area(1, rows, objs)
+    w = Walker(StaticMaps([a]), {1, 2, 3})
+    sight = next(
+        s for s in w.walk(Pos(1, 0, 1)).starts[(1,)] if (s.how, s.pos) == ("sight", Pos(1, 1, 1))
+    )
+    assert sight.moved == ((1, 1, 2, 1),)
+    line = {(x, z) for x, z, _, _ in w.sight_tiles(1, objs[1])}
+    cut = {(x, z) for x, z, _, _ in w.sight_tiles(1, objs[1], moved=sight.moved)}
+    assert line == {(2, 3), (2, 2), (2, 1), (2, 0)} and cut == {(2, 3), (2, 2)}
+    line3 = {(x, z) for x, z, _, _ in w.sight_tiles(1, objs[2])}
+    open3 = {(x, z) for x, z, _, _ in w.sight_tiles(1, objs[2], moved=sight.moved)}
+    assert line3 == {(6, 3), (6, 2)} and open3 == {(6, 3), (6, 2), (6, 1), (6, 0)}
+    after = w.walk(sight.pos, {1}, y=sight.y, flags=sight.flags, moved=sight.moved)
+    assert Pos(1, 2, 0) not in {s.pos for s in after.starts.get((2,), ())}
+    assert Pos(1, 6, 0) in {s.pos for s in after.starts[(3,)]}
+    plain = w.walk(sight.pos, {1}, y=sight.y, flags=sight.flags)
+    assert Pos(1, 2, 0) in {s.pos for s in plain.starts[(2,)]}
+    assert Pos(1, 6, 0) not in {s.pos for s in plain.starts.get((3,), ())}
+
+
+def test_leaving_and_re_entering_puts_the_trainer_back_on_its_event_tile():
+    # a warp on (1, 3), off the way east, to header 2 and back: the arrival re-creates
+    # trainer 1 on (6, 0)
+    there = area(2, ["..."], warps=[Warp(0, 1, 0, 1, 0)])
+    w = _approach_walker([Warp(0, 1, 3, 2, 0)], [there], [*APPROACH_ROWS, "...#####"])
+    sight = next(s for s in w.walk(Pos(1, 0, 2)).starts[(1,)] if s.pos == Pos(1, 1, 0))
+    after = w.walk(sight.pos, {1}, y=sight.y, flags=sight.flags, moved=sight.moved)
+    moved = {st.pos for st in after.states if st.moved}
+    back = {st.pos for st in after.states if not st.moved and st.pos.header == 1}
+    assert Pos(1, 6, 0) in moved and Pos(1, 2, 0) not in moved
+    assert back and Pos(1, 2, 0) in back and Pos(1, 6, 0) not in back
+    assert all(not st.moved for st in after.states if st.pos.header == 2)
+
+
+def test_a_vs2_fight_moves_both_and_a_double_trainers_partner_walks_alongside():
+    # 1 looks east from (0, 0), 2 west from (6, 0): both see (3, 0) at distance 3 (VS2)
+    rows = [".......", "###.###", "......."]
+    a = area(1, rows, [trainer(1, 0, 0, EAST, 4), trainer(2, 6, 0, WEST, 4)])
+    w = Walker(StaticMaps([a]), {1, 2})
+    vs2 = {s.pos: s.moved for s in w.walk(Pos(1, 3, 2)).starts[(1, 2)]}
+    assert vs2[Pos(1, 3, 0)] == ((1, 1, 2, 0), (1, 2, 4, 0))
+    one = Walker(StaticMaps([a]), {1, 2}, two_alive=False)
+    alone = {s.pos: s.moved for s in one.walk(Pos(1, 3, 2)).starts[(1,)]}
+    assert alone[Pos(1, 3, 0)] == ((1, 1, 2, 0),)  # one live: trainer 1 alone walks up
+    # twins (one trainer id, two objects 5 and 6): the partner walks the leader's distance
+    rows = ["###.###", ".......", "......."]
+    twins = [trainer(5, 6, 1, WEST, 4), MapObject(6, 6, 0, 1, 3000 + 5 - 1, WEST, 4, 6, 2)]
+    t = Walker(StaticMaps([area(1, rows, twins)]), {5}, doubles={5})
+    got = {s.pos: s.moved for s in t.walk(Pos(1, 3, 0)).starts[(5,)]}
+    assert got[Pos(1, 3, 1)] == ((1, 5, 4, 1), (1, 6, 4, 2))
 
 
 def test_gap_fields_are_absent_where_the_live_table_makes_them_order_dependent():
