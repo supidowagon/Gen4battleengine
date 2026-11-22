@@ -524,6 +524,17 @@ def test_sweep_runs_the_jobs_under_the_p_cap_and_writes_the_results(tmp_path):
     ).read_text()
 
 
+def _driver_output(d: Path, p: subprocess.Popen, out: str = "sweep_out") -> str:
+    """sweep.sh's own stdout/stderr and driver.log, for an assertion message."""
+    try:
+        own = p.communicate(timeout=5)[0] or ""
+    except (subprocess.TimeoutExpired, ValueError):
+        own = "(no output read)"
+    log = d / out / "driver.log"
+    text = log.read_text() if log.is_file() else "(no driver.log)"
+    return f"sweep.sh rc {p.returncode}\n--- its output:\n{own}\n--- driver.log:\n{text}"
+
+
 @linux
 def test_sweep_waits_while_container_memory_plus_w_is_over_the_cap(tmp_path):
     d = _run_folder(tmp_path)
@@ -541,10 +552,14 @@ def test_sweep_waits_while_container_memory_plus_w_is_over_the_cap(tmp_path):
         assert (
             p.poll() is None and not (tmp_path / "trace.txt").exists()
         )  # 185 + 13 > 190: no job yet
-        (tmp_path / "cg" / "memory.current").write_text(
-            f"{177 * 10**9}\n", encoding="utf-8", newline="\n"
-        )  # 177 + 13 = 190
-        assert p.wait(timeout=60) == 0
+        # 177 + 13 = 190. Replaced, not rewritten in place: write_text truncates first, and a
+        # reading between the truncation and the write sees an empty file, which the driver
+        # takes for an unreadable memory file (it stops, exit 1), as it must on a pod.
+        tmp = tmp_path / "cg" / "memory.current.tmp"
+        tmp.write_text(f"{177 * 10**9}\n", encoding="utf-8", newline="\n")
+        os.replace(tmp, tmp_path / "cg" / "memory.current")
+        rc = p.wait(timeout=60)
+        assert rc == 0, _driver_output(d, p)
     finally:
         p.kill()
     trace = (tmp_path / "trace.txt").read_text()
@@ -621,7 +636,8 @@ def test_sweep_holds_its_starts_while_a_gate_claim_exists(tmp_path):
         assert p.poll() is None and not (tmp_path / "trace.txt").exists()
         assert "HOLD claim gate-run.u001" in (d / "sweep_out" / "driver.log").read_text()
         claim.unlink()
-        assert p.wait(timeout=60) == 0
+        rc = p.wait(timeout=60)
+        assert rc == 0, _driver_output(d, p)
     finally:
         p.kill()
         holder.kill()
@@ -879,7 +895,8 @@ def test_sweep_jobs_are_gate_units_while_they_run(tmp_path):
         )  # fmt: skip
         live, reserve = map(int, gate.stdout.split())
         assert live == 1 and reserve >= 12  # what every runner's gate now holds for it
-        assert p.wait(timeout=60) == 0
+        rc = p.wait(timeout=60)
+        assert rc == 0, _driver_output(d, p)
     finally:
         p.kill()
     assert not unit.exists()  # the run file goes with the job
