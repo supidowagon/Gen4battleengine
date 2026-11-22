@@ -12,17 +12,14 @@
 # and $RENT/tables/index.txt gets the line "<full sha> <key>".
 # Inputs from the main checkout ($REPO): data/local.toml (paths to the ROM, patch, calc zip,
 # docs sheet; copied into the build checkout when it has none), .cache/decomp/<commit>/main.nef.xMAP
-# (symbols) and external/pokeplatinum (linked when the build checkout has none). These stay on the PC.
+# (symbols) and external/pokeplatinum (linked when the build checkout has none or an empty folder there;
+# any other folder without src/ stops the build). These stay on the PC.
 # Python: $NUZLINE_PY (an existing venv's python, run with PYTHONPATH) or else `uv run --group rom python`.
 # RAM: the build steps run as the child of `tools/ops/ramgate.py --build` (docs/process.md section 5):
 # they start once free RAM > 6 GB + the build weight and the machine lock is free, and hold the lock
 # until they end. A reuse needs neither. A wait that times out exits 14.
 set -euo pipefail
-OPS_DIR=$(cd "$(dirname "$0")" && pwd); . "$OPS_DIR/common.sh"
-ARG="${1:?usage: build_tables.sh --here | <commit>}"
-[ -f "$REPO/data/local.toml" ] || { echo "ERROR: $REPO/data/local.toml missing (see data/local.example.toml)"; exit 2; }
-[ -d "$REPO/external/pokeplatinum" ] || { echo "ERROR: $REPO/external/pokeplatinum missing"; exit 2; }
-
+OPS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); . "$OPS_DIR/common.sh"
 LINKED=""
 unlink_decomp() {  # removes only a link this script made; never deletes through it
   [ -n "$LINKED" ] && [ -e "$LINKED" ] || return 0
@@ -41,6 +38,30 @@ link_decomp() {  # $1 = checkout without external/pokeplatinum
   else ln -s "$REPO/external/pokeplatinum" "$l"; fi
   [ -d "$l/src" ] || { echo "ERROR: decomp link $l failed"; exit 2; }
 }
+decomp_state() {  # $1 = path; prints none, link (a symlink or junction), decomp (a folder with src/),
+  # empty (an empty folder, no link) or other
+  if [ -L "$1" ]; then echo link
+  elif [ ! -e "$1" ]; then echo none
+  elif [ -d "$1/src" ]; then echo decomp
+  elif [ -d "$1" ] && [ -z "$(ls -A "$1")" ]; then echo empty
+  else echo other; fi
+}
+ensure_decomp() {  # $1 = build checkout: keeps its own decomp, else links $REPO's
+  local l="$1/external/pokeplatinum"
+  case "$(decomp_state "$l")" in
+    none) link_decomp "$1" ;;
+    empty) rmdir "$l"; link_decomp "$1" ;;   # an empty folder is no decomp; rmdir never removes content
+    decomp) ;;
+    link) [ -d "$l/src" ] || { echo "ERROR: $l is a link with no src/ (not made by this run); remove it by hand"; exit 2; } ;;
+    *) echo "ERROR: $l is not empty and has no src/: not a decomp; move it away by hand"; exit 2 ;;
+  esac
+}
+# Sourced (tests/tools/test_build_tables_decomp.py): the functions only.
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0
+
+ARG="${1:?usage: build_tables.sh --here | <commit>}"
+[ -f "$REPO/data/local.toml" ] || { echo "ERROR: $REPO/data/local.toml missing (see data/local.example.toml)"; exit 2; }
+[ -d "$REPO/external/pokeplatinum" ] || { echo "ERROR: $REPO/external/pokeplatinum missing"; exit 2; }
 
 if [ "$ARG" = --here ]; then
   B=$(git rev-parse --show-toplevel); MODE=here
@@ -56,7 +77,10 @@ else
     git -C "$REPO" worktree prune; rm -rf "$JC"
   }
   if [ -e "$B" ]; then  # leftover of an earlier run: its link may still be in it
-    [ -e "$B/external/pokeplatinum" ] && LINKED="$B/external/pokeplatinum"
+    case "$(decomp_state "$B/external/pokeplatinum")" in
+      link) LINKED="$B/external/pokeplatinum" ;;
+      empty) rmdir "$B/external/pokeplatinum" ;;
+    esac
     cleanup
   fi
   trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM HUP   # a signal runs cleanup too
@@ -64,7 +88,7 @@ else
   export NUZLINE_CACHE_DIR="$JC"
 fi
 cd "$B"
-[ -e external/pokeplatinum ] || link_decomp "$B"
+ensure_decomp "$B"
 [ -f data/local.toml ] || cp "$REPO/data/local.toml" data/local.toml
 if [ -n "${NUZLINE_PY:-}" ]; then
   W="$(pwd -W 2>/dev/null || pwd)"; S=":"; command -v cygpath >/dev/null && S=";"
