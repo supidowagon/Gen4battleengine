@@ -35,9 +35,6 @@ def pytest_collection_modifyitems(config, items):
         return
     verdict, msg = ramgate.pytest_gate(
         items,
-        config.invocation_params.args,
-        config.rootpath,
-        invocation_dir=config.invocation_params.dir,
         collect_only=bool(getattr(config.option, "collectonly", False)),
         say=lambda m: print(m, file=sys.stderr, flush=True),
     )

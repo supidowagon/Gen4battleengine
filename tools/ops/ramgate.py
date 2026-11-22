@@ -8,12 +8,15 @@ longest key matching an id; no key = 20 GB). The root conftest.py applies it at 
 
 CLI, for `tools.kaizo.*` runs and table builds:
     python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate | --build]
-prints `GO <w>` (exit 0) after any wait, or `POD <w>` (exit 3, weight >= 8). --build (table
+prints `GO <w>` (exit 0) after any wait, `POD <w>` (exit 3, weight >= 8), or `TIMEOUT <w>`
+(exit 4, after NUZLINE_RAMGATE_TIMEOUT minutes, default 30). --build (table
 builds, weight 20 unless --weight) never prints POD: it only waits for RAM.
 """
 
 import importlib.abc
+import inspect
 import os
+import re
 import sys
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -39,21 +42,36 @@ ROM_FIXTURES = frozenset(
         *("docs", "pkcalc_zip", "pkcalc"),
     }
 )
-# The two ROM-only tests that skip on a missing docs extraction by path, not through a fixture.
+# ROM-only tests the fixture closure cannot show (every param of a parametrized id counts):
+# two skip on a missing docs extraction by path, and the test_cli save export gets its save
+# through `request.getfixturevalue(which)`, so no fixture name in `item.fixturenames` shows it.
+# Without it a local ROM-only run holding these ids is no longer all ROM-only, and the engine
+# blocker then breaks the two test_cli tests next to it that import the engine in their body.
+# (The pod skips 4 test_cli tests: these 2 params plus test_kaizo_prep_refusal_exits_2_before_the_cap
+# and test_kaizo_pool_cap_is_never_defaulted, which hold kaizo_save_pre_roark_path.)
 ROM_ONLY_IDS = frozenset(
     {
+        "tests/test_cli.py::test_kaizo_save_export_checks_kaizo_tables",
+        "tests/test_cli.py::test_kaizo_roark_coverage_on_the_saves_is_exact",
+        "tests/kaizo/test_roark_ai_audit.py::test_roark_ai_against_the_pool",
+        "tests/kaizo/test_roark_widths.py::test_roark_pairs_fit_the_width_cap",
         "tests/kaizo/test_overrides.py::test_overrides_check_runs_the_two_placement_rule",
         "tests/kaizo/test_sheet_unmapped.py::test_ally_reasons_name_the_partner_rows_starter",
     }
 )
 # Engine-free means none of these is imported once collection ends. `jax` is not listed:
 # tests/conftest.py imports it for every run under tests/.
+# A ROM-only item's pod weight was measured while it skipped, so a ROM-only item weighs
+# ROM_UNMEASURED_GB until it is measured locally. Local figures: {id: GB}, same keys as weights.txt.
+ROM_UNMEASURED_GB = 20.0
+ROM_MEASURED: dict[str, float] = {}
 ENGINE_PREFIX = "nuzline.engine"
 MAX_LISTED = 5
 
 ENV_ON_POD = "NUZLINE_ON_POD"
 ENV_TIMEOUT = "NUZLINE_RAMGATE_TIMEOUT"
 ENV_ROM_GATE = "NUZLINE_RAMGATE_ROM_GATE"
+ENV_ENGINE_BLOCKED = "NUZLINE_ENGINE_BLOCKED"  # src/nuzline/engine/__init__.py refuses on it
 ENV_DONE = "NUZLINE_RAMGATE_DONE"
 ENV_NESTED = "PYTEST_CURRENT_TEST"  # set while a test runs: a pytest inside it is not gated
 
@@ -202,10 +220,57 @@ def wait_for_ram(
         sleep(POLL_S)
 
 
+def _direct_params(item) -> set[str]:
+    """Argnames the item gets from a direct (non-indirect) parametrize: pytest gives them a
+    pseudo fixture, so they are in `fixturenames` but are not the fixture of the same name."""
+    spec = getattr(item, "callspec", None)
+    info = getattr(item, "_fixtureinfo", None)
+    if spec is None or info is None:
+        return set()
+    defs = info.name2fixturedefs
+    return {
+        n
+        for n in spec.params
+        if all(
+            getattr(d.func, "__name__", "") == "get_direct_param_fixture_func"
+            for d in defs.get(n, ())
+        )
+    }
+
+
+_GETFIXTURE = re.compile(r"""getfixturevalue\(\s*["']([A-Za-z_0-9]+)["']""")
+
+
+def _fetches_rom_fixture(item) -> bool:
+    """The test body calls request.getfixturevalue("<a ROM fixture>") with a literal name. A name
+    held in a variable is invisible here: those tests are listed in ROM_ONLY_IDS."""
+    func = getattr(item, "function", None)
+    if func is None:
+        return False
+    try:
+        src = inspect.getsource(func)
+    except (OSError, TypeError):
+        return False
+    return any(m in ROM_FIXTURES for m in _GETFIXTURE.findall(src))
+
+
 def is_rom_only(item) -> bool:
-    """A test whose fixture closure holds a local-input fixture, or one of the two path tests."""
+    """A test whose fixture closure holds a local-input fixture, or one of the path/id tests."""
     node = item.nodeid.replace("\\", "/")
-    return bool(ROM_FIXTURES.intersection(item.fixturenames)) or node.split("[")[0] in ROM_ONLY_IDS
+    fixtures = set(item.fixturenames) - _direct_params(item)
+    return (
+        bool(ROM_FIXTURES & fixtures)
+        or node.split("[")[0] in ROM_ONLY_IDS
+        or _fetches_rom_fixture(item)
+    )
+
+
+def item_weight(item, table: Mapping[str, float]) -> float:
+    """Pod weights come from runs where ROM-only tests skip: they weigh 20 GB until measured."""
+    w = weight(item.nodeid, table)
+    if is_rom_only(item):
+        return ROM_MEASURED.get(item.nodeid.split("[")[0], max(ROM_UNMEASURED_GB, w))
+    return w
 
 
 def engine_loaded(modules: Iterable[str]) -> bool:
@@ -244,6 +309,7 @@ def install_blocker(meta_path: list | None = None) -> EngineBlocker:
     meta_path = sys.meta_path if meta_path is None else meta_path
     blocker = EngineBlocker()
     meta_path.insert(0, blocker)
+    os.environ[ENV_ENGINE_BLOCKED] = "1"  # children: src/nuzline/engine/__init__.py refuses
     return blocker
 
 
@@ -251,14 +317,12 @@ def remove_blocker(blocker, meta_path: list | None = None) -> None:
     meta_path = sys.meta_path if meta_path is None else meta_path
     if blocker in meta_path:
         meta_path.remove(blocker)
+    os.environ.pop(ENV_ENGINE_BLOCKED, None)
 
 
 def pytest_gate(
     items: Iterable,
-    args: Iterable[str],
-    rootdir: str | Path,
     *,
-    invocation_dir: str | Path | None = None,
     collect_only: bool = False,
     modules: Iterable[str] | None = None,
     env: Mapping[str, str] | None = None,
@@ -289,8 +353,8 @@ def pytest_gate(
             f"{QUICK_LANE_HINT[0].upper() + QUICK_LANE_HINT[1:]}. "
             f"{ENV_ROM_GATE}=1 is for the merge gate's ROM-only run only."
         )
-    ids = selected_ids(args, rootdir, invocation_dir)
-    w = run_weight(ids, load_weights() if table is None else table)
+    table = load_weights() if table is None else table
+    w = max((item_weight(i, table) for i in items), default=0.0)
     try:
         timeout = float(env.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
     except ValueError:
@@ -318,7 +382,13 @@ def main(
     w = None
     if "--weight" in argv:
         i = argv.index("--weight")
-        w = float(argv[i + 1])
+        try:
+            w = float(argv[i + 1])
+        except (IndexError, ValueError):
+            say(
+                "usage: ramgate.py <ids> [--weight GB] [--rom-gate | --build]; --weight needs a number"
+            )
+            return 2
         argv = argv[:i] + argv[i + 2 :]
     if w is None:
         table = load_weights()
@@ -330,7 +400,13 @@ def main(
     if not build and decide(w, 0.0, rom_gate) == "POD":
         say(f"POD {w:g}")
         return 3
-    wait_for_ram(w, timeout_min=float("inf"), free=free, sleep=sleep, clock=clock, say=say)
+    try:
+        timeout = float(os.environ.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
+    except ValueError:
+        timeout = DEFAULT_TIMEOUT_MIN
+    if not wait_for_ram(w, timeout_min=timeout, free=free, sleep=sleep, clock=clock, say=say):
+        say(f"TIMEOUT {w:g}")
+        return 4
     say(f"GO {w:g}")
     return 0
 

@@ -39,24 +39,40 @@ class Clock:
         self.t += s
 
 
-def item(nodeid, *fixtures):
-    return SimpleNamespace(nodeid=nodeid, fixturenames=["request", *fixtures])
+def item(nodeid, *fixtures, direct=(), indirect=()):
+    """A fake item. `direct`/`indirect`: parametrize argnames (pytest gives a direct one a pseudo
+    fixture def named get_direct_param_fixture_func, an indirect one its real fixture def)."""
+
+    def get_direct_param_fixture_func():
+        pass
+
+    def real_fixture():
+        pass
+
+    names = [*fixtures, *direct, *indirect]
+    defs = {n: [SimpleNamespace(func=get_direct_param_fixture_func)] for n in direct}
+    defs.update({n: [SimpleNamespace(func=real_fixture)] for n in indirect})
+    params = {n: 1 for n in (*direct, *indirect)}
+    return SimpleNamespace(
+        nodeid=nodeid,
+        fixturenames=["request", *names],
+        callspec=SimpleNamespace(params=params) if params else None,
+        _fixtureinfo=SimpleNamespace(name2fixturedefs=defs),
+    )
 
 
 ENGINE = ["os", "jax", "nuzline.engine.step"]
 NO_ENGINE = ["os", "jax", "nuzline.data.tables"]
 ROM = item("tests/tools/rom/test_nds.py::test_a", "vanilla_bytes")
-PLAIN = item("tests/tools/test_x.py::test_b", "tmp_path")
-ENG = item("tests/search/test_leaves.py::test_c")
+PLAIN = item("tests/a/test_x.py::test_b", "tmp_path")  # weight 5
+ENG = item("tests/a/test_e.py::test_c")  # weight 3
 
 
-def gate(items, free=20.0, modules=NO_ENGINE, env=None, args=("tests/a/test_x.py",), **kw):
+def gate(items, free=100.0, modules=NO_ENGINE, env=None, **kw):
     clock = kw.pop("clock", None) or Clock()
     lines = kw.pop("lines", [])
     return rg.pytest_gate(
         items,
-        args,
-        ROOT,
         modules=modules,
         env={} if env is None else env,
         table=TABLE,
@@ -195,12 +211,39 @@ def test_gate_skipped_on_pod_and_in_nested_runs():
     assert gate([ENG], modules=ENGINE, env={rg.ENV_NESTED: "x::y (call)"})[0] == "SKIP"
 
 
-def test_gate_weight_unknown_id_is_twenty_and_whole_tree_is_heaviest():
-    assert (
-        gate([PLAIN], free=25.9, args=["tests/zzz.py"], env={rg.ENV_TIMEOUT: "0"})[0] == "TIMEOUT"
-    )
-    assert gate([PLAIN], free=26.1, args=["tests/zzz.py"])[0] == "GO"
-    assert gate([PLAIN], free=35.0, args=[], env={rg.ENV_TIMEOUT: "0"})[0] == "TIMEOUT"  # 30 + 6
+def test_gate_weight_is_the_heaviest_collected_item_not_the_args():
+    unknown = item("tests/zzz.py::t", "tmp_path")  # no key = 20
+    env = {rg.ENV_TIMEOUT: "0"}
+    assert gate([PLAIN, unknown], free=25.9, env=env)[0] == "TIMEOUT"
+    assert gate([PLAIN, unknown], free=26.1)[0] == "GO"
+    assert gate([PLAIN], free=11.5)[0] == "GO"  # weight 5 -> needs > 11
+    assert gate([PLAIN], free=10.9, env=env)[0] == "TIMEOUT"
+
+
+def test_rom_only_items_weigh_twenty_until_measured(monkeypatch):
+    light = item("tests/b/test_y.py::t", "kaizo_inputs")  # table says 4
+    assert rg.item_weight(light, TABLE) == 20.0
+    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE) == 30.0
+    assert rg.item_weight(item("tests/b/test_y.py::t", "tmp_path"), TABLE) == 4.0
+    monkeypatch.setitem(rg.ROM_MEASURED, "tests/b/test_y.py::t", 7.0)
+    assert rg.item_weight(light, TABLE) == 7.0
+    assert gate([light], free=25.0, env={rg.ENV_TIMEOUT: "0"})[0] == "GO"  # 7 + 6 = 13
+
+
+def test_species_as_a_parametrize_name_is_not_the_fixture():
+    direct = item("tests/data/test_learnsets.py::t[1]", "species", direct=("species",))
+    indirect = item("tests/saves/test_to_spec.py::t[1]", "species", indirect=("species",))
+    plain_fixture = item("tests/x.py::t", "species")
+    assert not rg.is_rom_only(direct)
+    assert rg.is_rom_only(indirect)
+    assert rg.is_rom_only(plain_fixture)
+    assert rg.is_rom_only(item("tests/x.py::t[a]", "tmp_path", "species", direct=("which",)))
+
+
+def test_getfixturevalue_save_export_ids_are_rom_only_for_every_param():
+    base = "tests/test_cli.py::test_kaizo_save_export_checks_kaizo_tables"
+    for which in ("kaizo_save_pre_roark_path", "kaizo_save_path"):
+        assert rg.is_rom_only(item(f"{base}[{which}]", "tmp_path", "request"))
 
 
 def test_gate_waits_then_goes():
@@ -236,6 +279,23 @@ def test_cli_pod_rom_gate_and_build(monkeypatch):
     # a build never goes to the pod: weight 20 by default, only the RAM wait applies
     assert run(["--build"]) == 0 and out[-1] == "GO 20"
     assert run(["--build", "--weight", "12"]) == 0 and out[-1] == "GO 12"
+
+
+def test_cli_weight_without_a_value_is_a_usage_error():
+    out = []
+    assert rg.main(["tests/a.py", "--weight"], say=out.append) == 2
+    assert rg.main(["--weight", "x"], say=out.append) == 2
+    assert "usage" in out[0]
+
+
+def test_cli_honours_the_timeout_env(monkeypatch):
+    monkeypatch.setenv(rg.ENV_TIMEOUT, "2")
+    clock = Clock()
+    out = []
+    code = rg.main(
+        ["--build"], free=lambda: 1.0, sleep=clock.sleep, clock=clock.now, say=out.append
+    )
+    assert code == 4 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 20"
 
 
 def test_cli_build_waits_for_ram():
@@ -286,3 +346,61 @@ def test_blocker_wanted_only_for_engine_free_runs_without_override():
     assert rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "0"})
     assert not rg.blocker_wanted([ROM, ROM], {})
     assert not rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "1"})
+
+
+def test_blocker_sets_the_child_env_and_removal_unsets_it(monkeypatch):
+    monkeypatch.delenv(rg.ENV_ENGINE_BLOCKED, raising=False)
+    path = []
+    b = rg.install_blocker(path)
+    assert rg.os.environ[rg.ENV_ENGINE_BLOCKED] == "1"
+    rg.remove_blocker(b, path)
+    assert rg.ENV_ENGINE_BLOCKED not in rg.os.environ
+
+
+def test_engine_package_refuses_a_child_process_under_the_env():
+    import os
+    import subprocess
+
+    env = {**os.environ, rg.ENV_ENGINE_BLOCKED: "1", "PYTHONPATH": str(ROOT / "src")}
+    bad = subprocess.run(
+        [sys.executable, "-c", "import nuzline.engine"],
+        env=env, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert bad.returncode != 0 and "quick lane" in bad.stderr and "ImportError" in bad.stderr
+    env.pop(rg.ENV_ENGINE_BLOCKED)
+    ok = subprocess.run(
+        [sys.executable, "-c", "import nuzline.engine"],
+        env=env, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert ok.returncode == 0, ok.stderr
+
+
+def _body_fetching_a_rom_fixture(request):
+    return request.getfixturevalue("kaizo_save_path")
+
+
+def _body_fetching_a_plain_fixture(request):
+    return request.getfixturevalue("tmp_path"), request.getfixturevalue(request.param)
+
+
+def test_a_literal_getfixturevalue_of_a_rom_fixture_is_rom_only():
+    fetching = item("tests/x.py::t", "request")
+    fetching.function = _body_fetching_a_rom_fixture
+    plain = item("tests/x.py::t", "request")
+    plain.function = _body_fetching_a_plain_fixture
+    assert rg.is_rom_only(fetching)
+    assert not rg.is_rom_only(plain)  # a name held in a variable needs ROM_ONLY_IDS
+    plain.function = print  # no source for a builtin: not ROM-only, no crash
+    assert not rg.is_rom_only(plain)
+
+
+def test_the_dynamic_getfixturevalue_tests_are_listed():
+    for name in (
+        "tests/test_cli.py::test_kaizo_save_export_checks_kaizo_tables",
+        "tests/test_cli.py::test_kaizo_roark_coverage_on_the_saves_is_exact",
+        "tests/kaizo/test_roark_ai_audit.py::test_roark_ai_against_the_pool",
+        "tests/kaizo/test_roark_widths.py::test_roark_pairs_fit_the_width_cap",
+    ):
+        assert name in rg.ROM_ONLY_IDS
+        file, _, test = name.partition("::")
+        assert f"def {test}(" in (ROOT / file).read_text(encoding="utf-8")
