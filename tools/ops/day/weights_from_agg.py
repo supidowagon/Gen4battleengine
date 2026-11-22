@@ -16,8 +16,8 @@ counted results (agg.txt per-unit table; ids from <agg dir>/out/<unit>.ids, else
   three times (rc 98), units whose ids all have a hand-kept line or a test peak (each then has
   its own line), and units (not rc 137) whose peak is at or under the largest hand-kept weight
   among their ids (that line already carries the unit's peak). An agg.txt without a per-unit table counts its per-file max_rss_MB.
-New value of a line of GB g with fresh measurement m: m when m > g; else the larger of m's floor
-and nothing lower: floor(m) = ceil(m x 1.1) when m >= 40, else ceil(max(m x 1.25, m + 2)); a line
+New value of a line of GB g with fresh measurement m: m + RAISE_MARGIN_GB (2) when that is above g
+(a raise carries a small fixed margin); else the larger of m's floor and nothing lower: floor(m) = ceil(m x 1.1) when m >= 40, else ceil(max(m x 1.25, m + 2)); a line
 moves down to floor(m) only when floor(m) < g. A file line the table lacks is written at floor(m), the same margin. A line with no fresh measurement stays. Also stays:
 a hand-kept line whose cite has the word "keep" (never lowered), a hand-kept per-test line whose
 test is in a counted rc 137 or rc 98 unit (never lowered), and any line whose old peak the fresh
@@ -34,14 +34,16 @@ becomes "<entry padded to 74> <GB> <run>"), then the file lines (largest first, 
 then the per-test lines by name: every old one (as above) and a new one for each test peak,
 at floor(m), when that is PER_TEST_MARGIN_GB or more under its file's line or above it. A
 per-test line within PER_TEST_MARGIN_GB under its file's line or equal to it is left out (the
-file's line weighs it). Ids with a space or "#" get no line.
+file's line weighs it); a test with a fresh peak whose old line is so left out gets the line a new
+one would, floor(m), when that is kept, so a rerun adds nothing. Ids with a space or "#" get no line.
 stderr: "REDUCED <entry> <old> -> <new> GB" for the 20 largest reductions (a new per-test line
 counts from its file's line), "changed: <n> down, <n> up", and warnings ("WARNING: ..."; the
 table is still printed): a unit killed three times (rc 98, no peak), a kernel kill whose lower
 bound is above its file's measured peak (the line takes the bound; the real peak may be higher),
 a unit of hand-kept ids only that peaked above its largest hand-kept weight. After the "changed" line, one
 "EXCLUDED <run> <unit> <file>: ..." line per unit left out of its file's line because its peak is at or
-under the largest hand-kept weight of its ids (no warning). DAYBOX.md, Send a
+under the largest hand-kept weight of its ids (no warning). A per-test hand-kept line counts here at its
+new value. DAYBOX.md, Send a
 run step 2: the new table is not moved into place while any warning stands.
 """
 
@@ -61,6 +63,8 @@ FLOOR_GB = 4
 # A per-test line is written only this far from its file's line: smaller differences do not
 # change what the gate admits enough to be worth a line.
 PER_TEST_MARGIN_GB = 4
+# A line the fresh results raise goes this far above the measured peak.
+RAISE_MARGIN_GB = 2
 DEFAULT_MARK = "not slow and not fullset"
 UNITS = "--- per unit: unit ids max_rss_MB wall_s rc first_id"
 REPO = Path(__file__).resolve().parents[3]
@@ -82,9 +86,9 @@ def floor_gb(m: int) -> int:
 def new_value(old: int, m: int | None) -> int:
     if m is None:
         return old
-    if m > old:
-        return m
-    return min(old, floor_gb(m))
+    if m + RAISE_MARGIN_GB > old:
+        return m + RAISE_MARGIN_GB
+    return min(old, floor_gb(m))   # floor_gb(m) >= m + RAISE_MARGIN_GB: a raised line stays on a rerun
 
 
 def run_name(agg: Path) -> str:
@@ -265,6 +269,29 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
         if u.alone and (u.ids[0] not in test_m or u.mib > test_m[u.ids[0]][0]):
             test_m[u.ids[0]] = (u.mib, u.run)
 
+    def head_value(b: list[str], best: dict[str, tuple[int, str]]) -> tuple[int, tuple[int, str] | None]:
+        """A hand-kept line's new GB and the measurement behind it."""
+        e, g = b[0], int(b[1])
+        if "::" in e:
+            got = [v for t, v in test_m.items() if weights._matches(e, t)]
+            m = max(got) if got else None
+            frozen = "keep" in b[2:] or any(weights._matches(e, t) for t in killed)
+        else:
+            m, frozen = best.get(e), "keep" in b[2:]
+        n = new_value(g, None if m is None else gb(m[0]))
+        if n < g and (frozen or not may_lower(e, n, " ".join(b[2:]))):
+            n = g
+        return n, m
+
+    # per-test hand-kept lines at their new values (they depend on 1-id peaks only), so a unit is left
+    # out of its file's line only by the weight its hand-kept line will have: a rerun changes nothing
+    now = {}
+    for ln in head:
+        b = ln.split("#", 1)[0].split()
+        if len(b) >= 2 and b[1].isdigit() and "::" in b[0]:
+            now[b[0]] = head_value(b, {})[0]
+    hand_now = [(e, now.get(e, g)) for e, g in hand]
+
     best: dict[str, tuple[int, str]] = {}
     low: dict[str, tuple[int, str, str]] = {}
     excluded: list[str] = []
@@ -277,7 +304,7 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
             continue
         if u.mib <= 0:
             continue
-        covered = [max(g for e, g in hand if weights._matches(e, t)) for t in u.ids if _hand_covered(t, hand)]
+        covered = [max(g for e, g in hand_now if weights._matches(e, t)) for t in u.ids if _hand_covered(t, hand)]
         if len(covered) == len(u.ids):
             if gb(u.mib) > max(covered):
                 w.append(f"hand-kept ids peaked at {gb(u.mib)} GB{' (rc 137: at least)' if u.rc == '137' else ''}, "
@@ -307,15 +334,7 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
             new_head.append(ln)
             continue
         e, g = b[0], int(b[1])
-        if "::" in e:
-            got = [v for t, v in test_m.items() if weights._matches(e, t)]
-            m = max(got) if got else None
-            frozen = "keep" in b[2:] or any(weights._matches(e, t) for t in killed)
-        else:
-            m, frozen = best.get(e), "keep" in b[2:]
-        n = new_value(g, None if m is None else gb(m[0]))
-        if n < g and (frozen or not may_lower(e, n, " ".join(b[2:]))):
-            n = g
+        n, m = head_value(b, best)
         if n == g:
             new_head.append(ln)
         else:
@@ -331,11 +350,10 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
         if m is None:
             files[e] = (g, cite)
             continue
-        mg = gb(m[0])
-        if mg > g:
-            files[e] = (mg, m[1])
+        n = new_value(g, gb(m[0]))
+        if n > g:
+            files[e] = (n, m[1])
         else:
-            n = new_value(g, mg)
             files[e] = (n, m[1]) if n < g and may_lower(e, n, cite) else (g, cite)
         if files[e][0] != g:
             changes.append((g, files[e][0], e))
@@ -361,7 +379,15 @@ def render(weights_txt: Path, aggs: list[Path], warn: list[str] | None = None, s
     def kept(t: str, v: int) -> bool:
         fg = files.get(t.split("::")[0])
         return fg is None or not (fg[0] - PER_TEST_MARGIN_GB < v <= fg[0])
-    tests = {t: v for t, v in tests.items() if kept(t, v[0])}
+    for t, v in list(tests.items()):
+        if not kept(t, v[0]):
+            del tests[t]
+            # the id falls back to its file's line; a measured one then gets the line a new one would
+            # (floor(m)), so the next rerun does not add it
+            if t in test_m and _lineable(t) and kept(t, floor_gb(gb(test_m[t][0]))):
+                tests[t] = (floor_gb(gb(test_m[t][0])), test_m[t][1])
+                changes = [c for c in changes if c[2] != t] + [(old[t][0] if t in old else files[t.split("::")[0]][0],
+                                                                tests[t][0], t)]
     changes = [c for c in changes if "::" not in c[2] or c[2] in tests or c[2] in hand_entries]
 
     down = sorted(((o - n, o, n, e) for o, n, e in changes if n < o), key=lambda x: (-x[0], x[3]))

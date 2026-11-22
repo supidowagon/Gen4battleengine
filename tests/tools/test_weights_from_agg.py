@@ -48,7 +48,8 @@ def test_floor_is_1_25_x_or_plus_2_gb_and_1_1_x_from_40_gb(m, floor):
     (30, 10, 13),    # down to the floor
     (12, 10, 12),    # the floor (13) is above the line: it stays
     (13, 10, 13),
-    (10, 20, 20),    # a raise takes the measured peak
+    (10, 20, 22),    # a raise takes the measured peak + 2
+    (11, 10, 12),    # under m + 2: raised to it
     (82, 50, 55),    # 40 GB and more: x 1.1
     (82, None, 82),  # no fresh measurement: stays
 ])
@@ -130,7 +131,7 @@ def test_per_test_lines_come_from_1_id_units_that_passed_their_test(tmp_path):
     w = _table(tmp_path, "tests/p.py::test_h 80 run-a\ntests/p.py::test_k 80 r0 keep\ntests/p.py::test_z 80 r0\n",
                "tests/p.py 80 old\ntests/p.py::test_e 30 run-a\n")
     a1 = _agg(tmp_path / "out", "run-a", [
-        "u_001 5 76000 50 0 tests/p.py::test_a",        # 80 GB: the file line
+        "u_001 5 76000 50 0 tests/p.py::test_a",        # 80 GB: the file line goes to 82 (test_h's line drops)
         "u_002 1 8000 10 0 tests/p.py::test_a",         # passed alone at 9
         "u_003 1 3000 10 0 tests/p.py::test_b",         # skipped: not its cost
         "u_004 1 4000 10 1 tests/p.py::test_c",         # failed
@@ -138,7 +139,7 @@ def test_per_test_lines_come_from_1_id_units_that_passed_their_test(tmp_path):
         "u_006 1 5000 10 0 tests/p.py::test_h",         # hand-kept 80, alone at 6: down to 8
         "u_007 1 5000 10 0 tests/p.py::test_k",         # hand-kept 80 with "keep": stays
         "u_008 2 9000 10 0 tests/p.py::test_e",         # 2 ids: no measurement of e
-        "u_009 1 69000 10 0 tests/p.py::test_g",        # 73: floor 81 above the file line: its own line
+        "u_009 1 69000 10 0 tests/p.py::test_g",        # 73: floor 81, within 4 of the file line 82: no line
         "u_010 1 4000 10 0 tests/p.py::test_x[a b]",    # an id with a space: no line
         "u_011 1 4000 10 0 tests/p.py::test_y",         # no log: no line
         "u_012 1 5000 10 0 tests/p.py::test_z",         # hand-kept 80, alone at 6, but also killed:
@@ -154,22 +155,22 @@ def test_per_test_lines_come_from_1_id_units_that_passed_their_test(tmp_path):
     out = wfa.render(w, [a1, a2], [], report=report).splitlines()
     assert out[:4] == [f"{'tests/p.py::test_h':<74} 8 run-a", "tests/p.py::test_k 80 r0 keep", "tests/p.py::test_z 80 r0",
                        wfa.MARK]
-    assert out[4:] == ["tests/p.py 80 old",          # the cited run is not given: not lowered, kept
+    # u_001 holds test_h, whose hand line goes down to 8 in this pass: it no longer carries u_001's 80 GB,
+    # so u_001 counts toward the file line, raised to 80 + 2
+    assert out[4:] == ["tests/p.py 82 run-a",
                        "tests/p.py::test_a 13 run-b",       # the larger of two passed 1-id units (10), floor 13
                        "tests/p.py::test_d 68 run-a",
                        "tests/p.py::test_e 27 run-b",       # old line 30, measured 21 (a warnings count is a pass)
-                       "tests/p.py::test_g 81 run-a",
                        "tests/p.py::test_q 64 run-a"]
-    assert report == ["REDUCED tests/p.py::test_h 80 -> 8 GB", "REDUCED tests/p.py::test_a 80 -> 13 GB",
-                      "REDUCED tests/p.py::test_q 80 -> 64 GB", "REDUCED tests/p.py::test_d 80 -> 68 GB",
-                      "REDUCED tests/p.py::test_e 30 -> 27 GB", "changed: 5 down, 1 up",
-                      "EXCLUDED run-a u_001 tests/p.py: peak 80 GB at or under its hand-kept weight 80 GB"]
+    assert report == ["REDUCED tests/p.py::test_h 80 -> 8 GB", "REDUCED tests/p.py::test_a 82 -> 13 GB",
+                      "REDUCED tests/p.py::test_q 82 -> 64 GB", "REDUCED tests/p.py::test_d 82 -> 68 GB",
+                      "REDUCED tests/p.py::test_e 30 -> 27 GB", "changed: 5 down, 1 up"]
     # the new table loads; a multi-id chunk weighs the max over its ids; a rerun changes nothing
     w2 = tmp_path / "w2.txt"
     w2.write_text("\n".join(out) + "\n", encoding="utf-8")
     t = wfa.weights.load(w2)
     assert wfa.weights.unit_weight(["tests/p.py::test_a", "tests/p.py::test_e"], t) == 27
-    assert wfa.weights.unit_weight(["tests/p.py::test_a", "tests/p.py::test_b"], t) == 80
+    assert wfa.weights.unit_weight(["tests/p.py::test_a", "tests/p.py::test_b"], t) == 82
     assert wfa.render(w2, [a1, a2], [], report=[]) == w2.read_text(encoding="utf-8")
 
 
@@ -262,3 +263,18 @@ def test_tracked_since_file_names_runs_and_commits_only():
         if spec:
             f, _, c = spec.rpartition("=")
             assert (f.startswith("tests/") and c.isalnum()) or (not f and spec[0] == "[" and spec[2] == "]"), spec
+
+
+def test_an_old_per_test_line_the_file_line_absorbs_becomes_its_first_line_value(tmp_path):
+    # old per-test 13 stays 13 (m = 11, 11 + 2 is not above it); the file line rises 12 -> 13, which
+    # absorbs 13, so the test takes floor(11) = 14, the value a rerun would give a new line
+    w = _table(tmp_path, "", "tests/c.py 12 run-a\ntests/c.py::test_x 13 run-a\n")
+    a = _agg(tmp_path / "out", "run-a", ["u_001 3 10000 10 0 tests/c.py::test_y", "u_002 1 10000 10 0 tests/c.py::test_x"],
+             logs={"u_002": OK})
+    report: list[str] = []
+    out = wfa.render(w, [a], [], report=report)
+    assert out.splitlines()[1:] == ["tests/c.py 13 run-a", "tests/c.py::test_x 14 run-a"]
+    assert report == ["changed: 0 down, 2 up"]
+    w2 = tmp_path / "w2.txt"
+    w2.write_text(out, encoding="utf-8")
+    assert wfa.render(w2, [a], [], report=[]) == out
