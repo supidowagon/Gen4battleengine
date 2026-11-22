@@ -958,6 +958,9 @@ INPUT_NEUTRAL_EFFECTS = (
     # whose ON_HIT subscript_chatter.s only confuses, which no damage input reads (G-70).
     _E.MIMIC,
     _E.CHATTER,
+    # I-3: Sketch (BtlCmd_TrySketch, battle_script.c:4839-4884) writes only its user's moves, ppCur
+    # and lastResortCount, no input of the side's hit, whose move is chosen already.
+    _E.SKETCH,
     # E3 batch 1: Splash / Kaizo Thief deals no damage and writes no state but its user's
     # last move (effect_script_0085.s:5), Teleport fails (effect_script_0153.s:9-10): neither
     # changes an input of the side's hit (E3-1-1, E3-1-4).
@@ -1567,6 +1570,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.NATURAL_GIFT,
     _E.EMBARGO,  # B13-31: a status move, no damage
     _E.MIMIC,  # G-68, G-69: status moves, no damage
+    _E.SKETCH,  # I-3: a status move, no damage
     _E.TRANSFORM,
     _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
     _E.FLEE,  # a status move that fails: no damage (E3-1-4)

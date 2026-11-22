@@ -704,6 +704,11 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         215,  # GRAVITY: Basic_CheckGravityActive (:254); Expert_Gravity (:1759), :4795, :4799
         82,  # COPY_MOVE_FOR_BATTLE (Mimic): no Basic or Expert entry, no other script.s mention
         57,  # TRANSFORM: no Basic or Expert entry, no script.s mention
+        # SKETCH (I-3): no Basic or Expert entry; no Tag Strategy entry (script.s: no mention of
+        # effect 95 or move 166; Tag Strategy's FlagMoveDamageScore -> NO_COMPARISON ->
+        # CheckSpecialScoring, :6637-6752, matches no test and changes no score). A foe holds
+        # Sketch only through Transform, where it always fails (battle_script.c:4847).
+        95,
         267,  # CHATTER: no Basic or Expert entry; Basic_CheckSoundproof :131 by move id
         # E3-B2-3. No Basic_ScoreMoveEffect (:133-286), Expert_Main (:1623-1811) or other flag
         # entry names it: its move takes the generic paths (the tables that list it, Expert_

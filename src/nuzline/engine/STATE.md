@@ -139,7 +139,7 @@ three structs has a row.
   3443-3459 / bcp.c:3218; zeroed with the volatiles at a switch or faint, battle_lib.c:2100-2104,
   and not Baton-passed, :2107-2115; zeroed by Transform, battle_script.c:5340, and a Mimic that
   copies Last Resort, :4514-4516; `effects.last_resort_fails` is BtlCmd_TryLastResort,
-  battle_script.c:7567-7579; the Sketch zeroing, :4876-4878, waits for Sketch). The rest (Heal
+  battle_script.c:7567-7579; Sketch zeroes it for a copied Last Resort, :4876-4878, `effects._sketch`, I-3). The rest (Heal
   Block) is later (M6).
 - **fieldConditionsMask -> `field_mask`** (int32, `_FIELD`, one per battle: BattleContext state,
   doubles-state-design section 5 convention 2): `BattleContext.fieldConditionsMask`
@@ -232,11 +232,11 @@ three structs has a row.
   (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
   whose Quick Claw activated this turn); `monSpeedValues` (mapped since E3-B2-15 to
   `speed_rec`, below), by `BtlCmd_CalcGyroBallPower`
-  (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
+  (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`; mapped since I-3 to `sketch_move`, below). M1 is
   unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw's
   activation is `qc_roll` (below; the flag `claw_flag` carries its animation and the
   Knock Off / Thief / Covet failures into the next turn when no BeforeMove cleared it,
-  SF2 (k)), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
+  SF2 (k)), and none of Thief, Covet, Gyro Ball or Sketch is in M1 (Sketch: I-3). M6's
   coverage work must add these fields before the mechanics that read them.
 - **Trace, the weather abilities and Truant (E2 batch 3).** `BattleMon.ability` is per
   battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
@@ -454,6 +454,17 @@ three structs has a row.
   Spite (E3-B2-4, `effects._spite`) takes `min(4, ppCur)` from the BattleMon's slot of the target's
   `last_move` (BtlCmd_TrySpite, battle_script.c:4990-5016): it writes `pp` only, so a Mimic slot's
   `shadow_pp` stays (`BattleMon_CopyToParty` skips it).
+- **Sketch -> `sketch_move`** (I-3; `int16[B]`, per battler `[MAX_BATTLERS]`: `BattleContext.moveSketched`,
+  a battler array, doubles-state-design section 5 convention 2). `UpdateMoveBuffers` writes
+  `moveSketched[attacker] = moveTemp` when `SYSCTL_ATTACK_MESSAGE_SHOWN` (battle_controller_player.c:
+  3952-3954, outside the `SYSCTL_REUSE_LAST_MOVE` block) and otherwise keeps it, where
+  `movePrevByBattler` becomes MOVE_NONE (:3945-3949) (`step._use_move`, `_set_sketch`); cleared at a
+  switch-in and a faint with `last_move` (`UpdateAfterSwitch`, battle_lib.c:2130; `CleanupFaintedMon`,
+  :2208), so a VOLATILE field, not Baton-passed. `BtlCmd_TrySketch` (battle_script.c:4839-4884,
+  `effects._sketch`) copies it into the user's first Sketch slot with the move's table PP and no
+  shadow: the engine's `moves` / `pp` are the party Pokemon's, so the write is permanent (it needs no
+  `mimic_slots` bit, and `BtlIOCmd_UpdatePartyMon` writes every unflagged slot,
+  battle_io_command.c:575-587). The slot's `pp_ups` are untouched.
 - **aiContext**: `battlerMoves` (moves the AI has seen, as move ids in first-free order,
   `TrainerAI_RecordLastMove`, trainer_ai.c:2705-2716) -> `ai_seen_moves`,
   `battlerHeldItems` (the player's held items a message named, E2 batch 7) -> `ai_item_known`
@@ -934,7 +945,7 @@ three structs has a row.
 | `BattleContext.movePrevByBattler` | `last_move` | mapped |
 | `BattleContext.moveCopied` | `move_copied` | mapped |
 | `BattleContext.moveCopiedHit` | `move_copied_hit` | mapped |
-| `BattleContext.moveSketched` | — | later (M6) |
+| `BattleContext.moveSketched` | `sketch_move` | mapped (I-3) |
 | `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.moveSlot` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.conversion2Move` | `conv2_move` | mapped |

@@ -174,6 +174,8 @@ from nuzline.engine.ids import (
     GRAVITY_TURNS,
     METRONOME_DRAW,
     MOVE_CHATTER,
+    MOVE_SKETCH,
+    SKETCH_FORBIDDEN,
     SPECIES_CHATOT,
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
@@ -839,6 +841,21 @@ def fight_calls(tables: Tables, party: Sequence[PokemonSpec]) -> list[int]:
     return sorted(out)
 
 
+def sketch_calls(known: Sequence[int], opp: Sequence[PokemonSpec]) -> list[int]:
+    """The moves a player's Sketch can copy (``BtlCmd_TrySketch``, battle_script.c:4839-4884):
+    ``known`` are the Pokemon's moves and its ``learnable_moves`` (empty unless one is Sketch); the
+    copy is a foe's ``moveSketched``, its chosen move (``moveTemp``: the slot's move, Mimic's copy
+    included, which the player already knows), so a move of ``opp`` that is neither forbidden
+    (``SKETCH_FORBIDDEN``) nor already known. A superset: the foe may not use it. The checks that
+    read every move of the fight (``move_effect_line``, the AI's ``player_move_refusal``,
+    ``halved_defense_line``, the terrain and the ROM changes) run over them, as over the
+    Metronome calls (``fight_calls``)."""
+    if MOVE_SKETCH not in known:
+        return []
+    banned = {*known, *SKETCH_FORBIDDEN}
+    return sorted({m for mon in opp for m in mon.moves if m and m not in banned})
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -1183,7 +1200,8 @@ def check_coverage(
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
-    extra = sorted({m for moves in learnable for m in moves})
+    sketched = [sketch_calls([*mon.moves, *learnable[i]], opp) for i, mon in enumerate(player)]
+    extra = sorted({m for moves in (*learnable, *sketched) for m in moves})
     if chatot_cry is None:
         for slot, mon in enumerate(player):
             if mon.species == SPECIES_CHATOT and MOVE_CHATTER in (*mon.moves, *learnable[slot]):
@@ -1208,6 +1226,11 @@ def check_coverage(
             c.add(support, f"{where}: {name}", "level-up in battle move effect")
             if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
                 c.add(Support.NONE, f"{where}: {name} (level-up in battle, {reason})", "trainer AI")
+        for move in sketched[slot]:  # a Sketch copies any move of the fight (I-3)
+            support, name = move_effect_line(tables, names, move, row)
+            c.add(support, f"{where}: {name}", "Sketch move effect")
+            if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
+                c.add(Support.NONE, f"{where}: {name} (Sketch, {reason})", "trainer AI")
         levels_up = reachable_level(tables, mon, opp) > mon.level
         for line in exp_refusals(tables, names, mon, learnable[slot], fight_moves, levels_up):
             c.add(Support.NONE, f"{where}: {line}", "experience")
@@ -1215,7 +1238,7 @@ def check_coverage(
     for owner, party, foes in (("Player", player, opp), (display_name(trainer), opp, player)):
         foe_defense = low_defense(tables, foes)
         for slot, mon in enumerate(party):
-            extra_moves = learnable[slot] if owner == "Player" else ()
+            extra_moves = [*learnable[slot], *sketched[slot]] if owner == "Player" else ()
             calls = fight_calls(tables, [mon])
             for move in [*mon.moves, *(m for m in [*extra_moves, *calls] if m not in mon.moves)]:
                 if move and (low := halved_defense_line(tables, move, foe_defense)):

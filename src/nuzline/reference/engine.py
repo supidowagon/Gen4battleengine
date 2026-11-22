@@ -88,6 +88,7 @@ from nuzline.engine.ids import (
     MOVE_LAST_RESORT,
     MOVE_MIMIC,
     MOVE_NATURAL_GIFT,
+    MOVE_SKETCH,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_SOLAR_BEAM,
@@ -110,6 +111,7 @@ from nuzline.engine.ids import (
     SECRET_POWER_EFFECTS,
     SEMI_HIT_FLAGS,
     SEMI_SET_FLAGS,
+    SKETCH_FORBIDDEN,
     SLEEPLESS_ABILITIES,
     SNORE_PARAM,
     SPECIES_ARCEUS,
@@ -2284,6 +2286,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "flinched",
         "choice_lock",
         "last_move",
+        "sketch_move",  # moveSketched, cleared with movePrevByBattler (lib.c:2130, :2208), I-3
         "protect_count",
         "rollout_count",
         "charge_turn",
@@ -4752,6 +4755,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.battlers[target].confusion = o.duration[side]
     elif effect == EffectId.MIMIC and landed:
         _mimic(tables, s, side, target)
+    elif effect == EffectId.SKETCH and landed:
+        _sketch(tables, s, side, target)
     elif effect == EffectId.TRANSFORM and landed:
         if _transform(tables, s, side, target):
             # SYNCHRONIZE_STATUS's TriggerFormChange first (lib.c:4536-4544, bcp.c:3665-3672): a
@@ -8420,6 +8425,31 @@ def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
     )
 
 
+def _sketch(tables, s: RefState, side: int, target: int) -> None:
+    """Sketch (effect_script_0095.s:5; subscript_sketch.s:5-6, ``BtlCmd_TrySketch``, script.c:
+    4839-4884): fails on a defender with a Substitute, a Transformed user (:4847), a defender's
+    ``moveSketched`` that is MOVE_NONE or forbidden (``SKETCH_FORBIDDEN``, :4848-4851) or a move
+    the user knows in a slot that is not Sketch (:4855-4860); else the user's first Sketch slot
+    takes the move with its table PP (no cap), a copied Last Resort zeroes ``lastResortCount``
+    (:4876-4878), and the party Pokemon keeps it (no shadow: ``BtlIOCmd_UpdatePartyMon``
+    writes every unflagged slot, battle_io_command.c:575-587)."""
+    last = s.battlers[target].sketch_move
+    mon, sd = _active(s, side), s.battlers[side]
+    if (
+        sd.transformed
+        or s.battlers[target].substitute_hp
+        or not last
+        or last in SKETCH_FORBIDDEN
+        or last in mon.moves
+    ):
+        return
+    j = mon.moves.index(MOVE_SKETCH)
+    mon.moves[j] = last
+    mon.pp[j] = _t(tables, "move_pp", last)
+    if last == MOVE_LAST_RESORT:
+        sd.last_resort_count = 0
+
+
 def _mimic(tables, s: RefState, side: int, target: int) -> None:
     """Mimic (effect_script_0082.s:3; ``BtlCmd_TryMimic``, script.c:4476-4524): fails on a
     defender's ``movePrevByBattler`` that is MOVE_NONE or not Mimic-able (``MIMIC_FORBIDDEN``,
@@ -8993,6 +9023,8 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
             # battle's movePrev is moveTemp (the chosen move) when the attack message showed.
             s.move_prev = move if turn.attack_message else 0
+            if turn.attack_message:  # moveSketched, bcp.c:3952-3954 (I-3)
+                s.battlers[side].sketch_move = move
             copied = (0, 0) if turn.reflected else _copied_writes(tables, turn, move, record)
             conv2 = None if turn.reflected else _conv2_writes(tables, s, turn, side, move, record)
             # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
@@ -9670,6 +9702,7 @@ def _resume(
     _update_choice_lock(turn, s, side, defender, move, exempt)
     s.move_prev = move
     s.battlers[side].last_move = move
+    s.battlers[side].sketch_move = move  # bcp.c:3952-3954 (I-3)
     s.battlers[side].protect_count = 0
     copied = (_copied_writes(tables, turn, move, record)[0], 0)  # a pivot is never self-ranged
     # The pivot's hit landed (it paused): the foe records it for Conversion 2 (E3-B2-3).

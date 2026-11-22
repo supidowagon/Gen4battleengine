@@ -573,6 +573,14 @@ def _set_last_move(state: BattleState, side, move, cond) -> BattleState:
     return state._replace(last_move=state.last_move.at[side].set(value))
 
 
+def _set_sketch(state: BattleState, side, move, cond) -> BattleState:
+    """``moveSketched[side] = move`` where ``cond`` (``BattleState.sketch_move``): UpdateMoveBuffers
+    writes it when the attack message showed (battle_controller_player.c:3952-3954) and keeps the
+    old value otherwise (``movePrevByBattler`` would become MOVE_NONE, :3945-3949)."""
+    value = jnp.where(cond, move, state.sketch_move[side]).astype(state.sketch_move.dtype)
+    return state._replace(sketch_move=state.sketch_move.at[side].set(value))
+
+
 def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
     """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717), at the start of the turn:
     the AI adds the player's ``movePrevByBattler`` to its list of the player's moves
@@ -3166,6 +3174,10 @@ def _use_move(
     prev = jnp.where(ready_t, jnp.where(shown_t, move, 0), state.move_prev)
     prev = jnp.where(tail, prev, state.move_prev)
     state = state._replace(move_prev=prev.astype(state.move_prev.dtype))
+    # UpdateMoveBuffers' moveSketched (bcp.c:3952-3954), I-3: moveTemp where the attack message
+    # showed, outside the REUSE_LAST_MOVE block and kept otherwise (``_set_sketch``). The same
+    # battler and move as ``movePrevByBattler``; Pursuit's pre-switch hit never reaches it.
+    state = _set_sketch(state, side, move, ready_t & tail & shown_t)
     # UpdateFlagsWhenHit's conversion2 fields (bcp.c:4509-4533, E3-B2-3) for the foe defender
     # (``record``): where SYSCTL_MOVE_SUCCEEDED is set and the move has no MOVE_STATUS_NO_EFFECTS
     # (``succeeded`` and ``worked``: a hit that connected; the tail modes' U-turn landed) and its

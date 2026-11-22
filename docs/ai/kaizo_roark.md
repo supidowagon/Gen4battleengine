@@ -874,6 +874,11 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
 
 ### 5.26 E1 trial batch: Mimic (G-68), Transform (G-69), Chatter (G-70)
 
+- LEARN_MOVE_PERMANENT (95, Sketch, I-3): no Basic or Expert entry and no Tag Strategy entry (a
+  Normal status move: `TagStrategy_Main` -> `FlagMoveDamageScore` -> `AI_NO_COMPARISON_MADE` ->
+  `TagStrategy_CheckSpecialScoring`, `script.s:6641-6642`, :6733-6752, matches none of its moves or
+  types and adds nothing). It is in `KAIZO_TRANSCRIBED` for the foe that Transforms into a Sketch
+  holder (`policy.opponent_move_refusals`); no trainer Pokemon knows Sketch.
 - COPY_MOVE_FOR_BATTLE (82, Mimic, G-68): no Basic or Expert entry and no other `script.s` mention;
   the generic paths score a status move of power 0. The AI's own copied move is scored by the
   copied move's effect label (`layout.fight_effects`): a fight with a Mimic or Transform user
