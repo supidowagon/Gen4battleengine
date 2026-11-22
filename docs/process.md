@@ -193,6 +193,12 @@ per day is the rate used for estimates.
   file, or the first failure when the brief asked for `--until first-failure`. No polling
   turns: the agent does not call `status.sh` while `wait.sh` runs. Only committed code runs
   on the pod.
+- **Exec bodies stay short.** No exec-pod body that an agent must reproduce carries more than
+  a short script (at most 1000 characters, `tools/ops/day/send_body.sh`; its only long token a
+  64-hex sha256): payloads, scripts included, travel by file transfer (`runpodctl send` on the
+  PC, `runpodctl receive` under a timeout on the pod), and the body starts them only after
+  their sha256 matches the PC's. Long base64 in a body arrives changed (21 Nov 2026: three
+  snapshot bodies in a row refused with `RUNSH_SHA_MISMATCH`).
 - **Run dispatcher session.** A standing Sonnet session (name `dispatch`, state file
   `_scratch/handoff/DISPATCH.md`; owner, 21 Nov 2026) handles the streams' run requests in
   place of the managing session: it takes each request (commit and test list), checks the
