@@ -221,6 +221,10 @@ per day is the rate used for estimates.
   PC (Windows) than on the pod (Linux) from the same seed and content hash. A stream rebuilds
   a diverged part only from the capture's `<part>.inputs.pkl.gz`: it asks the managing
   session, which copies those files from the pod with `snap.sh fetch` (DAYBOX.md) into `<scratch>/rent/out/<snapshot folder>/fetch-<epoch>/`.
+- **Gen draws and source literals.** `draw_inputs` draws with Hypothesis's local-constants pool
+  empty (`snap_compare.no_local_constants`), so a new literal of 100 or more in `src` or `tools`
+  does not shift the `gen` part's draws. This change altered every gen draw once: a main capture
+  made before it needs a fresh capture of main with this code before the first compare.
 - **Snapshot seeds in tests.** No test may redraw snapshot seeds through the live generator; a
   test that needs a compare state pins the state.
 - **Snapshot jobs and the runner.** A capture or compare is outside the runner's chunk count

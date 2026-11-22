@@ -178,6 +178,13 @@ pivot_actions) and ``in_outcome`` (any_outcome), the AI example's ``in_ai_state`
 other entry; a raise; a different step list) is a divergence and fails the part
 (``classify_gen``): a .gen part fails on a changed rebuild, never on a changed draw.
 
+The draws do not depend on the source: ``draw_inputs`` runs ``no_local_constants``, which empties
+Hypothesis's local-constants pool (a literal of the checkout's modules, drawn for about 5% of
+integer and float choices), so a new literal of 100 or more in src or tools no longer shifts
+every later draw. That change altered every gen draw once: a capture made before it (a main
+capture) compares as generator drift at its first seed; capture main again with this code
+before the first compare.
+
 An output that raised is stored as its exception (a refusal is an output) and compared like
 one: a raise against a result (a value or a structure) is a divergence, never a one-sided entry
 that --allow-new could pass. Floats (Python, np.float64) compare by their IEEE-754 bytes, as
@@ -207,6 +214,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import dataclasses
 import gzip
 import hashlib
@@ -986,6 +994,28 @@ def ai_outputs(ctx: Ctx, s) -> dict:
     }
 
 
+@contextlib.contextmanager
+def no_local_constants():
+    """Hypothesis's local-constants pool empty inside the block (restored after). Draws must
+    not depend on source literals: ``HypothesisProvider._maybe_draw_constant`` returns, for
+    about 5% of integer and float choices, a constant that ``_get_local_constants`` took from
+    the checkout's imported modules (hypothesis/internal/conjecture/providers.py:775-827,
+    325-380, 6.170.13), so any new literal of 100 or more shifts every later draw. The
+    provider reads the function at each test case; ``CONSTANTS_CACHE`` (providers.py:137)
+    keeps the pool per key, so it is cleared on entry and exit."""
+    from hypothesis.internal.conjecture import providers
+    from hypothesis.internal.constants_ast import Constants
+
+    saved = providers._get_local_constants
+    providers._get_local_constants = Constants
+    providers.CONSTANTS_CACHE.cache.clear()
+    try:
+        yield
+    finally:
+        providers._get_local_constants = saved
+        providers.CONSTANTS_CACHE.cache.clear()
+
+
 def draw_inputs(ctx: Ctx, seed_value: int, saved: dict | None = None) -> list[tuple[str, dict]]:
     """``[(key, {in_state, in_actions, in_outcome})]`` (plain dicts) drawn as
     tools/differential.py draws a seed (TURNS examples, no shrink), each pause resumed as
@@ -1042,7 +1072,8 @@ def draw_inputs(ctx: Ctx, seed_value: int, saved: dict | None = None) -> list[tu
         turn[0] += 1
 
     start = time.monotonic()
-    gen()
+    with no_local_constants():
+        gen()
     TIMES["draw"] = TIMES.get("draw", 0.0) + time.monotonic() - start
     return out
 
