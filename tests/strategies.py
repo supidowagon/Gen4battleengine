@@ -2119,6 +2119,42 @@ def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
         a["rollout_count"][side] = draw(st.integers(1, 4))
 
 
+def settle_traces(tables: Tables, state: BattleState) -> BattleState:
+    """``state`` as a turn start leaves it (the Trace invariant, src/nuzline/engine/STATE.md):
+    ShowBattleMon runs SWITCH_IN_CHECK_STATE_TRACE before every turn's commands (bcp.c:256, from
+    TurnEnd :1858 and TrainerMessage :240-249), so a battler with ``Battler_Ability`` Trace, HP,
+    no Griseous Orb and ``trace_announced`` 0 that faces an opposing battler with HP whose raw
+    ability ChooseTraceTarget accepts (not Forecast, Trace or Multitype, battle_lib.c:7750-7781)
+    has traced already (:3711-3737). A drawn state that breaks it gets ``trace_announced`` 1 for
+    that battler (a holder that announced and kept Trace raw: reachable by a later Skill Swap of
+    Trace back, which leaves the flag, subscript_exchange_abilities.s:4-24). No draw: the
+    Hypothesis byte stream of every other field is unchanged."""
+    from nuzline.engine.damage import decomp_abilities
+    from nuzline.engine.format import side_of
+    from nuzline.engine.ids import ITEM_GRISEOUS_ORB, UNTRACEABLE_ABILITIES
+    from nuzline.engine.state import battler_ability
+
+    fmt = format_of(state)
+    decomp = np.asarray(decomp_abilities(tables, state))
+    hp, item, active = np.asarray(state.hp), np.asarray(state.item), np.asarray(state.active)
+    announced = np.asarray(state.trace_announced).copy()
+    for b in range(fmt.B):
+        p, m = party(fmt, b), int(active[b])
+        if (
+            int(battler_ability(state, b)) != AbilityId.TRACE
+            or announced[b]
+            or hp[p, m] == 0
+            or item[p, m] == ITEM_GRISEOUS_ORB
+        ):
+            continue
+        for e in range(fmt.B):
+            q, n = party(fmt, e), int(active[e])
+            traceable = hp[q, n] > 0 and int(decomp[q, n]) not in UNTRACEABLE_ABILITIES
+            if side_of(e) != side_of(b) and traceable:
+                announced[b] = 1
+    return state._replace(trace_announced=jnp.asarray(announced, state.trace_announced.dtype))
+
+
 @st.composite
 def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
@@ -2279,7 +2315,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     # BattleMon.formNum (H-5): the active slot's form (a Transform copies it with the rest).
     for side in (0, 1):
         a["form_num"][side] = a["form"][side, a["active"][side]]
-    return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+    return settle_traces(
+        tables, BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+    )
 
 
 def _draw_exp(draw, tables: Tables, a: dict) -> None:
@@ -2731,7 +2769,9 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
     a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
     a["weather_turns"][...] = timer
-    return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+    return settle_traces(
+        tables, BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+    )
 
 
 @st.composite
@@ -2925,4 +2965,6 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
             a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
     _draw_standoff(draw, a, draw(st.integers(0, 1)))  # G-25: an armed Trace holder's copy
     _draw_terrain(draw, a)  # a LAW_MOVES terrain move needs one too
-    return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+    return settle_traces(
+        tables, BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+    )
