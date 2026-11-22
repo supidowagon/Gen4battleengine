@@ -130,6 +130,15 @@ REPRO_2 = "@reproduce_failure('6.170.13', b'AXicQQQQ')"
 REPRO_3 = "@reproduce_failure('6.170.13', b'AXicRRRR')"
 
 
+def _done(out: Path, jobs: list[tuple[str, int]]) -> None:
+    """jobs.txt (the expected count) and SWEEP_DONE, as sweep.sh leaves a finished sweep."""
+    full = {SHORT_A: NODE_A, SHORT_B: NODE_B}
+    (out / "jobs.txt").write_text(
+        "".join(f"{full[short]} {short} {seed}\n" for short, seed in jobs), encoding="utf-8"
+    )
+    (out / "SWEEP_DONE").write_text("1\n", encoding="utf-8")
+
+
 def _sweep_out(tmp_path: Path, name: str = "sweep-20261122-abcdef0123456789") -> Path:
     out = tmp_path / name
     out.mkdir()
@@ -141,6 +150,7 @@ def _sweep_out(tmp_path: Path, name: str = "sweep-20261122-abcdef0123456789") ->
         + "".join("\t".join(map(str, r)) + "\n" for r in rows),
         encoding="utf-8",
     )
+    _done(out, [(r[0], r[1]) for r in rows])
     for r in rows:
         (out / f"{r[0]}_{r[1]}.log").write_text("1 passed in 1s\n", encoding="utf-8")
     (out / f"{SHORT_B}_6.log").write_text(
@@ -258,7 +268,9 @@ def test_collect_writes_blocks_and_classes_from_the_replay(tmp_path):
     assert collect.main([str(out)]) == 0
     text = (out / "sweep_failures.txt").read_text(encoding="utf-8")
     first = text.splitlines()[0]
-    assert first == "SWEEP 20261122 abcdef01: 6 processes, 3 PASS, 3 FAIL, 2 classes"
+    assert (
+        first == "SWEEP 20261122 abcdef01: 6 processes, 3 PASS, 3 FAIL, 1 classes, 1 unclassified"
+    )
     for seed, repro, item, choice in [
         (6, REPRO_1, "X Attack", 3),
         (7, REPRO_2, "X Attack", 5),
@@ -330,9 +342,11 @@ def test_collect_clean_sweep_first_line_and_exit_zero(tmp_path):
     out = tmp_path / "x-20261201-0123456789abcdef"
     out.mkdir()
     (out / "summary.txt").write_text(
-        "node\tseed\tresult\twall_s\trc\tpeak_GB\n" + f"{SHORT_A}\t1\tPASS\t10\t0\t1.0\n" * 3,
+        "node\tseed\tresult\twall_s\trc\tpeak_GB\n"
+        + "".join(f"{SHORT_A}\t{i}\tPASS\t10\t0\t1.0\n" for i in (1, 2, 3)),
         encoding="utf-8",
     )
+    _done(out, [(SHORT_A, 1), (SHORT_A, 2), (SHORT_A, 3)])
     r = subprocess.run([sys.executable, str(ROOT / "tools/ops/sweep/collect.py"), str(out)],
                        check=False, capture_output=True, text=True)  # fmt: skip
     assert r.returncode == 0
@@ -352,9 +366,13 @@ def test_collect_a_failure_without_a_falsifier_is_its_own_class(tmp_path):
         encoding="utf-8",
     )
     (out / f"{SHORT_A}_1.log").write_text("Killed\n", encoding="utf-8")
+    _done(out, [(SHORT_A, 1), (SHORT_A, 2)])
     assert collect.main([str(out), "--night", "20261122", "--tip", "deadbeefcafe"]) == 0
     text = (out / "sweep_failures.txt").read_text()
-    assert text.splitlines()[0] == "SWEEP 20261122 deadbeef: 2 processes, 0 PASS, 2 FAIL, 2 classes"
+    assert (
+        text.splitlines()[0]
+        == "SWEEP 20261122 deadbeef: 2 processes, 0 PASS, 2 FAIL, 0 classes, 2 unclassified"
+    )
     assert f"(NO-FALSIFIER rc=137, {SHORT_A}, -)" in text and f"(LOST, {SHORT_A}, -)" in text
 
 
@@ -384,7 +402,11 @@ def test_sweep_body_ships_the_jobs_in_a_tar_and_stays_short(tmp_path):
         capture_output=True,
         text=True,
     ).stdout
-    assert "R=/work/sweep-20261122-abc" in start and "setsid nohup bash bin/sweep.sh" in start
+    assert "R=/work/sweep-20261122-abc" in start
+    # absolute jobs and out paths: sweep.sh works from <run>/repo
+    assert 'setsid nohup bash bin/sweep.sh "$R/$J" "$R/$o"' in start
+    assert "o=sweep_out_$e" in start  # a second sweep of the run gets a new out dir
+    assert "*[!0-9]*|0|1)" in start  # a pid of 0 or 1 in sweep.pid is never signalled
     assert "SWEEP_CAP" not in start  # unset: sweep.sh takes the cap from the pod's limit
     bad = tmp_path / "bad.txt"
     bad.write_text("tests/x.py::t only_two\n", encoding="utf-8")
@@ -408,6 +430,7 @@ esac
 for a in "$@"; do case "$a" in --hypothesis-seed=*) seed=${a#*=};; esac; done
 T="$FAKE_TRACE"
 echo "start $seed $(date +%s.%N) $NUZLINE_HYPOTHESIS_PROFILE $*" >> "$T"
+if [ "$seed" = "${FAKE_HANG_SEED:-}" ]; then sleep 600; fi
 sleep "${FAKE_JOB_S:-1}"
 echo "end $seed" >> "$T"
 if [ "$seed" = "${FAKE_FAIL_SEED:-}" ]; then echo "E       Failing test case: t("; exit 1; fi
@@ -561,7 +584,8 @@ def test_sweep_stops_when_no_memory_reader_exists(tmp_path):
 def test_sweep_cap_comes_from_the_container_limit(tmp_path, limit, cap):
     d = _run_folder(tmp_path)
     r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, []))], check=False,
-                       capture_output=True, text=True, env=_env(tmp_path, 10**9, limit), timeout=60)  # fmt: skip
+                       capture_output=True, text=True, env=_env(tmp_path, 10**9, limit, SWEEP_P="1"),
+                       timeout=60)  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
     assert f" CAP={cap} (limit " in (d / "sweep_out" / "driver.log").read_text()
 
@@ -636,3 +660,278 @@ def test_sweep_scripts_parse_and_ship_in_the_pod_bin():
         POD.glob("*.sh")
     )  # pod_bin (common.sh) packs every *.sh of pod/
     assert re.search(r"\*\.sh", (ROOT / "tools/ops/common.sh").read_text(encoding="utf-8"))
+
+
+# --- collect: the first line is clean only for a whole sweep -----------------------------------
+
+HEADER = "node\tseed\tresult\twall_s\trc\tpeak_GB\n"
+
+
+def _clean_out(tmp_path: Path, n: int = 3) -> Path:
+    """A finished clean sweep of n processes: jobs.txt, summary.txt, logs, SWEEP_DONE."""
+    out = tmp_path / "sweep-20261122-abcdef01"
+    out.mkdir()
+    (out / "summary.txt").write_text(
+        HEADER + "".join(f"{SHORT_A}\t{i}\tPASS\t10\t0\t1.0\n" for i in range(1, n + 1)),
+        encoding="utf-8",
+    )
+    for i in range(1, n + 1):
+        (out / f"{SHORT_A}_{i}.log").write_text("1 passed in 1s\n", encoding="utf-8")
+    _done(out, [(SHORT_A, i) for i in range(1, n + 1)])
+    return out
+
+
+def _zero_rows(out: Path) -> None:
+    (out / "summary.txt").write_text(HEADER, encoding="utf-8")
+
+
+def _short(out: Path) -> None:
+    rows = (out / "summary.txt").read_text(encoding="utf-8").splitlines(keepends=True)
+    (out / "summary.txt").write_text("".join(rows[:-1]), encoding="utf-8")
+
+
+def _stopped(out: Path) -> None:
+    (out / "SWEEP_DONE").unlink()
+    (out / "SWEEP_STOPPED").write_text("1\n", encoding="utf-8")
+
+
+def _no_done(out: Path) -> None:
+    (out / "SWEEP_DONE").unlink()
+
+
+def _no_jobs(out: Path) -> None:
+    (out / "jobs.txt").unlink()
+
+
+def _empty_jobs(out: Path) -> None:
+    (out / "jobs.txt").write_text("", encoding="utf-8")
+    _zero_rows(out)
+
+
+def _no_summary(out: Path) -> None:
+    (out / "summary.txt").unlink()
+
+
+@pytest.mark.parametrize(
+    ("spoil", "first"),
+    [
+        (_zero_rows, "INCOMPLETE (0 processes in summary.txt): 0 processes, 0 PASS, 0 FAIL, 0 classes, 0 unclassified"),
+        (_short, "INCOMPLETE (2 of 3 processes in summary.txt): 2 processes, 2 PASS, 0 FAIL, 0 classes, 0 unclassified"),
+        (_stopped, ("INCOMPLETE (SWEEP_STOPPED present (the sweep was stopped); no SWEEP_DONE (the driver did not "
+                   "finish)): 3 processes, 3 PASS, 0 FAIL, 0 classes, 0 unclassified")),
+        (_no_done, ("INCOMPLETE (no SWEEP_DONE (the driver did not finish)): 3 processes, 3 PASS, 0 FAIL, 0 classes, "
+                   "0 unclassified")),
+        (_no_jobs, ("INCOMPLETE (no jobs.txt (the expected count is unknown)): 3 processes, 3 PASS, 0 FAIL, "
+                   "0 classes, 0 unclassified")),
+        (_empty_jobs, ("INCOMPLETE (jobs.txt has no job line; 0 processes in summary.txt): 0 processes, 0 PASS, "
+                      "0 FAIL, 0 classes, 0 unclassified")),
+        (_no_summary, ("INCOMPLETE (no summary.txt): 0 processes, 0 PASS, 0 FAIL, 0 classes, 0 unclassified "
+                      "(0 falsifiers in the logs)")),
+    ],
+)  # fmt: skip
+def test_collect_names_every_reason_a_sweep_is_not_whole(tmp_path, spoil, first):
+    out = _clean_out(tmp_path)
+    assert collect.main([str(out)]) == 0
+    assert (out / "sweep_failures.txt").read_text().splitlines()[0] == (
+        "SWEEP 20261122 abcdef01: 0 FAIL: none in 3 processes"
+    )
+    spoil(out)
+    assert collect.main([str(out)]) == 0
+    assert (out / "sweep_failures.txt").read_text().splitlines()[0] == (
+        f"SWEEP 20261122 abcdef01: {first}"
+    )
+
+
+def test_collect_a_falsifier_the_replay_does_not_reproduce_is_named_per_seed(tmp_path):
+    out = _sweep_out(tmp_path)
+    (out / "replay.txt").write_text(
+        f"== {SHORT_B}_6\n  RESULT PASS bad rows 0 of 40\n"
+        f"  CLASS KEY (PASS, X Attack(57), Pressure(46)/Static(9), BAG/EFFECT_HIT)\n"
+        f"== {SHORT_B}_7\n  CLASS KEY (PASS, X Attack(57), Pressure(46)/Static(9), BAG/EFFECT_HIT)\n"
+        "== CLASS KEYS\n",
+        encoding="utf-8",
+    )
+    assert collect.main([str(out)]) == 0
+    text = (out / "sweep_failures.txt").read_text()
+    assert text.splitlines()[0].endswith("3 FAIL, 0 classes, 3 unclassified")
+    assert f"  1  (NOT-REPRODUCED, {SHORT_B}:6, X Attack)  seeds {SHORT_B}:6" in text
+    assert f"  1  (NOT-REPRODUCED, {SHORT_B}:7, X Attack)  seeds {SHORT_B}:7" in text
+    assert "reason: the replay did not reproduce the failure" in text
+    assert "(PASS, X Attack(57)" not in text.split("\n\n")[1]  # not listed as a class
+
+
+def test_collect_reads_only_the_logs_of_its_summary(tmp_path):
+    out = _sweep_out(tmp_path)
+    (out / f"{SHORT_B}_99.log").write_text(  # an older sweep's log in the same folder
+        _fail_log(NODE_B, 99, "Ether", 2, REPRO_1), encoding="utf-8"
+    )
+    assert collect.main([str(out)]) == 0
+    text = (out / "sweep_failures.txt").read_text()
+    assert f"{SHORT_B}:99" not in text and "Ether" not in text
+
+
+def test_collect_and_sweep_sh_use_extract_markers(tmp_path):
+    marks = re.search(r"^MARKS='([^']*)'$", (POD / "sweep.sh").read_text(), re.MULTILINE)
+    assert marks and marks.group(1) == "|".join(extract.MARKERS)
+    out = _sweep_out(tmp_path)
+    old = (out / f"{SHORT_B}_6.log").read_text().replace("Failing test case", "Falsifying example")
+    (out / f"{SHORT_B}_6.log").write_text(old, encoding="utf-8")
+    assert collect.main([str(out)]) == 0
+    text = (out / "sweep_failures.txt").read_text()
+    assert f"== {SHORT_B}_6  node {SHORT_B}  seed 6" in text  # still a falsifier, not NO-FALSIFIER
+    assert f"NO-FALSIFIER rc=1, {SHORT_B}" not in text
+
+
+# --- a real failing log ------------------------------------------------------------------------
+
+REAL_LOG = ROOT / "tests" / "fixtures" / "sweep" / f"{SHORT_B}_7.log.gz"
+# A real falsifier log (Hypothesis 6.170.13 through `pytest -q`, the explore profile): seed 7 of
+# the hand-run sweep at b83a1247, one bug, no exception group.
+
+
+def test_extract_and_collect_read_a_real_hypothesis_log(tmp_path):
+    import gzip
+    import hashlib
+
+    out = tmp_path / "sweep-20261122-b83a1247"
+    out.mkdir()
+    (out / f"{SHORT_B}_7.log").write_bytes(gzip.decompress(REAL_LOG.read_bytes()))
+    ex = tmp_path / "ex"
+    r = subprocess.run([sys.executable, str(ROOT / "tools/ops/sweep/extract.py"), str(out), str(ex)],
+                       check=True, capture_output=True, text=True)  # fmt: skip
+    assert f"{SHORT_B}_7 {SHORT_B} item='Persim Berry' choice=0 seed=1438 ok" in r.stdout
+    d = ex / f"{SHORT_B}_7"
+    assert sorted(f.name for f in d.iterdir()) == [
+        "choice.txt", "item.txt", "node.txt", "outcome.txt", "reproduce.txt", "seed.txt", "state.txt",
+    ]  # fmt: skip
+    digest = {
+        f: hashlib.sha256((d / f"{f}.txt").read_text().encode()).hexdigest()
+        for f in ("state", "outcome")
+    }
+    assert digest == {  # the draws E2's extract.py cut from the same log
+        "state": "dd104365c497bff24295e61e6c6e99e1d06cee7a3e7b4aa0b431a345f06241a3",
+        "outcome": "b5df612e4d410f8fb43ea1d325cc42b728ed1de54c3375e0ad210c2ae99d5a21",
+    }
+    (out / "summary.txt").write_text(
+        HEADER + f"{SHORT_B}\t7\tFAIL\t1215\t1\t12.1\n", encoding="utf-8"
+    )
+    _done(out, [(SHORT_B, 7)])
+    assert collect.main([str(out)]) == 0
+    text = (out / "sweep_failures.txt").read_text()
+    assert text.splitlines()[0] == (
+        "SWEEP 20261122 b83a1247: 1 processes, 0 PASS, 1 FAIL, 0 classes, 1 unclassified"
+    )
+    block = text.split(f"== {SHORT_B}_7  node {SHORT_B}  seed 7\n", 1)[1].split("\n\n", 1)[0]
+    assert "  @reproduce_failure('6.170.13', b'AXicXVRtaJVlGH7u9z0f2znb" in block
+    assert "bag item: Persim Berry  choice: 0" in block
+    assert f"(UNREPLAYED, {SHORT_B}, Persim Berry)" in block
+
+
+# --- sweep.sh: paths, gate units, refusals, job limit ------------------------------------------
+
+
+@linux
+def test_sweep_takes_relative_jobs_and_out_paths_from_the_callers_folder(tmp_path):
+    d = _run_folder(tmp_path)
+    _jobs(tmp_path, [1, 2])
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    shutil.copy(tmp_path / "jobs.txt", elsewhere / "rel_jobs.txt")
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0", SWEEP_P="2")
+    r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), "rel_jobs.txt", "rel_out"], cwd=elsewhere,
+                       check=False, capture_output=True, text=True, env=env, timeout=60)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = elsewhere / "rel_out"
+    assert (out / "SWEEP_DONE").is_file()
+    assert len((out / "summary.txt").read_text().splitlines()) == 3  # header + 2 jobs
+    assert (tmp_path / "trace.txt").read_text().count("start") == 2
+    assert collect.main([str(out), "--night", "20261122", "--tip", "abcdef01"]) == 0
+    first = (out / "sweep_failures.txt").read_text().splitlines()[0]
+    assert first == "SWEEP 20261122 abcdef01: 0 FAIL: none in 2 processes"
+
+
+@linux
+def test_sweep_jobs_are_gate_units_while_they_run(tmp_path):
+    d = _run_folder(tmp_path)
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="4", SWEEP_P="1")
+    p = subprocess.Popen([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1]))], env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)  # fmt: skip
+    unit = d / "sweep" / "out" / "run" / f"{SHORT_A}_1"
+    try:
+        for _ in range(100):
+            if unit.is_file() and (tmp_path / "trace.txt").exists():
+                break
+            time.sleep(0.05)
+        g = unit.read_text().strip()
+        assert (d / "sweep" / "out" / f"{SHORT_A}_1.w").read_text().strip() == "13"
+        ps = subprocess.run(
+            ["ps", "-eo", "pgid=,args="], check=True, capture_output=True, text=True
+        )
+        assert any(
+            ln.split(None, 1)[0] == g and "--hypothesis-seed=1" in ln
+            for ln in ps.stdout.splitlines()
+        )  # the pytest process is in the recorded group
+        work = _posix(tmp_path / "work")
+        gate = subprocess.run(
+            [BASH, "-c", (f'. "{_posix(d / "bin/gate.sh")}"; NO_W_FILE_GB=12 podgate '
+                         f'"{work}"/*/out/run/* "{work}"/*/*/out/run/*')],
+            check=True, capture_output=True, text=True, env=env,
+        )  # fmt: skip
+        live, reserve = map(int, gate.stdout.split())
+        assert live == 1 and reserve >= 12  # what every runner's gate now holds for it
+        assert p.wait(timeout=60) == 0
+    finally:
+        p.kill()
+    assert not unit.exists()  # the run file goes with the job
+
+
+@linux
+@pytest.mark.parametrize(
+    ("knobs", "why"),
+    [({"SWEEP_P": "7"}, "SWEEP_P 7 x SWEEP_W 13GB = 91GB is over the cap 88GB (limit 137GB)"),
+     ({"SWEEP_P": "0"}, "SWEEP_P '0' is under 1"),
+     ({"SWEEP_JOB_S": "1h"}, "SWEEP_JOB_S '1h' is not a whole number")],
+)  # fmt: skip
+def test_sweep_refuses_knobs_that_cannot_work(tmp_path, knobs, why):
+    d = _run_folder(tmp_path)
+    r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1]))], check=False,
+                       capture_output=True, text=True, env=_env(tmp_path, 10**9, **knobs), timeout=60)  # fmt: skip
+    assert r.returncode == 1 and why in r.stderr, r.stderr
+    assert not (tmp_path / "trace.txt").exists()
+
+
+@linux
+def test_sweep_refuses_an_out_dir_that_holds_a_sweep(tmp_path):
+    d = _run_folder(tmp_path)
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0")
+    args = [BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1]))]
+    assert (
+        subprocess.run(args, check=False, capture_output=True, env=env, timeout=60).returncode == 0
+    )
+    r = subprocess.run(args, check=False, capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 1 and "already holds a sweep (jobs.done)" in r.stderr
+    assert (tmp_path / "trace.txt").read_text().count("start") == 1
+
+
+@linux
+def test_sweep_a_job_over_its_time_limit_fails_and_the_sweep_goes_on(tmp_path):
+    d = _run_folder(tmp_path)
+    env = _env(
+        tmp_path, 10 * 10**9, FAKE_JOB_S="0", FAKE_HANG_SEED="2", SWEEP_JOB_S="2", SWEEP_P="3"
+    )
+    r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1, 2, 3]))], check=False,
+                       capture_output=True, text=True, env=env, timeout=60)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = d / "sweep_out"
+    rows = [ln.split("\t") for ln in (out / "summary.txt").read_text().splitlines()[1:]]
+    assert [(x[1], x[2], x[4]) for x in rows] == [
+        ("1", "PASS", "0"),
+        ("2", "FAIL", "124"),
+        ("3", "PASS", "0"),
+    ]
+    assert (out / "SWEEP_DONE").is_file()
+    assert not list((d / "sweep" / "out" / "run").iterdir())
+    left = subprocess.run(["ps", "-eo", "args="], check=True, capture_output=True, text=True).stdout
+    assert "sleep 600" not in left  # the hung job's leftovers were killed
+    assert collect.main([str(out), "--night", "20261122", "--tip", "abcdef01"]) == 0
+    assert f"(NO-FALSIFIER rc=124, {SHORT_A}, -)" in (out / "sweep_failures.txt").read_text()
