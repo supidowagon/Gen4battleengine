@@ -108,6 +108,74 @@ per day is the rate used for estimates.
 
 ## 5. Rented test pods (Runpod CPU)
 
+- **No engine tests on the PC.** The root `conftest.py` (`tools/ops/ramgate.py`) enforces it
+  after collection. A local pytest run is allowed only when every selected test is ROM-only (its
+  fixture closure holds a local-input fixture, `ROM_FIXTURES` in `ramgate.py`) or when
+  `nuzline.engine` was not imported by the collected modules (a tool test). Any other run exits
+  at once, naming the first disallowed ids: send them to the quick lane below. The tests listed
+  in `tools/ops/day/pod_only.txt` (JAX compiles without the engine: `tests/test_spike_step.py`,
+  `tests/test_jaxcache.py`; manager ruling 22 Nov 2026) are refused on the PC the same way,
+  whatever they import. `-n` / `--dist`
+  (pytest-xdist) is refused on the PC at configure time. A pytest on the PC that never loaded
+  the gate (`--noconftest`, `--confcutdir tests`, also through `PYTEST_ADDOPTS`) cannot import
+  the engine: `src/nuzline/engine/__init__.py` raises ImportError when `_pytest` is loaded on
+  Windows and the gate module is not. Its four subprocess tests in `tests/tools/test_ramgate.py`
+  (`test_a_pytest_without_the_gate_cannot_import_the_engine`) are win32-only, so no pod run
+  covers them: run `tests/tools/test_ramgate.py` locally once per change to
+  `src/nuzline/engine/__init__.py` or the root `conftest.py`. An allowed run
+  waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
+  6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, then takes the machine lock
+  `<main checkout>/_scratch/ramgate.lock`: an OS lock on that file (`msvcrt.locking` on
+  Windows, `fcntl.flock` elsewhere) held until the run ends, so one local run goes at a time.
+  The kernel frees it the moment its holder ends, however it ends (a killed tool, the watchdog's
+  hard exit, a power cut): there is no stale lock. The file stays; its line `<pid> <kind>
+  <start time>` only names the holder, and a child process of the holder (pid and start time
+  of the ancestor both matching, every parent link start-time checked, so a reused pid never
+  counts) runs under its hold. Waiting on the lock (polled every 10 s, the message names the
+  holder pid and the path) counts toward the same `NUZLINE_RAMGATE_TIMEOUT` minutes (default
+  30). To clear a stuck lock, end the named process if it is no pytest or build of yours;
+  deleting the file frees nothing.
+  `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
+  `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
+  weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured
+  ROM-only item waits for more than 20 GB free. Local measuring pass:
+  `python tools/ops/ramgate_measure.py IDS_FILE OUT_JSON [--skip SLOW_IDS_FILE]` (its header
+  has the details): it holds the machine lock as kind `measure` for the whole pass, runs one
+  file's ROM-only ids per process, strictly serial, each started when free RAM is above 20 GB;
+  it polls every 0.5 s and kills that pytest tree when free RAM drops below 4 GB (the file is
+  then marked `pod-measure needed`, weight 20); figure = ceil(max(1.25 m, m + 2)) GB of the
+  peak summed RSS m of the tree, tag `local-measure-<sha7>-<yyyymmdd>`. Every gated run (and
+  every `--build` command) has a watchdog thread too: below 4 GB free it kills the run's child
+  processes and stops the run (KeyboardInterrupt, then a hard exit after 30 s), exit 15.
+  The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
+  never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
+  engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a
+  wait and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` (or
+  `--rom-gate`) concerns ROM-only ids only: it lifts the POD cut-off (weight 8 or more) of the
+  `ramgate.py <ids>` check; the pytest gate ignores it, so it lets no refused run through.
+  A refused run exits 13, a wait that times out 14, an unreadable free-RAM figure 16
+  (apart from pytest's own codes 0-5); a `NUZLINE_RAMGATE_TIMEOUT` that is not a finite number
+  of 0 or more counts as 30. `NUZLINE_RAMGATE_NO_WAIT=1` turns the RAM wait off (the
+  refusal stays) only while a live ancestor holds the machine lock as the measuring harness
+  (kind `measure`), which checks free RAM and runs the watchdog itself; otherwise it is ignored
+  with a note. A pytest started by a test of a gated run is part of that run: the gate sets
+  `NUZLINE_RAMGATE_DONE=<its pid>` and skips a run whose live ancestor (or itself, links
+  start-time checked) has that pid; any other value is ignored. The pod sets
+  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`, `quick.sh`, `sweep.sh`; `tests/tools/test_ramgate.py` fails for any script under `tools/ops/day/pod/` that starts pytest, or python importing the engine, without it in effect), which skips the gate on Linux only (on the
+  Windows PC it is ignored). Local jobs that are not
+  pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
+  waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
+  more than 20 GB free) and the machine lock, runs the command under the lock and exits with
+  its code; it never prints POD. On the pod (`NUZLINE_ON_POD=1`) or off Windows it runs the
+  command directly: no wait, no lock, no watchdog. `tools/ops/build_tables.sh` wraps its build
+  steps in it itself.
+  A `tools.kaizo.*` run (it needs the ROM or the docs sheet, so it cannot go to the pod):
+  `python tools/ops/ramgate.py --build [--weight GB] -- python -m tools.kaizo.<module> ...`.
+- **Quick lane (engine tests, a few ids):** send the managing session a request of at most 5
+  test ids at your tip; run name `q-<stream>-<sha7>`. It starts at once on any pod with memory
+  room, ahead of in-work lists, behind push gates only when memory is short. The result you
+  get back is pass or fail plus the first failure lines. Larger lists go on the normal pod
+  list.
 - **What may leave the PC:** source code at a commit (`git archive`) and the built tables
   listed by `TABLE_ALLOW` in `tools/ops/common.sh`. Never the ROM, save files, the calc
   archive or its extraction, the docs sheet or its extraction, or anything personal.
@@ -218,11 +286,9 @@ per day is the rate used for estimates.
   reads only that checkout and the built tables; it runs after the run's list has finished;
   its output is text written into the run's results folder and collected with the results.
   The exact command, sha and pod go in `_scratch/handoff/DISPATCH.md` before it runs.
-- **Local pytest with four streams.** With four streams working, the pod is the default place
-  for in-work tests. A local pytest (CLAUDE.md, Where tests run: one process, one file or
-  chunk) runs only when more than 6 GB of RAM is free, checked right before it starts
-  (PowerShell: `(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB`), not earlier
-  in the session.
+- **Local pytest with four streams.** The pod is the place for every engine test; the PC runs
+  only ROM-only and engine-free tests, under the gate above (one process; it waits for free RAM
+  > 6 GB + weight itself, no manual check). Engine tests go to the quick lane.
 - **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
   sends no new tip while that run is going, unless the run has already failed (a first-failure
   report counts). The managing session holds any other request until the run is back.
@@ -669,7 +735,7 @@ gh auth status
 ls _scratch/rent/bin/runpodctl-windows-amd64.exe _scratch/rent/home/.runpod/config.toml
 ls data/local.toml external/pokeplatinum/src .cache/decomp >/dev/null && echo INPUTS_OK
 python -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/settings.json')))['enabledPlugins'])"
-powershell -NoProfile -Command "[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)"   # free GB; local pytest needs more than 6
+powershell -NoProfile -Command "[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)"   # free GB; the ramgate waits for > 6 + weight
 ```
 Then confirm in the session that the skills `superpowers:*` and `runpod:*` are listed and
 that the Runpod tools answer. Report to the owner in five lines: what matched, what was
