@@ -89,8 +89,11 @@ PYTEST_FAIL_OUT = (
 )
 # FAKE_PYTEST_HOLD=<file>: writes <file>.pid, then waits until <file> exists (a running unit).
 # FAKE_PYTEST_SKIP=1: every test skipped, rc 0. FAKE_PYTEST_RC=<n>: one failure, rc n.
+# FAKE_PYTEST_LEAVE=<file>: leaves a sleep in its process group, its pid in <file>.
 FAKE_PYTEST = (
     'echo "$@" > "$(dirname "$0")/pytest.args"\n'
+    'if [ -n "${FAKE_PYTEST_LEAVE:-}" ]; then sleep 300 < /dev/null > /dev/null 2>&1 &\n'
+    '  echo $! > "$FAKE_PYTEST_LEAVE"; fi\n'
     'if [ -n "${FAKE_PYTEST_HOLD:-}" ]; then echo $$ > "$FAKE_PYTEST_HOLD.pid"\n'
     '  while [ ! -f "$FAKE_PYTEST_HOLD" ]; do sleep 0.2; done; fi\n'
     "if [ \"${FAKE_PYTEST_SKIP:-}\" = 1 ]; then cat <<'EOF'\n"
@@ -1042,6 +1045,19 @@ def test_memory_at_kill_gb_kills_the_quick_units_group_with_rc_98(src, tmp_path)
     assert not _alive(pid), "the unit's process group is killed"
     assert not (run / "out/run/q").exists()
     assert (run / "quick.rc").read_text(encoding="utf-8").strip() == "98"
+
+
+@linux
+def test_a_process_left_in_the_units_group_is_killed_before_out_run_q_goes(src, tmp_path):
+    _setup_lane(tmp_path, src)
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
+    left = tmp_path / "left.pid"
+    r = _quick(tmp_path, run, _cgroup(tmp_path), FAKE_PYTEST_LEAVE=_p(left))
+    log = _log(run)
+    assert r.returncode == 0 and "QUICK_PASS" in log, log
+    assert re.search(r"^QUICK_LEFTOVER \d+ ", log, re.MULTILINE), log
+    assert not _alive(int(left.read_text(encoding="utf-8")))
+    assert not (run / "out/run/q").exists()
 
 
 @linux

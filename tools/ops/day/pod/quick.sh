@@ -237,6 +237,11 @@ rm -f "$O/q.timeout" "$O/q.memkill"
 WPID=$!
 wait "$QPG"; PRC=$?
 if [ -f "$O/q.timeout" ] || [ -f "$O/q.memkill" ]; then wait "$WPID"; else kill "$WPID" 2> /dev/null; wait "$WPID" 2> /dev/null; fi
+# Members of the unit's group that outlive pytest (a test's child) stay counted (out/run/q names the
+# group) until they are gone: TERM, 5 s, KILL, as runner.sh's unit kill.
+if kill -0 -- "-$QPG" 2> /dev/null; then
+  echo "QUICK_LEFTOVER $(date +%s) the unit's group outlived pytest: killed"
+  kill -TERM -- "-$QPG" 2> /dev/null; sleep 5; kill -KILL -- "-$QPG" 2> /dev/null; fi
 rm -f "$O/run/q"
 # The tests' leftovers (non-ignored files, edits) go now; the next quick run resets again before
 # its OLD_TREE check, for a run that never got here.
