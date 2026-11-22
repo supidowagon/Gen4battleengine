@@ -60,7 +60,8 @@ def test_status_cure_reveals_are_shed_skin_and_hydration_alone():
     "species, ability, status",
     [
         ("Spinarak", "Insomnia", Status.SLEEP),
-        ("Mankey", "Vital Spirit", Status.SLEEP),
+        # pod e1-i3-68693f2: 62.6 s warm, over the fast-tier 60 s
+        pytest.param("Mankey", "Vital Spirit", Status.SLEEP, marks=pytest.mark.slow),
         ("Persian", "Limber", Status.PARALYSIS),
     ],
 )
@@ -156,6 +157,7 @@ def test_sketch_forbidden_ids_match_the_decomp():
     assert MOVE_SKETCH == moves.index("MOVE_SKETCH")
 
 
+@pytest.mark.slow  # pod e1-i3-68693f2: 61.7 s warm, over the fast-tier 60 s
 def test_a_slower_sketch_copies_the_foes_move_for_good(tables, names):
     """The foe's Rock Throw is its ``moveSketched`` (UpdateMoveBuffers, bcp.c:3952-3954); the first
     Sketch slot takes it with the table PP, no shadow and no ``mimic_slots`` bit
@@ -384,7 +386,7 @@ def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names)
     assert seen.count(names.move("Tackle")) == 6 and seen.count(names.move("Thunder")) == 6
 
 
-@pytest.mark.slow  # pod e1-igf-a4fe340: 545 s + 374 s, 16 GB peak; slow pending a warm re-measure
+@pytest.mark.slow  # pod e1-igf-a4fe340: 545 s + 374 s, 16 GB peak; slow without compile (e1-i3-68693f2: 396 s + 259 s warm)
 @pytest.mark.parametrize("order", ["player", "opp"])
 def test_the_call_law_follows_an_imprisoners_sketch(tables, names, order):
     """``enumerate_turn`` gives the decomp's weights: after a faster imprisoner's Sketch of Ember
