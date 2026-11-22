@@ -229,13 +229,13 @@ def test_refuses_effectiveness_modifiers(tables, names):
     s = versus(tables, names, CRANIDOS, "Starly")
     belt = s._replace(item=s.item.at[1, CRANIDOS].set(names.item("Expert Belt")))
     assert any("Expert Belt" in r for r in ai_refusals(tables, belt))
-    solid_rock = 116  # decomp ABILITY_SOLID_ROCK; ability_slot picks a species slot, so
+    normalize = 96  # decomp ABILITY_NORMALIZE; ability_slot picks a species slot, so
     # the species' ability table is edited instead
     starly = int(s.species[0, 0])
     edited = tables._replace(
-        species_abilities_decomp=tables.species_abilities_decomp.at[starly, 0].set(solid_rock)
+        species_abilities_decomp=tables.species_abilities_decomp.at[starly, 0].set(normalize)
     )
-    assert any("Solid Rock" in r for r in ai_refusals(edited, s))
+    assert any("Normalize" in r for r in ai_refusals(edited, s))
 
 
 @pytest.mark.fullset

@@ -65,7 +65,9 @@ from nuzline.engine.ids import (
     METRONOME_HEAVY,
     MOVE_STRUGGLE,
     NATURE_DISLIKED_FLAVOR,
+    PRIORITY_DOWN_ITEMS,
     SECRET_POWER_EFFECTS,
+    SPECIES_DITTO,
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
@@ -696,6 +698,13 @@ def effective_speed(
     # speed-halving items and before paralysis.
     scarf = tables.item_effect[held_item(state, side, mon)] == ItemId.CHOICE_SCARF
     speed = jnp.where(scarf, speed * 15 // 10, speed)
+    # :1252-1255 Quick Powder (HOLD_EFFECT_DITTO_SPEED_UP, Battler_HeldItemEffect: Klutz / Embargo
+    # hide it): a holder whose battleMons species is Ditto (a Transformed one is not), x2,
+    # after Choice Scarf and before Quick Feet / paralysis (H-4).
+    powder = (tables.item_effect[held_item(state, side, mon)] == ItemId.QUICK_POWDER) & (
+        state.species[party(fmt, side), mon] == SPECIES_DITTO
+    )
+    speed = jnp.where(powder, speed * 2, speed)
     # :1257-1261 Quick Feet (Battler_Ability) with any status (MON_CONDITION_ANY): x15/10,
     # and then no paralysis quartering; else paralysis quarters it.
     status = state.status[party(fmt, side), mon]
@@ -999,7 +1008,11 @@ def compare_speed(
     other = _foe(battler1) if battler2 is None else battler2
     speed = tuple(effective_speed(tables, state, b) for b in range(fmt.B))
     claw = quick_claw_active(tables, state, qc) | custap_active(tables, state)
-    lag = tuple(_holds(tables, state, side, ItemId.LAGGING_TAIL) for side in range(fmt.B))
+    # :1302-1304 HOLD_EFFECT_PRIORITY_DOWN: Lagging Tail and Full Incense (H-4).
+    lag = tuple(
+        jnp.any(jnp.stack([_holds(tables, state, side, i) for i in PRIORITY_DOWN_ITEMS]))
+        for side in range(fmt.B)
+    )
     speed1, speed2 = speed[battler1], speed[other]
     claw1, claw2 = claw[battler1], claw[other]
     lag1, lag2 = lag[battler1], lag[other]

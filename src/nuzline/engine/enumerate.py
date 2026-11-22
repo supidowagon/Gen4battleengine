@@ -60,7 +60,9 @@ of the turn:
 * ``infatuation[s]``: ``s`` moves and is in love at the start while the foe does not switch
   (a switch goes first and ``_source_leaves`` clears it), or the foe moves first with Attract
   and could infatuate ``s`` (opposite genders, neither genderless, ``s`` not in love yet;
-  ``effects._attract``). Cute Charm infatuates the attacker during its own move, after its
+  ``effects._attract``), or the foe moves first with a damaging contact move, holds a
+  Destiny Knot and ``s`` is a Cute Charm holder that can infatuate it (the knot reflects the
+  love back, H-4). Cute Charm infatuates the attacker during its own move, after its
   check: read only on a later turn.
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe moves
   first with a ``CONFUSE_FOE`` or ``SECONDARY_CONFUSE`` move and ``s`` is not confused
@@ -256,6 +258,7 @@ from nuzline.engine.ids import (
     FOCUS_BAND_PARAM,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
+    NO_IN_BATTLE_HOLD_EFFECT_ITEMS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
     SNORE_PARAM,
@@ -740,7 +743,7 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     para_by_foe = b["uses_move"] & foe_first & foes(b["para_inflict"])
     freeze_by_foe = b["uses_move"] & foe_first & foes(b["freeze_inflict"])
     confused_by_foe = b["uses_move"] & foe_first & foes(b["confuse_inflict"])
-    infatuated_by_foe = b["uses_move"] & foe_first & foes(b["attract_inflict"])
+    infatuated_by_foe = b["uses_move"] & foe_first & (foes(b["attract_inflict"]) | b["knot_love"])
     # A foe moving first can bring an unconfused holder of a disliked flavor berry to half HP
     # (hooks.held_item_check, G-5): its check then reads the berry's counter.
     berry_by_foe = b["uses_move"] & foe_first & b["berry_confuse"] & foes(b["uses_move"])
@@ -1210,6 +1213,17 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.MULTITYPE,
     # F-5: Hydration cures in the turn-end weather step, after every hit.
     AbilityId.HYDRATION,
+    # H-2: they only stop a status, confusion or infatuation (fewer input changes than the
+    # clauses already allow) and cure one at a move's end or a switch (a status pierced by Mold
+    # Breaker is cured at that move's end, before its holder's later hit).
+    AbilityId.IMMUNITY,
+    AbilityId.OWN_TEMPO,
+    AbilityId.WATER_VEIL,
+    AbilityId.MAGMA_ARMOR,
+    AbilityId.OBLIVIOUS,
+    # H-3: a blocked sound move has no hit (``absorbs`` in ``outcome_laws``); its uproar and Perish
+    # Song tests change sleep and the perish count only, no damage input.
+    AbilityId.SOUNDPROOF,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -1238,6 +1252,12 @@ INPUT_CLAUSE_ABILITIES = (
     # F-6: Castform's types follow the weather, which changes mid-turn only by an earlier foe
     # weather move (weather clause) or a switch-in weather ability or Cloud Nine (switch clause).
     AbilityId.FORECAST,
+    # H-3: a damaging hit on the holder sets its types (battle_lib.c:4232-4253): the color-change
+    # clause (the holder's later STAB, a later hit's chart against it).
+    AbilityId.COLOR_CHANGE,
+    # H-3: the holder's status, which can change before a physical hit on it, is a Defense
+    # factor (battle_lib.c:6797-6800): the marvel-scale clause, Guts' mirror.
+    AbilityId.MARVEL_SCALE,
 )
 INPUT_NEUTRAL_ITEMS = (
     ItemId.NONE,
@@ -1321,6 +1341,20 @@ INPUT_NEUTRAL_ITEMS = (
     # only the holder's crit odds, a variant bit of ``outcome.crit_variants`` (F-9).
     ItemId.MACHO_BRACE,
     ItemId.LANSAT_BERRY,
+    # E1 Batch H, H-4. Quick Powder (a speed factor of the order fixed at the turn's start; a
+    # Transform changes only the end-of-turn order, kept by ``xform_used``), Full Incense (as
+    # Lagging Tail), Shed Shell (only the choice set), and the items with no in-battle hold
+    # effect (``ids.NO_IN_BATTLE_HOLD_EFFECT_ITEMS``: the escape paths, and the exp payout, which
+    # changes state through the raw party item and reads no damage or chance input).
+    ItemId.QUICK_POWDER,
+    ItemId.FULL_INCENSE,
+    ItemId.SHED_SHELL,
+    # Mental Herb cures infatuation and Destiny Knot reflects it: infatuation is no damage input;
+    # the cure only removes an ``infatuation`` read (the existing clause over-approximates) and the
+    # knot's reflected love is the ``infatuated_by_foe`` read (``knot_love``).
+    ItemId.MENTAL_HERB,
+    ItemId.DESTINY_KNOT,
+    *NO_IN_BATTLE_HOLD_EFFECT_ITEMS,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -1592,6 +1626,13 @@ def damage_inputs_can_change(
     * **recycle**: the foe's earlier Recycle gives it back an item (B13-19; any, conservative);
     * **embargo**: the foe's earlier Embargo hides the side's held item (B13-31: a holder of one
       as ``state.held_item`` reads it at the turn start);
+    * **color-change** (H-3): the side's Color Change holder hit first by a foe's damaging move
+      gets that move's type (its STAB); a later hit of the side's damaging move on a foe holder
+      meets the types its first hit set (the chart);
+    * **marvel-scale** (H-3): a physical hit on a foe Marvel Scale holder reads the holder's
+      status, which the foe's earlier move (its wake-up, thaw, Rest, Refresh, Psycho Shift, a
+      contact status, Synchronize) or an earlier hit of the side's move (a secondary status, the
+      holder's status berry) can change;
     * **own move**: a later hit of a move other than ``MULTI_HIT``, ``TRIPLE_KICK`` and
       ``BEAT_UP`` (Twineedle's second hit, B13-1: its first can poison a Synchronize holder;
       Triple Kick's and Beat Up's own hits change no input but the HP and contact clauses',
@@ -1635,6 +1676,12 @@ def damage_inputs_can_change(
     physical = category == PHYSICAL
     special = category == SPECIAL
     guts = physical & (ability == AbilityId.GUTS)  # any status counts (damage.py :6793)
+    # H-3: Guts' mirror on the defender (battle_lib.c:6797-6800): any status of a foe holder.
+    marvel = physical & (foes(ability) == AbilityId.MARVEL_SCALE)
+    # H-3: Color Change (battle_lib.c:4232-4253) needs a move with table power.
+    damaging = tables.move_power[moves] != 0
+    color_own = (ability == AbilityId.COLOR_CHANGE) & foes(damaging)
+    color_foe = (foes(ability) == AbilityId.COLOR_CHANGE) & damaging
     burnable = physical & (ability != AbilityId.GUTS)  # a burn halves it (:6978)
     attack_stat = jnp.where(physical, Stat.ATK, Stat.SPA)
     defense_stat = jnp.where(physical, Stat.DEF, Stat.SPD)
@@ -1725,6 +1772,11 @@ def damage_inputs_can_change(
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
+        # H-3 marvel-scale: any earlier foe move can change the holder's own status (a wake-up or
+        # thaw at its status check, Rest, Refresh, Psycho Shift, a contact status, Synchronize).
+        | marvel
+        # H-3 color-change: the foe's damaging hit sets the side's types (its STAB).
+        | color_own
         | ((foe_effect == _E.REFLECT) & physical)
         | ((foe_effect == _E.LIGHT_SCREEN) & special)
         | ((foe_effect == _E.MUD_SPORT) & (move_type == Type.ELECTRIC))
@@ -1834,7 +1886,9 @@ def damage_inputs_can_change(
     repeat = _any_of(effect, (_E.MULTI_HIT, _E.TRIPLE_KICK, _E.BEAT_UP))
     # F-16: a later hit against a Sky Shaymin frozen at the turn start meets Land Forme.
     sky_frozen = foes(sky & (status == Status.FREEZE))
-    own_hits = hp_sensitive | ~repeat | contact_status | sync_back | sky_frozen
+    # H-3: a later hit meets a foe holder's types set by the first (color-change) or its status
+    # changed by a secondary or its berry (marvel-scale).
+    own_hits = hp_sensitive | ~repeat | contact_status | sync_back | sky_frozen | color_foe | marvel
     own_pre_move = (guts & _any_of(status, (Status.SLEEP, Status.FREEZE))) | (
         effect == _E.SELF_DESTRUCT
     )
@@ -2014,6 +2068,13 @@ def outcome_laws(
     if loose:
         charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
     holders = holders | charm
+    # H-4 Destiny Knot (battle_lib.c:4546-4566): a knot holder's contact hit that makes a Cute
+    # Charm foe infatuate it infatuates that foe back: the foe's attract check, if it moves later
+    # this turn, reads it (``infatuated_by_foe``). Raw item, Klutz / Embargo ignored (over-approximate).
+    knot_love = (
+        foes(_holds_item(tables, state, actions, (ItemId.DESTINY_KNOT,)) & damaging & contact)
+        & charm
+    )
     contact_proc = foes(lands & (damaging & contact & foes(holders))[:, None]) | (
         lands & (damaging & contact & holders & lock)[:, None]
     )
@@ -2053,6 +2114,17 @@ def outcome_laws(
         ]
     )
     limber = (param0 == Status.PARALYSIS) & (ignorable == AbilityId.LIMBER)
+    # H-2: Immunity, Water Veil and Magma Armor (effects._inflict) block as Limber does: a reveal
+    # only for a direct status move, none for Magma Armor.
+    limber = (
+        limber
+        | (
+            ((param0 == Status.POISON) | (param0 == Status.TOXIC))
+            & (ignorable == AbilityId.IMMUNITY)
+        )
+        | ((param0 == Status.BURN) & (ignorable == AbilityId.WATER_VEIL))
+        | ((param0 == Status.FREEZE) & (ignorable == AbilityId.MAGMA_ARMOR))
+    )
     insomnia = (param0 == Status.SLEEP) & sleepless(ignorable)  # Vital Spirit too (G-47)
     single = ~multi
 
@@ -2065,16 +2137,18 @@ def outcome_laws(
         )
 
     # Tri Attack: blocked when the target can take none of its three statuses (an existing
-    # status; or Fire, Ice and Limber together, subscript_paralyze.s:5).
+    # status; or Fire, Ice and Limber together, subscript_paralyze.s:5; Water Veil and Magma Armor
+    # each stop one, subscript_burn.s:20, subscript_freeze.s:5, H-2).
     tri_open = (
-        takes(Status.BURN)
-        | takes(Status.FREEZE)
+        (takes(Status.BURN) & (ignorable != AbilityId.WATER_VEIL))
+        | (takes(Status.FREEZE) & (ignorable != AbilityId.MAGMA_ARMOR))
         | (takes(Status.PARALYSIS) & (ignorable != AbilityId.LIMBER))
     )
     status_blocked = single & jnp.where(
         effect == _E.TRI_ATTACK, ~tri_open, ~insomnia & (~can_take | limber)
     )
-    confused_blocked = single & (foes(state.confusion) > 0)
+    # subscript_confuse.s:12: an ignorable Own Tempo stops it first (H-2).
+    confused_blocked = single & ((foes(state.confusion) > 0) | (ignorable == AbilityId.OWN_TEMPO))
     # subscript_flinch_mon.s:7: Inner Focus (ignorable) stops Thunder Fang's flinch.
     flinch_blocked = ignorable == AbilityId.INNER_FOCUS
     if loose:
@@ -2089,6 +2163,8 @@ def outcome_laws(
     infatuated_own = uses_move & (state.infatuated != 0)
     if not loose:
         attract = attract & lovers(gender[sides, mons], foes(gender[sides, mons])) & foe_calm
+        # subscript_infatuate.s:5: an ignorable Oblivious stops it (effects._attract, H-2).
+        attract = attract & (ignorable != AbilityId.OBLIVIOUS)
         infatuated_own = infatuated_own & ~foes(switch)
     # Focus Band (effects.play_hit, step._use_move; G-1): the defender's roll on every hit of a
     # non-status move, the foe's active Pokemon or the one it switches in (no implemented path
@@ -2110,7 +2186,9 @@ def outcome_laws(
             for side in range(fmt.B)
         ]
     )
-    calm_now = state.confusion == 0
+    # subscript_confuse.s:6: the holder's own Own Tempo (CheckAbility) stops a berry's confusion
+    # (hooks.berry_confuse, H-2).
+    calm_now = (state.confusion == 0) & (battler_ability(state, sides, mons) != AbilityId.OWN_TEMPO)
     if loose:
         calm_now = jnp.ones((fmt.B,), bool)
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
@@ -2204,6 +2282,7 @@ def outcome_laws(
         "confuse_inflict": uses_move & (confuses | fling_confuses) & ~confused_blocked,
         "infatuated_own": infatuated_own,
         "attract_inflict": attract,
+        "knot_love": knot_love,
         "focus_band": band_move,
         "own_band": uses_move & own_band,
         "berry_confuse": uses_move & own_berry & calm_now,
@@ -2431,7 +2510,9 @@ def outcome_laws(
     # B13-31: a foe's Embargo can hide a side's Choice Scarf (CompareBattlerSpeed's
     # Battler_HeldItemEffect, battle_lib.c:1248) before the turn end's sort, a speed the grid
     # does not follow: the tie draw is then always enumerated (over-approximate, sound).
-    scarf = tables.item_effect[held_items(state)] == ItemId.CHOICE_SCARF
+    # H-4: a Quick Powder (a Ditto's x2, battle_lib.c:1252-1255) is hidden by Embargo likewise.
+    speed_item = tables.item_effect[held_items(state)]
+    scarf = (speed_item == ItemId.CHOICE_SCARF) | (speed_item == ItemId.QUICK_POWDER)
     embargo_speed = jnp.any(scarf & foes(uses_move & (effect == _E.EMBARGO)))
     end_speed_tie = live & (pair_tie | embargo_speed)
     # A Trace holder on the field at the turn's end (the active or incoming one, or one a drag
@@ -2728,6 +2809,10 @@ def outcome_laws(
     # Flash Fire takes a Fire move too, unless its holder is frozen (F-2; a Fire flinch move has power).
     absorbs = absorbs | (
         (ignorable == AbilityId.FLASH_FIRE) & (kinds == Type.FIRE) & (foes(status) != Status.FREEZE)
+    )
+    # Soundproof takes a sound move whole (step._use_move's ``sound_block``, H-3): Snore's flinch.
+    absorbs = absorbs | (
+        (ignorable == AbilityId.SOUNDPROOF) & ((tables.move_flags[moves] & MoveFlag.SOUND) != 0)
     )
     flinch_sure = (
         # Snore (FLINCH with SNORE_PARAM) fails unless its user is asleep when it acts
@@ -3052,16 +3137,18 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # Not with a plucked Starf Berry (``plucked``): its PLUCK_EFFECT_RANDOM_UP2 draws while one of
     # the five stats is below +6, and its subscript_held_item_sharply_raise_stat.s:21 PLUCK_CHECK
     # clears the flag (the own berry is eaten once after it); with all five at +6 neither berry
-    # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo (lib:5839-5845) its
-    # own berry does not act either. The plucked draw and a second own draw never meet: two
-    # draws, not three (G-28's bound needs a Roar newcomer for the third).
+    # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo its own
+    # berry does not act either (``Battler_HeldItem`` gives ITEM_NONE, lib:5352-5363, read at
+    # :4580). The plucked draw and a second own draw never meet: two draws, not three (G-28's
+    # bound needs a Roar newcomer for the third).
     # G-S6: the flag is set only for an eaten berry (``result == TRUE``, lib:5848: a listed
     # PLUCK_EFFECT_* or Item_IsBerry, :5832-5835, ``hooks.PLUCKABLE``) and stays only while
     # ``nextSeq`` is 0: every held-item subscript ends in PLUCK_CHECK, which clears it. Leppa
     # (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830) always set
     # ``nextSeq``; a non-berry (Grip Claw) sets no flag. The other berries' conditions (full HP,
     # no status, +6, Focus Energy) are not tested: over-approximate. Klutz / Embargo
-    # (:5839-5845) keep the flag. STARF_BERRY's exclusion overlaps ``~plucked``.
+    # keep the flag (they zero only ``scriptTemp``, :5840-5845; the flag is set at :5848).
+    # STARF_BERRY's exclusion overlaps ``~plucked``.
     # The foe's item as the Pluck reads it: the start-of-turn item of each on-field slot (the
     # incoming one too: a switch acts before moves) or a berry it Recycles first
     # (effect_script_0184.s:5-7, BtlCmd_TryRecycle battle_script.c:9000-9013). Knock Off and a
@@ -3174,7 +3261,8 @@ def _hit(laws: OutcomeLaws, side: int, hit: int = 0) -> _Law:
 
 def _future_hit(laws: OutcomeLaws, side: int) -> _Law:
     """The Future Sight hit's CheckMoveHit roll (bcp.c:2976) on side ``side``'s battler: its
-    class over ``outcome.future_thresholds``, or every roll 1-100 where ``future_loose``."""
+    class over ``outcome.future_thresholds`` (the union of every mask the hit can read, an Acid
+    Rain write's included, H-1), or every roll 1-100 where ``future_loose`` (a due hit only)."""
     if bool(laws.future_loose[side]):
         return list(range(1, 101)), [1] * 100, 100
     possible = np.asarray(laws.future_possible[side], bool)

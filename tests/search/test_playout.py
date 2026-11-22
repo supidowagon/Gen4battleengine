@@ -258,20 +258,26 @@ def test_no_replacement_needed_changes_nothing(tables, names):
 
 @pytest.mark.fullset
 def test_refused_playout_cannot_be_counted_as_a_loss(tables, names):
-    # Levitate on the player's lead is refused by ai_refusals: traced, the first turn
+    # Normalize is reachable only artificially: no Kaizo Pokemon holds it, and vanilla
+    # Skitty's is engine-UNSUPPORTED (coverage would refuse the fight first). The AI reads its
+    # decomp id 96 (species_abilities_decomp), so the refusal named is the AI's, not the engine's.
+    # Normalize on the player's lead is refused by ai_refusals: traced, the first turn
     # stops the playout, and won = -1 so it cannot be summed as a loss.
-    s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
+    s = roark_state(tables, names, player_species="Skitty", player_ability="Normalize")
     r = playout(tables, s, jax.random.PRNGKey(10))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)
 
 
 @pytest.mark.fullset
 def test_refusal_reason_names_the_refused_mechanic(tables, names):
+    # Normalize is reachable only artificially: no Kaizo Pokemon holds it, and vanilla
+    # Skitty's is engine-UNSUPPORTED (coverage would refuse the fight first). The AI reads its
+    # decomp id 96 (species_abilities_decomp), so the refusal named is the AI's, not the engine's.
     # The traced playout only says "refused"; the eager replay of the same key names
-    # the mechanic (here the AI's Levitate refusal).
-    s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
+    # the mechanic (here the AI's Normalize refusal).
+    s = roark_state(tables, names, player_species="Skitty", player_ability="Normalize")
     reason = refusal_reason(tables, s, 0, jax.random.PRNGKey(10))
-    assert reason is not None and "Levitate" in reason
+    assert reason is not None and "Normalize" in reason
 
 
 @pytest.mark.slow

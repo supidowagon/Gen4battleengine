@@ -280,6 +280,8 @@ per day is the rate used for estimates.
   PC (Windows) than on the pod (Linux) from the same seed and content hash. A stream rebuilds
   a diverged part only from the capture's `<part>.inputs.pkl.gz`: it asks the managing
   session, which copies those files from the pod with `snap.sh fetch` (DAYBOX.md) into `<scratch>/rent/out/<snapshot folder>/fetch-<epoch>/`.
+- **Snapshot seeds in tests.** No test may redraw snapshot seeds through the live generator; a
+  test that needs a compare state pins the state.
 - **Snapshot jobs and the runner.** A capture or compare is outside the runner's chunk count
   and reserves; the runner sees it only as container memory. Pack runs stay off the capture
   pod while a job runs there (Capture pod above); a pack run already live there when a job

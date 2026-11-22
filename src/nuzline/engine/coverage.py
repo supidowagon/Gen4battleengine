@@ -31,10 +31,9 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   here, and in the pool and prep both ways: a player candidate's move against the
   opponent's lowest Defense, and an opponent's move against a candidate's own Defense.
   ``effect_script_0007.s``'s Damp branch is never met: Damp is an unsupported ability, so
-  a Damp holder on either side is refused. Likewise ``subscript_infatuate.s``'s Oblivious
-  branch (Attract, Cute Charm) and the infatuation cures (Oblivious, Mental Herb) and Destiny
-  Knot: Oblivious, Mental Herb and Destiny Knot are unsupported, so a holder on either side
-  is refused (pool and prep too). Reflect and Light Screen are modelled
+  a Damp holder on either side is refused. ``subscript_infatuate.s``'s Oblivious branch
+  (Attract, Cute Charm) and Oblivious' cure are modelled (E1 batch H, H-2); Mental
+  Herb's cure and Destiny Knot are modelled (E1 batch H, H-4). Reflect and Light Screen are modelled
   (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``), and so are the
   four weather moves (``EffectId.WEATHER``, ``effects._weather``). Moves the tables map to
   ``UNSUPPORTED`` include Tailwind and Trick Room;
@@ -82,7 +81,16 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   changes, the halved Defense) runs over them too (``fight_calls``);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
-  ``subscript_form_change``), which the engine does not model; Shaymin-Sky reverts to Land
+  ``subscript_giratina_form_change``), which the engine does not model (the Orb cannot leave in
+  battle, so an Origin that starts with it never reaches that branch: Knock Off, Trick /
+  Switcheroo, Thief / Covet, Fling and Embargo fail on a held Griseous Orb,
+  subscript_knock_off.s:7, subscript_exchange_items.s:9-10, battle_script.c:5111,
+  effect_script_0233.s:6, subscript_embargo_start.s:9; Pluck eats only berries,
+  ``BattleSystem_PluckBerry``, battle_lib.c:5539-5543; every other ``RemoveItem`` takes the
+  holder's own consumed item; Sticky Barb and Recycle need an empty hand, battle_lib.c:5389,
+  :7379, effect_script_0184.s:5); Castform, Cherrim, Arceus
+  and the Transformed Giratina-Origin are modelled since E1 batch H (``hooks.form_change``,
+  ``BattleSystem_TriggerFormChange``, battle_lib.c:6305-6451, F-6, H-5); Shaymin-Sky reverts to Land
   Forme when frozen (``subscript_check_shaymin_form.s``, ``battle_controller_player.c:3497-3505``)
   and is modelled since E1 batch F (``hooks.shaymin_land``, F-16), also for a Transformed
   battler that copied a Sky Shaymin: the script writes Land's ability into the Transform user's
@@ -163,6 +171,7 @@ from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of
 from nuzline.engine.ids import (
+    GIRATINA_FORM_ORIGIN,
     GRAVITY_TURNS,
     METRONOME_DRAW,
     MOVE_CHATTER,
@@ -184,7 +193,7 @@ from nuzline.engine.state import BattleState, make_state, spec_exp, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
-SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
+SPECIES_GIRATINA = 487
 ITEM_GRISEOUS_ORB = 112
 
 

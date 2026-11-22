@@ -163,7 +163,8 @@ class Outcome(NamedTuple):
     # Metronome's candidate rank; Copycat draws nothing.
     call: jnp.ndarray
     # int8[B], by the battler Future Sight hits at this turn's end: its CheckMoveHit roll's class
-    # (``future_thresholds``; the raw roll 1-100 where ``future_loose``), read like ``hit``.
+    # (``future_thresholds``; the raw roll 1-100 where ``future_loose``, which holds only on a
+    # battler whose hit is due, H-1), read like ``hit``.
     future_hit: jnp.ndarray
     # int8[B], by the battler a Yawn puts to sleep at this turn's end: subscript_fall_asleep.s's
     # ``Random 3, 2`` (2-5 turns), a draw of its own (bcp.c:1684-1697).
@@ -563,17 +564,11 @@ def future_threshold(tables: Tables, state: BattleState, defender) -> jnp.ndarra
     )
 
 
-def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarray:
-    """``bool``: an Acid Rain write (subscript_pursuit.s:100, :115; ledger G-12) can happen this
-    turn. ``BtlCmd_TryPursuit`` runs only from a switch (subscript_switch_pokemon.s:11) and from
-    U-turn (subscript_attack_then_switch_out.s:54), and takes only a battler of the other side
-    whose selected (or encored) move has Pursuit's effect (battle_script.c:6899-6916). So some
-    battler switches or uses U-turn while a battler of the other side uses Pursuit (``uses``,
-    ``effect``: per battler, the move it runs; a called Pursuit over-approximates), and the mask
-    at :115 can be nonzero: nonzero now, or a third battler's action can come before the chase
-    and write it. In singles there is none (a switch's chase comes before every move; a U-turn's
-    pursuer has not acted, and U-turn writes no field condition), and :115 and the switcher's
-    FAINT_MON only clear bits, so a mask that is 0 now stays 0 at :115."""
+def acid_rain_pairs(state: BattleState, actions, uses, effect) -> jnp.ndarray:
+    """``bool[B, B]``: ``[b, x]``, an Acid Rain write (subscript_pursuit.s:100, :115; ledger
+    G-12, H-1) can happen this turn with battler ``b`` chased and battler ``x`` of the other side
+    its pursuer: ``acid_rain_reachable``'s test for that pair. Battlers are looped, never derived
+    from one another (doubles-state-design section 5, rules 1 and 4)."""
     fmt = format_of(state)
     live = state.over == 0
     # A switch action's chase runs at its switch, before every move (switches go first): a turn
@@ -582,21 +577,93 @@ def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarra
     switch = is_switch(actions) & (state.pivot_battler == 0)
     chased = live & (switch | (uses & (effect == EffectId.U_TURN)))
     pursues = uses & (effect == EffectId.PURSUIT)
-    reach = jnp.asarray(False)
+    rows = []
     for b in range(fmt.B):
+        row = []
         for x in range(fmt.B):
             if side_of(x) == side_of(b):
+                row.append(jnp.asarray(False))
                 continue
             earlier = any(y not in (b, x) for y in range(fmt.B))
-            reach = reach | (chased[b] & pursues[x] & ((state.field_mask != 0) | earlier))
-    return reach
+            row.append(chased[b] & pursues[x] & ((state.field_mask != 0) | earlier))
+        rows.append(jnp.stack(row))
+    return jnp.stack(rows)
+
+
+def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarray:
+    """``bool``: an Acid Rain write (subscript_pursuit.s:100, :115; ledger G-12) can happen this
+    turn (any pair of ``acid_rain_pairs``). ``BtlCmd_TryPursuit`` runs only from a switch (subscript_switch_pokemon.s:11) and from
+    U-turn (subscript_attack_then_switch_out.s:54), and takes only a battler of the other side
+    whose selected (or encored) move has Pursuit's effect (battle_script.c:6899-6916). So some
+    battler switches or uses U-turn while a battler of the other side uses Pursuit (``uses``,
+    ``effect``: per battler, the move it runs; a called Pursuit over-approximates), and the mask
+    at :115 can be nonzero: nonzero now, or a third battler's action can come before the chase
+    and write it. In singles there is none (a switch's chase comes before every move; a U-turn's
+    pursuer has not acted, and U-turn writes no field condition), and :115 and the switcher's
+    FAINT_MON only clear bits, so a mask that is 0 now stays 0 at :115."""
+    return jnp.any(acid_rain_pairs(state, actions, uses, effect))
 
 
 # future_thresholds' grid per defender: attacker slot (SLOTS) x defender slot (SLOTS) x stage
-# total (13) x weather (6: none, sandstorm, hail, each with the start's deep fog bit or not) x
-# the target confused or not.
+# total (13) x weather (3: none, sandstorm, hail) x field (4: Gravity off / on x deep fog off /
+# on, ``_future_fields``) x the target confused or not x locked or not.
 _FUTURE_TOTALS = 13
-_FUTURE_WEATHERS = 6
+_FUTURE_WEATHERS = 3
+_FUTURE_FIELDS = 4
+
+
+def _future_fields(tables: Tables, state: BattleState, actions, uses, effect) -> jnp.ndarray:
+    """``bool[_FUTURE_FIELDS]``: which (Gravity on, deep fog) pairs the Future Sight hit's
+    accuracy check can read at this turn's end; field ``f`` is Gravity ``f // 2``, fog ``f % 2``.
+    The check reads the mask through sand, hail and deep fog (bcp.c:2926-2937) and the Gravity
+    bits (:2972-2974); rain and sun only for Thunder (:2915, :3023-3031), never Future Sight /
+    Doom Desire. Sand and hail are the grid's weather axis, every value of it.
+    - The start: its Gravity (a Gravity that ends or starts this turn sets ``loose``) with its fog
+      or none (a weather move or ability clears fog: effect_script_0115.s etc. :8,
+      subscript_sand_stream.s:11-12 etc.).
+    - At B = 2, each Acid Rain pair (``acid_rain_pairs``, H-1): subscript_pursuit.s:115 subtracts
+      ``faintedMon`` from the mask (OPCODE_SUB_TO_ZERO, battle_script.c:3282-3287): the chased
+      battler ``b`` (the switcher fainted) or the pursuer ``x`` (a recoil faint, battle_script.c:
+      1767-1770; over-approximate: both). The mask at :115 has lost ``b``'s Uproar bit (its
+      FAINT_MON) and, where ``b`` holds Destiny Bond, ``x``'s (subscript_faint_check_destiny_
+      bond.s:16, battle_lib.c:2213); a recoil-fainted ``x`` keeps its bit for the subtraction
+      (``field.acid_rain``'s ``kept``, as ``step._acid_rain``). A U-turn user's Destiny Bond is
+      gone by then (CHECK_STATUS_START, bcp.c:2425). In singles no action follows :115 (the
+      pursuer's is MOVE_END, battle_script.c:6931; the switcher's is the switch or the U-turn);
+      then the newcomer's weather ability (fog off), the field pass's Gravity count
+      (``field.gravity_tick``, bcp.c:1227-1238, Kaizo re-arm G-67) and the hit (bcp.c:1758).
+      So: Gravity of the ticked result, its fog or none."""
+    fmt = format_of(state)
+    mask = state.field_mask.astype(_I32)
+    gravity = [fcm.gravity_on(state)] * 2
+    fog = [fcm.fog(mask), jnp.asarray(False)]
+    ok = [jnp.asarray(True)] * 2
+    if fmt.B == 2:
+        pairs = acid_rain_pairs(state, actions, uses, effect)
+        switch = is_switch(actions) & (state.pivot_battler == 0)
+        rearm = tables.gravity_rearm != 0
+        for b in range(fmt.B):
+            for x in range(fmt.B):
+                if side_of(x) == side_of(b):
+                    continue
+                base = mask & ~fcm.uproar_bit(b)
+                bond = switch[b] & (state.destiny_bond[b] != 0)
+                for fainted, at, kept in (
+                    (b, jnp.where(bond, base & ~fcm.uproar_bit(x), base), 0),
+                    (x, base, base & fcm.uproar_bit(x)),
+                ):
+                    s = fcm.acid_rain(state._replace(field_mask=at), fainted, True, kept)
+                    after = fcm.gravity_tick(s, True, rearm)
+                    gravity += [fcm.gravity_on(after)] * 2
+                    fog += [fcm.fog(s.field_mask), jnp.asarray(False)]
+                    ok += [pairs[b, x]] * 2
+    gravity, fog, ok = jnp.stack(gravity), jnp.stack(fog), jnp.stack(ok)
+    return jnp.stack(
+        [
+            jnp.any(ok & (gravity == bool(f // 2)) & (fog == bool(f % 2)))
+            for f in range(_FUTURE_FIELDS)
+        ]
+    )
 
 
 def future_thresholds(
@@ -618,15 +685,19 @@ def future_thresholds(
     else the start stages of a battler that stays and 0 for a newcomer or a fainted attacker
     (CleanupFaintedMon). The rate reads three weather tests (``_rate``: sand for Sand Veil, hail
     for Snow Cloak, deep fog; a defender holds one ability), so the grid's weathers are none,
-    sandstorm and hail, each with and without the start's deep fog bit: that covers every mask
-    at the hit, a corrupted one included (FCM 3.1: a group ending, 0x8044 -> 0x8040, a lock,
-    a weather move or ability, which clear fog, effect_script_0115.s etc. :8, subscript_
-    drizzle.s etc. :11); nothing but Acid Rain sets fog after the start (``loose`` below); the
-    target confused or not;
+    sandstorm and hail; its field axis is Gravity off / on x deep fog off / on, each possible
+    as ``_future_fields`` finds (the start's Gravity with its fog or none, and at B = 2 the
+    masks an Acid Rain write leaves, H-1): that covers every mask at the hit, a corrupted one
+    included (FCM 3.1: a group ending, 0x8044 -> 0x8040, a lock, a weather move or ability,
+    which clear fog, effect_script_0115.s etc. :8, subscript_drizzle.s etc. :11); the classes
+    are over the union of all of them (``hit_class``); the target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
     the turn end's countdown). The attacker's Micle Berry flag is the active battler's of now, the
     roll kept whole where it can change (G-59), and so is it where an Embargo is used or up
-    (B13-31)."""
+    (B13-31). ``loose`` holds only on a battler whose hit is due (H-1): its count is 1 now
+    (``futureSightTurns``, bcp.c:1767-1769) and the move's table accuracy is not 0
+    (bcp.c:2900-2902); no other battler draws the roll (the subscript is loaded only at a due
+    hit, bcp.c:1782)."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     if moves is None:
@@ -667,27 +738,28 @@ def future_thresholds(
     free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
     # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
-    # As weather bits (field.weather_bits): none, a sandstorm, a hail, each with the start's fog.
-    fog = fcm.weather_bits(state) & int(FieldCondition.DEEP_FOG)
-    weathers = jnp.stack(
-        [
-            jnp.asarray(bits, _I32) | f
-            for f in (jnp.asarray(0, _I32), fog)
-            for bits in (0, int(FieldCondition.SANDSTORM_TEMP), int(FieldCondition.HAILING_TEMP))
-        ]
+    # As weather bits (field.weather_bits): none, a sandstorm, a hail; the field axis adds the
+    # fog bit and sets the Gravity bits (``_future_fields``).
+    weathers = jnp.asarray(
+        [0, int(FieldCondition.SANDSTORM_TEMP), int(FieldCondition.HAILING_TEMP)], _I32
     )
-    a_mon, d_mon, total, wi, conf, lk = (
+    fields = _future_fields(tables, state, actions, uses, effect)
+    a_mon, d_mon, total, wi, fi, conf, lk = (
         g.reshape(-1)
         for g in jnp.meshgrid(
             slots,
             slots,
             jnp.arange(_FUTURE_TOTALS),
             jnp.arange(_FUTURE_WEATHERS),
+            jnp.arange(_FUTURE_FIELDS),
             jnp.arange(2),
             jnp.arange(2),
             indexing="ij",
         )
     )
+    # With ``weather`` and ``total`` given, ``_rate`` reads the mask only through
+    # ``field.gravity_on`` (its ``finish``): the field's Gravity is set as INIT or cleared.
+    no_gravity = state.field_mask.astype(_I32) & ~int(FieldCondition.GRAVITY)
     # Lock-On at the hit (B8-6): MON_COND_CHECK_STATE_LOCK_ON drops the count in the turn end's
     # per-battler checks (bcp.c:1618-1624), before the side-condition pass hits (:1758-1783), so
     # a lock on the defender holds there when its count is 2 or more now, or when this turn's
@@ -701,20 +773,23 @@ def future_thresholds(
         move = state.future_move[d].astype(_I32)
         foe = _foe(a)  # the defender is the other side's battler (singles)
 
-        def rate(am, dm, t, w, c, k, a=a, move=move, d=d):
+        def rate(am, dm, t, w, f, c, k, a=a, move=move, d=d):
+            gm = no_gravity | jnp.where(f // 2 == 1, int(FieldCondition.GRAVITY_INIT), 0)
             s = state._replace(
+                field_mask=gm.astype(state.field_mask.dtype),
                 active=state.active.at[a].set(am.astype(state.active.dtype)),
                 lock_on=state.lock_on.at[d].set(k.astype(state.lock_on.dtype)),
                 lock_on_target=state.lock_on_target.at[d].set(
                     jnp.where(k == 1, 1 + a, 0).astype(state.lock_on_target.dtype)
                 ),
             )
+            weather = weathers[w] | jnp.where(f % 2 == 1, int(FieldCondition.DEEP_FOG), 0)
             return _rate(
                 tables, s, a, move, d, dm, jnp.asarray(False), 0, 0, True,
-                weathers[w], c == 1, t, micle=(am == state.active[a]) & (state.micle[a] != 0),
+                weather, c == 1, t, micle=(am == state.active[a]) & (state.micle[a] != 0),
             )  # fmt: skip
 
-        thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, conf, lk))
+        thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, fi, conf, lk))
         lock_ok = (lk == 0) | lock_move | (state.lock_on[d] >= 2)
 
         def actual(am, dm, keep_acc, a=a, d=d):
@@ -726,7 +801,9 @@ def future_thresholds(
         kept = jax.vmap(actual)(a_mon, d_mon, jnp.ones_like(a_mon, bool))
         reset = jax.vmap(actual)(a_mon, d_mon, jnp.zeros_like(a_mon, bool))
         stage_ok = free | (total == kept) | (total == reset)
-        possible.append(on_field[a][a_mon] & on_field[d][d_mon] & stage_ok & (foe == d) & lock_ok)
+        possible.append(
+            on_field[a][a_mon] & on_field[d][d_mon] & stage_ok & (foe == d) & lock_ok & fields[fi]
+        )
     # The Micle Berry's flag (G-59) at the hit: the grid reads the active battler's flag of now
     # (a newcomer has none). It can differ at the turn's end when the attacker's side has a flag
     # set (its own accuracy check clears it) or a Micle Berry on the field (its pinch sets it):
@@ -758,10 +835,13 @@ def future_thresholds(
     # (subscript_copy_ability.s:14-15); a Gastro Acid suppresses its target's
     # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
     ends = (fcm.gravity_count(state) == 1) & (tables.gravity_rearm == 0)
-    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO of a switcher or a U-turn user
-    # subtracts a battler from a nonzero mask, which can turn Gravity or deep fog on or off
-    # (FCM 3.1): kept whole too, only where that write can happen (``acid_rain_reachable``).
-    acid = acid_rain_reachable(state, actions, uses, effect)
+    # Acid Rain (subscript_pursuit.s:115, G-12, H-1): at B = 2 the grid's field axis holds the
+    # masks it can leave (``_future_fields``). At B = 4 the roll stays whole wherever any acid
+    # pair is reachable: a third battler can write the mask before the chase (a weather move or
+    # a newcomer's weather ability, subscript_sand_stream.s:11-12; Gravity; an earlier KO's
+    # FAINT_MON clearing its Uproar bit; an earlier chase), and two chases compose. The exact
+    # B = 4 handling goes to the doubles milestone (E2).
+    acid = acid_rain_reachable(state, actions, uses, effect) if fmt.B > 2 else False
     field_change = (
         jnp.any(
             uses
@@ -780,7 +860,11 @@ def future_thresholds(
     loose = (
         jnp.broadcast_to(tracer | embargo_field | field_change, (fmt.B,)) | micle_field[attackers]
     )
-    return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose
+    # H-1: only a due hit draws the roll (bcp.c:1767-1769: a count of 1 now; the accuracy draw
+    # needs a table accuracy that is not 0, bcp.c:2900-2902). HP at the side pass and the
+    # battlersSwitchingMask skip (:1761-1764) are not known now: over-approximate, sound.
+    due = live & (state.future_timer == 1) & (tables.move_accuracy[state.future_move] != 0)
+    return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose & due
 
 
 def _hit_threshold(

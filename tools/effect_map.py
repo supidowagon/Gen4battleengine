@@ -40,9 +40,8 @@ Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 are Insomnia and Vital Spirit (alike at every site; Vital Spirit since E1 Batch C, G-47),
 Limber and Leaf Guard in sun (implemented in ``engine/effects.py``; Leaf Guard since the E1
 Gardenia batch, G-14), Shield Dust against a damaging move's secondary status
-(``effects._inflict``), and Immunity, Water Veil and Magma Armor (``AbilityId.UNSUPPORTED``), and
-Safeguard and Substitute are unsupported moves, so none of those branches can be
-reached silently. Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) is modelled
+(``effects._inflict``), and Immunity, Water Veil and Magma Armor (``effects._inflict``, E1 batch
+H, H-2). Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) is modelled
 (E2 batch 5, ``effects._inflict``).
 """
 
@@ -752,8 +751,8 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Limber": AbilityId.LIMBER,
     "Adaptability": AbilityId.ADAPTABILITY,
     "Solid Rock": AbilityId.SOLID_ROCK,
-    # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4339-4355); Oblivious, which would block
-    # it (subscript_infatuate.s:5), stays unsupported (coverage refuses it).
+    # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4339-4355); the attacker's own Oblivious
+    # blocks it silently (subscript_infatuate.s:5, :_082 -> :_117; H-2).
     "Cute Charm": AbilityId.CUTE_CHARM,
     # Halves the pinch berries' and Custap Berry's param (battle_lib.c:4774-4776, :1289-1291):
     # the only decomp reads of ABILITY_GLUTTONY.
@@ -825,6 +824,16 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Forecast": AbilityId.FORECAST,
     "Air Lock": AbilityId.AIR_LOCK,
     "Klutz": AbilityId.KLUTZ,
+    # E1 batch H, H-2 (engine/ids.py AbilityId).
+    "Immunity": AbilityId.IMMUNITY,
+    "Own Tempo": AbilityId.OWN_TEMPO,
+    "Water Veil": AbilityId.WATER_VEIL,
+    "Magma Armor": AbilityId.MAGMA_ARMOR,
+    "Oblivious": AbilityId.OBLIVIOUS,
+    # E1 batch H, H-3 (engine/ids.py AbilityId).
+    "Color Change": AbilityId.COLOR_CHANGE,
+    "Marvel Scale": AbilityId.MARVEL_SCALE,
+    "Soundproof": AbilityId.SOUNDPROOF,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
@@ -1019,6 +1028,17 @@ HOLD_EFFECT_TO_ID: dict[int, tuple[str, ItemId]] = {
             (122, "HOLD_EFFECT_LVLUP_HP_EV_UP"),
         )
     },
+    # E1 Batch H, H-4 (each item its own id; sheets item-*.md): the decomp hold effects.
+    54: ("HOLD_EFFECT_HEAL_INFATUATION", ItemId.MENTAL_HERB),
+    102: ("HOLD_EFFECT_DITTO_SPEED_UP", ItemId.QUICK_POWDER),
+    107: ("HOLD_EFFECT_PRIORITY_DOWN", ItemId.FULL_INCENSE),
+    108: ("HOLD_EFFECT_RECIPROCATE_INFAT", ItemId.DESTINY_KNOT),
+    123: ("HOLD_EFFECT_SWITCH", ItemId.SHED_SHELL),
+    # No in-battle effect (ids.NO_IN_BATTLE_HOLD_EFFECT_ITEMS): the payout reads the raw effect.
+    63: ("HOLD_EFFECT_FLEE", ItemId.SMOKE_BALL),
+    51: ("HOLD_EFFECT_EXP_SHARE", ItemId.EXP_SHARE),
+    53: ("HOLD_EFFECT_FRIENDSHIP_UP", ItemId.SOOTHE_BELL),
+    66: ("HOLD_EFFECT_EXP_UP", ItemId.LUCKY_EGG),
 }
 
 # Kaizo's re-purposed and renamed items (docs/kaizo/discrepancies.md:31-34, :1336-1348, :2654-2657;

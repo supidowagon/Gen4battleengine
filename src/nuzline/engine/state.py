@@ -563,6 +563,11 @@ class BattleState(NamedTuple):
     transformed: jnp.ndarray  # int8, VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)
     shadow_species: jnp.ndarray  # int16, the party Pokemon's species while transformed (G-69)
     shadow_form: jnp.ndarray  # int8 (G-69)
+    # int8 per battler, BattleMon.formNum (battle_mon.h:79, H-5): the party's form at the send-out
+    # (``BattleSystem_InitBattleMon``, battle_lib.c:132), copied by Transform (:5346-5348), written
+    # by ``BattleSystem_TriggerFormChange`` (``hooks.form_change``) and Shaymin's revert. Read only
+    # by that function's Cherrim, Arceus and Giratina blocks; not cleared, not Baton-passed.
+    form_num: jnp.ndarray
     shadow_stats: jnp.ndarray  # int16[B,5], the party's Atk, Def, SpA, SpD, Spe (G-69)
     shadow_ivs: jnp.ndarray  # int8[B,6] (G-69)
     shadow_ability_slot: jnp.ndarray  # int8 (G-69)
@@ -688,6 +693,17 @@ class BattleState(NamedTuple):
     # int8[B], the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of each battler (F-4): a U-turn
     # newcomer's Intimidate skips a foe whose substitute the action hit (hooks.intimidate)
     ts_sub_hit: jnp.ndarray
+    # int8[B], the paused action's SELF_TURN_FLAG_INFATUATED of each battler's slot (H-4; cleared by
+    # BattleContext_Init at the action's end, battle_lib.c:2013-2015). U-turn clears the attacker's
+    # slot before the list (subscript_attack_then_switch_out.s:70), so the resumed tail's Destiny
+    # Knot step (battle_lib.c:4546-4566, ``effects.knot``) sees only a pursuer the user's Cute Charm
+    # flagged in the Pursuit (:54); a Pursuit-felled user's tail (:55) reads its own flag. 1: flagged
+    # and the sideEffectMon at the list; 2 (B = 4, H-M1): flagged, but a later pursuer's contact
+    # trigger moved sideEffectMon off it (battle_lib.c:4350), so the resumed tail's knot cannot pass.
+    # The 1 / 2 codes carry only which flagged slot is the sideEffectMon (doubles-state-design
+    # section 5, rule 3): if a later rule needs the sideEffectMon at the list itself (an unflagged
+    # battler), add ``ts_sem`` (1 + battler) instead of more codes.
+    ts_loved: jnp.ndarray
     # int8[B], 1 = the battler fainted in the paused action holding MOVE_EFFECT_GRUDGE (review b2
     # #5): SYSCTL_MON_FAINTED keeps it flagged across a U-turn's party list (battle_script.c:
     # 1770-1771, cleared by PlayFaintAnimation :1799) and its moveEffectsMask stays until its faint
@@ -1018,6 +1034,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "transformed": (_BATTLER, np.int8),
     "shadow_species": (_BATTLER, np.int16),
     "shadow_form": (_BATTLER, np.int8),
+    "form_num": (_BATTLER, np.int8),
     "shadow_stats": ((*_BATTLER, 5), np.int16),
     "shadow_ivs": ((*_BATTLER, 6), np.int8),
     "shadow_ability_slot": (_BATTLER, np.int8),
@@ -1112,6 +1129,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
     "ts_sub_hit": (_BATTLER, np.int8),
+    "ts_loved": (_BATTLER, np.int8),
     "ts_grudge": (_BATTLER, np.int8),
     "ts_follow_me": (_SIDE, np.int8),
     "ts_trace_fires": (_BATTLER, np.int8),
@@ -1437,6 +1455,8 @@ def initial_arrays(
                     f"side {side}: lead slot {leads[b]} is not in a party of {len(members)}"
                 )
             a["active"][b] = leads[b]
+            # BattleSystem_InitBattleMon (battle_lib.c:132): BattleMon.formNum = the party's form.
+            a["form_num"][b] = a["form"][side, leads[b]]
         if len({leads[b] for b in own}) != len(own):
             raise ValueError(
                 f"side {side}: two battlers lead from one slot ({[leads[b] for b in own]})"

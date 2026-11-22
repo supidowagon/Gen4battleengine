@@ -418,10 +418,15 @@ def _lands(side=1):
     return O._replace(secondary=sec)
 
 
-# Immunity's cure (battle_lib.c:4383-4388) comes with the Immunity group (mechanics_backlog.md).
+# H-2: Immunity (battle_lib.c:4383-4388), Water Veil (:4412-4417), Magma Armor (:4419-4424).
 @pytest.mark.parametrize(
     ("foe_move", "holder", "status"),
-    [("Body Slam", ("Persian", "Limber"), Status.PARALYSIS)],
+    [
+        ("Body Slam", ("Persian", "Limber"), Status.PARALYSIS),
+        ("Poison Jab", ("Zangoose", "Immunity"), Status.POISON),
+        ("Ember", ("Wailmer", "Water Veil"), Status.BURN),
+        ("Ice Beam", ("Camerupt", "Magma Armor"), Status.FREEZE),
+    ],
 )
 def test_battle_ending_move_end_cures_the_defender(tables, names, foe_move, holder, status):
     # bcp.c:3965-3969: the cure runs before CheckBattleOver; the foe falls to Life Orb recoil.
@@ -437,7 +442,12 @@ def test_battle_ending_move_end_cures_the_defender(tables, names, foe_move, hold
 
 @pytest.mark.parametrize(
     ("foe_move", "holder"),
-    [("Body Slam", ("Persian", "Limber"))],
+    [
+        ("Body Slam", ("Persian", "Limber")),
+        ("Poison Jab", ("Zangoose", "Immunity")),
+        ("Ember", ("Wailmer", "Water Veil")),
+        ("Ice Beam", ("Camerupt", "Magma Armor")),
+    ],
 )
 def test_move_end_cure_while_the_battle_goes_on_is_as_before(tables, names, foe_move, holder):
     s = _end_duel(tables, names, foe_move, holder, None, foe_item="")
@@ -461,7 +471,9 @@ def test_battle_ending_move_end_cures_the_attacker(tables, names):
 
 def test_battle_ending_confusion_self_hit_cures_only_the_user(tables, names):
     # bcp.c:2629: a confusion self-hit makes the user the defender, so the battle-ending MoveEnd
-    # (bcp.c:3965-3969) reads the fallen foe twice and the player's Limber holder stays paralyzed.
+    # (bcp.c:3965-3969) reads the fallen foe twice and the player's Limber holder stays paralyzed
+    # through it (no cure, so no STATUS_CURE reveal); subscript_battle_won.s:6-7 then clears it
+    # (Ability_ForbidsStatus on the party's Limber, battle_lib.c:4466-4470; H-2).
     s = make_state(
         tables,
         [_mon(names, "Persian", ["Leer"], 50, ability="Limber"), _bench(names)],
@@ -474,14 +486,17 @@ def test_battle_ending_confusion_self_hit_cures_only_the_user(tables, names):
     out = assert_matches_reference(tables, s, (0, 0), hurt)
     assert int(out.over) == 1
     assert int(out.hp[1, 0]) == 0
-    assert int(out.status[0, 0]) == Status.PARALYSIS
+    assert int(out.ai_ability_known[0]) == 0
+    assert int(out.status[0, 0]) == Status.NONE
 
 
 @pytest.mark.parametrize("change", ["worry_seed", "gastro_acid"])
 def test_battle_ending_move_end_cure_reads_the_battle_ability(tables, names, change):
     # Owed 20: a paralysis given while Limber was replaced (Worry Seed, Skill Swap: BattleMon.ability)
     # or suppressed (Gastro Acid). The battle-ending MoveEnd cure (bcp.c:3965-3969) reads
-    # Battler_Ability (battle_lib.c:4382), not the party's Limber that the battle's end puts back.
+    # Battler_Ability (battle_lib.c:4382), not the party's Limber that the battle's end puts back:
+    # no MoveEnd cure (no STATUS_CURE reveal). subscript_battle_won.s:6-7 then clears it through
+    # the party's Limber (battle_script.c:9149, battle_lib.c:4466-4470; H-2).
     s = make_state(
         tables,
         [_mon(names, "Persian", ["Scratch"], 50, ability="Limber"), _bench(names)],
@@ -496,7 +511,8 @@ def test_battle_ending_move_end_cure_reads_the_battle_ability(tables, names, cha
     out = assert_matches_reference(tables, s, (0, 0), O)
     assert int(out.over) == 1
     assert int(out.hp[1, 0]) == 0
-    assert int(out.status[0, 0]) == Status.PARALYSIS
+    assert int(out.ai_ability_known[0]) == 0
+    assert int(out.status[0, 0]) == Status.NONE
     assert int(out.ability[0, 0]) == AbilityId.LIMBER
 
 

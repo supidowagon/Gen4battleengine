@@ -201,7 +201,8 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     on a grounded battler (``BattlerIsGrounded``, :5500-5507: no Levitate, no Magnet Rise turns, not
     Flying, or Iron Ball, or Gravity), all by ``Battler_Ability`` over the other side's living
     battlers (``CountAbilityTheirSide``, :5509-5512; E2 batch 9, B9-11). Shed Shell
-    (HOLD_EFFECT_SWITCH, :5518) is an unsupported item."""
+    (HOLD_EFFECT_SWITCH, :5518, ``Battler_HeldItemEffect``: Klutz / Embargo hide it) returns FALSE
+    before any of these (H-4)."""
     fmt = format_of(state)
     mon = state.active[side]
     own = battler_ability(state, side)
@@ -230,7 +231,8 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
             | ((theirs == AbilityId.ARENA_TRAP) & grounded)
         )
         trapped_by = trapped_by | (live & abilities)
-    return (
+    shed = tables.item_effect[held_item(state, side, mon)] == ItemId.SHED_SHELL
+    return ~shed & (
         (state.trapped[side] != 0)
         | (state.mean_look[side] != 0)
         | (state.ingrain[side] != 0)

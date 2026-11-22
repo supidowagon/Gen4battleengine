@@ -121,7 +121,7 @@ def test_player_move_refusal(names):
 
 @pytest.mark.fullset
 def test_player_ability_refusal(names):
-    assert player_ability_refusal(26)  # Levitate
+    assert player_ability_refusal(96)  # Normalize
     assert player_ability_refusal(51) is None  # Keen Eye
 
 

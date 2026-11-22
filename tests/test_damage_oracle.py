@@ -64,6 +64,7 @@ from nuzline.engine.ids import (
     POWER_IF_TARGET_MOVED,
     AbilityId,
     EffectId,
+    MoveFlag,
     Stat,
     Status,
     Type,
@@ -221,7 +222,9 @@ def _smogon_departs(
     #    MOVE_STATUS_NO_MORE_WORK before BattleSystem_CalcMoveDamage, which has no Water or
     #    Electric case for them (its one Dry Skin factor is Fire's, :6845-6848). ``damage_table``
     #    is that calculation; the absorb is ``step._use_move``'s. @smogon/calc returns 0.
-    #    (Motor Drive and Soundproof are not modelled abilities: no ``AbilityId``.)
+    #    Soundproof takes a sound move whole (battle_lib.c:3523-3530, H-3), its holder's own
+    #    ability as the attacker sees it; @smogon/calc returns 0. (Motor Drive is not a
+    #    modelled ability: no ``AbilityId``.)
     seen = int(ignorable(s, 0, 1))
     powered = int(tables.move_power[move]) != 0
     # The game's moveType, which Weather Ball's script sets from the weather
@@ -237,7 +240,8 @@ def _smogon_departs(
         and int(s.status[1, int(s.active[1])]) != Status.FREEZE
     )
     volt = seen == AbilityId.VOLT_ABSORB and kind == Type.ELECTRIC
-    if ((water or flash) and powered) or volt:
+    sound = seen == AbilityId.SOUNDPROOF and bool(int(tables.move_flags[move]) & MoveFlag.SOUND)
+    if ((water or flash) and powered) or volt or sound:
         return True
     # 7. The type chart rounding at low damage (_chart_rounding_departs).
     return _chart_rounding_departs(tables, names, s, move, m["crit"])

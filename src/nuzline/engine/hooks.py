@@ -4,8 +4,11 @@
   (``subscript_switch_pokemon.s``) runs the entry hazards
   (``subscript_hazards_check.s``; Stealth Rock is the only M1 hazard), and the
   controller then runs ``BattleSystem_TriggerEffectOnSwitch`` (battle_lib.c:3649,
-  from ``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3973; at the
-  start of the battle from ``ShowBattleMon``, :256). Of its states the engine reaches
+  from ``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3973, and from
+  ``ShowBattleMon``, :254-268, at the start of the battle and at every turn start:
+  ``TurnEnd`` sets ``BATTLE_CONTROL_TRAINER_MESSAGE``, :1858, which goes on to
+  ``SHOW_BATTLE_MON``, :241-248; the engine runs its form change and held-item states
+  there in ``step._turn_start_items``). Of its states the engine reaches
   ``SWITCH_IN_CHECK_STATE_TRACE`` (:3718, ``trace``), ``_WEATHER_ABILITIES`` (:3740,
   ``weather_ability``), ``_INTIMIDATE`` (:3795), ``_DOWNLOAD`` (:3814, ``download``),
   ``_FORBIDDEN_STATUS`` (:4135) and ``_HELD_ITEM_STATUS`` (:4151).
@@ -16,9 +19,10 @@
   move (``AFTER_MOVE_EFFECT_ATTACKER_ITEM`` / ``_DEFENDER_ITEM``,
   battle_controller_player.c:3684, :3691, then ``_HELD_ITEM_STATUS`` for both, :3730;
   the after-move effects run per hit before
-  ``BATTLE_CONTROL_LOOP_MULTI_HIT``, :3769), after a switch-in, and at the end of
+  ``BATTLE_CONTROL_LOOP_MULTI_HIT``, :3769), after a switch-in, at the end of
   the turn (``MON_COND_CHECK_STATE_USE_ITEM``, :1362, and
-  ``MON_COND_CHECK_STATE_ITEM_CONDITION``, :1699).
+  ``MON_COND_CHECK_STATE_ITEM_CONDITION``, :1699), and at the next turn start
+  (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``, battle_lib.c:4151-4165, from ``ShowBattleMon``).
 
 Intimidate (``subscript_intimidate.s``): every living foe that is not behind a
 Substitute gets ``ATTACK_DOWN_1_STAGE`` as an ability side effect, through
@@ -51,7 +55,11 @@ reveals nothing.
 Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
 Simple, Mold Breaker, Adaptability and Solid Rock in ``damage.py``; Keen Eye, Inner
 Focus, Rock Head, Static, Poison Point, Flame Body, Rough Skin and Limber in
-``effects.py`` (Limber's cure here); Steadfast, Natural Cure and Shed Skin in ``step.py``,
+``effects.py`` (Limber's cure here); Immunity, Own Tempo, Water Veil, Magma Armor and Oblivious
+block in ``effects.py`` and cure here (``recover_status_by_ability``, H-2); Color Change in
+``effects._contact_ability``, Marvel Scale in ``damage.py``, Soundproof in ``step.py`` (its block
+and the uproar wake-ups) and ``effects.py`` (sleep in an uproar, Perish Song), H-3; Steadfast, Natural Cure,
+the switch-out cure of ``Ability_ForbidsStatus`` and Shed Skin in ``step.py``,
 Compoundeyes, Sand Veil and Snow Cloak (accuracy) in ``outcome.py``, Swift
 Swim in ``order.py``; Sand Veil and Snow Cloak also in the end-of-turn weather chip
 (``step.py``). Cloud Nine: every decomp branch on it is a weather branch
@@ -82,6 +90,7 @@ from nuzline.engine.damage import (
     battler_decomp_ability,
     decomp_ability_id,
     divide,
+    judgment_type,
     weather_suppressed,
 )
 from nuzline.engine.effects import (
@@ -96,10 +105,20 @@ from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
+    ABILITY_MULTITYPE,
+    CASTFORM_FORM_NORMAL,
+    CASTFORM_FORM_RAINY,
+    CASTFORM_FORM_SNOWY,
+    CASTFORM_FORM_SUNNY,
     CONFUSION_PENDING,
+    GIRATINA_FORM_ALTERED,
+    GIRATINA_FORM_ORIGIN,
     ITEM_ABILITY_IDS,
     NATURE_DISLIKED_FLAVOR,
+    SPECIES_ARCEUS,
     SPECIES_CASTFORM,
+    SPECIES_CHERRIM,
+    SPECIES_GIRATINA,
     SPECIES_SHAYMIN,
     STARF_STATS,
     AbilityId,
@@ -134,6 +153,11 @@ STATUS_HP, TORMENT = "status_hp", "torment"
 STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
 DAMAGE_AVOIDED = "damage_avoided"
 REDIRECTED = "redirected"
+# H-2: the "prevents" messages of Immunity, Water Veil, Own Tempo and Oblivious.
+POISON_BLOCKED, BURN_BLOCKED = "poison_blocked", "burn_blocked"
+CONFUSION_BLOCKED, ROMANCE_BLOCKED = "confusion_blocked", "romance_blocked"
+# H-3: Color Change's "made it the {2} type!" and Soundproof's "blocks {2}!".
+TYPE_CHANGE, SOUND_BLOCKED = "type_change", "sound_blocked"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -193,6 +217,27 @@ REDIRECTED = "redirected"
 #   battle_script.c:4340-4341; subscript_missed.s:67-69 prints "{0} was protected by {1}!"
 #   with ``TAG_NICKNAME_ABILITY``, BTLSCR_DEFENDER) unless an earlier flag of subscript_missed.s
 #   prints first: protected (:18), Levitate (:34), ineffective (:59) (``step._use_move``).
+# * Immunity (H-2): a direct poison it blocks (subscript_poison.s:13 -> :_177 -> :_201,
+#   subscript_badly_poison.s:31 -> :_249; "prevents poisoning", ``TAG_NICKNAME_ABILITY``,
+#   BTLSCR_SIDE_EFFECT_MON: battle_script.c:11798-11810); an indirect or ability side effect ends
+#   silently (Toxic Spikes and Toxic Orb read it by decomp id).
+# * Water Veil (H-2): a direct burn it blocks (subscript_burn.s:20 -> :_264, "prevents burns").
+# * Own Tempo (H-2): a direct confusion it blocks (subscript_confuse.s:12 -> :_141, :73,
+#   "prevents confusion"); an indirect, held-item or move-effect one ends silently.
+# * Oblivious (H-2): a direct Attract it blocks (subscript_infatuate.s:5 -> :_055, :39, "prevents
+#   romance"); Cute Charm's (an ability side effect, :_082 -> :_117) ends silently.
+# * Color Change (H-3): subscript_color_change.s:6 "{0}'s {1} made it the {2} type!"
+#   (``TAG_NICKNAME_ABILITY_TYPE``, BTLSCR_DEFENDER: battle_script.c:11798-11810).
+# * Soundproof (H-3): subscript_blocked_by_soundproof.s:9 "{0}'s {1} blocks {2}!"
+#   (``TAG_NICKNAME_ABILITY_MOVE``, BTLSCR_DEFENDER), also after a miss or a Protect
+#   (bcp.c:2791-2792). Perish Song's "blocks" (subscript_perish_song_start.s:12-19) tags
+#   BTLSCR_MSG_TEMP: no reveal (battle_script.c:11801-11802).
+# Marvel Scale prints nothing (CalcMoveDamage, battle_lib.c:6797-6800).
+# Magma Armor's freeze block prints the attack message only (subscript_freeze.s:_128). The cures of
+# ``recover_status_by_ability`` tag ``BTLSCR_MSG_TEMP``, which never reaches
+# ``BattleAI_SetAbility`` (battle_script.c:11801-11802): Immunity, Own Tempo, Water Veil, Magma
+# Armor and Oblivious reveal nothing there (Insomnia's, Vital Spirit's and Limber's
+# ``STATUS_CURE`` stay for now).
 # The others never reveal: Intimidate's "cuts" message, Download's "raised its" message
 # (``SetupNicknameAbilityStatMsg``, :2854) and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
@@ -220,6 +265,12 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     # F-5: subscript_ability_restore_status.s:8 tags the holder (BTLSCR_MSG_BATTLER_TEMP).
     AbilityId.HYDRATION: frozenset({STATUS_CURE}),
     AbilityId.INNER_FOCUS: frozenset({FLINCH_BLOCKED}),
+    AbilityId.IMMUNITY: frozenset({POISON_BLOCKED}),  # H-2
+    AbilityId.WATER_VEIL: frozenset({BURN_BLOCKED}),
+    AbilityId.OWN_TEMPO: frozenset({CONFUSION_BLOCKED}),
+    AbilityId.OBLIVIOUS: frozenset({ROMANCE_BLOCKED}),
+    AbilityId.COLOR_CHANGE: frozenset({TYPE_CHANGE}),  # H-3
+    AbilityId.SOUNDPROOF: frozenset({SOUND_BLOCKED}),
     AbilityId.DRIZZLE: frozenset({WEATHER_SET}),
     AbilityId.SAND_STREAM: frozenset({WEATHER_SET}),
     AbilityId.DROUGHT: frozenset({WEATHER_SET}),
@@ -386,7 +437,9 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[row, mon] > 0)
     w = fcm.weather_bits(state)
     already = fcm.ability_bits(w, weather) == w
-    state = announce(state, "weather_announced", side, on)  # :3747, :3756, :3765, :3774, even when already up
+    state = announce(
+        state, "weather_announced", side, on
+    )  # :3747, :3756, :3765, :3774, even when already up
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
     return fcm.weather_ability(state, weather, on)
 
@@ -483,28 +536,44 @@ def arm_unburden(state: BattleState, side, cond=True) -> BattleState:
     return state._replace(can_unburden=state.can_unburden.at[side].set(value))
 
 
+def forbids_status(ability, status) -> jnp.ndarray:
+    """``Ability_ForbidsStatus`` (battle_lib.c:4454-4492): ``ability`` (an ``AbilityId``) forbids
+    ``status``: Immunity any poison (:4460-4464), Limber paralysis (:4466-4470), Insomnia and
+    Vital Spirit sleep (:4472-4477), Water Veil burn (:4478-4482), Magma Armor freeze
+    (:4484-4488). The same pairs are the status cases of ``BattleSystem_RecoverStatusByAbility``
+    (:4383-4388, :4397-4424)."""
+    return (
+        ((ability == AbilityId.IMMUNITY) & ((status == Status.POISON) | (status == Status.TOXIC)))
+        | ((ability == AbilityId.LIMBER) & (status == Status.PARALYSIS))
+        | (sleepless(ability) & (status == Status.SLEEP))  # G-47
+        | ((ability == AbilityId.WATER_VEIL) & (status == Status.BURN))
+        | ((ability == AbilityId.MAGMA_ARMOR) & (status == Status.FREEZE))
+    )
+
+
 def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleState:
-    """``BattleSystem_RecoverStatusByAbility`` (battle_lib.c:4378) for ``side``'s active
-    Pokemon, where ``cond``: an asleep Insomnia holder (:4404) or a paralyzed Limber holder
-    (:4397), the abilities of the family in M1, with HP left is cured (counter 0) and
-    shows ``subscript_ability_forbids_status.s``, whose message tags its ability. The
-    ability is the holder's own (``Battler_Ability``: Mold Breaker does not matter). The
-    decomp runs it for the attacker then the defender at each move end
-    (``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3965-3967) and for
-    every battler on a switch-in (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``,
-    battle_lib.c:4135-4145)."""
+    """``BattleSystem_RecoverStatusByAbility`` (battle_lib.c:4378-4452) for battler ``side``,
+    where ``cond``. ``Battler_Ability`` (Gastro Acid: none; Mold Breaker does not matter) picks
+    one case: a status its ability forbids (``forbids_status``: Immunity, Limber, Insomnia, Vital
+    Spirit, Water Veil, Magma Armor), Own Tempo with ``VOLATILE_CONDITION_CONFUSION``
+    (:4390-4395) or Oblivious with ``VOLATILE_CONDITION_ATTRACT`` (:4426-4431). There is no HP
+    test (H-2). subscript_ability_forbids_status.s then clears it: the status to NONE (:13, the
+    counter with it; msgTemp MSGCOND_SLEEP 0 also clears VOLATILE_CONDITION_NIGHTMARE, :10,
+    :16-18, G-32), the confusion bits (msgTemp 5, :11, :_045) or the infatuation (msgTemp 6,
+    :12, :_052). Its message (:6) tags ``BTLSCR_MSG_TEMP``, which never reaches
+    ``BattleAI_SetAbility`` (battle_script.c:11801-11802); only Insomnia's, Vital Spirit's and
+    Limber's ``STATUS_CURE`` reveal is kept for now (``REVEALS_ON``). The decomp runs it for the
+    attacker then the defender at each move end (``BattleControllerPlayer_MoveEnd``,
+    battle_controller_player.c:3965-3967) and for every battler on a switch-in
+    (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``, battle_lib.c:4135-4145)."""
     side = jnp.asarray(side, _I32)
+    cond = jnp.asarray(cond, bool)
     state = arm_unburden(state, side, cond)
     mon, row = state.active[side], party(format_of(state), side)
     ability, status = battler_ability(state, side), state.status[row, mon]
-    woke = (
-        cond
-        & (
-            (sleepless(ability) & (status == Status.SLEEP))  # :4404-4405 (G-47)
-            | ((ability == AbilityId.LIMBER) & (status == Status.PARALYSIS))
-        )
-        & (state.hp[row, mon] > 0)
-    )
+    woke = cond & forbids_status(ability, status)
+    tempo = cond & (ability == AbilityId.OWN_TEMPO) & (state.confusion[side] != 0)
+    love = cond & (ability == AbilityId.OBLIVIOUS) & (state.infatuated[side] != 0)
     state = state._replace(
         status=state.status.at[row, mon].set(
             jnp.where(woke, Status.NONE, state.status[row, mon]).astype(state.status.dtype)
@@ -512,9 +581,13 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
         status_counter=state.status_counter.at[row, mon].set(
             jnp.where(woke, 0, state.status_counter[row, mon]).astype(state.status_counter.dtype)
         ),
+        confusion=state.confusion.at[side].set(
+            jnp.where(tempo, 0, state.confusion[side]).astype(state.confusion.dtype)
+        ),
+        infatuated=state.infatuated.at[side].set(
+            jnp.where(love, 0, state.infatuated[side]).astype(state.infatuated.dtype)
+        ),
     )
-    # subscript_ability_forbids_status.s:10, :16-18: msgTemp MSGCOND_SLEEP (0, battle_lib.c:4406) also
-    # clears VOLATILE_CONDITION_NIGHTMARE; Limber's paralysis takes :13-14, which keeps it (G-32).
     state = clear_nightmare(state, side, woke & (status == Status.SLEEP))
     return reveal_ability(state, side, mon, STATUS_CURE, woke)
 
@@ -540,7 +613,9 @@ def _restore(state: BattleState, side, mon, effect, cond):
     (``..._frz_restore.s``); Persim: confusion (``..._cnf_restore.s``, battle_lib.c:4655-4660);
     Lum: any status and confusion (``..._prz/slp/psn/brn/frz/cnf/multi_restore.s``: the
     status, then the confusion); White Herb: every stage below neutral back to neutral
-    (battle_lib.c:4875-4887, done in C before ``..._statdown_restore.s``). A cured status
+    (battle_lib.c:4875-4887, done in C before ``..._statdown_restore.s``); Mental Herb: the
+    attract bits (VOLATILE_CONDITION_ATTRACT only, no Taunt / Encore / Disable in Gen 4:
+    battle_lib.c:4889-4894, :5102-5107; ``subscript_held_item_heal_infatuation.s:10``, H-4). A cured status
     takes its counter with it (sleep turns and the toxic counter are bits of ``status``)."""
     row = party(format_of(state), side)
     status = state.status[row, mon]
@@ -557,6 +632,8 @@ def _restore(state: BattleState, side, mon, effect, cond):
     cure_status = cond & (berry | (lum & any_status))
     cure_confusion = cond & (lum | (effect == ItemId.PERSIM_BERRY)) & confused
     herb = cond & (effect == ItemId.WHITE_HERB) & jnp.any(lowered)
+    love = state.infatuated[side] != 0
+    cure_love = cond & (effect == ItemId.MENTAL_HERB) & love
     # VOLATILE_CONDITION_NIGHTMARE off (G-32): subscript_held_item_slp_restore.s:13 (a sleep cure,
     # battle_lib.c:4608-4611, :4667-4671, Pluck :5577-5580, :5648-5651) and _multi_restore.s:13
     # (Lum on a status and confusion, :4689-4692, :5669-5672); the other restore subscripts keep it.
@@ -573,12 +650,15 @@ def _restore(state: BattleState, side, mon, effect, cond):
         confusion=state.confusion.at[side].set(
             jnp.where(cure_confusion, 0, state.confusion[side]).astype(state.confusion.dtype)
         ),
+        infatuated=state.infatuated.at[side].set(
+            jnp.where(cure_love, 0, state.infatuated[side]).astype(state.infatuated.dtype)
+        ),
         stages=state.stages.at[side].set(
             jnp.where(herb & lowered, 0, state.stages[side]).astype(state.stages.dtype)
         ),
     )
     state = clear_nightmare(state, side, nightmare_off)
-    return state, cure_status | cure_confusion | herb
+    return state, cure_status | cure_confusion | herb | cure_love
 
 
 def _raise_stat(tables: Tables, state: BattleState, side, item, cond):
@@ -1042,21 +1122,119 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     )
 
 
-def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
-    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE``'s Castform block (``BattleSystem_TriggerFormChange``,
-    battle_lib.c:6313-6364), F-6, for every battler (``monSpeedOrder``) that is a Castform with HP
-    and Forecast (``Battler_Ability``: ``damage.battler_decomp_ability``) where
-    ``cond``. With no alive Cloud Nine or Air Lock (``damage.weather_suppressed``): no rain, sun
-    or hail (``FIELD_CONDITION_CASTFORM``) and neither type Normal -> Normal/Normal; else sun and
-    neither type Fire -> Fire/Fire; else rain and neither Water -> Water/Water; else hail and
-    neither Ice -> Ice/Ice. With one alive: neither type Normal -> Normal/Normal (:6355-6363).
+def form_change(tables: Tables, state: BattleState, cond=True) -> BattleState:
+    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE`` (``BattleSystem_TriggerFormChange``, battle_lib.c:
+    6305-6451), F-6 and H-5, for every battler (``monSpeedOrder``) where ``cond``: the four species
+    blocks, each written when it differs.
+
+    Castform (:6313-6364, F-6): a Castform with HP and Forecast (``Battler_Ability``:
+    ``damage.battler_decomp_ability``). With no alive Cloud Nine or Air Lock
+    (``damage.weather_suppressed``): no rain, sun or hail (``FIELD_CONDITION_CASTFORM``) and
+    neither type Normal -> Normal/Normal; else sun and neither type Fire -> Fire/Fire; else rain
+    and neither Water -> Water/Water; else hail and neither Ice -> Ice/Ice. With one alive: neither
+    type Normal -> Normal/Normal (:6355-6363). The types are written with ``form_num``
+    (``CASTFORM_FORM_*``: Normal 0, Sunny 1, Rainy 2, Snowy 3, include/constants/forms.h:51-54).
+
+    Cherrim (:6366-6396): species and HP only, no ability test. Its ``form_num`` (Overcast 0,
+    Sunshine 1) is Sunshine when no Cloud Nine / Air Lock is alive and it is sunny, Overcast
+    otherwise: the else-if chain (:6369-6389) and the Cloud Nine case (:6391-6395) reduce to it.
+
+    Arceus (:6398-6410): a Multitype holder (``Battler_Ability``) with HP takes the form of its
+    RAW held item's plate type (``Pokemon_GetArceusTypeOf``, pokemon.c:4319-4377: Normal for any
+    other item; Klutz and Embargo do not hide it): ``damage.judgment_type``.
+
+    Giratina (:6412-6451): a Transformed Giratina (species, HP) with ``form_num`` Origin (1), the
+    copy of an Origin, rebuilds from a copy of its target's party Pokemon (``Pokemon_Copy`` of
+    ``GetPartyPokemon(target, selectedPartySlot[target])``; the target a singles foe, doubles
+    ``chosen_target``, battlerActions[..][CHOOSE_TARGET], which a redirect can leave on another
+    Pokemon: :6420-6429) with the item removed and form Altered set (:6431-6437). The party
+    Pokemon is the target's own (``_party_mon``: its ``shadow_*`` while it is Transformed itself).
+    ``Pokemon_SetGiratinaFormByHeldItem`` (pokemon.c:4380-4405) acts only on a Giratina
+    (:4397-4404): form Altered, ``BoxPokemon_CalcAbility`` (pokemon.c:4746-4766: the second slot
+    for an odd personality when the row has one, ``ability_slot``; Altered's is empty today) and
+    ``Pokemon_CalcLevelAndStats`` (Altered's row, the party Pokemon's IVs, EVs, level, nature).
+    Any other species keeps its party stats and ability (``MON_DATA_FORM`` is a plain write,
+    pokemon.c:1608-1609; ``party_ability`` where a script wrote it). The copier's Attack, Defense,
+    Speed, Sp. Atk, Sp. Def and ability become the copy's (:6441-6446), ``form_num`` Altered
+    (:6447), and ``SYSCTL_FORM_CHANGE`` writes the copier's own party form 0 (:6448-6450,
+    battle_controller.c:1489-1494, battle_io_command.c:597-599: ``shadow_form``; ``form``, the
+    copy the Transformed slot holds, follows; no ``SYSCTL_RECALC_MON_STATS``, so the party's
+    ability stays). Types, stages, moves, PP, HP and ``power_trick`` / ``power_trick_desync``
+    stay. The AI learns the new ability where it announces itself: Transform cleared
+    ``moldBreakerAnnounced`` and ``pressureAnnounced`` (battle_script.c:5357-5358), and the
+    rebuild runs at AfterMoveEffects' SYNCHRONIZE_STATUS (battle_lib.c:4536-4544, bcp.c:3665-3670;
+    ``step._use_move`` runs this function before the Transform's switch-in checks), so its
+    TRIGGER_SWITCH_IN_EFFECTS (bcp.c:3672) reaches the MOLD_BREAKER / PRESSURE states
+    (battle_lib.c:4075, :4096-4110; subscript_pressure.s, ``BattleAI_SetAbility``,
+    battle_script.c:11806: ``reveal_ability``) with it. A Giratina Origin that is not Transformed
+    changes only without the Griseous Orb (:6416-6418, :6450-6453), which it can lack only from
+    the battle's start, refused by coverage (``coverage._check_form``): no move takes the Orb in
+    battle (Knock Off subscript_knock_off.s:7, Trick / Switcheroo subscript_exchange_items.s:9-10,
+    Thief / Covet battle_script.c:5111, Fling effect_script_0233.s:6 all fail on it; the C
+    commands TryKnockOff / TrySwapItems run only after those script checks).
+
     The state is not advanced while a change happened (battle_lib.c:4115-4121), so the call
-    repeats until none changes; each result is stable under its own test and no battler's change
-    feeds another's, so one pass reaches the same fixpoint whatever the order. Only ``types``
-    are written: ``formNum`` is read by the display only (``battle_controller.c``) and the party's
-    form, which the switch-in re-reads (battle_lib.c:113-114), is not updated (the change sets no
-    ``SYSCTL_FORM_CHANGE``, only Giratina does, :6446), so ``state.form`` stays."""
+    repeats until none changes. Each result is stable under its own test, and only the Giratina
+    rebuild feeds another block: the ability it writes can add or remove a Cloud Nine / Air Lock,
+    which Castform's and Cherrim's tests read. No block feeds the rebuild (its inputs are the
+    copier's ``form_num`` and the target's party Pokemon) and it fires once (``form_num`` Altered),
+    so running every rebuild first and the other blocks after reaches the decomp's fixpoint
+    whatever ``monSpeedOrder`` is. The party's form, which the switch-in re-reads
+    (battle_lib.c:132), is not updated by Castform, Cherrim or Arceus (no ``SYSCTL_FORM_CHANGE``,
+    only Giratina sets it, :6448), so ``state.form`` stays for them."""
     fmt = format_of(state)
+    cond = jnp.asarray(cond)
+    altered = tables.species_form_row[SPECIES_GIRATINA, GIRATINA_FORM_ALTERED]
+    for side in range(fmt.B):
+        row, mon = party(fmt, side), state.active[side]
+        # The copier's target: a singles foe, a doubles battler's chosen target (:6420-6429).
+        foe = state.chosen_target[side].astype(_I32) if fmt.B == 4 else side ^ 1
+        t_row, t_mon = party(fmt, foe), state.active[foe]
+        own_species, ivs, slot, aform, own_stats_ = _party_mon(state, foe)
+        is_copy = (
+            cond
+            & (state.species[row, mon] == SPECIES_GIRATINA)
+            & (state.hp[row, mon] > 0)
+            & (state.form_num[side] == GIRATINA_FORM_ORIGIN)
+            & (state.transformed[side] != 0)
+        )
+        giratina = own_species == SPECIES_GIRATINA
+        recalced = calc_stats_jnp(
+            tables.species_base_stats[altered],
+            ivs,
+            state.evs[t_row, t_mon],
+            state.level[t_row, t_mon],
+            tables.nature_mods[state.nature[t_row, t_mon]],
+            SPECIES_GIRATINA,
+        )[Stat.ATK :]
+        # BoxPokemon_CalcAbility: an empty second slot is decomp ability 0 (pokemon.c:4755-4763).
+        g_slot = jnp.where(tables.species_abilities_decomp[altered, slot] != 0, slot, 0)
+        written = state.party_ability[t_row, t_mon]
+        own_ability = tables.species_abilities[tables.species_form_row[own_species, aform], slot]
+        stats = jnp.where(giratina, recalced, own_stats_)
+        ability = jnp.where(
+            giratina,
+            tables.species_abilities[altered, g_slot],
+            jnp.where(written != 0, written, own_ability),
+        )
+
+        def put(arr, value, is_copy=is_copy, row=row, mon=mon):
+            return arr.at[row, mon].set(jnp.where(is_copy, value, arr[row, mon]).astype(arr.dtype))
+
+        def put_b(arr, value, is_copy=is_copy, side=side):
+            return arr.at[side].set(jnp.where(is_copy, value, arr[side]).astype(arr.dtype))
+
+        state = state._replace(
+            stats=put(state.stats, stats),
+            ability=put(state.ability, ability),
+            ability_slot=put(state.ability_slot, jnp.where(giratina, g_slot, slot)),
+            ability_form=put(state.ability_form, jnp.where(giratina, GIRATINA_FORM_ALTERED, aform)),
+            form=put(state.form, GIRATINA_FORM_ALTERED),
+            shadow_form=put_b(state.shadow_form, GIRATINA_FORM_ALTERED),
+            form_num=put_b(state.form_num, GIRATINA_FORM_ALTERED),
+        )
+
+    # The rebuilt abilities are in: Cloud Nine / Air Lock as the blocks below read them.
     clear = ~weather_suppressed(tables, state)
     w = fcm.weather_bits(state)
     rain, sun, hail = fcm.rain(w), fcm.sun(w), fcm.hail(w)
@@ -1064,14 +1242,16 @@ def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
     for side in range(fmt.B):
         row, mon = party(fmt, side), state.active[side]
         types = state.types[row, mon]
+        species, alive = state.species[row, mon], state.hp[row, mon] > 0
+        shown = state.form_num[side].astype(_I32)
 
         def has(t, types=types):
             return jnp.any(types == t)
 
         is_castform = (
-            jnp.asarray(cond)
-            & (state.species[row, mon] == SPECIES_CASTFORM)
-            & (state.hp[row, mon] > 0)
+            cond
+            & (species == SPECIES_CASTFORM)
+            & alive
             & (
                 battler_decomp_ability(tables, state, side)
                 == ABILITY_DECOMP_IDS[AbilityId.FORECAST]
@@ -1088,8 +1268,53 @@ def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
         )
         change = is_castform & (normal | fire | water | ice)
         both = jnp.full(types.shape, new, state.types.dtype)
-        state = state._replace(types=state.types.at[row, mon].set(jnp.where(change, both, types)))
+        cast_form = jnp.where(
+            normal,
+            CASTFORM_FORM_NORMAL,
+            jnp.where(
+                fire,
+                CASTFORM_FORM_SUNNY,
+                jnp.where(water, CASTFORM_FORM_RAINY, CASTFORM_FORM_SNOWY),
+            ),
+        )
+        shown = jnp.where(change, cast_form, shown)
+
+        is_cherrim = cond & (species == SPECIES_CHERRIM) & alive
+        shown = jnp.where(is_cherrim, (clear & sun).astype(_I32), shown)
+
+        is_arceus = (
+            cond
+            & (species == SPECIES_ARCEUS)
+            & alive
+            & (battler_decomp_ability(tables, state, side) == ABILITY_MULTITYPE)
+        )
+        plate = judgment_type(tables, state.item[row, mon], Type.NORMAL)
+        shown = jnp.where(is_arceus, plate, shown)
+        state = state._replace(
+            types=state.types.at[row, mon].set(jnp.where(change, both, types)),
+            form_num=state.form_num.at[side].set(shown.astype(state.form_num.dtype)),
+        )
     return state
+
+
+def _party_mon(state: BattleState, battler):
+    """``(species, ivs, ability_slot, ability_form, stats)`` of ``battler``'s party Pokemon
+    (``BattleSystem_GetPartyPokemon``, the slot it was sent from): the active slot's values, or
+    the ``shadow_*`` while the battler is Transformed (the party keeps its own, G-69). ``stats``:
+    Attack .. Speed in ``state.stats`` order, the party's (a Power Trick swap is not in them)."""
+    row, mon = party(format_of(state), battler), state.active[battler]
+    tr = state.transformed[battler] != 0
+
+    def pick(shadow, own):
+        return jnp.where(tr, shadow[battler], own[row, mon])
+
+    return (
+        pick(state.shadow_species, state.species).astype(_I32),
+        pick(state.shadow_ivs, state.ivs),
+        pick(state.shadow_ability_slot, state.ability_slot).astype(_I32),
+        pick(state.shadow_ability_form, state.ability_form).astype(_I32),
+        pick(state.shadow_stats, state.stats),
+    )
 
 
 def land_stats(tables: Tables, state: BattleState, row, mon) -> jnp.ndarray:
@@ -1199,6 +1424,10 @@ def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleS
         shadow_form=state.shadow_form.at[side].set(
             jnp.where(on & tr, 0, state.shadow_form[side]).astype(state.shadow_form.dtype)
         ),
+        # subscript_check_shaymin_form.s:10 writes the battler's formNum 0 (H-5).
+        form_num=state.form_num.at[side].set(
+            jnp.where(on, 0, state.form_num[side]).astype(state.form_num.dtype)
+        ),
         shadow_stats=state.shadow_stats.at[side].set(
             jnp.where(on & tr, stats[Stat.ATK :], state.shadow_stats[side]).astype(
                 state.shadow_stats.dtype
@@ -1245,7 +1474,7 @@ def switch_in_effects(
         state, side, mon, SWITCH_IN, state.hp[party(format_of(state), side), mon] > 0
     )
     state = reveal_ability(state, foe, other, SWITCH_IN, traced)
-    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6
+    state = form_change(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6, H-5
     state = recover_status_by_ability(state, side)
     state = recover_status_by_ability(state, foe, traced)
     # SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS runs for every battler (battle_lib.c:4135-4145):
@@ -1362,7 +1591,7 @@ def show_battle_mon(
     for side in sides:
         mon = state.active[side]
         state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[party(fmt, side), mon] > 0)
-    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6
+    state = form_change(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6, H-5
     for side in sides:
         state = recover_status_by_ability(state, side)
     for side in sides:

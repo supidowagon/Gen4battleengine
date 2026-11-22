@@ -864,11 +864,32 @@ class AbilityId(IntEnum):
     MULTITYPE = 93
     # F-5: Hydration (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:5626-5639; ``step._weather_effect``).
     HYDRATION = 94
-    # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.forecast``).
+    # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.form_change``).
     FORECAST = 95
     # G-14: Air Lock shares Cloud Nine's lock (include/battle/common.h:63-67); read by decomp id
     # (``WEATHER_ABILITY_IDS``) in ``damage.weather_suppressed``, so no new reader.
     AIR_LOCK = 96
+    # E1 batch H, H-2: the status-forbidding abilities of BattleSystem_RecoverStatusByAbility
+    # (battle_lib.c:4378-4431: the cure at a move's end and a switch-in,
+    # ``hooks.recover_status_by_ability``) and Ability_ForbidsStatus (:4454-4492: the switch-out
+    # cure, ``step._restore_status_on_switch``), and their blocks in the status subscripts
+    # (``effects._inflict``, ``_contact_ability``, ``_attract``, the confusion effects).
+    IMMUNITY = 97
+    OWN_TEMPO = 98
+    WATER_VEIL = 99
+    MAGMA_ARMOR = 100
+    OBLIVIOUS = 101
+    # E1 batch H, H-3. Color Change: BattleSystem_TriggerAbilityOnHit (battle_lib.c:4232-4253;
+    # ``effects._contact_ability``) sets both of the defender's types to the move's type
+    # (subscript_color_change.s:9-10). Marvel Scale: CalcMoveDamage's defenseStat x150/100 on a
+    # statused holder (battle_lib.c:6797-6800; ``damage._pre_random``). Soundproof:
+    # TriggerImmunityAbility's sSoundMoves block (battle_lib.c:3473-3486, :3523-3530;
+    # ``step._use_move``), the uproar wake-ups it skips (bcp.c:2430-2439, :1505-1515), the
+    # uproar sleep block it skips (subscript_fall_asleep.s:15, :44) and TryPerishSong's test
+    # (battle_script.c:5474; ``effects.perish_song_eligible``).
+    COLOR_CHANGE = 102
+    MARVEL_SCALE = 103
+    SOUNDPROOF = 104
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -973,6 +994,14 @@ ABILITY_DECOMP_IDS = {
     AbilityId.HYDRATION: 93,
     AbilityId.FORECAST: 59,
     AbilityId.AIR_LOCK: 76,
+    AbilityId.IMMUNITY: 17,
+    AbilityId.OWN_TEMPO: 20,
+    AbilityId.WATER_VEIL: 41,
+    AbilityId.MAGMA_ARMOR: 40,
+    AbilityId.OBLIVIOUS: 12,
+    AbilityId.COLOR_CHANGE: 16,
+    AbilityId.MARVEL_SCALE: 63,
+    AbilityId.SOUNDPROOF: 43,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
@@ -1205,6 +1234,45 @@ class ItemId(IntEnum):
     # Kaizo's Lava Cookie / Old Gateau (hold 12, a Lum Berry's effect on a non-berry): Lum's cure
     # (``hooks._restore``), but Pluck / Bug Bite leave it (F-12).
     LAVA_COOKIE = 66
+    # E1 Batch H, H-4: held items, each its own id. Quick Powder (HOLD_EFFECT_DITTO_SPEED_UP):
+    # a Ditto's Speed x2 (``order.effective_speed``, battle_lib.c:1252-1255). Full Incense
+    # (HOLD_EFFECT_PRIORITY_DOWN, Lagging Tail's effect): ordered as ``LAGGING_TAIL``
+    # (battle_lib.c:1302-1304, :1412-1421). Destiny Knot (HOLD_EFFECT_RECIPROCATE_INFAT):
+    # ``effects.knot`` (battle_lib.c:4546-4566). Shed Shell (HOLD_EFFECT_SWITCH):
+    # ``actions.trapped`` (battle_lib.c:5518). Mental Herb (HOLD_EFFECT_HEAL_INFATUATION):
+    # ``hooks._restore`` (battle_lib.c:4889-4894, :5102-5107).
+    QUICK_POWDER = 67
+    FULL_INCENSE = 68
+    DESTINY_KNOT = 69
+    SHED_SHELL = 70
+    MENTAL_HERB = 71
+    # No in-battle hold effect in a trainer battle (``NO_IN_BATTLE_HOLD_EFFECT_ITEMS``): Smoke
+    # Ball (HOLD_EFFECT_FLEE, read only by the escape paths a trainer battle never reaches), and
+    # the party-item readers of the exp payout, which read the raw hold effect in ``levelup``:
+    # Exp. Share, Soothe Bell (friendship at a level-up), Lucky Egg.
+    SMOKE_BALL = 72
+    EXP_SHARE = 73
+    SOOTHE_BELL = 74
+    LUCKY_EGG = 75
+
+
+# H-4: the one shared handler of the items with no hook in the fight: the id lifts the coverage
+# refusal and ``enumerate`` treats them as input-neutral (readers are the payout's raw hold
+# effects and escape paths a trainer battle never reaches). Exp. Share, Lucky Egg and Soothe Bell
+# do change state, through the exp payout: it reads each party Pokemon's raw item data
+# (Pokemon_GetValue(MON_DATA_HELD_ITEM) + the hold effect, battle_script.c:2209-2210, :9706-9709,
+# :9745-9749; battle_system.c:746), never Battler_HeldItemEffect, and ``levelup`` reads
+# ``tables.item_hold_effect`` likewise: no Klutz / Embargo, no ``ItemId`` read, so the shared id
+# is enough and no damage or chance input depends on them.
+NO_IN_BATTLE_HOLD_EFFECT_ITEMS = (
+    ItemId.SMOKE_BALL,
+    ItemId.EXP_SHARE,
+    ItemId.SOOTHE_BELL,
+    ItemId.LUCKY_EGG,
+)
+
+# Full Incense is ordered as Lagging Tail (HOLD_EFFECT_PRIORITY_DOWN).
+PRIORITY_DOWN_ITEMS = (ItemId.LAGGING_TAIL, ItemId.FULL_INCENSE)
 
 
 # subscript_bind_start.s:10-12: an attacker holding HOLD_EFFECT_EXTEND_TRAPPING (Grip Claw) sets
@@ -1238,6 +1306,9 @@ CHOICE_ITEMS = (ItemId.CHOICE_BAND, ItemId.CHOICE_SPECS, ItemId.CHOICE_SCARF)
 # (battle_lib.c:6730-6774; generated/species.txt line N is id N-1).
 SPECIES_PIKACHU = 25
 SPECIES_CASTFORM = 351  # BattleSystem_TriggerFormChange (battle_lib.c:6314), F-6
+SPECIES_CHERRIM = 421  # BattleSystem_TriggerFormChange's Cherrim block (battle_lib.c:6366), H-5
+# CASTFORM_FORM_* (include/constants/forms.h:51-54): BattleMon.formNum, H-5.
+CASTFORM_FORM_NORMAL, CASTFORM_FORM_SUNNY, CASTFORM_FORM_RAINY, CASTFORM_FORM_SNOWY = 0, 1, 2, 3
 SPECIES_SHAYMIN = 492  # subscript_check_shaymin_form.s:6, F-16
 SPECIES_FARFETCHD = 83  # BattleSystem_CalcCriticalMulti (battle_lib.c:7128)
 SPECIES_CHANSEY = 113  # :7127
@@ -1250,6 +1321,8 @@ SPECIES_LATIOS = 381
 SPECIES_DIALGA = 483
 SPECIES_PALKIA = 484
 SPECIES_GIRATINA = 487
+# GIRATINA_FORM_* (include/constants/forms.h:93-94): BattleMon.formNum, H-5.
+GIRATINA_FORM_ALTERED, GIRATINA_FORM_ORIGIN = 0, 1
 
 
 # ``item_param[i, 1]`` of Chilan Berry (``HOLD_EFFECT_WEAKEN_NORMAL``): the berry halves any

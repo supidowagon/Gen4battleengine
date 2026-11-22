@@ -388,15 +388,19 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
     attacker = _i32(battler_ability(state, atk_side))
     ability = _i32(battler_ability(state, def_side, slot))
     if active:
-        # Battler_Ability (battle_lib.c:3095-3103): Levitate is ABILITY_NONE under Gravity (:3095-
-        # 3098, G-67) and for an ingrained battler (:3100-3103). Only the active battler's: a
-        # party slot being read is a switch action's newcomer (the laws), which carries no Ingrain
-        # (only Baton Pass keeps it).
-        rooted = ((state.ingrain[def_side] != 0) | fcm.gravity_on(state)) & (
-            ability == AbilityId.LEVITATE
-        )
+        # Only the active battler's: a party slot being read is a switch action's newcomer (the
+        # laws), which carries no Ingrain (only Baton Pass keeps it).
+        rooted = levitate_off(state, def_side) & (ability == AbilityId.LEVITATE)
         ability = jnp.where(rooted, AbilityId.NONE, ability)
     return jnp.where(attacker == AbilityId.MOLD_BREAKER, AbilityId.NONE, ability)
+
+
+def levitate_off(state: BattleState, battler) -> jnp.ndarray:
+    """``bool``: ``Battler_Ability`` (battle_lib.c:3095-3103) reads ``battler``'s Levitate as
+    ``ABILITY_NONE``: under Gravity (:3095-3098, G-67) or while ``battler`` is ingrained
+    (``MOVE_EFFECT_INGRAIN``, :3100-3103). The one place of the rule, for engine ids (``ignorable``)
+    and decomp ids (``ai.switching.seen_ability``)."""
+    return (state.ingrain[battler] != 0) | fcm.gravity_on(state)
 
 
 def iron_ball(tables: Tables, state: BattleState, side, slot=None) -> jnp.ndarray:
@@ -1680,6 +1684,13 @@ def _pre_random(
     attack = jnp.where(
         (a_ability == AbilityId.GUTS) & (a_status != Status.NONE), attack * 150 // 100, attack
     )
+    # :6797-6800 Marvel Scale (Battler_IgnorableAbility; H-3): defenseStat x150/100 when the
+    # defender's BATTLEMON_STATUS (defenderParams.statusMask, :6652) is set, before the stage
+    # scaling (a crit keeps it) and Explosion's halving. A confusion self-hit's defender is the
+    # attacker (CALC_SELF_HIT, include/battle/common.h:35-46).
+    d_status = _i32(s.status[party(fmt, def_side), d_slot])
+    marvel = (d_ability_eff == AbilityId.MARVEL_SCALE) & (d_status != Status.NONE)
+    defense = jnp.where(marvel, defense * 150 // 100, defense)
 
     # :6802-6809 Plus / Minus (attackerParams.ability): spAttackStat x150/100 when a living
     # battler of the attacker's side (COUNT_ALIVE_BATTLERS_OUR_SIDE) has the other ability.
