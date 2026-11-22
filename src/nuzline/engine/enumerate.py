@@ -250,7 +250,13 @@ from nuzline.engine.effects import (
 )
 from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.hooks import PLUCKABLE, entry_damage_up, reverted_stats, starf_holders
+from nuzline.engine.hooks import (
+    _FLING_STAT_UP,
+    PLUCKABLE,
+    entry_damage_up,
+    reverted_stats,
+    starf_holders,
+)
 from nuzline.engine.ids import (
     CALL_GRAVITY,
     CHATTER_CHANCES,
@@ -2630,7 +2636,7 @@ def outcome_laws(
         quick_claw = jnp.broadcast_to(live & anywhere, (fmt.B,))
 
     starf_draw, starf_loose = _starf_reads(
-        tables, state, actions, uses_move, effect, params, dragged, loose
+        tables, state, actions, uses_move, effect, params, moves, dragged, loose
     )
 
     band_party = jnp.any(
@@ -2993,7 +2999,84 @@ _STARF_STAGE_JUMPS = (
 )
 
 
-def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loose):
+def _starf_gain(tables, state, actions, uses_move, effect, params, moves):
+    """``(gain int32[B], fresh int32[B])``: an upper bound on how far one of battler ``d``'s five
+    Starf stats can rise this turn before any of its eats (``_starf_reads``), and the same for a
+    fresh Roar newcomer of ``d``'s side. Every source of a raise in the engine, summed (each adds
+    at most its amount to any one stat; over-approximate):
+
+    - ``d``'s own action (one per battler): a stat move's stage param (``STAT_SELF``,
+      ``SECONDARY_STAT_SELF``; twice for a ``MoveFlag.HIT_TWICE`` move, a proc per hit), 2 for
+      Acupressure, 1 for Dragon Dance and kin, AncientPower, Curse (each stat +1), 1 for Pluck /
+      Bug Bite (a plucked Liechi / Ganlon / Salac / Petaya / Apicot, battle_lib.c:5753-5797), 1 for
+      a ``CHARGE_DEF_UP`` charge turn (Skull Bash, effect_script_0145.s:8); or a bag item: each
+      stage param +1 once (BattleSystem_UseBagItem, battle_system.c:575-615; the trainer's item
+      action comes first, battle_controller_player.c:753-761).
+    - every other battler's move at ``d`` (a loop over battlers, section 5 of
+      docs/doubles-state-design.md; the partner can target its ally): Swagger / Flatter and a
+      raising ``STAT_FOE`` / ``SECONDARY_STAT_FOE`` param (twice for ``HIT_TWICE``); a Fling of a
+      stat berry, +1 (FLING_EFFECT_ATK_UP..SPDEF_UP, battle_lib.c:6075-6108,
+      subscript_held_item_raise_stat.s); at B = 4 the partner's Acupressure, +2 (RANGE_USER_OR_ALLY).
+      A flung or plucked Starf Berry is an eat of its own (``_starf_reads``' ``+2`` per earlier
+      eat). ``d``'s own Swagger / Flatter counts too when another battler uses Magic Coat
+      (``MoveFlag.MAGIC_COAT`` reflects it onto ``d``).
+    - abilities, each +1: Speed Boost at the turn end (MON_COND_CHECK_STATE_ABILITY bcp.c:1354,
+      battle_lib.c:3555-3562, before USE_ITEM :1362 and ITEM_CONDITION :1699), Steadfast on a
+      flinch (subscript_flinched.s:12), Download on entry (battle_lib.c:3814-3851); +2 when a
+      Skill Swap / Role Play can hand ``d`` either of the first two this turn.
+
+    Not modelled, so not here (each maps to ``AbilityId.UNSUPPORTED`` / ``EffectId.UNSUPPORTED``;
+    add it here with its mechanic): Anger Point (Attack to +6, subscript_critical_hit.s:10-15),
+    Motor Drive (battle_lib.c:3532-3536), Rage (bcp.c:4605-4611), Stockpile
+    (subscript_stockpile.s), Thief / Covet / Trick giving ``d`` a berry. Simple scales only the
+    stat calc, not the stored stage (battle_lib.c:1171-1185, :6850-6870), so it adds nothing.
+
+    The fresh newcomer (``InitBattleMon`` resets its stages, battle_lib.c:97-101) does not act and
+    has entered this turn (no Speed Boost, battle_lib.c:3558): the other battlers' gains plus its
+    Download."""
+    fmt = format_of(state)
+    sides = jnp.arange(fmt.B)
+    rows = party(fmt, sides)
+    flags = tables.move_flags[moves].astype(_I32)
+    hits = jnp.where((flags & MoveFlag.HIT_TWICE) != 0, 2, 1)
+    param1 = jnp.maximum(params[:, 1].astype(_I32), 0)
+    own_move = jnp.where(
+        _any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)),
+        param1 * hits,
+        jnp.where(
+            effect == _E.ACUPRESSURE,
+            2,
+            _any_of(
+                effect, (_E.DRAGON_DANCE, _E.RAISE_ALL_STATS_HIT, _E.CURSE, _E.EAT_BERRY)
+            ).astype(_I32),
+        ),
+    ) + ((flags & MoveFlag.CHARGE_DEF_UP) != 0).astype(_I32)
+    own = jnp.where(uses_move, own_move, 0) + is_item(actions).astype(_I32)
+    at_foe = jnp.where(
+        uses_move & _any_of(effect, (_E.SWAGGER, _E.STAT_FOE, _E.SECONDARY_STAT_FOE)),
+        param1 * hits,
+        0,
+    )
+    fling_up = jnp.asarray([int(k) for k in _FLING_STAT_UP], _I32)
+    flung = tables.item_fling_effect[state.item[rows, state.active]].astype(_I32)
+    at_foe = at_foe + (uses_move & (effect == _E.FLING) & jnp.isin(flung, fling_up)).astype(_I32)
+    others = jnp.sum(at_foe) - at_foe  # every battler but d
+    if fmt.B == 4:
+        acu = jnp.where(uses_move & (effect == _E.ACUPRESSURE), 2, 0)
+        others = others + acu[sides ^ 2]
+    coat = uses_move & (effect == _E.MAGIC_COAT)
+    reflected = jnp.where((jnp.sum(coat.astype(_I32)) - coat.astype(_I32)) > 0, at_foe, 0)
+    swap = jnp.any(uses_move & _any_of(effect, (_E.SKILL_SWAP, _E.ROLE_PLAY)))
+    ability = (
+        _holds(tables, state, actions, (AbilityId.SPEED_BOOST,)).astype(_I32)
+        + _holds(tables, state, actions, (AbilityId.STEADFAST,)).astype(_I32)
+        + _holds(tables, state, actions, (AbilityId.DOWNLOAD,)).astype(_I32)
+        + jnp.where(swap, 2, 0)
+    )
+    return own + others + reflected + ability, others + 1
+
+
+def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragged, loose):
     """``(relevant bool[B, 4], loose bool[B, 4])`` of ``Outcome.starf`` (F-10). Index 0, the first
     eat's draw, is read where side ``d`` can eat a Starf Berry this turn: its active Pokemon or the
     one it switches in holds one, or any living holder of its party can enter (its own U-turn or
@@ -3009,11 +3092,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
 
     The law: the draw is read modulo the count of the five stats below +6 at the eating. A fresh
     newcomer has all five below +6; an active one keeps that count when its highest of them plus
-    the most this turn can add stays below +6: the side's own stat move (its stage param, 1 for
-    Dragon Dance, AncientPower, Curse, 2 for Acupressure), a foe's Swagger / Flatter or raising
-    stat move (its param) and 2 for the rest (Steadfast, Speed Boost, a plucked pinch berry,
-    Download); no Belly Drum, Psych Up, Power / Guard Swap, Transform, Baton Pass or Recycle
-    (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The replacement's
+    the most this turn can add stays below +6 (``_starf_gain``: its own move or bag item, the
+    other battlers' raising moves and Flings of a stat berry, its abilities); no Belly Drum, Psych
+    Up, Power / Guard Swap, Transform, Baton Pass or Recycle (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The replacement's
     draw is always 5 values: a fresh battler (``step.starf_kept`` stores it modulo 5).
 
     Index 2 (F-O3, G-27), battler ``d``'s second eat this turn: every eat draws its own
@@ -3030,8 +3111,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     foe's Roar newcomer holder (Roar's priority -6 drags after d's move). The k-th eat's law: the
     same battler's while it has k sources of its own, the index-0 rule with +2 per earlier eat;
     else the fresh Roar newcomer's (``InitBattleMon`` resets the stages, battle_lib.c:97-101; a
-    dragged battler does not act, so only a foe's bounded gains and 2 for the rest reach it): five
-    values unless those reach +6. A foe's Fling of a Starf Berry at d (``flung``, lib:6110-6127,
+    dragged battler does not act, so only the other battlers' gains and its Download reach it,
+    ``_starf_gain``): five values unless those reach +6. A foe's Fling of a Starf Berry at d (``flung``, lib:6110-6127,
     its own ``RandNext() % 5`` loop at :6121, at TryFling, hit or miss: ``hooks.fling_try``) is
     one more of d's own sources: it takes the next queue entry like an eat (E3-B2-1 on G-28). In
     singles the foe has one move: a flinger or a foe that Recycles a Starf Berry for d's Pluck
@@ -3110,20 +3191,7 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # The count: fixed at 5 unless a stat can reach +6 before the eating.
     five = jnp.asarray([int(x) for x in STARF_STATS], _I32)
     highest = jnp.maximum(jnp.max(state.stages[:, five].astype(_I32), axis=1), 0)
-    param1 = jnp.maximum(params[:, 1].astype(_I32), 0)
-    own_gain = jnp.where(
-        _any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)),
-        param1,
-        jnp.where(
-            effect == _E.ACUPRESSURE,
-            2,
-            _any_of(effect, (_E.DRAGON_DANCE, _E.RAISE_ALL_STATS_HIT, _E.CURSE)).astype(_I32),
-        ),
-    )
-    foe_gain = jnp.where(
-        _any_of(effect, (_E.SWAGGER, _E.STAT_FOE, _E.SECONDARY_STAT_FOE)), param1, 0
-    )
-    gain = jnp.where(uses_move, own_gain, 0) + foes(jnp.where(uses_move, foe_gain, 0)) + 2
+    gain, fresh_gain = _starf_gain(tables, state, actions, uses_move, effect, params, moves)
     jump = jnp.any(uses_move & _any_of(effect, _STARF_STAGE_JUMPS))
     turn_loose = jump | (highest + gain >= STAGE_MAX) | open_
     # Indices 2 and 3: battler d's eats this turn (F-O3), counted: ``own`` the same battler's,
@@ -3192,8 +3260,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     )
     sources = own + jnp.where(newcomer, entries, 0)
     # The k-th eat (k = 2, 3) is the same battler's while ``own >= k``, its stages up 2 per
-    # earlier eat; else the Roar newcomer's, fresh (only a foe's bounded gains reach it).
-    fresh_loose = jump | (foes(jnp.where(uses_move, foe_gain, 0)) + 2 >= STAGE_MAX)
+    # earlier eat; else the Roar newcomer's, fresh (``_starf_gain``'s ``fresh``).
+    fresh_loose = jump | (fresh_gain >= STAGE_MAX)
 
     def later(k):
         same = turn_loose | (highest + gain + 2 * (k - 1) >= STAGE_MAX)
