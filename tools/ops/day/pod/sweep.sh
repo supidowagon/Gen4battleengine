@@ -14,7 +14,11 @@
 # (setsid), <run>/sweep/out/run/<short>_<seed> holds that group's id and <run>/sweep/out/<short>_<seed>.w
 # its weight SWEEP_W, so every podgate over WORK/*/*/out/run/* (each runner's start gate, quick.sh,
 # and this driver) reserves the gap between SWEEP_W and the job's RSS while it grows. The run file
-# goes when the job's group is gone. A runner's KILL_GB backstop kills only its own run's units.
+# goes when the job's group is gone. A runner's KILL_GB backstop kills only its own run's units,
+# never the sweep's jobs, and the sweep has no KILL_GB watcher of its own (quick.sh's q has one).
+# The replay (below) is a unit the same way: sweep/out/run/replay and replay.w (SWEEP_W), started
+# through the same gate, in its own group under `timeout --foreground -k 30 SWEEP_REPLAY_S`; the
+# driver waits for it with `wait`, so a stop signal is handled at once and reaches its group.
 # A job starts only under the pod-wide gate lock RUNNER_LOCK (flock, as runner.sh; jobs start with
 # it closed), while fewer than SWEEP_P jobs of this sweep run, no gate-run claim exists (gate.sh
 # claim_state over CLAIMS: any live claim, a runner waiting for room, holds every start) and
@@ -95,10 +99,10 @@ cd "$REPO" || exit 1
 say "DRIVER_START repo=$REPO P=$P W=$W CAP=$CAP ($CAPSRC) nice=$NICE job_s=$JOB_S jobs=$(grep -c . "$OUT/jobs.txt")"
 TIMEBIN=; [ -x /usr/bin/time ] && TIMEBIN=/usr/bin/time
 TO=; command -v timeout > /dev/null && TO=timeout
-# One job, run as `setsid bash -c "$JOB" sweep-job <args>` (its own process group). timeout runs
+# One job, run by unit_start as `setsid bash -c "$JOB" <unit> <args>` (its own process group). timeout runs
 # with --foreground so that it stays in that group (without it, timeout makes a group of its own,
 # which podgate would not sum and stop() would not reach).
-JOB='O=$1 j=$2 node=$3 s=$4 repo=$5 nice=$6 tb=$7 to=$8 js=$9; t0=$(date +%s)
+JOB='O=$1 j=$2 node=$3 s=$4 repo=$5 nice=$6 tb=$7 to=$8 js=$9; t0=$(date +%s)   # $0: the unit name
 tm=(); [ -n "$tb" ] && tm=("$tb" -v -o "$O/$j.rss")
 tl=(); [ -n "$to" ] && tl=("$to" --foreground -k 60 "$js")
 NUZLINE_HYPOTHESIS_PROFILE=explore nice -n "$nice" "${tm[@]}" "${tl[@]}" "$repo/.venv/bin/python" -m pytest -p no:cacheprovider -q -x "$node" --hypothesis-seed="$s" -m "" > "$O/$j.log" 2>&1 < /dev/null
@@ -128,15 +132,9 @@ stop() { trap - TERM INT HUP; local p f g all="" gs=""
   for g in $gs; do kill -KILL -- "-$g" 2>/dev/null; done
   rm -f "$U"/run/*
   say "STOPPED by $1: jobs stopped, no SWEEP_DONE"; date +%s > "$OUT/SWEEP_STOPPED"; exit "$2"; }
-rm -f "$OUT/SWEEP_STOPPED"
-trap 'stop TERM 143' TERM; trap 'stop INT 130' INT; trap 'stop HUP 129' HUP
-mkdir -p "${LOCK%/*}" 2>/dev/null; exec 8>> "$LOCK" || fail "cannot open the gate lock $LOCK"
-: > "$OUT/jobs.done"   # the jobs this driver started, in order: <node> <short> <seed>
-held=
-while read -r node short s rest; do
-  case "$node" in ''|'#'*) continue;; esac
-  case "$s" in ''|*[!0-9]*) say "SKIP bad job line: $node $short $s"; continue;; esac
-  # Check and start under the pod lock, as runner.sh: no runner passes its gate on the same reading.
+# gate_wait: returns holding the pod lock (fd 8) once fewer than P units of this sweep run, no
+# gate-run claim exists and memory + the pod's reserve + W fits under the cap; sets m, pres, n.
+gate_wait() { local b plive cs cn why key held=
   while :; do
     reap
     n=$(jobs -rp | wc -l)
@@ -148,7 +146,7 @@ while read -r node short s rest; do
         read -r plive pres <<< "$(podgate "$WORK"/*/out/run/* "$WORK"/*/*/out/run/*)"
         case "$plive$pres" in ''|*[!0-9]*) flock -u 8; say "ERROR: the gate reserve is not a number; driver stops"; stop ERROR 1;; esac
         read -r cs cn _ <<< "$(claim_state - 2>> "$LOG")"
-        if [ "$cs" = none ] && [ $((m + pres + W)) -le "$CAP" ]; then break; fi
+        if [ "$cs" = none ] && [ $((m + pres + W)) -le "$CAP" ]; then return 0; fi
         flock -u 8
         why="mem ${m}GB + reserve ${pres}GB (${plive} units) + ${W}GB over cap ${CAP}GB"; key=cap
         [ "$cs" = none ] || { why="claim $cn"; key=$why; }
@@ -156,12 +154,24 @@ while read -r node short s rest; do
       else say "gate lock $LOCK still held after 120 s"; fi
     fi
     sleep "$POLL"
-  done
-  held=
-  j="${short}_${s}"; echo "$node $short $s" >> "$OUT/jobs.done"; echo "$W" > "$U/$j.w"
-  setsid bash -c "$JOB" sweep-job "$OUT" "$j" "$node" "$s" "$REPO" "$NICE" "$TIMEBIN" "$TO" "$JOB_S" 8>&- &
-  g=$!; echo "$g" > "$U/run/.$j.tmp" && mv -f "$U/run/.$j.tmp" "$U/run/$j"   # a unit in every podgate from here
-  flock -u 8
+  done; }
+# unit_start <name> <script> <args...>: starts `setsid bash -c <script> <name> <args>` as a unit
+# (run file and .w written, visible to every podgate) and releases the pod lock; sets g.
+unit_start() { local u=$1 sc=$2; shift 2; echo "$W" > "$U/$u.w"
+  setsid bash -c "$sc" "$u" "$@" 8>&- &
+  g=$!; echo "$g" > "$U/run/.$u.tmp" && mv -f "$U/run/.$u.tmp" "$U/run/$u"
+  flock -u 8; }
+rm -f "$OUT/SWEEP_STOPPED"
+trap 'stop TERM 143' TERM; trap 'stop INT 130' INT; trap 'stop HUP 129' HUP
+mkdir -p "${LOCK%/*}" 2>/dev/null; exec 8>> "$LOCK" || fail "cannot open the gate lock $LOCK"
+: > "$OUT/jobs.done"   # the jobs this driver started, in order: <node> <short> <seed>
+while read -r node short s rest; do
+  case "$node" in ''|'#'*) continue;; esac
+  case "$s" in ''|*[!0-9]*) say "SKIP bad job line: $node $short $s"; continue;; esac
+  # Check and start under the pod lock, as runner.sh: no runner passes its gate on the same reading.
+  gate_wait
+  j="${short}_${s}"; echo "$node $short $s" >> "$OUT/jobs.done"
+  unit_start "$j" "$JOB" "$OUT" "$j" "$node" "$s" "$REPO" "$NICE" "$TIMEBIN" "$TO" "$JOB_S"   # a unit in every podgate from here
   say "START $j pgid=$g mem=${m}GB reserve=${pres}GB running=$((n+1))"
   sleep "$SPACING"
 done < "$JOBS"
@@ -188,10 +198,16 @@ done < "$OUT/jobs.done"
 if [ "$fails" -gt 0 ]; then
   say "REPLAY_START logs=$fails"
   rm -rf "$OUT/replay_in"; mkdir -p "$OUT/replay_in"
-  RUNNER=; [ -n "$TO" ] && RUNNER="timeout -k 30 $REPLAY_S"
   "$REPO/.venv/bin/python" "$TOOLS/extract.py" "$OUT" "$OUT/replay_in" > "$OUT/extract.txt" 2>&1
-  $RUNNER "$REPO/.venv/bin/python" "$TOOLS/replay.py" "$REPO" "$OUT/replay_in" > "$OUT/replay.txt" 2>&1
-  say "REPLAY_END rc=$?"
+  # The replay loads the engine: a unit like a job (gate, group, run file), waited for with `wait`.
+  RPL='O=$1 repo=$2 tools=$3 to=$4 rs=$5; tl=(); [ -n "$to" ] && tl=("$to" --foreground -k 30 "$rs")
+"${tl[@]}" "$repo/.venv/bin/python" "$tools/replay.py" "$repo" "$O/replay_in" > "$O/replay.txt" 2>&1 < /dev/null'
+  gate_wait
+  unit_start replay "$RPL" "$OUT" "$REPO" "$TOOLS" "$TO" "$REPLAY_S"
+  say "REPLAY_RUN pgid=$g mem=${m}GB reserve=${pres}GB"
+  wait "$g"; rc=$?
+  reap final
+  say "REPLAY_END rc=$rc"
 fi
 date +%s > "$OUT/SWEEP_DONE"
 say "SWEEP_DONE"

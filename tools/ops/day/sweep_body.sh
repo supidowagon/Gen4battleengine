@@ -14,7 +14,9 @@
 # /work/<run>/sweep_out, or sweep_out_<epoch> when sweep_out already holds a sweep (a rerun keeps
 # the first sweep's files); sweep.outdir names the newest. Its last line: SWEEP_STARTED <run>
 # out=<out dir name> jobs=<n> | SWEEP_REFUSED <reason> (no run folder, no bin/sweep.sh, no repo, a
-# sweep of this run still running).
+# sweep of this run still running: sweep.pid names a process that exists and is not a zombie, as
+# gate.sh pidlive, and the newest out dir has no SWEEP_DONE; the detached driver's parent is the
+# pod's PID 1, which never reaps, so a driver that ended stays a zombie and kill -0 would pass).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"; . "$HERE/send_body.sh"
 [ $# -eq 2 ] || { echo "usage: sweep_body.sh <run> <jobs file>"; exit 2; }
@@ -34,7 +36,8 @@ tr -d '\r' < "$2" | grep -v '^[[:space:]]*\(#\|$\)' > "$T/sweep_jobs.txt"
 [ -f "$R/bin/sweep.sh" ] || { echo "SWEEP_REFUSED no $R/bin/sweep.sh (the run was packed before sweep.sh)"; exit 1; }
 [ -x "$R/repo/.venv/bin/python" ] || { echo "SWEEP_REFUSED no $R/repo/.venv (setup.sh not finished?)"; exit 1; }
 p=$(cat "$R/sweep.pid" 2>/dev/null); o=$(cat "$R/sweep.outdir" 2>/dev/null)
-case "$p" in ''|*[!0-9]*|0|1) ;; *) if kill -0 "$p" 2>/dev/null && [ ! -f "$R/${o:-sweep_out}/SWEEP_DONE" ]; then echo "SWEEP_REFUSED a sweep of this run is running (pid $p)"; exit 1; fi;; esac
+case "$p" in ''|*[!0-9]*|0|1) st=;; *) st=$(ps -o stat= -p "$p" 2>/dev/null | tr -d ' ');; esac
+case "$st" in ''|Z*) ;; *) [ -f "$R/${o:-sweep_out}/SWEEP_DONE" ] || { echo "SWEEP_REFUSED a sweep of this run is running (pid $p)"; exit 1; };; esac
 o=sweep_out; J=sweep_jobs.txt; [ -e "$R/$o" ] && { e=$(date +%s); o=sweep_out_$e; J=sweep_jobs_$e.txt; }
 cp sweep_jobs.txt "$R/$J" && cd "$R" || exit 1
 echo "$o" > sweep.outdir

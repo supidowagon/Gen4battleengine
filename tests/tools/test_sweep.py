@@ -425,7 +425,7 @@ FAKE_PYTHON = r"""#!/bin/bash
 # fake <repo>/.venv/bin/python: the pytest job, extract.py and replay.py
 case "$1" in
   *extract.py) mkdir -p "$3"; echo extracted "$2" > "$3/extract.ok"; exit 0;;
-  *replay.py) echo "== replayed $3"; exit 0;;
+  *replay.py) echo "== replayed $3"; echo "replay $$ $(date +%s.%N)" >> "$FAKE_TRACE"; sleep "${FAKE_REPLAY_S:-0}"; exit 0;;
 esac
 for a in "$@"; do case "$a" in --hypothesis-seed=*) seed=${a#*=};; esac; done
 T="$FAKE_TRACE"
@@ -522,6 +522,11 @@ def test_sweep_runs_the_jobs_under_the_p_cap_and_writes_the_results(tmp_path):
     assert (out / "replay_in" / "extract.ok").is_file() and "== replayed" in (
         out / "replay.txt"
     ).read_text()
+    # the replay is a gate unit like a job: started through the gate, its run file gone after it
+    assert re.search(r"REPLAY_RUN pgid=[0-9]+ ", (out / "driver.log").read_text())
+    assert "REPLAY_END rc=0" in (out / "driver.log").read_text()
+    assert (d / "sweep" / "out" / "replay.w").read_text().strip() == "13"
+    assert not list((d / "sweep" / "out" / "run").iterdir())
 
 
 def _driver_output(d: Path, p: subprocess.Popen, out: str = "sweep_out") -> str:
@@ -952,3 +957,129 @@ def test_sweep_a_job_over_its_time_limit_fails_and_the_sweep_goes_on(tmp_path):
     assert "sleep 600" not in left  # the hung job's leftovers were killed
     assert collect.main([str(out), "--night", "20261122", "--tip", "abcdef01"]) == 0
     assert f"(NO-FALSIFIER rc=124, {SHORT_A}, -)" in (out / "sweep_failures.txt").read_text()
+
+
+# --- the driver-alive checks: a zombie or dead driver is not a running sweep --------------------
+
+
+def _start_sh(run_dir: Path) -> str:
+    """sweep_body.sh's start.sh for the run folder <run_dir> (its R line pointed there)."""
+    src = (ROOT / "tools/ops/day/sweep_body.sh").read_text(encoding="utf-8")
+    body = src.split("cat <<'START'\n", 1)[1].split("\nSTART\n", 1)[0]
+    return f"R='{_posix(run_dir)}'; export SWEEP_P=1 SWEEP_W=13\n{body}\n"
+
+
+def _daybox_check(run_dir: Path) -> str:
+    """The check exec of DAYBOX.md "Soundness sweep" step 4, for the run folder <run_dir>."""
+    import json
+
+    text = (ROOT / "tools/ops/day/DAYBOX.md").read_text(encoding="utf-8")
+    m = re.search(r'Check: exec `(\{"command":\["bash","-c","cd /work/<run>; o=.*?\}`)', text)
+    assert m, "the check exec is not in DAYBOX.md"
+    cmd = json.loads(m.group(1)[:-1])["command"]
+    return cmd[2].replace("/work/<run>", f"'{_posix(run_dir)}'")
+
+
+@linux
+@pytest.mark.parametrize("driver", ["dead", "zombie", "live"])
+def test_start_and_the_check_see_a_dead_or_zombie_driver_as_gone(tmp_path, driver):
+    d = _run_folder(tmp_path)
+    if driver == "live":
+        proc = subprocess.Popen(["sleep", "60"])
+    else:
+        proc = subprocess.Popen(["true"])
+        if driver == "dead":
+            proc.wait()
+        else:  # exited and not waited for: a zombie, as under the pod's PID 1, which never reaps
+            for _ in range(100):
+                st = subprocess.run(["ps", "-o", "stat=", "-p", str(proc.pid)],
+                                    check=False, capture_output=True, text=True).stdout.strip()  # fmt: skip
+                if st.startswith("Z"):
+                    break
+                time.sleep(0.05)
+            assert st.startswith("Z")
+    try:
+        (d / "sweep.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+        (d / "sweep.outdir").write_text("sweep_out\n", encoding="utf-8")
+        (d / "sweep_out").mkdir()  # an earlier sweep that ended without SWEEP_DONE
+        check = subprocess.run(
+            [BASH, "-c", _daybox_check(d)], check=False, capture_output=True, text=True, timeout=30
+        )
+        assert ("DRIVER_ALIVE" in check.stdout) == (driver == "live"), check.stdout
+        send = tmp_path / "send"
+        send.mkdir()
+        (send / "start.sh").write_text(_start_sh(d), encoding="utf-8", newline="\n")
+        (send / "sweep_jobs.txt").write_text(
+            f"{NODE_A} {SHORT_A} 1\n", encoding="utf-8", newline="\n"
+        )
+        r = subprocess.run([BASH, "start.sh"], cwd=send, check=False, capture_output=True, text=True, timeout=30,
+                           env=_env(tmp_path, 10 * 10**9, FAKE_JOB_S="0"))  # fmt: skip
+        last = r.stdout.strip().splitlines()[-1]
+        if driver == "live":
+            assert last == f"SWEEP_REFUSED a sweep of this run is running (pid {proc.pid})", (
+                r.stdout
+            )
+            return
+        assert re.fullmatch(r"SWEEP_STARTED sweep-x out=sweep_out_[0-9]+ jobs=1", last), (
+            r.stdout + r.stderr
+        )
+        o = d / (d / "sweep.outdir").read_text().strip()
+        for _ in range(200):
+            if (o / "SWEEP_DONE").exists():
+                break
+            time.sleep(0.1)
+        assert (o / "SWEEP_DONE").is_file(), (d / "sweep.log").read_text()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@linux
+def test_sweep_term_during_the_replay_stops_it_at_once(tmp_path):
+    d = _run_folder(tmp_path)
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0", FAKE_FAIL_SEED="1", FAKE_REPLAY_S="60")
+    p = subprocess.Popen([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1]))], env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)  # fmt: skip
+    trace = tmp_path / "trace.txt"
+    try:
+        for _ in range(200):
+            if trace.exists() and "replay " in trace.read_text():
+                break
+            time.sleep(0.05)
+        assert (d / "sweep" / "out" / "run" / "replay").is_file()  # a unit while it runs
+        t0 = time.time()
+        p.terminate()
+        assert p.wait(timeout=30) == 143, _driver_output(d, p)
+        assert time.time() - t0 < 15  # not held until the replay ends (60 s)
+    finally:
+        p.kill()
+    rpid = trace.read_text().split("replay ", 1)[1].split()[0]
+    st = subprocess.run(
+        ["ps", "-o", "stat=", "-p", rpid], check=False, capture_output=True, text=True
+    ).stdout.strip()
+    assert st == "" or st.startswith("Z")  # the replay's group was stopped too
+    assert (d / "sweep_out" / "SWEEP_STOPPED").is_file()
+    assert not (d / "sweep_out" / "SWEEP_DONE").exists()
+
+
+@linux
+def test_podcheck_lists_a_live_sweep_run_with_its_units(tmp_path):
+    root = tmp_path / "work"
+    d = root / "sweep-x"
+    (d / "sweep" / "out" / "run").mkdir(parents=True)
+    driver = subprocess.Popen(["sleep", "60"])
+    job = subprocess.Popen(["setsid", "sleep", "60"])
+    try:
+        (d / "sweep.pid").write_text(f"{driver.pid}\n", encoding="utf-8")
+        (d / "sweep" / "out" / "run" / "j1").write_text(f"{job.pid}\n", encoding="utf-8")
+        (d / "sweep" / "out" / "j1.w").write_text("13\n", encoding="utf-8")
+        r = subprocess.run([BASH, _posix(POD / "podcheck.sh"), _posix(root)], check=False, capture_output=True, text=True,
+                           timeout=60, env={**_clean_env(), "CGROOT": _posix(tmp_path / "nocg")})  # fmt: skip
+        assert "run sweep-x gate=old scripts=old runner=sweep live=1 pending=0" in r.stdout, (
+            r.stdout + r.stderr
+        )
+    finally:
+        driver.kill()
+        job.kill()
+        driver.wait()
+        job.wait()
