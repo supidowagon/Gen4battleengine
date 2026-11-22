@@ -64,7 +64,14 @@ def choices_of(tables, state, actions):
 
 
 def scan(tables, state, switcher, actions, move_end=()):
+    """``next_pursuer`` on ``state`` as ``step._action_phase`` hands it to the action loop: the
+    selection written (``with_selection``: moveSlot and TEMP_VALUE, E2-ML-5, E2-ML-8), which
+    TryPursuit's ``Battler_SelectedMove`` reads (battle_lib.c:2858-2868). The in-loop scan never
+    re-selects, so a raw turn-start state finds no FIGHT's move there."""
+    from nuzline.engine.order import with_selection
+
     acts = jnp.asarray(actions, jnp.int32)
+    state = with_selection(tables, state, acts)
     found, who = next_pursuer(
         tables, state, switcher, acts, choices_of(tables, state, acts), mask(*move_end)
     )

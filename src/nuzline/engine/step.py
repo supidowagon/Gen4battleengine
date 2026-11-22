@@ -3595,6 +3595,8 @@ def next_pursuer(
     The first battler in index order (``i = 0 .. maxBattlers - 1``, never the fastest), on the
     other side from ``switcher`` (:6904), that is not MOVE_END (``move_end``, ``bool[B]``: its
     action is over, it pursued, was dragged, entered or fainted) and passes ``_pursuer_ready``.
+    ``state`` is one the selection wrote (``with_selection``: ``_action_phase``'s prologue), as
+    every caller inside the action loop has; a turn-start caller goes through ``first_pursuer``.
     ``pursuer`` is a masked placeholder (an opposing battler) when none is found."""
     fmt = format_of(state)
     found = jnp.bool_(False)
@@ -3616,8 +3618,15 @@ def first_pursuer(
     """``(int32, bool)``: the battler ``BtlCmd_TryPursuit`` takes against ``switcher`` at the turn
     start, and whether there is one (fcm-verify (d)): ``next_pursuer`` with only the absent
     battlers MOVE_END (nothing has acted yet; bcp.c:330-333). None: the battler across from
-    ``switcher`` (a masked placeholder)."""
+    ``switcher`` (a masked placeholder). A turn-start entry point: it reads ``state`` as this
+    turn's selection leaves it (``with_selection``, idempotent on a selected turn-start state), so
+    TryPursuit's ``Battler_SelectedMove`` reads this turn's TEMP_VALUE (battle_lib.c:2858-2868,
+    E2-ML-8) on a raw turn-start state too, as ``replacement_power_mul`` does. ``next_pursuer``
+    itself runs inside the action loop on the state ``_action_phase`` selected and never
+    re-selects: mid-turn an Encore or a lock that landed would change what ``selection_temps``
+    gives."""
     fmt = format_of(state)
+    state = with_selection(tables, state, actions)
     absent = jnp.stack([absent_now(state, b) for b in range(fmt.B)])
     found, who = next_pursuer(tables, state, switcher, actions, choices, absent)
     return who, found
