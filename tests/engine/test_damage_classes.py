@@ -42,7 +42,7 @@ from tests.engine.test_enumerate import (
     order_actions,
     turn_children,
 )
-from tests.strategies import outcome_law_state
+from tests.strategies import outcome_law_state, settle_traces
 
 _SPE = Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
 
@@ -380,7 +380,8 @@ def input_state(draw, tables, names) -> BattleState:
         a["stats"][1, m1, _SPE] = a["stats"][0, m0, _SPE]
         a["stages"][:, Stat.SPE] = 0
         a["tailwind"][:] = 0
-    return BattleState(**{name: np.asarray(a[name]) for name in BattleState._fields})
+    s = BattleState(**{name: np.asarray(a[name]) for name in BattleState._fields})
+    return settle_traces(tables, s)  # the Trace invariant (STATE.md)
 
 
 @pytest.mark.slow
