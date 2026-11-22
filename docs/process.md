@@ -115,8 +115,14 @@ per day is the rate used for estimates.
   at once, naming the first disallowed ids: send them to the quick lane below. An allowed run
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
   20 GB), a message every 60 s, giving up after `NUZLINE_RAMGATE_TIMEOUT` minutes (default 30).
-  `--collect-only` is allowed without a wait. `NUZLINE_RAMGATE_ROM_GATE=1` lets a refused run
-  through, the RAM wait stays; only the merge gate's ROM-only run sets it. The pod sets
+  `--collect-only` is allowed without a wait. A ROM-only item weighs its figure in
+  `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`), else 20 GB.
+  The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
+  never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
+  engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a
+  wait and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` is a last
+  resort: it lets a refused run through, so engine tests run on the PC too; the RAM wait
+  stays. A wait that times out exits 4. The pod sets
   `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`), which skips the gate. `tools.kaizo.*` runs:
   `python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]` first (weight 8 or more prints
   POD, exit 3). Table builds: `python tools/ops/ramgate.py --build [--weight GB]` (default 20)

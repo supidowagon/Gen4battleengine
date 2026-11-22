@@ -68,7 +68,7 @@ PLAIN = item("tests/a/test_x.py::test_b", "tmp_path")  # weight 5
 ENG = item("tests/a/test_e.py::test_c")  # weight 3
 
 
-def gate(items, free=100.0, modules=NO_ENGINE, env=None, **kw):
+def gate(items, free=100.0, modules=NO_ENGINE, env=None, rom_table=None, **kw):
     clock = kw.pop("clock", None) or Clock()
     lines = kw.pop("lines", [])
     return rg.pytest_gate(
@@ -76,6 +76,7 @@ def gate(items, free=100.0, modules=NO_ENGINE, env=None, **kw):
         modules=modules,
         env={} if env is None else env,
         table=TABLE,
+        rom_table={} if rom_table is None else rom_table,
         free=free if callable(free) else (lambda: free),
         sleep=clock.sleep,
         clock=clock.now,
@@ -220,14 +221,27 @@ def test_gate_weight_is_the_heaviest_collected_item_not_the_args():
     assert gate([PLAIN], free=10.9, env=env)[0] == "TIMEOUT"
 
 
-def test_rom_only_items_weigh_twenty_until_measured(monkeypatch):
-    light = item("tests/b/test_y.py::t", "kaizo_inputs")  # table says 4
-    assert rg.item_weight(light, TABLE) == 20.0
-    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE) == 30.0
-    assert rg.item_weight(item("tests/b/test_y.py::t", "tmp_path"), TABLE) == 4.0
-    monkeypatch.setitem(rg.ROM_MEASURED, "tests/b/test_y.py::t", 7.0)
-    assert rg.item_weight(light, TABLE) == 7.0
-    assert gate([light], free=25.0, env={rg.ENV_TIMEOUT: "0"})[0] == "GO"  # 7 + 6 = 13
+def test_rom_only_items_weigh_twenty_until_measured():
+    light = item("tests/b/test_y.py::t[x]", "kaizo_inputs")  # pod table says 4
+    assert rg.item_weight(light, TABLE, {}) == 20.0
+    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}) == 30.0
+    assert rg.item_weight(item("tests/b/test_y.py::t", "tmp_path"), TABLE, {}) == 4.0
+    measured = {"tests/b/test_y.py": 7.0, "tests/b/test_y.py::t": 9.0}
+    assert rg.item_weight(light, TABLE, measured) == 9.0  # longest prefix wins
+    assert rg.item_weight(item("tests/b/test_y.py::u", "docs"), TABLE, measured) == 7.0
+    assert (
+        gate([light], free=25.0, rom_table={"tests/b/test_y.py": 7.0}, env={rg.ENV_TIMEOUT: "0"})[0]
+        == "GO"
+    )
+    assert gate([light], free=25.0, rom_table={}, env={rg.ENV_TIMEOUT: "0"})[0] == "TIMEOUT"
+
+
+def test_load_rom_weights(tmp_path):
+    f = tmp_path / "rom_weights.txt"
+    f.write_text("# c\ntests/a.py 7 local-measure-abc1234-20261122\n", encoding="utf-8")
+    assert rg.load_rom_weights(f) == {"tests/a.py": 7.0}
+    assert rg.load_rom_weights(tmp_path / "missing.txt") == {}
+    assert rg.ROM_WEIGHTS.parent.name == "day" and rg.ROM_WEIGHTS.name == "rom_weights.txt"
 
 
 def test_species_as_a_parametrize_name_is_not_the_fixture():
@@ -322,7 +336,8 @@ def test_blocker_blocks_engine_imports_only():
         assert b.find_spec(name) is None
 
 
-def test_blocker_in_a_fake_run_stops_the_import_and_is_removed():
+def test_blocker_in_a_fake_run_stops_the_import_and_is_removed(monkeypatch):
+    monkeypatch.delenv(rg.ENV_ENGINE_BLOCKED, raising=False)  # restored at teardown
     path = []
     b = rg.install_blocker(path)
     assert path == [b]
@@ -404,3 +419,41 @@ def test_the_dynamic_getfixturevalue_tests_are_listed():
         assert name in rg.ROM_ONLY_IDS
         file, _, test = name.partition("::")
         assert f"def {test}(" in (ROOT / file).read_text(encoding="utf-8")
+
+
+def _body_with_a_conditional_fetch(request, g):
+    return request.getfixturevalue("tables" if g else "kaizo_save_path")
+
+
+def test_a_conditional_getfixturevalue_counts_every_literal():
+    it = item("tests/x.py::t", "request")
+    it.function = _body_with_a_conditional_fetch
+    assert rg.is_rom_only(it)
+
+
+def test_timeout_message_names_the_env_and_the_weights_files():
+    verdict, msg = gate([PLAIN], free=1.0, env={rg.ENV_TIMEOUT: "0"})
+    assert verdict == "TIMEOUT"
+    assert rg.ENV_TIMEOUT in msg and "weights.txt" in msg and "rom_weights.txt" in msg
+
+
+def test_refusal_says_ids_never_a_file_path_and_rom_gate_is_a_last_resort():
+    _, msg = gate([ENG], modules=ENGINE)
+    assert "never a file path" in msg and "--rom-ids" in msg and "last resort" in msg
+
+
+def test_rom_ids_group_by_file_and_print_ready_commands():
+    a1 = item("tests/test_cli.py::test_a[x y]", "kaizo_save_path")
+    a2 = item("tests/test_cli.py::test_engine", "tmp_path")
+    a3 = item("tests/test_cli.py::test_b", "docs")
+    b1 = item("tests/kaizo/test_z.py::test_c", "pkcalc")
+    by_file = rg.rom_ids_by_file([a1, a2, a3, b1])
+    assert by_file == {
+        "tests/test_cli.py": ["tests/test_cli.py::test_a[x y]", "tests/test_cli.py::test_b"],
+        "tests/kaizo/test_z.py": ["tests/kaizo/test_z.py::test_c"],
+    }
+    lines = rg.rom_commands(by_file)
+    assert lines[0] == (
+        "python -m pytest -p no:cacheprovider -q 'tests/test_cli.py::test_a[x y]' tests/test_cli.py::test_b"
+    )
+    assert len(lines) == 2 and "test_engine" not in lines[0]

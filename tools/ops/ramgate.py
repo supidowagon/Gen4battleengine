@@ -8,16 +8,19 @@ longest key matching an id; no key = 20 GB). The root conftest.py applies it at 
 
 CLI, for `tools.kaizo.*` runs and table builds:
     python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate | --build]
+    python tools/ops/ramgate.py --rom-ids [file ...]   (collect only; one ready command per file)
 prints `GO <w>` (exit 0) after any wait, `POD <w>` (exit 3, weight >= 8), or `TIMEOUT <w>`
 (exit 4, after NUZLINE_RAMGATE_TIMEOUT minutes, default 30). --build (table
 builds, weight 20 unless --weight) never prints POD: it only waits for RAM.
 """
 
+import ast
 import importlib.abc
 import inspect
 import os
-import re
+import shlex
 import sys
+import textwrap
 import time
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -62,9 +65,9 @@ ROM_ONLY_IDS = frozenset(
 # Engine-free means none of these is imported once collection ends. `jax` is not listed:
 # tests/conftest.py imports it for every run under tests/.
 # A ROM-only item's pod weight was measured while it skipped, so a ROM-only item weighs
-# ROM_UNMEASURED_GB until it is measured locally. Local figures: {id: GB}, same keys as weights.txt.
+# ROM_UNMEASURED_GB until rom_weights.txt (same format as weights.txt, measured locally) has it.
 ROM_UNMEASURED_GB = 20.0
-ROM_MEASURED: dict[str, float] = {}
+ROM_WEIGHTS = ROOT / "tools" / "ops" / "day" / "rom_weights.txt"
 ENGINE_PREFIX = "nuzline.engine"
 MAX_LISTED = 5
 
@@ -106,14 +109,24 @@ def load_weights(path: str | Path = WEIGHTS) -> dict[str, float]:
     return out
 
 
-def weight(ident: str, table: Mapping[str, float]) -> float:
+def lookup(ident: str, table: Mapping[str, float]) -> float | None:
+    """Longest key that equals the id or that the id starts with plus "::", "[" or "/"."""
     ident = ident.replace("\\", "/")
     best: tuple[str, float] | None = None
     for key, gb in table.items():
         hit = ident == key or any(ident.startswith(key + s) for s in ("::", "[", "/"))
         if hit and (best is None or len(key) > len(best[0])):
             best = (key, gb)
-    return best[1] if best else DEFAULT_WEIGHT
+    return best[1] if best else None
+
+
+def weight(ident: str, table: Mapping[str, float]) -> float:
+    w = lookup(ident, table)
+    return DEFAULT_WEIGHT if w is None else w
+
+
+def load_rom_weights(path: str | Path = ROM_WEIGHTS) -> dict[str, float]:
+    return load_weights(path) if Path(path).exists() else {}
 
 
 def _relative(arg: str, rootdir: Path, invocation_dir: Path | None) -> str:
@@ -238,20 +251,23 @@ def _direct_params(item) -> set[str]:
     }
 
 
-_GETFIXTURE = re.compile(r"""getfixturevalue\(\s*["']([A-Za-z_0-9]+)["']""")
-
-
 def _fetches_rom_fixture(item) -> bool:
-    """The test body calls request.getfixturevalue("<a ROM fixture>") with a literal name. A name
-    held in a variable is invisible here: those tests are listed in ROM_ONLY_IDS."""
+    """The test body calls request.getfixturevalue(...) with a ROM fixture name among the string
+    literals of the call, so `getfixturevalue("a" if g else "b")` counts too. A name held in a
+    variable is invisible here: those tests are listed in ROM_ONLY_IDS."""
     func = getattr(item, "function", None)
     if func is None:
         return False
     try:
-        src = inspect.getsource(func)
-    except (OSError, TypeError):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    except (OSError, TypeError, SyntaxError):
         return False
-    return any(m in ROM_FIXTURES for m in _GETFIXTURE.findall(src))
+    for call in ast.walk(tree):
+        if isinstance(call, ast.Call) and getattr(call.func, "attr", None) == "getfixturevalue":
+            for node in ast.walk(call):
+                if isinstance(node, ast.Constant) and node.value in ROM_FIXTURES:
+                    return True
+    return False
 
 
 def is_rom_only(item) -> bool:
@@ -265,11 +281,13 @@ def is_rom_only(item) -> bool:
     )
 
 
-def item_weight(item, table: Mapping[str, float]) -> float:
-    """Pod weights come from runs where ROM-only tests skip: they weigh 20 GB until measured."""
+def item_weight(item, table: Mapping[str, float], rom_table: Mapping[str, float]) -> float:
+    """Pod weights come from runs where ROM-only tests skip: a ROM-only item weighs the figure of
+    rom_weights.txt (measured locally), else 20 GB or its pod weight if higher."""
     w = weight(item.nodeid, table)
     if is_rom_only(item):
-        return ROM_MEASURED.get(item.nodeid.split("[")[0], max(ROM_UNMEASURED_GB, w))
+        measured = lookup(item.nodeid, rom_table)
+        return measured if measured is not None else max(ROM_UNMEASURED_GB, w)
     return w
 
 
@@ -327,6 +345,7 @@ def pytest_gate(
     modules: Iterable[str] | None = None,
     env: Mapping[str, str] | None = None,
     table: Mapping[str, float] | None = None,
+    rom_table: Mapping[str, float] | None = None,
     free: Callable[[], float] = free_gb,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -351,10 +370,12 @@ def pytest_gate(
             f"ramgate: no engine tests on the PC: {len(bad)} selected test(s) are neither ROM-only "
             f"nor engine-free, first: {', '.join(bad[:MAX_LISTED])}{more}. "
             f"{QUICK_LANE_HINT[0].upper() + QUICK_LANE_HINT[1:]}. "
-            f"{ENV_ROM_GATE}=1 is for the merge gate's ROM-only run only."
+            "Pass ROM-only node ids, never a file path (python tools/ops/ramgate.py --rom-ids <file>). "
+            f"{ENV_ROM_GATE}=1 is a last resort: it also lets engine tests run on the PC."
         )
     table = load_weights() if table is None else table
-    w = max((item_weight(i, table) for i in items), default=0.0)
+    rom_table = load_rom_weights() if rom_table is None else rom_table
+    w = max((item_weight(i, table, rom_table) for i in items), default=0.0)
     try:
         timeout = float(env.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
     except ValueError:
@@ -362,9 +383,51 @@ def pytest_gate(
     if not wait_for_ram(w, timeout_min=timeout, free=free, sleep=sleep, clock=clock, say=say):
         return "TIMEOUT", (
             f"ramgate: free RAM stayed <= {RESERVE_GB + w:g} GB for {timeout:g} min "
-            f"(weight {w:g} GB). Run again later."
+            f"(weight {w:g} GB; {ENV_TIMEOUT} sets the minutes, weights in "
+            "tools/ops/day/pod/weights.txt and tools/ops/day/rom_weights.txt). Run again later."
         )
     return "GO", f"ramgate: GO weight {w:g} GB"
+
+
+def rom_ids_by_file(items: Iterable) -> dict[str, list[str]]:
+    """Node ids of the ROM-only items, grouped by test file, in collection order."""
+    out: dict[str, list[str]] = {}
+    for it in items:
+        if is_rom_only(it):
+            out.setdefault(it.nodeid.split("::")[0], []).append(it.nodeid)
+    return out
+
+
+def rom_commands(by_file: Mapping[str, list[str]]) -> list[str]:
+    """One ready command line per file: exact ids, never the file path (a path makes the run
+    mixed, so the engine blocker goes on and the file's engine tests would be refused)."""
+    return [
+        "python -m pytest -p no:cacheprovider -q " + " ".join(shlex.quote(i) for i in ids)
+        for ids in by_file.values()
+    ]
+
+
+def rom_ids(files: list[str], say: Callable[[str], None] = print) -> int:
+    """`--rom-ids [file ...]`: collect only (no wait), print the commands for the ROM-only tests."""
+    import pytest
+
+    class Collect:
+        def __init__(self):
+            self.items: list = []
+
+        def pytest_collection_modifyitems(self, items):
+            self.items = list(items)
+
+    plugin = Collect()
+    code = pytest.main(
+        ["--collect-only", "-q", "-p", "no:cacheprovider", *(files or ["tests"])], plugins=[plugin]
+    )
+    if code not in (0, 5):
+        say(f"ramgate: collection failed (pytest exit {int(code)})")
+        return 1
+    for line in rom_commands(rom_ids_by_file(plugin.items)):
+        say(line)
+    return 0
 
 
 def main(
@@ -376,6 +439,8 @@ def main(
     say: Callable[[str], None] = lambda m: print(m, flush=True),
 ) -> int:
     """CLI. `--build`: a table build cannot go to the pod, so it only waits for RAM."""
+    if "--rom-ids" in argv:
+        return rom_ids([a for a in argv if a != "--rom-ids"], say)
     rom_gate = "--rom-gate" in argv or _flag(os.environ, ENV_ROM_GATE)
     build = "--build" in argv
     argv = [a for a in argv if a not in ("--rom-gate", "--build")]

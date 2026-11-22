@@ -38,8 +38,10 @@ def pytest_collection_modifyitems(config, items):
         collect_only=bool(getattr(config.option, "collectonly", False)),
         say=lambda m: print(m, file=sys.stderr, flush=True),
     )
-    if verdict in ("REFUSE", "TIMEOUT"):
+    if verdict == "REFUSE":
         pytest.exit(msg, returncode=3)
+    if verdict == "TIMEOUT":
+        pytest.exit(msg, returncode=4)
     if verdict == "GO":
         # Engine-free run: an import of nuzline.engine at run time fails loudly (until unconfigure).
         if not config.option.collectonly and ramgate.blocker_wanted(items, os.environ):
