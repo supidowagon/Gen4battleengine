@@ -17,12 +17,15 @@ from nuzline.search.rows import take
 from tests.engine.helpers import roark_real_state
 from tests.search.fixtures import shinx_vs_cranidos
 
-# temp + output of one ``_laws`` call at LAWS_CHUNK (4096) rows, 1 device, measured
-# (``compile().memory_analysis()``, 395916d1 + this cap): temp 17,196,603,408 B + output
-# 493,122,616 B = 17,689,726,024 B. Uncapped (CHUNK = 16384 rows) it was 68.8 GB temp. E2's
-# sorted speed-tie test (enumerate.py ``pair_ties``, e2-d67) lowers the temp to ~2.17 MB per
-# row (~8.9 GB here); lower this bound then.
-LAWS_CALL_BYTES = 18_000_000_000
+# Bound by purpose: one capped ``_laws`` call (LAWS_CHUNK = 4096 rows, 1 device), temp + output,
+# must fit the owner's 32 GB PC beside the CLI's other programs. Measured
+# (``compile().memory_analysis()``): 395916d1 + the cap: temp 17,196,603,408 B + output
+# 493,122,616 B = 17.69 GB; 153dc32d (after H-1 7074311e, Future Sight's hit law per
+# post-Acid-Rain mask) and 01a94ae8 (train/wave3, + e2-lawsbag): temp 17,229,453,328 B + output
+# 953,185,336 B = 18,182,638,664 B = 18.18 GB. The bound moves when state or outcome fields are
+# added (the output is the OutcomeLaws fields per row). E2's sorted speed-tie test (D6-22,
+# ``pair_ties``) lowers the temp to ~2.17 MB per row, the total to ~9.5 GB: lower the bound then.
+LAWS_CALL_BYTES = 20_000_000_000
 
 
 def _call_size(monkeypatch, n: int) -> int:
