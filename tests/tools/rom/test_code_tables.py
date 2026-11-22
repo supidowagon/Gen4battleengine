@@ -141,10 +141,10 @@ def _pairs(*pairs):
     "raw",
     [
         b"",
-        _pairs((385, 27)) + b"\0\0",  # half a pair
-        _pairs((593, 27)),  # header past MAP_HEADER_COUNT
-        _pairs((385, 28)),  # method past the 28 evolution methods
-        _pairs((385, 27), (385, 25)),  # a header twice
+        _pairs((385, 26)) + b"\0\0",  # half a pair
+        _pairs((593, 26)),  # header past MAP_HEADER_COUNT
+        _pairs((385, 27)),  # method past the 27 methods (EVO_NONE 0 .. EVO_LEVEL_ICE_ROCK 26)
+        _pairs((385, 26), (385, 25)),  # a header twice
     ],
 )
 def test_map_evolution_methods_shape_errors(vanilla_files, symbols, monkeypatch, raw):
@@ -154,5 +154,6 @@ def test_map_evolution_methods_shape_errors(vanilla_files, symbols, monkeypatch,
 
 
 def test_map_evolution_methods_decode(vanilla_files, symbols, monkeypatch):
-    _patch(monkeypatch, {"mapEvolutionMethods$12747": _pairs((385, 27), (203, 26))})
-    assert map_evolution_methods(vanilla_files, symbols) == {385: 27, 203: 26}
+    # Route 217 -> Ice Rock (26), Eterna Forest -> Moss Rock (25): src/map_header.c:253-257.
+    _patch(monkeypatch, {"mapEvolutionMethods$12747": _pairs((385, 26), (203, 25))})
+    assert map_evolution_methods(vanilla_files, symbols) == {385: 26, 203: 25}
