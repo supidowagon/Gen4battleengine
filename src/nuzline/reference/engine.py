@@ -6379,6 +6379,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     # moveSlot[attacker] (ATTACKER_MOVE_SLOT, common.h:8): the selection's (bcp.c:445, :526),
     # never changed by an Encore takeover (bcp.c:1869-1873). Trump Card (battle_script.c:7237,
     # B13-15), TryGrudge (:6753), DecPPForPressure (battle_lib.c:7390-7395) read it (review 5).
+    # A reflected pass reads none (no reflectable move reads moveSlot): 0, as step's (review 6).
     turn.chosen_slot = 0 if reflect_pass else s.battlers[side].move_slot
     turn.gift = 0
     turn.fling = turn.fling_power = 0

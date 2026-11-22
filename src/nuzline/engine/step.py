@@ -1148,8 +1148,11 @@ def _use_move(
     # ATTACKER_MOVE_SLOT (common.h:8) is moveSlot[attacker], written only at selection
     # (bcp.c:445, :526; ``state.move_slot``, which ``_action_phase`` wrote, E2-ML-5); the Encore
     # takeover below (bcp.c:1868-1872) changes moveTemp, not moveSlot, so TryGrudge zeroes the
-    # selected slot (review b2-fix #2), a locked battler's last selected one.
-    chosen_slot = jnp.where(reflected_pass, slot, state.move_slot[side].astype(_I32))
+    # selected slot (review b2-fix #2), a locked battler's last selected one. A reflected pass
+    # (the Magic Coat holder's) reads none: no move with a moveSlot reader (Trump Card, Grudge,
+    # Counter, Mirror Coat, Metal Burst) has MOVE_FLAG_MAGIC_COAT (res/moves/*/data.json); 0
+    # there, as the reference's ``_Turn.chosen_slot`` (review 6 nit).
+    chosen_slot = jnp.where(reflected_pass, 0, state.move_slot[side].astype(_I32))
     user = state.active[side]
     # BattleControllerPlayer_FightCommand (bcp.c:1866-1883), B10-9: after Struggle, an encored
     # battler whose encored slot holds the encored move uses it (and that slot's PP: the no-PP

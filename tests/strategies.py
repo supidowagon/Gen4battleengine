@@ -2099,14 +2099,18 @@ def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     a["choice_lock"][side] = draw(st.sampled_from([0, 0, *moves]))
 
 
-def _draw_selection(draw, a: dict, b: int, moves) -> None:
+def _draw_selection(draw, a: dict, b: int, moves, p: int) -> None:
     """Battler ``b``'s carried selection values (review 5): ``move_slot`` (E2-ML-5,
     ``BattleContext.moveSlot``) one of the slots its active Pokemon's moveset (``moves``) holds, or
     0; ``selected_temp`` (E2-ML-8, ``battlerActions[b][TEMP_VALUE]``) 0, ``1 + a slot it holds``
-    (a FIGHT) or a party slot 0-5 (a switch, bcp.c:595; 5 reads ``moves[4]``, the IV word)."""
+    (a FIGHT) or a slot of its party ``p`` (a switch, bcp.c:595, which picks only a party member;
+    5 reads ``moves[4]``, the IV word), bounded by the party size (review 6)."""
     held = [k for k in range(4) if int(moves[k])]
+    members = int(np.count_nonzero(np.asarray(a["species"][p])))
     a["move_slot"][b] = draw(st.sampled_from([0, *held]))
-    a["selected_temp"][b] = draw(st.sampled_from([0, 0, *(k + 1 for k in held), *range(6)]))
+    a["selected_temp"][b] = draw(
+        st.sampled_from([0, 0, *(k + 1 for k in held), *range(max(members, 1))])
+    )
 
 
 def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
@@ -2278,7 +2282,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_klutz(draw, tables, a, side, active, names)
         _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
-        _draw_selection(draw, a, side, a["moves"][side, active])
+        _draw_selection(draw, a, side, a["moves"][side, active], side)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.
     _share_with_sleep_talk(draw, tables, a, names)
@@ -2675,7 +2679,7 @@ def _draw_battler(draw, tables: Tables, a: dict, fmt: Format, b: int) -> None:
     a["disabled_move"][b] = disabled
     turns = draw(st.integers(0, _DISABLE_MAX))
     a["disable_turns"][b] = turns if disabled else 0
-    _draw_selection(draw, a, b, a["moves"][p, active])
+    _draw_selection(draw, a, b, a["moves"][p, active], p)
     if b < 2:
         a["stealth_rock"][side] = draw(st.integers(0, 1))
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
