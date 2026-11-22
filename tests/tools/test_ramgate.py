@@ -1088,6 +1088,24 @@ def test_the_measuring_harness_figures_and_reads_rss():
     assert 'kind="measure"' in text and "rg.ENV_NO_WAIT" in text
 
 
+def test_the_measuring_harness_gives_a_figure_only_when_every_id_ran():
+    spec = importlib.util.spec_from_file_location("ramgate_measure_w", ROOT / "tools/ops/ramgate_measure.py")
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)
+
+    def line(rc, summary, figure=4):
+        return harness.weight_line("tests/a.py", {"rc": rc, "summary": summary, "figure": figure}, "abc1234-20261122")
+
+    assert line(0, "3 passed in 1.0s") == "tests/a.py 4 local-measure-abc1234-20261122"
+    assert line(0, "2 passed, 1 deselected in 1.0s") == "tests/a.py 4 local-measure-abc1234-20261122"
+    assert line(0, "2 passed, 1 skipped in 1.0s") == "tests/a.py 14 unmeasured-skipped-abc1234-20261122"
+    assert line(0, "3 skipped in 0.1s") == "tests/a.py 14 unmeasured-skipped-abc1234-20261122"
+    assert line(0, ["no summary"]) == "tests/a.py 14 unmeasured-skipped-abc1234-20261122"
+    assert line(1, "1 failed, 2 passed in 1.0s") == "tests/a.py 14 unmeasured-failed-rc1-abc1234-20261122"
+    assert line(5, "no tests ran in 0.1s") == "tests/a.py 14 unmeasured-failed-rc5-abc1234-20261122"
+    assert line("killed", "pod-measure needed", 20) == "tests/a.py 20 pod-measure-needed"
+
+
 def test_free_gb_reads_this_machine():
     assert 0.0 < rg.free_gb() < 10_000.0
 
