@@ -357,6 +357,7 @@ tests/tools/test_extract_trainers.py 6 e3-pfix2-5a43e21
 tests/tools/test_offsite.py 6 cachevol-c9e9a57
 tests/tools/test_pod_gate.py 6 ops-merged-27db518
 tests/tools/test_pod_weights.py 6 gatefix-merged-72de30b
+tests/tools/test_quick_lane.py 6 ops-rg-estimate-as-sibling-tools-tests
 tests/tools/test_ramgate.py 6 ops-rg-estimate-as-sibling-tools-tests
 tests/tools/test_snap_compare.py 6 e2-d67w1-4f3f58f
 tests/tools/test_snap_parallel.py 6 cachevol-c9e9a57
