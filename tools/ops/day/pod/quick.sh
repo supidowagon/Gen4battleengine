@@ -209,7 +209,7 @@ while :; do
   if [ "$d" = start ]; then
     rm -f "$O/pending.txt"
     # The unit: its own process group (setsid, as runner.sh starts unit.sh), both locks closed.
-    setsid bash -c 'cd "$1" || exit 1; shift; exec uv run --frozen pytest -q -rfEs -p no:cacheprovider "$@"' \
+    setsid bash -c 'cd "$1" || exit 1; shift; export NUZLINE_ON_POD=1; exec uv run --frozen pytest -q -rfEs -p no:cacheprovider "$@"' \
       quick-unit "$LR" "${IDS[@]}" < /dev/null > "$D/quick.pytest.log" 2>&1 8>&- 9>&- &
     QPG=$!; echo "$QPG" > "$O/run/.q.tmp" && mv -f "$O/run/.q.tmp" "$O/run/q"   # visible to every podgate from here
     flock -u 8; break

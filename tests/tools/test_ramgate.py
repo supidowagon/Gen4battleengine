@@ -322,7 +322,7 @@ def test_cli_build_waits_for_ram():
     assert not any(m.startswith("POD") for m in out)
 
 
-@pytest.mark.parametrize("name", ["unit.sh", "setup.sh"])
+@pytest.mark.parametrize("name", ["unit.sh", "setup.sh", "quick.sh"])
 def test_pod_entry_points_export_the_pod_marker(name):
     text = (ROOT / "tools/ops/day/pod" / name).read_text(encoding="utf-8")
     assert rg.ENV_ON_POD + "=1" in text
