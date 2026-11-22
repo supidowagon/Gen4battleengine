@@ -2099,6 +2099,16 @@ def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     a["choice_lock"][side] = draw(st.sampled_from([0, 0, *moves]))
 
 
+def _draw_selection(draw, a: dict, b: int, moves) -> None:
+    """Battler ``b``'s carried selection values (review 5): ``move_slot`` (E2-ML-5,
+    ``BattleContext.moveSlot``) one of the slots its active Pokemon's moveset (``moves``) holds, or
+    0; ``selected_temp`` (E2-ML-8, ``battlerActions[b][TEMP_VALUE]``) 0, ``1 + a slot it holds``
+    (a FIGHT) or a party slot 0-5 (a switch, bcp.c:595; 5 reads ``moves[4]``, the IV word)."""
+    held = [k for k in range(4) if int(moves[k])]
+    a["move_slot"][b] = draw(st.sampled_from([0, *held]))
+    a["selected_temp"][b] = draw(st.sampled_from([0, 0, *(k + 1 for k in held), *range(6)]))
+
+
 def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe lock the active Pokemon into a Bide or Rollout / Ice Ball it knows (not while
     it sleeps: ``step`` unlocks a sleeper), with the matching hidden counters: Bide's
@@ -2162,7 +2172,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     Pursuit in a slot (``_draw_pursuit``), a Choice item, Life Orb or other battle item
     (``_draw_battle_item``), a species item's holder (``_draw_species_item``), a batch-2 item
     with what makes it act (``_draw_batch2_item``), a Choice lock
-    (``_draw_choice_lock``),
+    (``_draw_choice_lock``), the carried ``move_slot`` and ``selected_temp`` (``_draw_selection``),
     Water Sport, Foresight, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather,
     the turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
     one of the foe's active's moves) and ``last_move`` (none, one of its own moves or
@@ -2268,6 +2278,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_klutz(draw, tables, a, side, active, names)
         _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
+        _draw_selection(draw, a, side, a["moves"][side, active])
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.
     _share_with_sleep_talk(draw, tables, a, names)
@@ -2644,8 +2655,9 @@ def _live_lead(draw, tables: Tables, spec: PokemonSpec) -> PokemonSpec:
 def _draw_battler(draw, tables: Tables, a: dict, fmt: Format, b: int) -> None:
     """Battler ``b``'s own draws on the arrays ``a`` of a ``fmt`` state: its active Pokemon's
     stat stages, confusion, Taunt, ``last_move`` (none, one of its own moves or Struggle),
-    Disable (a move of the active and its turns) and ``fake_out_turn`` (0 to ``turn + 1``), each
-    in the battler's own [B] slot; and, for the battlers 0 and 1 (one per side), the side's
+    Disable (a move of the active and its turns), ``fake_out_turn`` (0 to ``turn + 1``) and the
+    carried selection values (``_draw_selection``), each in the battler's own [B] slot; and, for
+    the battlers 0 and 1 (one per side), the side's
     Reflect, Light Screen, Tailwind and Stealth Rock in the side's [2] slot (``side_of(b)``).
     The party-slot draws (PP, status counters) are ``four_state``'s, over every slot of every
     party."""
@@ -2663,6 +2675,7 @@ def _draw_battler(draw, tables: Tables, a: dict, fmt: Format, b: int) -> None:
     a["disabled_move"][b] = disabled
     turns = draw(st.integers(0, _DISABLE_MAX))
     a["disable_turns"][b] = turns if disabled else 0
+    _draw_selection(draw, a, b, a["moves"][p, active])
     if b < 2:
         a["stealth_rock"][side] = draw(st.integers(0, 1))
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
