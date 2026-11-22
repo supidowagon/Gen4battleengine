@@ -18,8 +18,10 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
     touch E2's mechanic batches.
   A stream never pushes, never creates billable resources and never writes to `main`.
 - **Pods in working hours:** one test pod per active stream plus one for captures and
-  compares (section 5). Outside working hours delete every pod with nothing running or
-  queued.
+  compares (section 5). During a merge wave up to six; back to three or four when the merge
+  line clears. Outside working hours delete every pod with nothing running or queued.
+- **Run dispatcher.** A Sonnet session that sends, waits on and collects every pod run of the
+  streams and the managing session's gate runs (section 5, Run dispatcher session).
 - **Subagents.** Each batch runs the pipeline in section 2.
 
 ## 2. A batch, start to merge
@@ -60,9 +62,50 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    inside the diff range and is checked against the compare log). Verdict: MERGE or FIX. When
    only tests or docs changed since an already-reviewed commit, a diff stat of `src` and
    `tools` replaces the review.
-9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, then
+9. On MERGE: `git merge --ff-only <tip>` into `main` (the tip already contains `main`; a
+   train branch already holds the `--no-ff` merges), `git push origin main`, confirm with
+   `git ls-remote origin main`, then
    `bash tools/ops/offsite.sh` (section 12, Off-site copy), send the stream the new tip and the
    non-blocking notes, and tell the user in at most three lines.
+
+**Gate rules (every batch and every merge).**
+- A known gap that departs from the decomp is a must-fix (`docs/decisions.md` section 3),
+  also when the stream calls it unobservable.
+- The merge-candidate message names the batch's code review file
+  (`_scratch/<stream>/<name>_review_<n>.md`; a merge-gate review is
+  `_scratch/manager/review_<name>_<sha8>.md`). No file, no gate run.
+  (22 Nov 2026: a batch's code went unreviewed; only its sheets had been reviewed.)
+- On every "ready" report the managing session runs `git merge-tree --write-tree main <tip>`
+  and `git merge-base --is-ancestor main <tip>`. Conflicts surface before the review. A green
+  gate on an old base is not a merge gate: when `main` gains engine changes, the stream merges
+  `main` and reruns its gate.
+- A stream sends no tip that has not passed one quick-lane run of
+  `tests/data/test_game_constants.py` (it loads both games; at most 5 ids; section 5, Quick
+  lane).
+- A merge-gate review that runs no tests never replaces the pod run.
+- Every merge gate runs every test that skips on the pod for missing inputs, locally by exact
+  node ids (`_scratch/e3/rom_only_tests.md`), not only `tests/test_cli.py` (section 5,
+  ROM-only run of a merge gate; exception: the skip rule there).
+- An extract output change and its ROM reader change land together, with the ROM-only tests
+  run before the candidate is sent.
+- No flat fact list that depends on fight order or live count (heal, leave, pc gaps) beside
+  `live_next`.
+- A closing snapshot compare names generator drift whenever the batch touches a function that
+  `tests/strategies.py` calls (drawn inputs include engine output).
+
+**Outcome-law changes (`enumerate.py`, `outcome.py`).**
+- A soundness fix widens a law mask only where its condition holds. Rows that turn
+  SamplingOnly where the base was exact are a must-fix. The branch reports the exact rows lost
+  at its tip.
+- Before a laws merge candidate: the deep soundness sweep (`test_mask_sound` and
+  `test_mask_sound_with_a_trainer_item`, explore profile, 15 seeds each: 2 nodes x 15 seeds = 30
+  processes; DAYBOX.md, Soundness sweep). The nightly runs it on `main`.
+- Every merge candidate that touches `enumerate.py` or `outcome.py` lists
+  `tests/engine/test_enumerate.py::test_mask_sound 1 A` and
+  `::test_mask_sound_with_a_trainer_item 1 A`.
+- A candidate blocked by open classes is split: the part strictly sounder than `main` lands,
+  with the open classes listed as must-fix in the ledger; the rest follows as its own
+  candidate (candidates A and B, 22 Nov 2026).
 
 **Merge train.** When two or more batches are expected to be merge-ready within one gate run
 of each other (about 3 hours), the managing session names a train order.
@@ -74,18 +117,32 @@ of each other (about 3 hours), the managing session names a train order.
 - The pod work runs once, on the last tip: one targeted run with the union of the lists
   and the default mark, one `MARK='fullset'` run (DAYBOX.md, Merge candidate), one snapshot
   compare against the `main` capture with the union `--allow-new` list (section 5).
-- On green and MERGE from every review, the managing session merges the last tip
-  `--no-ff` (it contains the others) and pushes once.
+- On green and MERGE from every review, the managing session moves `main` to the last tip
+  (it contains the others) and pushes once.
 - A failure goes to the stream that owns the failing test's area. If it cannot be
   attributed and fixed in one fix round, the train is dropped and the batches merge one by
   one.
 - A batch that is ready alone and has no partner within one gate run merges alone.
+- The managing session builds the train in its own worktree: `git checkout -B train/<name>
+  <first tip>`, then `git merge --no-ff` of each later member. Never rebase. A train branch
+  already copied off-site is never rebuilt under its old name: use a new name
+  (`train/<name>2`), or `offsite.sh` rejects it.
+- Ops, tools and docs branches gate on `main` directly, outside the train: review agent, a
+  small gate (the four guards, `tests/test_differential.py 1 A` and the own tool tests of the
+  branch), `git merge --ff-only`.
+  When two such branches touch the same files, the second to land merges `main` and reruns its
+  small gate.
 
 ## 3. Tests
 
 - **Per batch and per merge:** CLAUDE.md, Batches and Merges.
-- **Nightly:** the fast tier on `main`'s tip on the nightly pod (section 5). Tests that need
-  the ROM, saves, the calc archive or the docs sheet skip there; run them locally afterwards.
+- **Nightly:** the fast tier on `main`'s tip on a day volume pod (section 5), then the
+  soundness sweep (DAYBOX.md, Soundness sweep). Tests that need the ROM, saves, the calc
+  archive or the docs sheet skip there; run them locally afterwards (ROM-only ids only).
+- **`slow` marks** only for a warm call-phase time over 60 s, never for a cold-compile wall.
+- **User-facing CLI commands** must fit the owner's 32 GB PC. Check the measured peak of the
+  `tests/test_cli.py` prep and solve tests after any change that moves laws or search memory
+  (22 Nov 2026: a small prep needed 31.9 GiB).
 - **Slow tier:** after each merge wave (the merges of one day), at most once a day, the
   managing session runs `-m slow` on `main`'s tip on the test pod: one run agent,
   `MARK='slow' bash tools/ops/day/pack.sh <tip> <tables> slow-<yyyymmdd>-<short tip> <list>`
@@ -102,26 +159,127 @@ of each other (about 3 hours), the managing session names a train order.
 
 `tools/kaizo/backlog.py <out.md>` (needs built Kaizo tables) counts, per split, the battles
 that are fully playable and the mechanic groups still missing, for the opponent side and for
-the player's side. At `aaf2ef7`: 98 of 387 battles playable; 158 missing groups on the
-opponent side plus 35 player-only. Re-run it after each merge. The drop in missing groups
-per day is the rate used for estimates.
+the player's side. At `d2ec0fc1` (22 Nov 2026, `docs/kaizo/mechanics_backlog.md`): 234 of
+387 battles playable; 47 missing groups on the opponent side plus 1 player-only. Re-run it
+after each merge that changes the engine or tables. The drop in missing groups per day is the
+rate used for estimates.
 
 ## 5. Rented test pods (Runpod CPU)
 
+- **No engine tests on the PC.** The root `conftest.py` (`tools/ops/ramgate.py`) enforces it
+  after collection. A local pytest run is allowed only when every selected test is ROM-only (its
+  fixture closure holds a local-input fixture, `ROM_FIXTURES` in `ramgate.py`) or when
+  `nuzline.engine` was not imported by the collected modules (a tool test). Any other run exits
+  at once, naming the first disallowed ids: send them to the quick lane below. The tests listed
+  in `tools/ops/day/pod_only.txt` (JAX compiles without the engine: `tests/test_spike_step.py`,
+  `tests/test_jaxcache.py`; manager ruling 22 Nov 2026) are refused on the PC the same way,
+  whatever they import. `-n` / `--dist`
+  (pytest-xdist) is refused on the PC at configure time. A pytest on the PC that never loaded
+  the gate (`--noconftest`, `--confcutdir tests`, also through `PYTEST_ADDOPTS`) cannot import
+  the engine: `src/nuzline/engine/__init__.py` raises ImportError when `_pytest` is loaded on
+  Windows and the gate module is not. Its four subprocess tests in `tests/tools/test_ramgate.py`
+  (`test_a_pytest_without_the_gate_cannot_import_the_engine`) are win32-only, so no pod run
+  covers them: run `tests/tools/test_ramgate.py` locally once per change to
+  `src/nuzline/engine/__init__.py` or the root `conftest.py`. An allowed run
+  waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
+  6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, then takes the machine lock
+  `<main checkout>/_scratch/ramgate.lock`: an OS lock on that file (`msvcrt.locking` on
+  Windows, `fcntl.flock` elsewhere) held until the run ends, so one local run goes at a time.
+  The kernel frees it the moment its holder ends, however it ends (a killed tool, the watchdog's
+  hard exit, a power cut): there is no stale lock. The file stays; its line `<pid> <kind>
+  <start time>` only names the holder, and a child process of the holder (pid and start time
+  of the ancestor both matching, every parent link start-time checked, so a reused pid never
+  counts) runs under its hold. Waiting on the lock (polled every 10 s, the message names the
+  holder pid and the path) counts toward the same `NUZLINE_RAMGATE_TIMEOUT` minutes (default
+  30). To clear a stuck lock, end the named process if it is no pytest or build of yours;
+  deleting the file frees nothing.
+  `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
+  `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
+  weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured
+  ROM-only item waits for more than 20 GB free. Local measuring pass:
+  `python tools/ops/ramgate_measure.py IDS_FILE OUT_JSON [--skip SLOW_IDS_FILE]` (its header
+  has the details): it holds the machine lock as kind `measure` for the whole pass, runs one
+  file's ROM-only ids per process, strictly serial, each started when free RAM is above 20 GB;
+  it polls every 0.5 s and kills that pytest tree when free RAM drops below 4 GB (the file is
+  then marked `pod-measure needed`, weight 20); figure = ceil(max(1.25 m, m + 2)) GB of the
+  peak summed RSS m of the tree, tag `local-measure-<sha7>-<yyyymmdd>`. Every gated run (and
+  every `--build` command) has a watchdog thread too: below 4 GB free it kills the run's child
+  processes and stops the run (KeyboardInterrupt, then a hard exit after 30 s), exit 15.
+  The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
+  never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
+  engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a
+  wait and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` (or
+  `--rom-gate`) concerns ROM-only ids only: it lifts the POD cut-off (weight 8 or more) of the
+  `ramgate.py <ids>` check; the pytest gate ignores it, so it lets no refused run through.
+  A refused run exits 13, a wait that times out 14, an unreadable free-RAM figure 16
+  (apart from pytest's own codes 0-5); a `NUZLINE_RAMGATE_TIMEOUT` that is not a finite number
+  of 0 or more counts as 30. `NUZLINE_RAMGATE_NO_WAIT=1` turns the RAM wait off (the
+  refusal stays) only while a live ancestor holds the machine lock as the measuring harness
+  (kind `measure`), which checks free RAM and runs the watchdog itself; otherwise it is ignored
+  with a note. A pytest started by a test of a gated run is part of that run: the gate sets
+  `NUZLINE_RAMGATE_DONE=<its pid>` and skips a run whose live ancestor (or itself, links
+  start-time checked) has that pid; any other value is ignored. The pod sets
+  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`, `quick.sh`, `sweep.sh`;
+  `tests/tools/test_ramgate.py` fails for any script under `tools/ops/day/pod/` that starts
+  pytest, or python importing the engine, without it in effect), which skips the gate on
+  Linux only (on the Windows PC it is ignored). Local jobs that are not
+  pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
+  waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
+  more than 20 GB free) and the machine lock, runs the command under the lock and exits with
+  its code; it never prints POD. On the pod (`NUZLINE_ON_POD=1`) or off Windows it runs the
+  command directly: no wait, no lock, no watchdog. `tools/ops/build_tables.sh` wraps its build
+  steps in it itself.
+  A `tools.kaizo.*` run (it needs the ROM or the docs sheet, so it cannot go to the pod):
+  `python tools/ops/ramgate.py --build [--weight GB] -- python -m tools.kaizo.<module> ...`.
+  An agent's brief makes it wait on the gate (or `--build`), never print free RAM and start
+  anyway. Measured local weights: `tools/ops/day/rom_weights.txt` (most ROM-only files 3 GB,
+  unmeasured ones 14). A table build was measured at about 0.6 GB peak; `--build` weighs it
+  14 until `weights.txt` has a `tools/build_tables.py` line. Engine work outside pytest on the
+  PC (`tools.differential`, `snap_compare`, benchmarks, ad hoc scripts) has no gate: it goes
+  to the pod.
+- **ROM-only run of a merge gate (PC).** Skip it only when the diff touches no ROM-reading
+  code or test (`tools/ops`, `tests/tools` outside `tests/tools/rom`, docs).
+  1. Worktree at the tip: the managing session's `_scratch/manager/wt_train`,
+     `git -C <wt> checkout --detach <tip>`. When it is missing:
+     `git worktree add --detach _scratch/manager/wt_train <tip>`, copy `data/local.toml` in,
+     decomp link as DAYBOX.md, Collect step 3.4. Then `bash tools/ops/build_tables.sh --here`
+     there.
+  2. Copy the template folder `_scratch/manager/romonly_batchi/` (`gen.py`, `driver.sh`,
+     `run.ps1`, `waitram.sh`) to `_scratch/manager/romonly_<name>/`, replace `romonly_batchi`
+     in the files, run `python gen.py` (exact node ids from `_scratch/e3/rom_only_tests.md`,
+     one file's ids per process, slow ids left out), then `bash driver.sh` in the background;
+     one Sonnet agent waits on it.
+  These helpers are git-ignored local files on the owner's PC (local helpers below).
+  3. Read every `*.log` last line: all `passed`; a skip only for an input the PC lacks
+     (`kaizo_save_probe`). Write the result to `_scratch/manager/romonly_<name>.md`.
+- **Agents kill only processes they started**, by recorded pid, never by name pattern
+  (22 Nov 2026: a stream's agent killed stray `pytest.main` processes that may have been
+  another session's run).
+- **Quick lane (engine tests, a few ids):** send the managing session a request of at most 5
+  test ids at your tip; run name `q-<stream>-<sha7>`, ids file one per line. It starts at once
+  on the pod with the most memory room, ahead of in-work lists; it waits only on the memory
+  gate (up to 900 s, DAYBOX.md, Quick lane). The result you get back is pass or fail plus
+  the first failure lines. Larger lists go on the normal pod list. A quick pass is never a
+  substitute for a gate run (DAYBOX.md, Quick lane). While streams work, one pod is kept for
+  the lane.
 - **What may leave the PC:** source code at a commit (`git archive`) and the built tables
   listed by `TABLE_ALLOW` in `tools/ops/common.sh`. Never the ROM, save files, the calc
   archive or its extraction, the docs sheet or its extraction, or anything personal.
-- **Nightly:** brief `tools/ops/nightly_brief.md`. Run it on `ci-day-big` when that pod is
-  up; when its run ends the nightly
-  agent deletes `ci-day-big` if no other run is active on it. Otherwise it rents `ci-nightly`:
-  at most $6 per run; the nightly agent itself deletes it within 4.5 hours of creation.
-  A tip that equals the last nightly's tip does not run again. A `ci-nightly` rented in the
-  network volume's data center mounts the volume (Network volume below).
+- **Nightly:** brief `tools/ops/nightly_brief.md`. Run it on a free day volume pod
+  (`ci-day-big` with the network volume) that holds no push gate; when its run ends the
+  nightly agent deletes that pod if no other run is active on it. Only when none is free it
+  rents `ci-nightly`: at most $6 per run; the nightly agent itself deletes it within 4.5 hours
+  of creation. The fast tier no longer fits a 128 GB pod in 4.5 h (22 Nov 2026: 208 of 317
+  units). A tip that equals the last nightly's tip does not run again. A `ci-nightly` rented
+  in the network volume's data center mounts the volume (Network volume below).
 - **Scheduled tasks, not session timers.** The nightly dispatch (22:07) and the 30-minute
   stall check run as scheduled tasks, which survive a restart or clear of the managing
-  session; they are not session timers (owner, 21 Nov 2026, `docs/decisions.md`). Until they
-  are set up, at the next restart of the managing session, the session prompts of section 7
-  stand in for them and are re-created after every restart.
+  session; they are not session timers (owner, 21 Nov 2026, `docs/decisions.md`). A new
+  managing session first checks `list_scheduled_tasks` and creates what is missing: the
+  nightly task daily at 22:07 local, whose prompt names the project folder, the brief, the
+  skip rule, the day volume pods and the state file `_scratch/handoff/MANAGER.md` for its
+  one-line result. Where no scheduled-task tool exists, the session prompts of section 7
+  stand in for them and are re-created after every restart (list them first, no duplicate).
 - **Test pod (`ci-day-big`):** 32 vCPU CPU, no daily limit, for every stream test run, in one
   of two shapes, each with its limits passed in the exec-pod body's `env`:
   - 128 GB (`cpu3g`): `GATE_GB` 88, `MAXP` 10, `KILL_GB` 118 (the runner's defaults).
@@ -136,13 +294,14 @@ per day is the rate used for estimates.
     packed with older pod scripts (another default) gets it too. This is the one SPACING
     rule; DAYBOX.md and `tools/ops/nightly_brief.md` point here.
   Several test pods may be up at once (approval: `docs/decisions.md`, section 5). In working
-  hours: one pod per active stream plus one capture pod (section 1). Pod N's id
-  is in `_scratch/rent/day<N>/POD_ID_<N>`; pod 1's is in `_scratch/rent/POD_ID`. Each pod
+  hours: one pod per active stream plus one capture pod (section 1); during a merge wave up to
+  six, back to three or four when the merge line clears. Pod N's id is in
+  `_scratch/rent/day<N>/POD_ID_<N>` (pod 1's in `_scratch/rent/POD_ID`); a new pod takes the
+  next unused N; a deleted pod's id file is renamed with the suffix `.deleted`. Each pod
   gets its own pod check before every pack (DAYBOX.md, Send a run step 3).
-  The capture pod is pod 1 (id in `_scratch/rent/POD_ID`), rented like any test pod
-  (`ci-day-big`, Bring-up in DAYBOX.md) in the 256 GB shape, so `snap.sh` runs with
-  `SNAP_GATE_GB` 176 (on a 128 GB pod: 88). When pod 1 is down, the managing session names
-  another up pod the capture pod and writes it in `_scratch/handoff/MANAGER.md`. For the
+  The capture pod is a test pod with the network volume (`ci-day-big`, Bring-up in DAYBOX.md)
+  in the 256 GB shape, so `snap.sh` runs with `SNAP_GATE_GB` 176 (on a 128 GB pod: 88). The
+  managing session names it and writes it in `_scratch/handoff/MANAGER.md`. For the
   no-idle-pods rule a pending compare counts as queued: a pod holding the capture a sent or
   expected merge candidate compares against is not idle (`docs/decisions.md`, section 5).
   Read the shape before sending a body: exec
@@ -156,7 +315,12 @@ per day is the rate used for estimates.
   1048576 or more. A pod with less (65530 aborts JAX units with rc 134) is deleted and another
   rented. The pod check (DAYBOX.md, Send a run step 3) refuses such a pod
   (`PODCHECK REFUSED vm.max_map_count=<value>`) and a snapshot job stops at once
-  (`MAP_COUNT_LOW` in `times.txt`). Keep it up while streams work; delete it when
+  (`MAP_COUNT_LOW` in `times.txt`). Read the ssh user suffix in the create-pod answer: known
+  faulty EU-RO-1 hosts (`vm.max_map_count` 65530) are listed in the managing session's state
+  file (`_scratch/handoff/MANAGER_START.md`, pod section), not here; a pod on one is deleted
+  at once. Placeholder trick (needs a free slot under the six-pod ceiling): create a
+  placeholder that takes the faulty host, create the real pod, delete the placeholder
+  (DAYBOX.md, Bring-up step 3). Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
 - **Network volume.** One 30 GB STANDARD network volume (owner, 21 Nov 2026,
@@ -176,7 +340,10 @@ per day is the rate used for estimates.
   are compiled CPU programs, JAX's cache key does not hold the CPU, and XLA compiles for the
   host's target features and LLVM's host CPU name, which LLVM derives from those fields; the
   LLVM side is not re-checked in this repo, `tools/ops/day/pod/cache_sync.sh` header), so a pod
-  seeds only programs compiled on a CPU of its tag. The low-space warning compares `du` of the
+  seeds only programs compiled on a CPU of its tag: the CPU model splits the cache, so only
+  pods of one host tag share a warm cache (22 Nov 2026: the differential took 1832 s on a
+  warm pod against 4112 s cold). Gates on volume pods use the shared cache; a pod of a new
+  tag fills its own folder on its first gates. The low-space warning compares `du` of the
   volume in bytes with its size (30 GB of 10^9 bytes; `df` of the mount shows the whole storage
   cluster) and fires under 3 GB left. Every volume call
   runs under a timeout (900 s until the road test measures them; then at least three times the
@@ -192,7 +359,39 @@ per day is the rate used for estimates.
   background, and reports once: the final result with counts, time and peak memory per
   file, or the first failure when the brief asked for `--until first-failure`. No polling
   turns: the agent does not call `status.sh` while `wait.sh` runs. Only committed code runs
-  on the pod.
+  on the pod: `pack.sh` / `snap.sh` payloads of a commit, or a committed script step at the
+  sha under test (Script step below). Nothing ad hoc, nothing typed into an exec body, nothing
+  sent from the PC by hand, also no read-only tally script (ruling 22 Nov 2026).
+- **List size.** The number after a list line is ids per chunk, not units. Size a list in
+  units with `python _scratch/manager/unitcount.py <list> [default|fullset]` (a local helper,
+  below). A merge-candidate list targets about 120 units; the dispatcher refuses one over
+  150. Read every run's unit count when the run is announced.
+- **Push gate.** A run that gates a push of `main` gets a pod to itself or the first claim
+  (the memory reserve lets a low-priority run block it). It is split across the pods with room
+  from the start: parts `<run>`, `<run>-2`, `<run>-3`, ..., `tests/test_differential.py 1 A` as
+  its own part. The gate is green when the union of its parts covers every unit with no
+  failure.
+- **Shell-level ops tests** (`tests/tools` tests that run pod shell scripts) run under WSL in
+  a non-reaping PID namespace (`_scratch/offsite/wsl_run_ops_noreap.sh`, a local helper,
+  below) before the pod send, as on the pod (PID 1 never reaps). A zombie counts as gone.
+- **Local helpers (git-ignored, on the owner's PC only).** `tools/ops/offsite.sh` copies
+  `_scratch/manager`, `_scratch/e<n>`, `_scratch/handoff` and `_scratch/rent` to the private
+  off-site remote; `_scratch/offsite` is not copied. Rewrite a lost one from its line:
+  - `_scratch/manager/unitcount.py <list> [default|fullset]`: estimates a pod list's units
+    from the `collected.txt` counts of past runs in `_scratch/rent/out/*/results/` for that
+    mark; prints units, ids and source per line, then the total.
+  - `_scratch/manager/romonly_batchi/`: `gen.py` reads the "Per test" ids of
+    `rom_only_tests.md`, leaves out slow ids and writes one `.args` file per test file plus
+    `files.txt`; `driver.sh` runs them one at a time with the worktree's venv python, each
+    after `waitram.sh` (waits for more than 10 GB free and no python over 2 GB); `run.ps1`
+    starts one pytest, logs its peak working set and kills it under 4 GB free.
+  - `_scratch/e3/rom_only_tests.md` (owner: E3): the ROM-only tests, a "Per file" list and a
+    "Per test" list of `- \`<node id>\`: <why ROM-only>` lines; one file's ids are also
+    printed by `python tools/ops/ramgate.py --rom-ids <file>`.
+  - `_scratch/offsite/wsl_run_ops_noreap.sh <checkout> <test file>...`: runs `wsl_run_ops.sh`
+    inside a new user, PID and mount namespace whose PID 1 is `sleep infinity`, lists the
+    zombies left after the run, then kills the namespace.
+  Committing them is owed (`docs/decisions.md` section 2).
 - **Exec bodies stay short.** No exec-pod body that an agent must reproduce carries more than
   a short script (at most 1000 characters, `tools/ops/day/send_body.sh`; its only long token a
   64-hex sha256): payloads, scripts included, travel by file transfer (`runpodctl send` on the
@@ -209,7 +408,7 @@ per day is the rate used for estimates.
   pushes and never merges. Between 22:00 and 08:00 it may delete an idle test pod: one of ours,
   with nothing running or queued on it (checked on the pod: DAYBOX.md, Delete, the volume
   publish included), every run on it collected, and never the nightly's pod before or during
-  the nightly; it verifies the delete with a pod listing, renames the pod's id file to
+  the nightly; it verifies the delete with `get-pod` (404), renames the pod's id file to
   `.deleted`, logs it in `DISPATCH.md` and sends the managing session one line. In working
   hours it only reports idle pods. Creating pods stays with the managing session.
 - **Script step on a pod.** Besides pack runs, the dispatcher may run one committed script on
@@ -218,11 +417,9 @@ per day is the rate used for estimates.
   reads only that checkout and the built tables; it runs after the run's list has finished;
   its output is text written into the run's results folder and collected with the results.
   The exact command, sha and pod go in `_scratch/handoff/DISPATCH.md` before it runs.
-- **Local pytest with four streams.** With four streams working, the pod is the default place
-  for in-work tests. A local pytest (CLAUDE.md, Where tests run: one process, one file or
-  chunk) runs only when more than 6 GB of RAM is free, checked right before it starts
-  (PowerShell: `(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB`), not earlier
-  in the session.
+- **Local pytest with four streams.** The pod is the place for every engine test; the PC runs
+  only ROM-only and engine-free tests, under the gate above (one process; it waits for free RAM
+  > 6 GB + weight itself, no manual check). Engine tests go to the quick lane.
 - **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
   sends no new tip while that run is going, unless the run has already failed (a first-failure
   report counts). The managing session holds any other request until the run is back.
@@ -245,15 +442,16 @@ per day is the rate used for estimates.
   test files of every area the change touches, the four guards and `tests/test_differential.py
   1 A`, sized for about one hour on a pod alone (about 120 units). The nightly covers the
   rest. The `fullset` run is unchanged (DAYBOX.md, Merge candidate).
-- **Snapshot capture of `main`.** After every push of `main` the managing session starts
-  one capture of the new tip on the capture pod, in `/work/snapmain-<short sha>` (seeds 0-199;
-  commands: `tools/ops/day/snap.sh`, DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
-  delete an older one only when no compare reads it. A capture is never sent back to a pod
-  from the PC. On pods with the network volume a passed capture of a `main` tip is stored on
-  the volume, keyed by its full sha and the table key of its tables, and is never overwritten;
-  a capture of a key the volume holds, and a compare whose capture is not on its pod, fetch it
-  from there instead of re-capturing (owner, 21 Nov 2026). Only a capture lost with a pod
-  without the volume, or one the volume does not hold, is re-made on the next pod.
+- **Snapshot capture of `main`.** After every push of `main` that changes the engine or the
+  tables the managing session starts one capture of the new tip on the capture pod, in
+  `/work/snapmain-<short sha>` (seeds 0-199; commands: `tools/ops/day/snap.sh`, DAYBOX.md,
+  "Snapshot compare"). Keep the newest two captures; delete an older one only when no
+  compare reads it. A capture is never sent back to a pod from the PC. On pods with the
+  network volume a passed capture of a `main` tip is stored on the volume, keyed by its full
+  sha and the table key of its tables, and is never overwritten; a capture of a key the
+  volume holds, and a compare whose capture is not on its pod, fetch it from there instead
+  of re-capturing (owner, 21 Nov 2026). Only a capture lost with a pod without the volume, or
+  one the volume does not hold, is re-made on the next pod.
 - **Capture pod.** Snapshot captures and compares run on the capture pod only. No pack run
   is sent to it while a capture or compare is going there. One snapshot job at a time per
   pod: each job gates only on its own parts, so two at once could overrun memory together.
@@ -262,14 +460,19 @@ per day is the rate used for estimates.
   removed); a second job sent meanwhile waits for it, printing one `lock wait` line a minute
   (DAYBOX.md, Snapshot compare). A job runs its parts in parallel
   (`SNAP_WORKERS`, default 16, each part its own process; `tools/snap_compare.py`, Workers):
-  about 30 minutes for a capture or a compare (estimate: the longest part, `roark.rank`, takes
-  15-22 minutes alone; replace it with the first timed parallel run). Serially
+  a capture takes 17-24 minutes (measured), a compare about 30 minutes (estimate; the longest
+  part, `roark.rank`, takes 15-22 minutes alone). Serially
   (`SNAP_WORKERS=1`, or a commit whose `snap_compare.py` has no `--workers`) a job takes
   85-115 minutes.
 - **Snapshot compare of a merge candidate.** Compare only, against the
   capture of the `main` tip its branch contains, with `--allow-new <the stream's list>`
   (left out when the list is empty). Never compare a merge candidate against an older base
   once `main` was merged into the branch.
+- **Capture identity.** The capture a candidate compares against has the candidate's base
+  engine and packed tables. Check that by sha and packed-table content, never by table key:
+  the key hashes tool code and tree state, so it differs across machines and after tool-only
+  changes. After every landing that changes the engine or tables the new `main` capture
+  becomes the standing capture (stored on the volume).
 - **Allow-new list.** The stream derives the list from the code, never from a compare log:
   every `BattleState` and `Outcome` field the tip has that the capture's commit lacks and no
   `UPGRADES` row of the tip's `tools/snap_compare.py` writes
@@ -381,9 +584,9 @@ per day is the rate used for estimates.
   (with the owner). Pods are used by the managing session and the run dispatcher's run
   agents, and deleted by the managing session, the nightly agent (`ci-nightly`, and
   `ci-day-big` as above) and the run dispatcher (idle pods between 22:00 and 08:00, as
-  above). Use generic names. Verify every
-  delete with a pod listing. Each spending cap is the user's explicit approval; anything
-  larger or longer needs a new approval.
+  above). Use generic names. Verify every delete with `get-pod` on its id (404; a full pod
+  listing is too long). Each spending cap is the user's explicit approval; anything larger or
+  longer needs a new approval.
 - Transfer files with `runpodctl send` / `receive`; run commands on the pod through the
   Runpod tools' pod exec. A pod exec call ends after 25 seconds: start work with `nohup`.
   The pod reports back without pod exec: its `notify.sh` offers a first-failure beacon and
@@ -418,13 +621,16 @@ They live only in the session and expire after 7 days. Re-create them after ever
 or clear. Times are local cron expressions; the scheduler adds jitter. The nightly row and
 the 30-minute stall check move to scheduled tasks that survive a restart (section 5,
 "Scheduled tasks, not session timers"); once those exist, the session keeps only the other
-rows.
+rows. Before creating a row, list the session's prompts: no duplicate. Night pod deletes are
+the dispatcher's (section 5, Run dispatcher session); the former 22:57 pod-delete row is
+gone. Stall check: update `_scratch/manager/streams.json` first, then start
+`tools/ops/watch_flags.ps1 -EveryMin 30 -Streams _scratch/manager/streams.json` in the
+background (section 6).
 
 | Cron | What |
 |---|---|
 | `47 9,21 * * *` | Fallback check: watchdog plus usage; silent unless something is wrong |
-| `7 22 * * *` | Dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier on `ci-day-big` when that is up, else on `ci-nightly`, and deletes `ci-nightly` itself |
-| `57 22 * * *` | Delete the test pod if nothing is queued and no nightly runs on it, verify with a pod listing, log the cost |
+| `7 22 * * *` | Only where no scheduled task holds it: dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier and the soundness sweep on a free day volume pod (`ci-day-big`) holding no push gate, else on `ci-nightly`, and deletes `ci-nightly` itself |
 | `37 23 * * *` | `bash tools/ops/offsite.sh` from the main checkout (section 12, Off-site copy); report only a non-zero exit (a refusal, a rejected branch, an abort or a failed push) |
 
 ## 8. Usage rules
@@ -455,6 +661,8 @@ managing session lowers cost per unit of work and never throttles the streams.
 - **Live state** is in `_scratch/handoff/` (git-ignored): one state file per role, rewritten
   in full, sections as in section 12, "State files".
 - Each stream keeps its ledger in `docs/kaizo/` and restarts from it after a clear.
+- Heredoc appends to state files are quoted (`<<'EOF'`), so no backtick or `$` runs. Every
+  timestamp written comes from `date` (PC) or `date +%s` (pod).
 - A session's private memory folder is a copy. Nothing a successor needs exists only there,
   in a session, or in the app's side-session notes.
 
@@ -488,7 +696,8 @@ from the main checkout.
 A successor has the project folder and nothing else. This section and the files it names are
 enough to run the project.
 
-**Read in this order:** `CLAUDE.md`; this file; `docs/decisions.md`;
+**Read in this order** (a new managing session: follow "Taking over as the managing session"
+below instead of this list): `CLAUDE.md`; this file; `docs/decisions.md`;
 `_scratch/handoff/MANAGER.md` (a stream: its `E<n>.md`); `tools/ops/day/DAYBOX.md` before any
 pod work. This section is the source of the handoff procedure; a copy in
 `_scratch/handoff/README.md` follows it.
@@ -575,7 +784,11 @@ table archives or run outputs.
 
 ### State files (`_scratch/handoff/`, git-ignored)
 
-- `MANAGER.md`: the managing session. `E1.md`, `E2.md`, `E3.md`: one per work stream.
+- `MANAGER.md`: the managing session (a "Current state" block at the top, then dated log
+  entries, newest last). `MANAGER_START.md`: the entry brief for a new managing session
+  (hard rules, standing approvals, state, routine jobs, first actions). `E1.md`, `E2.md`,
+  `E3.md`, `E4.md`: one per work stream. `DISPATCH.md`: the run dispatcher (standing orders
+  at the top, runs in flight and results at the end; large: read its top and tail only).
   `SETUP.md`: this machine's setup inventory with its real paths.
 - Every state file has these sections: Role, Tips (branch, worktree, commit), In flight, Held,
   Owed, Next steps in order, Open questions, Pointers. Its first line under the title is
@@ -615,6 +828,42 @@ The session then:
    these.
 4. Reports to the owner in five lines what it found and what it does first.
 5. Waits for nothing unless its state file says an owner decision is open.
+
+### Taking over as the managing session
+
+Read order (first 15 minutes):
+1. `CLAUDE.md`.
+2. `_scratch/handoff/MANAGER_START.md` (when present), then `_scratch/handoff/MANAGER.md`:
+   its "Current state" block, then every dated entry newer than the brief. Newer entries
+   supersede the brief.
+3. `_scratch/handoff/DISPATCH.md`: its standing orders at the top and its last 30 lines only.
+4. `_scratch/handoff/E1.md` to `E4.md`: the current section at the top of each, or the tail.
+5. This file's sections 2, 5 and 12 when a job sends you there; `tools/ops/day/DAYBOX.md`
+   only before pod work; `docs/decisions.md` before answering any approval or rule question.
+Never read whole: the old managing-session log, agent transcripts, run logs.
+
+First actions, in order:
+1. Verify git against the state files: `date`; `git log --oneline -10 main`;
+   `git rev-parse origin/main`; `git status -sb`; `git branch -v` for every branch the state
+   files name. Where git and a file disagree, git wins: note it in `MANAGER.md`.
+2. Sessions: list them with the desktop app's session tools (`list_sessions` with linked
+   sessions); check that each stream and the dispatcher is alive; read each one's context use
+   (`get_usage` per session) and clear a stream past 30% at its next commit point. Old
+   session ids in a file are history: never message a retired managing session.
+3. Pods: one `get-pod` per id file in `_scratch/rent/`; read each with one pod-check exec
+   before use (DAYBOX.md, Send a run step 3); outside working hours delete any pod with
+   nothing running or queued (DAYBOX.md, Delete); in working hours keep one per active
+   stream plus the capture pod (section 5, Test pod); count the pods up and their cost per
+   hour.
+4. Recreate what died with the old session: the nightly trigger (section 5, Scheduled tasks;
+   check `list_scheduled_tasks` first), the session prompts of section 7, the stall check
+   (section 6) after updating `_scratch/manager/streams.json`.
+5. Collect runs whose beacons failed by hand (DAYBOX.md, Collect); land whichever queued
+   candidate has a MERGE review and a green gate (section 2 step 9).
+6. First message to the owner, five lines: `main`'s tip and what landed since the handoff;
+   pods up and cost per hour; what lands next; anything that needs the owner; that a new
+   managing session has taken over.
+Then wake only for owner messages, stream results, the stall check and scheduled tasks.
 
 ### Rules
 
@@ -656,8 +905,9 @@ None of these is in the repo. The setup assumes Windows with Git Bash and PowerS
 4. Add the owner's recordings folder as an additional directory only when the Elite Four
    replay check needs it.
 5. Connectors are not needed (section 8).
-6. Start three stream sessions (E1, E2, E3): folder the main checkout, model Opus, each with
-   its pick-up line. Record the new session ids in `MANAGER.md`.
+6. Start the four stream sessions (E1-E4, model Opus) and the dispatcher (`dispatch`, model
+   Sonnet): folder the main checkout, each with its pick-up line. Record the new session ids
+   in `MANAGER.md`.
 7. Recreate the watch loop (section 6) and the scheduled prompts (section 7), only when no
    pause is in force.
 
@@ -669,7 +919,7 @@ gh auth status
 ls _scratch/rent/bin/runpodctl-windows-amd64.exe _scratch/rent/home/.runpod/config.toml
 ls data/local.toml external/pokeplatinum/src .cache/decomp >/dev/null && echo INPUTS_OK
 python -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/settings.json')))['enabledPlugins'])"
-powershell -NoProfile -Command "[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)"   # free GB; local pytest needs more than 6
+powershell -NoProfile -Command "[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)"   # free GB; the ramgate waits for > 6 + weight
 ```
 Then confirm in the session that the skills `superpowers:*` and `runpod:*` are listed and
 that the Runpod tools answer. Report to the owner in five lines: what matched, what was

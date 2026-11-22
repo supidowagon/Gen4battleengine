@@ -11,6 +11,7 @@
 # stays in this run's repo/.cache, so runs of other commits never prune each other's.
 export PATH="/root/.local/bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 export NUZLINE_TEST_COMPILE_CACHE="${NUZLINE_TEST_COMPILE_CACHE:-/work/_jaxcache/jax-tests}"
+export NUZLINE_ON_POD=1   # tells the root conftest.py (RAM gate, tools/ops/ramgate.py) this is the pod
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; . "$D/meta.env"; cd "$D/repo"
 if [ "$1" = --warmup ]; then mkdir -p "$O/warmup"; P="$O/warmup/warmup"; args=("$2"); ma=()
 else u="$1"; P="$O/$u"; mapfile -t args < "$O/$u.ids"
