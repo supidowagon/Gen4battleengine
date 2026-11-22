@@ -52,6 +52,7 @@
 # (/work/.runner.lock), CLAIMS (/work/.claims), CLAIM_MAX_S (3600), DEFAULT_WEIGHT_GB (12), WORK
 # (/work), RESERVE_TOP, RESERVE_FULL_GB, RESERVE_PCT (gate.sh defaults), CGROOT.
 set -u
+export NUZLINE_ON_POD=1   # the jobs' pytest and the replay: tells the root conftest.py (RAM gate, tools/ops/ramgate.py) this is the pod
 D=$(cd "$(dirname "$0")/.." && pwd)
 JOBS="${1:-}"; OUT="${2:-$D/sweep_out}"; REPO="$D/repo"; U="$D/sweep/out"
 # The driver works from $REPO: relative paths are the caller's.

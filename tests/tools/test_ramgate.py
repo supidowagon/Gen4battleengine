@@ -3,6 +3,7 @@ read, no real waiting: free RAM, the clock and the sleep are injected."""
 
 import importlib
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -443,18 +444,101 @@ def test_cli_build_on_the_pod_or_off_windows_runs_the_command_directly(monkeypat
     assert code == 5 and out[-1].startswith("GO ")
 
 
-@pytest.mark.parametrize("name", ["unit.sh", "setup.sh", "quick.sh"])
-def test_pod_entry_points_export_the_pod_marker(name):
-    """On a line that runs (not a comment, not after a `#`), so a commented-out marker fails."""
-    lines = (ROOT / "tools/ops/day/pod" / name).read_text(encoding="utf-8").splitlines()
-    code = [ln.split(" #")[0] for ln in lines if not ln.lstrip().startswith("#")]
-    assert any(rg.ENV_ON_POD + "=1" in ln for ln in code)
+POD_DIR = ROOT / "tools/ops/day/pod"
+_PYTEST_START = re.compile(
+    r"(-m\s+pytest\b|\buv\s+run(\s+--?[\w=-]+)*\s+pytest\b|(^|[\s;&|(])(\S*/)?pytest\s+-)"
+)
+_PY_SCRIPT = re.compile(r"\bpython3?\S*\"?\s+\"?[^\s\"]*?([\w-]+\.py)\b")
+_PY_INLINE = re.compile(r"\bpython3?\S*\"?\s+(-c\s|-\s|-$)|\"\$PY\"\s+-")
+_MARKER = "NUZLINE_ON_POD=1"
 
 
-def test_the_pod_marker_check_sees_a_commented_out_line():
-    lines = ["#!/bin/bash", "# export NUZLINE_ON_POD=1", "echo x  # NUZLINE_ON_POD=1"]
-    code = [ln.split(" #")[0] for ln in lines if not ln.lstrip().startswith("#")]
-    assert not any(rg.ENV_ON_POD + "=1" in ln for ln in code)
+def _code(line):
+    """The part of a shell or Python line that runs: no comment line, nothing after ` #`."""
+    return "" if line.lstrip().startswith("#") else line.split(" #")[0]
+
+
+def _imports_engine(text):
+    return bool(re.search(r"^\s*(from|import)\s+(nuzline\.engine|tests\.engine)\b", text, re.M))
+
+
+def _inline_block(lines, i):
+    """The inline Python a `python -c '...'` / `python - <<'TAG'` on line i runs."""
+    tag = re.search(r"<<-?'?(\w+)'?", lines[i])
+    end = i + 1
+    while end < len(lines) and end - i < 400:
+        if (tag and lines[end].strip() == tag.group(1)) or (not tag and "'" in lines[end]):
+            break
+        end += 1
+    return "\n".join(lines[i : end + 1])
+
+
+def pod_marker_problems(path, find_script=None):
+    """Lines of a pod script that start pytest, or python importing the engine, while the pod
+    marker is not in effect: neither an earlier top-level `export NUZLINE_ON_POD=1` nor the
+    marker on that line itself. find_script(name) -> text of a python script it runs, or None."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    exported_at = next(
+        (n for n, ln in enumerate(lines) if re.match(r"export\s.*\b" + _MARKER + r"\b", _code(ln))),
+        None,
+    )
+    bad = []
+    for n, line in enumerate(lines):
+        code = _code(line)
+        if not code.strip():
+            continue
+        starts = bool(_PYTEST_START.search(code))
+        if not starts and _PY_INLINE.search(code):
+            starts = _imports_engine(_inline_block(lines, n))
+        if not starts:
+            m = _PY_SCRIPT.search(code)
+            text = find_script(m.group(1)) if (m and find_script) else None
+            starts = bool(text) and _imports_engine(text)
+        if path.suffix == ".py" and _imports_engine(code):
+            starts = True  # a pod Python file that imports the engine itself
+        marked = _MARKER in code or (exported_at is not None and exported_at < n)
+        if starts and not marked:
+            bad.append(f"{path.name}:{n + 1}: {line.strip()[:120]}")
+    return bad
+
+
+def _repo_script(name):
+    hits = [p for p in (ROOT / "tools").rglob(name) if p.is_file()]
+    return "\n".join(p.read_text(encoding="utf-8") for p in hits) or None
+
+
+def test_every_pod_script_that_starts_pytest_or_the_engine_sets_the_pod_marker():
+    """Generic: every file under tools/ops/day/pod/, so a new pod script cannot miss it."""
+    files = sorted(p for p in POD_DIR.iterdir() if p.is_file() and p.suffix in (".sh", ".py"))
+    assert {"unit.sh", "setup.sh", "quick.sh", "sweep.sh"} <= {p.name for p in files}
+    bad = [b for p in files for b in pod_marker_problems(p, _repo_script)]
+    assert bad == [], "pod scripts without NUZLINE_ON_POD=1 in effect:\n" + "\n".join(bad)
+
+
+def test_the_pod_marker_check_catches_each_way_to_miss_it(tmp_path):
+    def problems(text, scripts=None):
+        f = tmp_path / "x.sh"
+        f.write_text(text, encoding="utf-8")
+        return pod_marker_problems(f, (scripts or {}).get)
+
+    run = 'uv run --frozen pytest -q "$@"\n'
+    assert problems("#!/bin/bash\n" + run)  # no marker at all
+    assert problems("# export NUZLINE_ON_POD=1\n" + run)  # commented out
+    assert problems("echo x  # NUZLINE_ON_POD=1\n" + run)  # only in a comment
+    assert problems(run + "export NUZLINE_ON_POD=1\n")  # set after the start
+    assert problems('"$py" -m pytest -x "$node"\n')
+    assert problems('.venv/bin/pytest -q tests\n')
+    assert problems('"$repo/.venv/bin/python" "$tools/replay.py" a\n', {"replay.py": "import nuzline.engine.step\n"})
+    assert problems("python - <<'PY'\nfrom nuzline.engine import ids\nPY\n")
+    assert problems("x=$(python -c '\nimport tests.engine.helpers\n')\n")
+    # fine: marker exported first, or on the line itself; engine-free python; no start at all
+    assert not problems("export NUZLINE_ON_POD=1\n" + run)
+    assert not problems("export A=1 NUZLINE_ON_POD=1 B=2\n" + run)
+    assert not problems("NUZLINE_ON_POD=1 " + run)
+    assert not problems("bash -c 'export NUZLINE_ON_POD=1; exec uv run pytest -q'\n")
+    assert not problems('python "$t/extract.py" a\n', {"extract.py": "import re\n"})
+    assert not problems("python -c 'from nuzline.jaxcache import jax_version'\n")
+    assert not problems('echo "pytest rc $PRC"\npgrep -f "/.venv/bin/pytest"\n')
 
 
 def test_blocker_blocks_engine_imports_only():

@@ -161,7 +161,7 @@ per day is the rate used for estimates.
   with a note. A pytest started by a test of a gated run is part of that run: the gate sets
   `NUZLINE_RAMGATE_DONE=<its pid>` and skips a run whose live ancestor (or itself, links
   start-time checked) has that pid; any other value is ignored. The pod sets
-  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`, `quick.sh`), which skips the gate on Linux only (on the
+  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`, `quick.sh`, `sweep.sh`; `tests/tools/test_ramgate.py` fails for any script under `tools/ops/day/pod/` that starts pytest, or python importing the engine, without it in effect), which skips the gate on Linux only (on the
   Windows PC it is ignored). Local jobs that are not
   pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
   waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
