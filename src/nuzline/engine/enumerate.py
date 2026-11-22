@@ -66,7 +66,8 @@ of the turn:
   check: read only on a later turn.
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe moves
   first with a ``CONFUSE_FOE`` or ``SECONDARY_CONFUSE`` move and ``s`` is not confused
-  (counter 2-5; ``step._use_move``, step.py:496-499).
+  (counter 2-5; ``step._use_move``, step.py:496-499), or a disliked flavor berry can confuse
+  it before its check (``berry_confusion`` below).
 * ``duration[s]``: ``s``'s move is Taunt, Bind, ``CONFUSE_FOE``, ``SECONDARY_CONFUSE`` or
   inflicts sleep (effects.py:189, :286, :297, :307).
 * ``speed_tie``: the two orders ``order.action_order`` gives under ``speed_tie`` 0 and 1
@@ -168,7 +169,15 @@ of the turn:
   confused, holds a flavor berry it dislikes (``hooks.held_item_check`` after the foe's hit):
   the draw of ``step._use_move``'s confusion check. A berry eaten after ``s``'s check leaves the
   counter pending for a later turn. The same foe-first case makes ``confusion_hit[s]`` and
-  ``roll[s, 0]`` relevant (the "confusion_berry" path: the foe's move hits).
+  ``roll[s, 0]`` relevant (the "confusion_berry" path: the foe's move hits). Also (E2-ML-1)
+  when ``s``'s Pokemon is in the berry's range (``curHP <= maxHP / 2``) at the start and any
+  action comes before ``s``'s: that action's MoveEnd runs the held-item pass over every battler
+  (bcp.c:3973, battle_lib.c:4151-4165), an item, a switch or a missed move included (the
+  "confusion_berry_start" path, no condition), with the berry shown (``state.held_item``) or
+  its Klutz taken first, and its Own Tempo maybe gone by then (the foe's Skill Swap, Worry Seed
+  or Gastro Acid). ShowBattleMon runs that pass before the commands (bcp.c:256-268), so at a
+  turn start this needs a hidden berry or a paused state. At B = 4 the range is not tested (a
+  third battler's hit).
 * Nothing is relevant once the battle is over (``step`` returns the state,
   ``step.step_events``, step.py:1439).
 
@@ -325,16 +334,19 @@ from nuzline.engine.order import (
 from nuzline.engine.outcome import (
     ACUPRESSURE_DRAWS,
     CRIT_DRAWS,
+    CRIT_WRITE_VARIANTS,
     MAX_HITS,
     PRESENT_CUTS,
     PRESENT_HEAL,
     PROTECT_RATES,
     ROAR_LEVEL_VALUES,
     Outcome,
+    ability_whole,
     acid_rain_reachable,
     armored,
     crit_class,
     crit_variants,
+    doubles_ability_change,
     empty_outcome,
     future_thresholds,
     hit_threshold_pair,
@@ -346,7 +358,13 @@ from nuzline.engine.outcome import (
     roar_inputs,
     roar_levels,
     secondary_chance,
+    secondary_thresholds,
     self_lock,
+    trace_copies,
+    trace_sources,
+)
+from nuzline.engine.outcome import (
+    any_of as _any_of,
 )
 from nuzline.engine.outcome import (
     kings_rock_chance as outcome_kings_rock_chance,
@@ -415,6 +433,7 @@ class Reads(NamedTuple):
     band_move: jnp.ndarray  # bool[B, MAX_HITS]: the foe's Focus Band rolls at that hit
     band_self: jnp.ndarray  # it holds a Focus Band: a confusion self-hit rolls focus_band[s, 0]
     berry_by_foe: jnp.ndarray  # bool[2, B]: a foe move first can feed it a disliked flavor berry
+    berry_start: jnp.ndarray  # bool[2, B]: in range at the start, an earlier MoveEnd feeds it
     pending_own: jnp.ndarray  # it moves with a CONFUSION_PENDING counter at the start
     # G-30: it uses Present against a side with a Wonder Guard Pokemon: the draw picks the heal
     # path's SYSCTL_IGNORE_IMMUNITIES before the accuracy check, so a miss reads it too (the
@@ -438,7 +457,11 @@ class OutcomeLaws(NamedTuple):
     crit_variants: jnp.ndarray  # int32[B, outcome.CRIT_VARIANTS], variant 0 the turn start
     crit_possible: jnp.ndarray  # bool[B, outcome.CRIT_VARIANTS]
     no_crit: jnp.ndarray  # bool[B], Lucky Chant on the defending side (outcome.py:157)
-    secondary_chance: jnp.ndarray  # int32[B], tables.move_effect_chance of the move
+    secondary_chance: jnp.ndarray  # int32[B], the chance at the turn start (Serene Grace then)
+    # The chances the secondary rolls can be read with at the hit and which are possible
+    # (outcome.secondary_thresholds): the roll's class over them (outcome.secondary_class).
+    secondary_thresholds: jnp.ndarray  # int32[B, 2]
+    secondary_possible: jnp.ndarray  # bool[B, 2]
     duration_kind: jnp.ndarray  # int32[B], DURATION_*
     relevant: Outcome  # bool, each field shaped like the ``Outcome`` field: any branch
     branch_relevant: Outcome  # bool, a leading axis [2]: the branch speed_tie = 0, 1
@@ -482,13 +505,6 @@ class SamplingOnly(Exception):
         self.reason = reason
 
 
-def _any_of(x, values) -> jnp.ndarray:
-    out = jnp.zeros(jnp.shape(x), bool)
-    for v in values:
-        out = out | (x == v)
-    return out
-
-
 def _inflicts(tables: Tables, state: BattleState, moves, status, users=None) -> jnp.ndarray:
     """The move can inflict ``status`` on the foe (``STATUS_FOE`` / ``SECONDARY_STATUS`` /
     ``FANG_PARALYZE_FLINCH`` with ``move_param[m, 0]``, effects._inflict, effects._fang; and
@@ -522,10 +538,12 @@ def _entry_abilities(tables: Tables, state: BattleState, actions) -> jnp.ndarray
     )
 
 
-def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarray:
+def _holds(tables: Tables, state: BattleState, actions, abilities, src=None) -> jnp.ndarray:
     """``bool[B]``: side ``d``'s active Pokemon, or the one it switches in this turn, has one
     of ``abilities``: the incoming one by its own ability or the one it traces on entry
-    (``_entry_abilities``; both, so a Trace newcomer counts as Trace too)."""
+    (``_entry_abilities``; both, so a Trace newcomer counts as Trace too), or either one by the
+    copy its armed Trace can make at a MoveEnd this turn (``outcome.trace_copies``; ``src``: its
+    ``outcome.trace_sources``, computed once by ``outcome_laws``)."""
     fmt = format_of(state)
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
     sides = jnp.arange(fmt.B)
@@ -533,7 +551,8 @@ def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarra
     entry = _any_of(battler_ability(state, sides, incoming), abilities) | _any_of(
         _entry_abilities(tables, state, actions), abilities
     )
-    return now | (entry & is_switch(actions))
+    traced = trace_copies(tables, state, actions, abilities, src=src)
+    return now | (entry & is_switch(actions)) | traced
 
 
 def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarray:
@@ -747,7 +766,10 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     # A foe moving first can bring an unconfused holder of a disliked flavor berry to half HP
     # (hooks.held_item_check, G-5): its check then reads the berry's counter.
     berry_by_foe = b["uses_move"] & foe_first & b["berry_confuse"] & foes(b["uses_move"])
-    confusable = b["confused_own"] | confused_by_foe | berry_by_foe
+    # A holder in the berry's range at the start eats it at the MoveEnd of any action before its
+    # own (E2-ML-1, ``berry_start`` in ``outcome_laws``): read whatever that action did.
+    berry_start = b["berry_start"] & (foe_first | ~first_self)
+    confusable = b["confused_own"] | confused_by_foe | berry_by_foe | berry_start
     # A flinch roll is read only when the user moves first (subscript_flinch_mon.s: the
     # target has not moved, effects._flinch). A secondary status or confusion on a target
     # that cannot take it changes nothing (status eligibility), judged on the turn-start
@@ -778,9 +800,10 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         # Focus Band (G-1): the foe's on the move's hits, the side's own on a self-hit.
         "focus_band": b["focus_band"]
         | ((confusable & b["own_band"])[:, None] & (b["hit_index"] == 0)),
-        "berry_confusion": b["pending"] | berry_by_foe,
+        "berry_confusion": b["pending"] | berry_by_foe | berry_start,
         "chatter": b["chatter"],
         "berry_by_foe": berry_by_foe,
+        "berry_start": berry_start,
         # E3-B2-3: Conversion 2's pick for each recorded type the move can meet in this order.
         "conv2": b["conv2_use"][:, None]
         & jnp.where(foe_first[:, None], b["conv2_foe"], b["conv2_own"]),
@@ -1633,6 +1656,9 @@ def damage_inputs_can_change(
       status, which the foe's earlier move (its wake-up, thaw, Rest, Refresh, Psycho Shift, a
       contact status, Synchronize) or an earlier hit of the side's move (a secondary status, the
       holder's status berry) can change;
+    * **trace**: an armed Trace on the field (``outcome.trace_copies``) copies an ability at the
+      MoveEnd of the foe's earlier action (any action: bcp.c:1971-1973, :3973, :4008), which can
+      change every ability factor of the hit, and its Intimidate, Download or weather ability;
     * **own move**: a later hit of a move other than ``MULTI_HIT``, ``TRIPLE_KICK`` and
       ``BEAT_UP`` (Twineedle's second hit, B13-1: its first can poison a Synchronize holder;
       Triple Kick's and Beat Up's own hits change no input but the HP and contact clauses',
@@ -1807,6 +1833,18 @@ def damage_inputs_can_change(
         | hp_sensitive
     )
     foe_action = live & (foes(is_switch(actions)) | foes(is_item(actions)) | foe_move)
+    # The trace clause: an armed Trace on the field (outcome.trace_copies) fires at the MoveEnd of
+    # the foe's earlier action, whatever it was, and the copy can change any ability factor of the
+    # hit (either battler's), its Intimidate or Download a stage it reads, its weather ability the
+    # weather.
+    src = trace_sources(tables, state, actions, moves)
+    foe_action = foe_action | (live & jnp.any(trace_copies(tables, state, actions, src=src)))
+    # At B = 4 any battler's ability mover, a Trace firing at any battler's MoveEnd or a called
+    # Roar's drag (outcome.doubles_ability_change) can change the hit's ability factors or its
+    # target before it, whatever the order: a third battler moving first is in neither
+    # ``foe_first`` nor ``foe_move`` (Gastro Acid, subscript_suppress_target_ability.s:10; Skill
+    # Swap, subscript_exchange_abilities.s:21-24), so every hit is loose then.
+    doubles = live & doubles_ability_change(tables, state, actions, moves, src)
 
     # A White Herb resets its holder's lowered stages to 0 (hooks.held_item_check,
     # battle_lib.c:4875-4887). The hit reads two stages only, the attacker's Attack / Sp. Atk
@@ -1895,7 +1933,9 @@ def damage_inputs_can_change(
 
     later = jnp.arange(MAX_HITS)[None, :] >= 1
     before = jnp.asarray(foe_first, bool) & (foe_action | items)
-    return own_pre_move[:, None] | before[:, None] | (later & (own_hits | items)[:, None])
+    return (
+        (own_pre_move | doubles)[:, None] | before[:, None] | (later & (own_hits | items)[:, None])
+    )
 
 
 def outcome_laws(
@@ -2033,15 +2073,40 @@ def outcome_laws(
     )
     crit = lands & rolled[:, None]
     secondary = lands & ((chance != 0) & _any_of(effect, _PROC_EFFECTS))[:, None]
-    holders = _holds(
-        tables, state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
-    )
     # G-69: a side whose Transform lands before the foe's contact hit holds the foe's ability then
     # (BtlCmd_Transform copies ``ability``, battle_script.c:5346-5348, battle_mon.h:84), but not its
     # gender (a separate field, battle_mon.h after ``ability``; ``transformedGender`` is the
     # sprite's, :5338). Over-approximate: the Transform may move later or fail.
-    xform = uses_move & (effect == _E.TRANSFORM)
-    holders = holders | (xform & foes(holders))
+    # Its own Role Play (subscript_copy_ability.s:14-15) or Skill Swap
+    # (subscript_exchange_abilities.s:21-24) gives it the foe's raw ability alike (E3-B2-5,
+    # E3-2-5): ``copier``; ``gains`` is ``_holds`` with that copy.
+    copier = uses_move & _any_of(effect, (_E.TRANSFORM, _E.ROLE_PLAY, _E.SKILL_SWAP))
+    raw_now = state.ability[party(fmt, sides), mons]
+    # The turn's Trace sources, once (outcome.trace_sources), and at B = 4 any ability mover or
+    # Trace firing outside the singles pairing (outcome.doubles_ability_change): every
+    # turn-start ability read below is loose then, the third battler's hand-over included (a
+    # partner's Skill Swap giving the target its Static before the side's contact hit).
+    src = trace_sources(tables, state, actions, moves)
+    b4 = doubles_ability_change(tables, state, actions, moves, src)
+    not_self = ~jnp.eye(fmt.B, dtype=bool)
+
+    def handed(abilities) -> jnp.ndarray:
+        """``bool[B]``: at B = 4 (``b4``), another battler on the field holds one of
+        ``abilities`` raw, which a mover can hand to this one, or a living party member off the
+        field does, which a Roar's drag can put in this slot or beside it
+        (``trace_sources.bench_live``)."""
+        field = jnp.any(not_self & _any_of(raw_now, abilities)[None, :], axis=1)
+        bench = jnp.any(src.bench_live & _any_of(src.bench_raw, abilities))
+        return b4 & (field | bench)
+
+    def gains(abilities) -> jnp.ndarray:
+        return (
+            _holds(tables, state, actions, abilities, src)
+            | (copier & foes(_any_of(raw_now, abilities)))
+            | handed(abilities)
+        )
+
+    holders = gains((AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY))
     # BtlCmd_TryAttract (effects._attractable): different genders, neither genderless.
     gender = state.gender.astype(_I32)[party(fmt, jnp.arange(fmt.B))]  # each battler's party
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.gender.shape[1] - 1)
@@ -2063,10 +2128,17 @@ def outcome_laws(
     # A Transform user copies the foe's Cute Charm (G-69) and keeps its own gender. Raw: the
     # copy is BattleMon.ability's (battle_script.c:5342-5348).
     foe_charm = foes(state.ability[party(fmt, sides), mons] == AbilityId.CUTE_CHARM)
-    charm_copied = xform & foe_charm & lovers(gender[sides, mons], attacker_gender)
-    charm = (charm_now | charm_later | charm_copied) & calm
+    charm_copied = copier & foe_charm & lovers(gender[sides, mons], attacker_gender)
+    # An armed Trace that can copy Cute Charm at a MoveEnd (outcome.trace_copies), on the holder
+    # active then (the one it switches in, if it switches).
+    holder_gender = jnp.where(switch, gender[sides, incoming], gender[sides, mons])
+    charm_traced = (
+        trace_copies(tables, state, actions, (AbilityId.CUTE_CHARM,), src=src)
+        | handed((AbilityId.CUTE_CHARM,))
+    ) & lovers(holder_gender, attacker_gender)
+    charm = (charm_now | charm_later | charm_copied | charm_traced) & calm
     if loose:
-        charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
+        charm = gains((AbilityId.CUTE_CHARM,))
     holders = holders | charm
     # H-4 Destiny Knot (battle_lib.c:4546-4566): a knot holder's contact hit that makes a Cute
     # Charm foe infatuate it infatuates that foe back: the foe's attract check, if it moves later
@@ -2126,6 +2198,13 @@ def outcome_laws(
         | ((param0 == Status.FREEZE) & (ignorable == AbilityId.MAGMA_ARMOR))
     )
     insomnia = (param0 == Status.SLEEP) & sleepless(ignorable)  # Vital Spirit too (G-47)
+    # An armed Trace of the attacker that can copy Mold Breaker at a MoveEnd before its move
+    # (outcome.trace_copies) ignores the ignorable blocks below (Battler_IgnorableAbility, the
+    # attacker's Mold Breaker test, battle_lib.c:3108-3122): none of them is sure then. (The
+    # absorbs of ``flinch_sure`` stay: a sure flinch needs the first move, before any MoveEnd.)
+    # At B = 4 (``b4``) a mover can hand the attacker Mold Breaker or take the target's block
+    # outside the pairing: none of the blocks is sure then either.
+    pierce = trace_copies(tables, state, actions, (AbilityId.MOLD_BREAKER,), src=src) | b4
     single = ~multi
 
     def takes(status) -> jnp.ndarray:
@@ -2155,6 +2234,8 @@ def outcome_laws(
         status_blocked = confused_blocked = flinch_blocked = jnp.zeros((fmt.B,), bool)
     status_blocked, confused_blocked = status_blocked & ~lock, confused_blocked & ~lock
     flinch_blocked = flinch_blocked & ~lock
+    status_blocked, confused_blocked = status_blocked & ~pierce, confused_blocked & ~pierce
+    flinch_blocked = flinch_blocked & ~pierce
     confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER)) | chatter_user
     # Attract on the foe's active Pokemon (effects._attract); in love at the start, read
     # unless the source switches out first (step._source_leaves).
@@ -2164,7 +2245,7 @@ def outcome_laws(
     if not loose:
         attract = attract & lovers(gender[sides, mons], foes(gender[sides, mons])) & foe_calm
         # subscript_infatuate.s:5: an ignorable Oblivious stops it (effects._attract, H-2).
-        attract = attract & (ignorable != AbilityId.OBLIVIOUS)
+        attract = attract & ((ignorable != AbilityId.OBLIVIOUS) | pierce)
         infatuated_own = infatuated_own & ~foes(switch)
     # Focus Band (effects.play_hit, step._use_move; G-1): the defender's roll on every hit of a
     # non-status move, the foe's active Pokemon or the one it switches in (no implemented path
@@ -2189,10 +2270,42 @@ def outcome_laws(
     # subscript_confuse.s:6: the holder's own Own Tempo (CheckAbility) stops a berry's confusion
     # (hooks.berry_confuse, H-2).
     calm_now = (state.confusion == 0) & (battler_ability(state, sides, mons) != AbilityId.OWN_TEMPO)
+    # At B = 4 (``b4``) a third battler's Gastro Acid, Worry Seed or Skill Swap can take the
+    # holder's Own Tempo before its berry's check (subscript_confuse.s:6; CheckAbility reads
+    # Battler_Ability, battle_script.c:3168-3175), outside the pairing ``berry_by_foe`` follows.
+    calm_now = calm_now | (b4 & (state.confusion == 0))
+    # The berry's check at an earlier action's MoveEnd (E2-ML-1): every action, a move, an item, a
+    # switch or a skipped one, ends in BattleControllerPlayer_MoveEnd (bcp.c:1973, :1984, :893),
+    # whose TriggerEffectOnSwitch (bcp.c:3973) runs SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS over
+    # every battler (battle_lib.c:4151-4165): TriggerHeldItemOnStatus eats a flavor berry at
+    # curHP <= maxHP / 2 (battle_lib.c:5121-5194). A holder already in range at the turn start
+    # eats it at the first such MoveEnd, whatever that action was or did (step._move_end_tail).
+    # ShowBattleMon runs the same pass before the commands (bcp.c:256-268, step._turn_start_items),
+    # so at a turn start a holder in range has its berry hidden (Battler_HeldItem: Klutz or
+    # Embargo, battle_lib.c:5352-5363; ``state.held_item``) or the state is a paused one. The
+    # foe's Skill Swap, Worry Seed or Gastro Acid before the MoveEnd can take a Klutz (Embargo
+    # stays to the turn's end) and an Own Tempo (subscript_confuse.s:6 reads Battler_Ability then);
+    # ``b4`` covers the third battlers'. At B = 4 a third battler's hit can bring the holder into
+    # range before an earlier MoveEnd, outside the foe pairing: the range is not tested there.
+    hp_now = state.hp[party(fmt, sides), mons].astype(_I32)
+    max_now = state.max_hp[party(fmt, sides), mons].astype(_I32)
+    in_range = (hp_now > 0) & (hp_now <= max_now // 2)
+    if fmt.B == 4:
+        in_range = jnp.ones((fmt.B,), bool)
+    taken_by_foe = foes(uses_move & _any_of(effect, (_E.SKILL_SWAP, _E.WORRY_SEED, _E.GASTRO_ACID)))
+    ability_goes = taken_by_foe | b4
+    klutz_goes = (
+        ability_goes
+        & (battler_ability(state, sides, mons) == AbilityId.KLUTZ)
+        & (state.embargo[sides] == 0)
+    )
+    berry_shown = (held_items(state) != 0) | klutz_goes
+    calm_start = calm_now | ((state.confusion == 0) & ability_goes)
     if loose:
         calm_now = jnp.ones((fmt.B,), bool)
+        calm_start = berry_shown = in_range = calm_now
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
-    kings_rock = outcome_kings_rock_chance(tables, state)
+    kings_rock = outcome_kings_rock_chance(tables, state, actions, moves)
     kings_move = (tables.move_flags[moves] & MoveFlag.KINGS_ROCK) != 0
     # E3-B2-1: a Fling inflicts what its item's fling effect says on the foe (effects._fling): a
     # paralysis (Light Ball), a confusion (a flavor berry: it confuses the foe whose nature
@@ -2271,8 +2384,8 @@ def outcome_laws(
             | (
                 damaging
                 & contact
-                & (battler_ability(state, sides, mons) == AbilityId.SYNCHRONIZE)
-                & (foes(battler_ability(state, sides, mons)) == AbilityId.STATIC)
+                & gains((AbilityId.SYNCHRONIZE,))
+                & foes(gains((AbilityId.STATIC,)))
             )
             | fling_paralyzes
         ),
@@ -2286,6 +2399,7 @@ def outcome_laws(
         "focus_band": band_move,
         "own_band": uses_move & own_band,
         "berry_confuse": uses_move & own_berry & calm_now,
+        "berry_start": uses_move & own_berry & berry_shown & calm_start & in_range,
         "pending": uses_move & (state.confusion == CONFUSION_PENDING),
     }
 
@@ -2329,7 +2443,7 @@ def outcome_laws(
     foe_speed = foe_speed | (effect == _E.HAZE)
     # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed (its foe's
     # flinch move, or its King's Rock on a flagged damaging move).
-    steadfast = _holds(tables, state, actions, (AbilityId.STEADFAST,)) & foe_moves
+    steadfast = gains((AbilityId.STEADFAST,)) & foe_moves
     kings = (kings_rock > 0) & damaging & kings_move
     flinches = _any_of(foes(effect), _FLINCH_EFFECTS) | foes(kings)
     steadfast = steadfast & flinches
@@ -2342,6 +2456,11 @@ def outcome_laws(
     # Berry, a White Herb, a Lum or Cheri Berry): free like a held one.
     recycles = uses_move & (effect == _E.RECYCLE)
     plucks = plucks | recycles
+    # A trainer bag item acts before every move (bcp.c:753-769) on its user's own battler
+    # (bag.use_bag_item): an X Speed raises its Speed stage (BattleSystem_UseBagItem,
+    # battle_system.c:603-608) and the status cures (:458-541) and Full Restore's clear
+    # (subscript_use_full_restore.s:7) end its paralysis (or, for Quick Feet, any status) before
+    # the end-of-turn sort. Over-approximate: any item action frees both.
     stage_free = (
         (uses_move & own_speed)
         | (foe_moves & foes(foe_speed))
@@ -2349,9 +2468,10 @@ def outcome_laws(
         | herb
         | pinch_held
         | plucks
+        | item
     )
-    static = _holds(tables, state, actions, (AbilityId.STATIC,))
-    sync_foe = foes(_holds(tables, state, actions, (AbilityId.SYNCHRONIZE,)))
+    static = gains((AbilityId.STATIC,))
+    sync_foe = foes(gains((AbilityId.SYNCHRONIZE,)))
     # A Lum or Cheri Berry cures paralysis, held or plucked (hooks.held_item_check,
     # pluck_berry).
     lum = _holds_item(
@@ -2378,15 +2498,17 @@ def outcome_laws(
         # end-of-turn sort (battle_controller_player.c:888).
         | (foe_moves & (foes(effect) == _E.DOUBLE_POWER) & (foes(params)[:, 1] == 1))
         # Quick Feet reads any status (order.effective_speed): free for a holder.
-        | _holds(tables, state, actions, (AbilityId.QUICK_FEET,))
+        | gains((AbilityId.QUICK_FEET,))
         # A paralyzed Limber holder is cured at a move's end or a switch-in
         # (hooks.recover_status_by_ability, battle_lib.c:4397): the hole a generator state with a
         # paralyzed Limber foe exposed (E1 Gardenia batch).
-        | _holds(tables, state, actions, (AbilityId.LIMBER,))
+        | gains((AbilityId.LIMBER,))
         # Synchronize (effects.synchronize, G-13): a foe holder passes back the paralysis the
         # side's move gave it, or passes the paralysis the side's Static gave it.
         | (uses_move & _inflicts(tables, state, moves, Status.PARALYSIS) & sync_foe)
         | (foe_moves & foes(damaging) & foes(contact) & sync_foe & static)
+        # The side's trainer bag item: a paralysis cure or Full Restore (see ``stage_free``).
+        | item
     )
     # Roar / Whirlwind (step._use_move): BtlCmd_TryWhirlwind draws nothing with no eligible
     # bench Pokemon, BattleSystem_CanWhirlwind nothing for a user of at least the target's
@@ -2415,6 +2537,12 @@ def outcome_laws(
     # (BtlCmd_TryWhirlwind fails at eligibleMons <= 1, battle_script.c:5285-5297, before
     # any drag).
     dragged = foes(roar & (roar_bench >= 1))
+    if fmt.B == 4:
+        # Any opposing battler's Roar can drag this side's Pokemon (its target is the chosen
+        # one, step.py:5677-5680, not ``foe``); over-approximate: whatever the bench and anchor.
+        across = side_of(sides)[:, None] != side_of(sides)[None, :]
+        any_roar = uses_move & (effect == _E.ROAR)
+        dragged = dragged | jnp.any(across & any_roar[None, :], axis=1)
     if loose:
         # The brute force: both draws whenever the side uses Roar, whatever the levels and the
         # bench (the pick's law is then over max(bench, 1) values), and every living party
@@ -2523,7 +2651,7 @@ def outcome_laws(
     trace_party = jnp.any(living_now & (state.ability == AbilityId.TRACE), axis=1)[
         party(fmt, jnp.arange(fmt.B))
     ]
-    tracer = _holds(tables, state, actions, (AbilityId.TRACE,)) | (dragged & trace_party)
+    tracer = gains((AbilityId.TRACE,)) | src.armed | (dragged & trace_party)
     # G-69: a Transform copies its target's Speed, Speed stage and ability (BtlCmd_Transform,
     # battle_script.c:5346-5348; battle_mon.h:57-84): the two end speeds are then often equal, by
     # stats or by a copied speed ability or weather setter the grid does not follow. The tie is
@@ -2561,7 +2689,7 @@ def outcome_laws(
         party(fmt, jnp.arange(fmt.B))
     ]
     # A Transform user copies its target's Shed Skin (G-69).
-    shed_holder = _holds(tables, state, actions, (AbilityId.SHED_SKIN,))
+    shed_holder = gains((AbilityId.SHED_SKIN,))
     shed_skin = live & (
         shed_holder
         | (dragged & shed_party)
@@ -2831,6 +2959,9 @@ def outcome_laws(
         & (chance != 0)
         & single
         & ~lock  # a lock aimed at its user flinches the user, not the foe
+        # B = 4: a third battler's mover or a Trace firing at its MoveEnd can give the target
+        # Inner Focus or Shield Dust before the first mover's flinch (outcome.doubles_ability_change).
+        & ~b4
     )
     proc_effects = (
         _E.SECONDARY_STATUS,
@@ -2870,6 +3001,7 @@ def outcome_laws(
         band_move=base["focus_band"],
         band_self=base["own_band"],
         berry_by_foe=jnp.stack([m["berry_by_foe"] for m in branches]),
+        berry_start=jnp.stack([m["berry_start"] for m in branches]),
         pending_own=base["pending"],
         present_guard=off
         if loose
@@ -2882,7 +3014,10 @@ def outcome_laws(
             )
             # A foe whose Transform copies the side's own Wonder Guard (G-69): the raw
             # BattleMon.ability (battle_script.c:5342-5348).
-            | (foes(xform) & (state.ability[party(fmt, sides), mons] == AbilityId.WONDER_GUARD))
+            | (foes(copier) & (state.ability[party(fmt, sides), mons] == AbilityId.WONDER_GUARD))
+            # A foe's armed Trace that can copy one (outcome.trace_copies).
+            | foes(trace_copies(tables, state, actions, (AbilityId.WONDER_GUARD,), src=src))
+            | foes(handed((AbilityId.WONDER_GUARD,)))
         ),
     )
     kind = jnp.where(
@@ -2907,7 +3042,10 @@ def outcome_laws(
     # CalcCrit draws its crit as a class of the CRIT_DRAWS values (_crit), not in damage classes.
     odds_variants, odds_possible = crit_variants(tables, state, actions, moves)
     if loose:
-        odds_possible = jnp.ones_like(odds_possible)
+        # Every write variant; the trace columns (every stage's odds) stay where an armed Trace
+        # can copy a crit ability (outcome.crit_variants): the brute force reads the odds the
+        # writes reach.
+        odds_possible = odds_possible.at[:, :CRIT_WRITE_VARIANTS].set(True)
     crit_moves = jnp.any(odds_possible & (odds_variants != odds_variants[:, :1]), axis=1)
     compress = jnp.stack(
         [
@@ -2924,6 +3062,7 @@ def outcome_laws(
         compress = jnp.zeros_like(compress)
     thresholds, possible, later_thr = hit_threshold_pair(tables, state, actions, moves)
     later_ok = possible
+    sec_thr, sec_ok = secondary_thresholds(tables, state, actions, moves)
     future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
     if loose:
         # The brute force: the hit law cut at every threshold variant, possible or not
@@ -2940,7 +3079,9 @@ def outcome_laws(
         hit_possible=possible,
         hit_later_thresholds=later_thr,
         hit_later_possible=later_ok,
-        hit_whole=lock,
+        # A lock aimed at its user, or an ability change the threshold grid does not follow
+        # (outcome.ability_whole: an armed Trace, a B = 4 third battler's ability writer).
+        hit_whole=lock | ability_whole(tables, state, actions, moves, src),
         crit_variants=odds_variants,
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored); not for a
@@ -2955,6 +3096,8 @@ def outcome_laws(
         )
         & ~lock,
         secondary_chance=secondary_chance(tables, state, moves),
+        secondary_thresholds=sec_thr,
+        secondary_possible=sec_ok,
         duration_kind=kind.astype(_I32),
         relevant=relevant,
         branch_relevant=per_branch,
@@ -3295,12 +3438,30 @@ def _roll(laws: OutcomeLaws, side: int) -> _Law:
     return list(range(16)), [1] * 16, 16  # rand % 16
 
 
+def secondary_class_law(chances) -> _Law:
+    """The law of the secondary roll ``r = RandNext() % 100`` (battle_lib.c:1552-1556,
+    :1571-1575; battle_script.c:8369-8378) reduced to its class over ``chances`` (the possible
+    ones; ``outcome.secondary_class``): the cuts are the chances within 1-99, each class weighs
+    its width, and its value is its smallest ``r + 1``, or 0 when it fails at every chance.
+    Values in increasing order."""
+    cs = sorted({min(max(int(c), 0), 100) for c in chances})
+    cuts = [c for c in cs if 1 <= c <= 99]
+    lows, highs = [0, *cuts], [*cuts, 100]
+    law = sorted(
+        (0 if low >= cs[-1] else low + 1, high - low)
+        for low, high in zip(lows, highs)
+        if high > low
+    )
+    return [v for v, _ in law], [w for _, w in law], 100
+
+
 def _secondary(laws: OutcomeLaws, side: int) -> _Law:
-    chance = int(laws.secondary_chance[side])
-    if chance == 0:  # applies on every hit
+    """``secondary`` and ``fang_flinch``: the roll's class over the chances its hit can read
+    (``secondary_thresholds``); a chance-0 (``ON_HIT``) effect applies on every hit."""
+    if int(laws.secondary_chance[side]) == 0:  # applies on every hit
         return [1], [1], 1
-    chance = min(max(chance, 0), 100)  # rand % 100 < chance
-    return [0, 1], [100 - chance, chance], 100
+    possible = np.asarray(laws.secondary_possible[side], bool)
+    return secondary_class_law(np.asarray(laws.secondary_thresholds[side])[possible])
 
 
 def _contact(laws: OutcomeLaws, side: int) -> _Law:
@@ -3609,7 +3770,7 @@ def _any_proc(*values: np.ndarray) -> np.ndarray:
     assert values, "a proc condition needs at least one secondary roll"
     out = np.zeros(np.shape(values[0]), bool)
     for v in values:
-        out = out | (v == 1)
+        out = out | _may_proc(v)
     return out
 
 
@@ -3754,6 +3915,11 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         if bool(reads.berry_by_foe[t, s]):
             for elem in (*selfs, ("berry_confusion", (s,))):
                 plan.path(elem, "confusion_berry", *move_conds(foe))
+        # E2-ML-1: in the berry's range at the start, it eats the berry at any earlier action's
+        # MoveEnd (an item, a switch, a miss): a path with no condition on that action.
+        if bool(reads.berry_start[t, s]):
+            for elem in (*selfs, ("berry_confusion", (s,))):
+                plan.path(elem, "confusion_berry_start")
 
     # The first mover's flinch roll: Thunder Fang's own element, else its secondary.
     if bool(reads.fang[first]):
@@ -3892,8 +4058,14 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
 
 
 def _proc(v: np.ndarray) -> np.ndarray:
-    # 1: the secondary roll passed. SKIPPED (not drawn: the hit did not land) is no proc.
+    # 1: the roll passed (Chatter's). SKIPPED (not drawn: the hit did not land) is no proc.
     return v == 1
+
+
+def _may_proc(v: np.ndarray) -> np.ndarray:
+    # A secondary roll's class (outcome.secondary_class): a value above 0 passes at some chance
+    # the hit can read (1 passes at every one). SKIPPED (not drawn) and 0 never proc.
+    return v >= 1
 
 
 def _tri_value(status: int) -> Callable[[np.ndarray], np.ndarray]:
@@ -3933,7 +4105,7 @@ def _tri_attack_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None
         if not bool(laws.reads.tri_attack[s]) or elem not in plan:
             continue
         sec = ("secondary", (s, 0))
-        plan.restrict(elem, "move", Condition((sec,), _proc) if sec in plan else NEVER)
+        plan.restrict(elem, "move", Condition((sec,), _may_proc) if sec in plan else NEVER)
         if branch.first != s:
             continue
         for name, status in (("thaw", Status.FREEZE), ("full_para", Status.PARALYSIS)):

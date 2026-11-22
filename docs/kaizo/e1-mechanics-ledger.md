@@ -1848,10 +1848,17 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   overworld weather (field_battle_data_transfer.c:267). Weather 16 has no battle effect (the field-weather switch's
   default, battle_lib.c:3700; Kaizo keeps it, rom_diff.md:368): the 24 dark-flash rows (Sunyshore Gym, Wayward Cave)
   leave the refusal on that source (manager ruling 4). Weather 14: `AreaCondition.fog_headers` (sorted header ids;
-  `fog_clearable`) lists a fog fight's headers of weather 14 (`OVERWORLD_WEATHER_FOG`, data/trainer.py); Kaizo:
+  `fog_clearable`) is the fog that field Defog can clear: a fog fight's headers of weather 14 (`OVERWORLD_WEATHER_FOG`,
+  data/trainer.py). Weathers 14 and 15 both start a battle in fog (battle_lib.c:3684-3685), but only 14 turns clear
+  with the Defog flag (field_map_change.c:273-277), so deep fog (15) is left out on both sides (decomp and ROM); a
+  seasonal header cannot become 14 (FieldSystem_GetWeather, field_overworld_weather.c:399-422: `sYearlyWeather` holds
+  no fog in the decomp, and `trainer_fog_headers` refuses a ROM table that holds one; vanilla and Kaizo hold none). Kaizo:
   `tools/kaizo/resolve.py` `fog_headers` over `rom_trainer_maps.json` and `rom_map_weather.json` (`Sources.
   map_weather`), into `area_condition`; vanilla: `tools/extract_decomp.py` writes `fog_headers` beside the start
-  condition (header ids from `tools.terrain.header_names`). Kaizo: Byron Split's Route 210 North rows (66-69, 71-76,
+  condition (header ids from `tools.terrain.header_names`); the ROM side (`tools/rom/readers/maps.py`
+  `trainer_fog_headers`: the trainer -> map join and each header's ROM weather byte, `read_trainers` keeps them
+  on fog starts) writes the same field for both games, compared with the decomp in
+  tests/tools/rom/test_trainers.py, and resolve checks it against its own join. Kaizo: Byron Split's Route 210 North rows (66-69, 71-76,
   78, 79, 81, 441, 442, 489, 490), 913 Cyrus #1 (449) and the unplaced-split 636, 637, 659, 660, 748, 774, 776;
   Wake 695 / 696 (start none) and Candice 610 (rain, overrides) are on 363 / 247 without a fog start; deep fog (15:
   Hearthome Gym, Coronet) is never cleared (fmc:275 tests 14 only). MANIFEST_VERSION 37 (table inputs changed:
@@ -2793,9 +2800,73 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     a closing compare reverts: the `_draw_terrain` hunk of 25fcebb5 in tests/strategies.py.
   - 1405cbb2 (after the compare) changes only tests/engine/test_attract.py (two fullset tests), which no snapshot
     part runs: the compare holds for 1405cbb2.
-  - Closing compare: branch `e1-close-h-5` = the new tip with both reverts (the classes sit in different parts,
-    `sample` and `gen`, so one run attributes each). Expected: COMPARE_RC=0 with the same allow-new; a turn-0 drift
-    hides later `gen` steps today, so any other `gen` difference shows there first.
+  - First closing compare `snapcmp-e1closeh6-462ce77`: branch `e1-close-h-6` (462ce77b) = tip 507220df (after the
+    train merge) with the class A and class B reverts, against the train-tip 38099359 capture (82e54463 plus an
+    off-site test change). COMPARE_RC=1, 101 ok, 1 diverged, 20 generator drift. Log
+    `_scratch/rent/out/snapcmp-e1closeh6-462ce77/fetch-1795303179/compare.log`. With the terrain drift reverted, the
+    two classes it hid showed up:
+  - Diverged, class C (H-1, Acid Rain at B = 2): `130-139.sample` seed 136 turn 3 `.sample_outcome.future_hit[0]`
+    53 -> 47 (and [1] 53 -> 1). Cause: H-1 grids the masks an Acid Rain write leaves (`_future_fields`) and so drops
+    the B = 2 loose source (`acid = acid_rain_reachable(...) if fmt.B > 2 else False`, outcome.py:844). Where a
+    Pursuit can chase a U-turn or switch (subscript_pursuit.s:100, :115; battle_script.c:6899-6916) the class
+    `hit_class(53, {46, 85})` = 47 is stored where main stored the raw 53. Seed 136: Pursuit against U-turn, with
+    Gravity on. Every reachable mask gives the thresholds {46, 85}, so the class decides the hit exactly as the roll
+    does. The hit is not due (timer 2, battle_controller_player.c:1767-1769), so no `step` part moved. Intended
+    mechanic, sound. The single change a closing compare reverts: outcome.py:844 back to
+    `acid = acid_rain_reachable(state, actions, uses, effect)`. Report: `_scratch/e1/h-next/close-h6-diverge-report.md`.
+  - Generator drift, class D (H-2 / H-3, new abilities): all 20 `gen` parts, first diffs such as `.in_state.ability`
+    25 -> 99, 24 -> 101, 28 -> 98, and the ability slots, actions and speeds that follow from them. Cause:
+    `supported_pokemon` (tests/strategies.py:623) draws every ability slot that is not `AbilityId.UNSUPPORTED`, and
+    batch H implements eight more abilities: AbilityId 97-104, Immunity, Own Tempo, Water Veil, Magma Armor,
+    Oblivious (H-2) and Color Change, Marvel Scale, Soundproof (H-3). Generator only. Batch H adds no move effect and
+    no M1 item. The single change a closing compare reverts: the slot filter keeps ids below `AbilityId.IMMUNITY`.
+  - Closing compare: branch `e1-close-h-7` = 507220df with the class A, B, C and D reverts, against the 38099359
+    capture with the same allow-new. Expected: COMPARE_RC=0. (`e1-close-h-5`, cut before the train merge, was
+    cancelled.)
+  - Result `snapcmp-e1closeh7-5ba6b5b` (5ba6b5bc): `compare: ok`, COMPARE_RC=0, 102 ok, 0 diverged, 0 error, 0 sampler
+    drift, 20 generator drift. Log `_scratch/rent/out/snapcmp-e1closeh7-5ba6b5b/fetch-1795307088/compare.log`. All
+    step, jitstep, sample, rest, ai, roark.trace and roark.rank parts are identical, so batch H's gate holds.
+  - The 20 gen parts of close-h-7 still drift; class D (above) and class E (below) account for all of it. A gen
+    part passes as generator drift when every differing entry is an input `tests/strategies.py` draws
+    (`classify_gen`, tools/snap_compare.py:172-179). That alone does not make it harmless: some drawn inputs
+    come from engine functions (`legal_action_pair` draws from `engine.actions.legal_actions`,
+    strategies.py:2313-2324; the strategies also call `hooks.battle_start` and `calc_stats`), so a legality or
+    switch-in change would show only as drift. Each gen class is therefore named and reverted, and the gate
+    is a closing compare with gen drift 0. With class D reverted, the first drift still appears in all 20 gen parts. In 16 of them
+    it comes at a later seed or turn than in close-h-6, and in 4 (seeds 20, 100, 150, 170) it is unchanged (for example seed 3 turn 4 `speed_rec`, seed 11 turn 4 `in_actions`, seed 32
+    turn 2 `curled`, seed 81 turn 2 `in_outcome.call`). Six still drift at turn 1: seeds 20, 100, 150, 161, 170 and
+    185. Seed 20's `speed_rec[1]` 167 -> 236 is the same as in close-h-6, and `speed_rec` is a raw `st.integers`
+    draw (tests/strategies.py:2174), so the stream moves before it within that example.
+  - Generator drift, class E (H-5, 6567c627, the literal 421): the cause of all 20 remaining gen drifts. Hypothesis
+    6.170.13 keeps a pool of "local constants". On about 5% of integer and float choices,
+    `HypothesisProvider._maybe_draw_constant` (hypothesis/internal/conjecture/providers.py:775-827) returns a
+    literal from that pool instead of a random value. The pool is every int literal with |v| >= 100, plus floats,
+    strings and bytes, taken from every imported non-test module (`_get_local_constants`, providers.py:325-380;
+    `ConstantVisitor`, hypothesis/internal/constants_ast.py:105-180). H-5 adds one new such literal, 421
+    (`SPECIES_CHERRIM`, engine/ids.py:1309, and its `Constant` row, data/game_constants.py:602). That changes which
+    constant a constant draw takes. The first one changed is `speed_rec` (strategies.py:2174, 167 -> 236): the
+    turn-1 drift of seeds 20, 100, 150, 161, 170 and 185. Seed 81's `call` 426 -> 421 is the literal itself.
+    Draw-only: on both commits every draw makes the same choice types under the same constraints, and only the
+    values at constant draws differ. No engine function in the draw path (`legal_actions`, `battle_start`,
+    `calc_stats`) gives a different result, and the Cherrim rule (battle_lib.c:6366) never runs during
+    generation. Windows runs do not show it: there Hypothesis counts the uv-managed stdlib as local, so the pool is
+    about 1044 ints. With the pod's pool copied (`_scratch/e1/tmp/podsite/sitecustomize.py`), close-h-7 reproduces
+    the pod's first drift for seeds 3, 11, 20, 32, 81 and 100. Writing the value as `420 + 1` makes all six
+    identical. The single change a closing compare reverts: 421 written as `420 + 1` in those two lines.
+    Report: `_scratch/e1/h-next/close-h7-gen-report.md`. Every new int literal of 100 or more, float or short string
+    in an imported `src/` or `tools/` module shifts gen draws the same way. Turning the pool off in `draw_inputs`
+    would stop that, but it changes every draw once and needs a fresh main capture: a process item for the
+    manager.
+  - Final closing compare: branch `e1-close-h-8` (e50e2349) = `e1-close-h-7` plus the class E revert, so classes A
+    to E are all reverted. It runs against the 38099359 capture with the same allow-new. Expected: `compare: ok`
+    with 0 generator drift.
+  - Result `snapcmp-e1closeh8-e50e234`: `compare: ok`, COMPARE_RC=0, 122 ok, 0 diverged, 0 error, 0 sampler drift,
+    0 generator drift, seeds 0-199, all groups. Log `_scratch/rent/out/snapcmp-e1closeh8-e50e234/fetch-1795310785/compare.log`.
+    Classes A to E account for every difference between batch H and the train tip.
+  - Baseline: the closing compares of the merged tip use the train-tip capture 38099359 (82e54463, the
+    `train/e3-slowfix-nmw` tip, plus an off-site test change), not main. 507220df contains that train
+    (merge c592ddf9), which merges into main before batch H. Against main, the compare would also show the train's
+    own changes. Against the train tip, every difference is batch H's.
   - Should-fix `REVEALS_ON` (Insomnia / Vital Spirit / Limber on `STATUS_CURE`) is batch I group I-6 (`_scratch/e1/i-next/sheets/ability-status-cure-reveals.md`).
 
 ## Stream state (restart point, 2026-11-19)

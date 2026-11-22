@@ -31,7 +31,8 @@ SETTINGS = SolveSettings(max_depth=1, budget_playouts=100, n_depth0=10)
 @pytest.fixture(scope="module", autouse=True)
 def _small_chunk():
     """``expand``'s programs in 1024-row calls instead of ``CHUNK`` (16384): each
-    ``calls_rows``, ``laws_rows`` and ``step_rows`` call pads to ``CHUNK`` rows, and the
+    ``calls_rows`` and ``step_rows`` call pads to ``CHUNK`` rows (``laws_rows`` to at most
+    ``LAWS_CHUNK``), and the
     ``roark`` fixture's solve reached a 12.9 GB sampled peak. ``sacrifice_endgame``'s
     exhaustive check runs at 1024-row calls instead of ``exhaustive.P`` (8192) likewise
     (8.5 GB beside the ``sacrifice`` solves). A row's result depends on neither the call

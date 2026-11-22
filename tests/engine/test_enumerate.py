@@ -40,6 +40,7 @@ from nuzline.engine.outcome import (
     crit_odds,
     empty_outcome,
     future_thresholds,
+    hit_class,
     hit_threshold,
     hit_thresholds,
     outcome_to_py,
@@ -51,7 +52,7 @@ from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
 from tests.engine.helpers import BATCH, A, roark_real_state, roark_state, sample_rows, step_batch
 from tests.search.fixtures import shinx_vs_cranidos, spike_cannon_root, spore_1v1
-from tests.strategies import any_outcome, legal_action_pair, outcome_law_state
+from tests.strategies import any_outcome, legal_action_pair, outcome_law_state, settle_traces
 
 CHUNK = BATCH  # the suite's one padded row count: one step program for every file
 EMPTY = Outcome(*(np.asarray(f) for f in empty_outcome()))
@@ -571,6 +572,61 @@ def test_mask_sound(tables, names, data):
     acts = data.draw(legal_action_pair(tables, s))
     arbitrary = data.draw(any_outcome())
     seed = data.draw(st.integers(0, 2**31 - 1))
+    _assert_mask_sound(tables, s, acts, arbitrary, seed)
+
+
+# Every bag item whose BattleSystem_UseBagItem branch (battle_system.c:435-758) the engine
+# runs (bag.use_bag_item): HP, the status and confusion cures, Full Restore, PP, the stage
+# params, Guard Spec and Dire Hit.
+SWEEP_BAG_ITEMS = (
+    "Potion",
+    "Hyper Potion",
+    "Max Potion",
+    "Full Restore",
+    "Full Heal",
+    "Antidote",
+    "Burn Heal",
+    "Ice Heal",
+    "Awakening",
+    "Parlyz Heal",
+    "Yellow Flute",
+    "Persim Berry",
+    "Lava Cookie",
+    "Ether",
+    "Max Elixir",
+    "Guard Spec.",
+    "Dire Hit",
+    "X Attack",
+    "X Defend",
+    "X Speed",
+    "X Accuracy",
+    "X Special",
+    "X Sp. Def",
+)
+
+
+@pytest.mark.slow
+@settings(max_examples=150, **HYPOTHESIS)
+@given(data=st.data())
+def test_mask_sound_with_a_trainer_item(tables, names, data):
+    # test_mask_sound with the opponent's action forced to a bag item: a trainer item acts
+    # before every move (bcp.c:753-769) and can change any input it writes (status, confusion,
+    # stages, HP, PP, Mist, Focus Energy) that a relevance mask reads at the turn start.
+    s = data.draw(outcome_law_state(tables, names))
+    item = names.item(data.draw(st.sampled_from(SWEEP_BAG_ITEMS)))
+    s = s._replace(
+        trainer_items=s.trainer_items.at[1, 0].set(item),
+        trainer_item_count=s.trainer_item_count.at[1].set(max(int(s.trainer_item_count[1]), 1)),
+    )
+    assume(bool(np.asarray(legal_opponent_actions(tables, s))[FIRST_ITEM_ACTION]))
+    player = np.flatnonzero(np.asarray(legal_actions(tables, s, 0)))
+    acts = np.array([data.draw(st.sampled_from(player.tolist())), FIRST_ITEM_ACTION], np.int32)
+    arbitrary = data.draw(any_outcome())
+    seed = data.draw(st.integers(0, 2**31 - 1))
+    _assert_mask_sound(tables, s, acts, arbitrary, seed)
+
+
+def _assert_mask_sound(tables, s, acts, arbitrary, seed):
     laws = laws_of(tables, s, acts)
     try:
         outcomes, _, drawn = enumerate_drawn(laws)
@@ -786,7 +842,8 @@ def order_state(draw, tables, names) -> BattleState:
         if (a["status"][1, m1] == Status.PARALYSIS) != para0:
             a["status"][1, m1] = a["status"][0, m0] if para0 else Status.NONE
             a["status_counter"][1, m1] = a["status_counter"][0, m0] if para0 else 0
-    return BattleState(**{name: np.asarray(a[name]) for name in BattleState._fields})
+    s = BattleState(**{name: np.asarray(a[name]) for name in BattleState._fields})
+    return settle_traces(tables, s)  # the Trace invariant (STATE.md)
 
 
 @st.composite
@@ -997,3 +1054,85 @@ def test_width_drops_for_goldeen_psybeam_vs_cranidos(kaizo_tables, kaizo_names):
     _, probs = enumerate_outcomes(laws_of(t, s, acts))
     assert len(probs) <= 30000
     assert abs(math.fsum(probs) - 1) < 1e-12
+
+
+# --- trainer bag items in the relevance masks ---------------------------------------
+
+
+def _bag(s, names, item):
+    """``s`` with ``item`` in the opponent's bag slot 0 (action ``FIRST_ITEM_ACTION``)."""
+    return s._replace(
+        trainer_items=s.trainer_items.at[1].set(np.array([names.item(item), 0, 0, 0], np.int16)),
+        trainer_item_count=s.trainer_item_count.at[1].set(1),
+    )
+
+
+def test_a_bag_paralysis_cure_frees_the_end_speed_tie(tables, names):
+    # Player Spe 30; the opponent Spe 20 at +1 (30), paralyzed (x1/4): no end speeds tie, a
+    # faint's neutral points (30 against 20) included, until its Full Heal
+    # (BattleSystem_UseBagItem's HEAL_PARALYSIS, battle_system.c:527-541) runs before every move
+    # (bcp.c:753-769): the end-of-turn sort (battle_lib.c:3364-3382) then meets 30 = 30.
+    s = _bag(roark_state(tables, names), names, "Full Heal")
+    s = s._replace(
+        stats=s.stats.at[0, 0, Stat.SPE - 1].set(30).at[1, 0, Stat.SPE - 1].set(20),
+        stages=s.stages.at[1, Stat.SPE].set(1),
+        status=s.status.at[1, 0].set(Status.PARALYSIS),
+    )
+    acts = np.array([0, FIRST_ITEM_ACTION], np.int32)
+    assert bool(laws_of(tables, s, acts).relevant.end_speed_tie)
+
+
+def test_a_bag_confusion_cure_frees_the_tangled_feet_threshold(tables, names):
+    # A confused Tangled Feet target halves the rate (bcp.c:2944-2946); its Full Heal
+    # (HEAL_CONFUSION, battle_system.c:543-551) ends the confusion before the player's check.
+    s = roark_state(tables, names, player_moves=("Tackle",))
+    s = _bag(s, names, "Full Heal")
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.TANGLED_FEET))
+    acts = np.array([0, FIRST_ITEM_ACTION], np.int32)
+    calm = laws_of(tables, s, acts)
+    confused = laws_of(tables, s._replace(confusion=s.confusion.at[1].set(3)), acts)
+    full = int(calm.hit_thresholds[0, 0])
+    assert int(confused.hit_thresholds[0, 0]) < full
+    assert full in confused.hit_thresholds[0][confused.hit_possible[0]].tolist()
+
+
+def test_a_bag_confusion_cure_hits_on_the_sampled_path(tables, names):
+    # The sampled path of the state above: a roll u = RandNext() % 100 + 1 in (t/2, t]
+    # (bcp.c:2976) takes its class over the laws' grid as sample_outcome does (_move_draws,
+    # hit_class); the Full Heal ends the confusion first (battle_system.c:543-551), so Tackle
+    # hits at the full rate t. A grid without the unconfused variant gives class 0: a miss.
+    s = roark_state(tables, names, player_moves=("Tackle",))
+    s = _bag(s, names, "Full Heal")
+    s = s._replace(
+        ability=s.ability.at[1, 0].set(AbilityId.TANGLED_FEET),
+        confusion=s.confusion.at[1].set(3),
+    )
+    acts = np.array([0, FIRST_ITEM_ACTION], np.int32)
+    laws = laws_of(tables, s, acts)
+    calm = laws_of(tables, s._replace(confusion=s.confusion.at[1].set(0)), acts)
+    full = int(calm.hit_thresholds[0, 0])
+    rolls = np.arange(full // 2 + 1, full + 1)
+    classes = np.asarray(hit_class(rolls, laws.hit_thresholds[0], laws.hit_possible[0]))
+    assert (classes > 0).all()
+    hit = np.broadcast_to(EMPTY.hit, (CHUNK, *EMPTY.hit.shape)).copy()
+    hit[: len(rolls), 0, :] = classes[:, None]
+    rows_ = Outcome(*(np.broadcast_to(f, (CHUNK, *np.shape(f))) for f in EMPTY))._replace(hit=hit)
+    foe_hp = np.asarray(_step(tables, s, acts, rows_).hp)[: len(rolls), 1, int(s.active[1])]
+    assert (foe_hp < int(s.hp[1, s.active[1]])).all()
+
+
+def test_a_bag_x_accuracy_frees_the_future_sight_stage_sum(tables, names):
+    # The opponent's Future Sight is due on the player; its own X Accuracy (ACC_STAGES,
+    # battle_system.c:610-615) raises the attacker's accuracy stage the hit reads.
+    s = roark_state(tables, names)
+    s = _bag(s, names, "X Accuracy")
+    s = s._replace(
+        future_timer=s.future_timer.at[0].set(1),
+        future_damage=s.future_damage.at[0].set(5),
+        future_move=s.future_move.at[0].set(names.move("Future Sight")),
+        future_attacker=s.future_attacker.at[0].set(2),
+        future_sight=s.future_sight.at[0].set(1),
+    )
+    tackle = laws_of(tables, s, np.array([0, 0], np.int32))
+    item = laws_of(tables, s, np.array([0, FIRST_ITEM_ACTION], np.int32))
+    assert item.future_possible[0].sum() > tackle.future_possible[0].sum()
