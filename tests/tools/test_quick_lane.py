@@ -1431,5 +1431,6 @@ def test_the_body_env_carries_spacing_and_the_sweep_knobs_and_setup_records_them
 
 def test_pack_puts_night_and_the_tables_hash_into_meta_env():
     text = (DAY / "pack.sh").read_text(encoding="utf-8")
-    assert text.count("TABLES_CHASH=%s") == 2 and "OLD_TABLES_CHASH=%s" in text
+    # TABLES_CHASH in both meta.env formats (full and delta), OLD_TABLES_CHASH in the delta's only
+    assert len(re.findall(r"(?<!OLD_)TABLES_CHASH=%s", text)) == 2 and text.count("OLD_TABLES_CHASH=%s") == 1
     assert text.count("NIGHT=%s") == 2 and "SWEEP_NIGHT" in text

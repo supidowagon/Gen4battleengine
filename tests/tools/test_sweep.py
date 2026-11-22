@@ -669,7 +669,7 @@ def test_sweep_term_stops_the_jobs_without_sweep_done(tmp_path):
     out = d / "sweep_out"
     assert (out / "SWEEP_STOPPED").is_file() and not (out / "SWEEP_DONE").exists()
     assert "STOPPED by TERM" in (out / "driver.log").read_text()
-    left = subprocess.run(["ps", "-eo", "args="], check=True, capture_output=True, text=True).stdout
+    left = subprocess.run(["ps", "-ww", "-eo", "args="], check=True, capture_output=True, text=True).stdout
     assert _posix(d / "repo") not in left  # the fake pytest processes are gone
     assert "end" not in trace.read_text().split()
 
@@ -886,12 +886,12 @@ def test_sweep_jobs_are_gate_units_while_they_run(tmp_path):
         g = unit.read_text().strip()
         assert (d / "sweep" / "out" / f"{SHORT_A}_1.w").read_text().strip() == "13"
         ps = subprocess.run(
-            ["ps", "-eo", "pgid=,args="], check=True, capture_output=True, text=True
-        )
+            ["ps", "-ww", "-eo", "pgid=,args="], check=True, capture_output=True, text=True
+        )  # -ww: a piped ps cuts args at 80 columns, before the seed of a long tmp path
         assert any(
             ln.split(None, 1)[0] == g and "--hypothesis-seed=1" in ln
             for ln in ps.stdout.splitlines()
-        )  # the pytest process is in the recorded group
+        ), (g, ps.stdout)  # the pytest process is in the recorded group
         work = _posix(tmp_path / "work")
         gate = subprocess.run(
             [BASH, "-c", (f'. "{_posix(d / "bin/gate.sh")}"; NO_W_FILE_GB=12 podgate '
@@ -953,7 +953,7 @@ def test_sweep_a_job_over_its_time_limit_fails_and_the_sweep_goes_on(tmp_path):
     ]
     assert (out / "SWEEP_DONE").is_file()
     assert not list((d / "sweep" / "out" / "run").iterdir())
-    left = subprocess.run(["ps", "-eo", "args="], check=True, capture_output=True, text=True).stdout
+    left = subprocess.run(["ps", "-ww", "-eo", "args="], check=True, capture_output=True, text=True).stdout
     assert "sleep 600" not in left  # the hung job's leftovers were killed
     assert collect.main([str(out), "--night", "20261122", "--tip", "abcdef01"]) == 0
     assert f"(NO-FALSIFIER rc=124, {SHORT_A}, -)" in (out / "sweep_failures.txt").read_text()
@@ -1093,7 +1093,8 @@ def test_fixed_seeds_give_every_node_the_same_seeds_whatever_the_night(capsys):
     assert seeds.parse_seeds("7") == [7]
     assert seeds.parse_seeds("1,4,9") == [1, 4, 9]
     assert seeds.parse_seeds("1..2,9") == [1, 2, 9]
-    for bad in ("", "a", "3..1", "1,1", "1..2,2", "-1", "4294967296", "1..", "1,,2"):
+    for bad in ("", "a", "3..1", "1,1", "1..2,2", "-1", "4294967296", "1..", "1,,2",
+                "1..99999999999999999999"):  # refused before the range is built
         with pytest.raises(ValueError):
             seeds.parse_seeds(bad)
     assert seeds.main(["--seeds", "1..15"]) == 0

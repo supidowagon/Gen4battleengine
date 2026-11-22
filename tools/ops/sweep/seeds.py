@@ -61,6 +61,8 @@ def parse_seeds(spec: str) -> list[int]:
         hi = int(m.group(2)) if m.group(2) is not None else lo
         if hi < lo:
             raise ValueError(f"bad seed range {part!r}: {hi} is under {lo}")
+        if hi >= 2**32:  # before the range is built: a huge B must not fill memory
+            raise ValueError(f"bad seed list {spec!r}: seeds must be under 2**32")
         out.extend(range(lo, hi + 1))
     if not out or max(out) >= 2**32:
         raise ValueError(f"bad seed list {spec!r}: seeds must be under 2**32")
