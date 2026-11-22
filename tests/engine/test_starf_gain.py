@@ -187,7 +187,7 @@ def test_the_partner_switch_trace_chain_law_reads_all_draws(tables, names):
     """The law alone (fast, B = 4): the chain's copied Download makes battler 0's first eat loose
     (``_starf_gain``'s B = 4 armed-Trace term; 008ff3e5 gave the five-value law)."""
     laws = _laws(tables, *_partner_chain(tables, names))
-    assert bool(laws.relevant.starf[0, 0]) and bool(laws.starf_loose[0, 0])
+    assert bool(laws.relevant.starf[1, 0]) and bool(laws.starf_loose[1, 0])
 
 
 def _product_check(tables, s, acts, laws, count, cell=(1, 0), first=0):
@@ -409,19 +409,24 @@ def test_the_b2_replace_eats_the_active_holder_with_entry_0(tables, names, spa, 
 
 
 def _own_salac(tables, names):
-    """Review 4, must 2 (singles): side 1's Blissey holds a Salac Berry at Speed +5 (its other
-    stats at 0), a little above its pinch, and uses Double-Edge; side 0's Bidoof Flings its Starf
-    Berry at it. Double-Edge's recoil (subscript_recoil_1_3.s:14, UPDATE_HP with no item check)
-    can put Blissey at its pinch and AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684-3689) eats the
-    Salac: Speed +6. Bidoof's TryFling (effect_script_0233.s:7, lib.c:6110-6127) then reads the
-    draw with four stats below +6. The old bound: highest 5 + gain 0 = 5, tight."""
+    """Review 4, must 2; review 5, should 1 (singles): side 1's Blissey (level 100) holds a Salac
+    Berry at Speed +5 (its other stats at 0), one HP above its pinch, and uses Double-Edge; side
+    0's Shuckle (level 50) Flings its Starf Berry at it. Blissey moves first (Speed 130 at +5 to
+    Shuckle's 17) and Double-Edge leaves Shuckle standing (Attack 40 into Defense 242, Rock
+    resists: 27 at most, a crit with the top roll, of its 87 HP). The recoil
+    (subscript_recoil_1_3.s:10-14, BattleSystem_Divide, at least 1; UPDATE_HP with no item check)
+    puts Blissey at its pinch (lib.c:4799-4809) and AFTER_MOVE_EFFECT_ATTACKER_ITEM
+    (bcp.c:3684-3689) eats the Salac: Speed +6. Shuckle's TryFling (effect_script_0233.s:7,
+    lib.c:6110-6127) then reads the draw with four stats below +6. The old bound: highest 5 +
+    gain 0 = 5, tight."""
     s = make_state(
         tables,
-        [_mon(names, "Bidoof", ["Fling"], 5, "Starf Berry")],
+        [_mon(names, "Shuckle", ["Fling"], 50, "Starf Berry")],
         [_mon(names, "Blissey", ["Double-Edge"], 100, "Salac Berry")],
     )
+    assert int(s.stats[1, 0, Stat.SPE - 1]) > int(s.stats[0, 0, Stat.SPE - 1])
     top = int(s.max_hp[1, 0])
-    s = s.replace_hp(1, 0, top // 4 + 2)
+    s = s.replace_hp(1, 0, top // 4 + 1)
     s = s._replace(stages=s.stages.at[1, Stat.SPE].set(5))
     acts = jnp.asarray(
         [names.move_slot(s, 0, "Fling"), names.move_slot(s, 1, "Double-Edge")], jnp.int32
@@ -433,6 +438,29 @@ def test_a_flung_starf_after_the_own_pinch_berry_reads_all_draws(tables, names):
     """Review 4, must 2 (fast, law alone): ``_starf_gain`` plus d's own held stat pinch berry,
     +1 on the flung path: side 1's flung-Starf draw is loose (20137b9e: tight, five values)."""
     laws = _laws(tables, *_own_salac(tables, names))
+    assert bool(laws.relevant.starf[1, 0]) and bool(laws.starf_loose[1, 0])
+
+
+def test_a_plucked_starf_after_the_own_pinch_berry_reads_all_draws(tables, names):
+    """Review 5, note (fast, law alone): the plucked path. Side 0's Jolteon (level 50, Speed 142)
+    holds a Starf Berry and Tackles side 1's Blissey (level 100, Speed 130), which holds a Liechi
+    Berry at Attack +5, one HP above its pinch: the hit (31 at most, 62 with a crit, of 159) puts
+    it at its pinch and AFTER_MOVE_EFFECT_DEFENDER_ITEM (bcp.c:3691-3696) eats the Liechi:
+    Attack +6. Blissey's Bug Bite then eats the Starf Berry with four stats below +6: side 1's
+    Starf draw is loose (the EAT_BERRY +1 and the own-berry +1 both count it)."""
+    s = make_state(
+        tables,
+        [_mon(names, "Jolteon", ["Tackle"], 50, "Starf Berry")],
+        [_mon(names, "Blissey", ["Bug Bite"], 100, "Liechi Berry")],
+    )
+    assert int(s.stats[0, 0, Stat.SPE - 1]) > int(s.stats[1, 0, Stat.SPE - 1])
+    top = int(s.max_hp[1, 0])
+    s = s.replace_hp(1, 0, top // 4 + 1)
+    s = s._replace(stages=s.stages.at[1, Stat.ATK].set(5))
+    acts = jnp.asarray(
+        [names.move_slot(s, 0, "Tackle"), names.move_slot(s, 1, "Bug Bite")], jnp.int32
+    )
+    laws = _laws(tables, s, acts)
     assert bool(laws.relevant.starf[1, 0]) and bool(laws.starf_loose[1, 0])
 
 
