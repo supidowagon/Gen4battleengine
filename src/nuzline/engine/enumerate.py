@@ -323,14 +323,17 @@ from nuzline.engine.order import (
     used_moves,
 )
 from nuzline.engine.outcome import (
+    ABILITY_WRITERS,
     ACUPRESSURE_DRAWS,
     CRIT_DRAWS,
+    CRIT_WRITE_VARIANTS,
     MAX_HITS,
     PRESENT_CUTS,
     PRESENT_HEAL,
     PROTECT_RATES,
     ROAR_LEVEL_VALUES,
     Outcome,
+    ability_whole,
     acid_rain_reachable,
     armored,
     crit_class,
@@ -346,9 +349,9 @@ from nuzline.engine.outcome import (
     roar_inputs,
     roar_levels,
     secondary_chance,
+    secondary_thresholds,
     self_lock,
     trace_copies,
-    trace_whole,
 )
 from nuzline.engine.outcome import (
     kings_rock_chance as outcome_kings_rock_chance,
@@ -440,7 +443,11 @@ class OutcomeLaws(NamedTuple):
     crit_variants: jnp.ndarray  # int32[B, outcome.CRIT_VARIANTS], variant 0 the turn start
     crit_possible: jnp.ndarray  # bool[B, outcome.CRIT_VARIANTS]
     no_crit: jnp.ndarray  # bool[B], Lucky Chant on the defending side (outcome.py:157)
-    secondary_chance: jnp.ndarray  # int32[B], tables.move_effect_chance of the move
+    secondary_chance: jnp.ndarray  # int32[B], the chance at the turn start (Serene Grace then)
+    # The chances the secondary rolls can be read with at the hit and which are possible
+    # (outcome.secondary_thresholds): the roll's class over them (outcome.secondary_class).
+    secondary_thresholds: jnp.ndarray  # int32[B, 2]
+    secondary_possible: jnp.ndarray  # bool[B, 2]
     duration_kind: jnp.ndarray  # int32[B], DURATION_*
     relevant: Outcome  # bool, each field shaped like the ``Outcome`` field: any branch
     branch_relevant: Outcome  # bool, a leading axis [2]: the branch speed_tie = 0, 1
@@ -1818,6 +1825,10 @@ def damage_inputs_can_change(
     # hit (either battler's), its Intimidate or Download a stage it reads, its weather ability the
     # weather.
     foe_action = foe_action | (live & jnp.any(trace_copies(tables, state, actions)))
+    # At B = 4 a third battler's Skill Swap, Worry Seed or Gastro Acid (outcome.ABILITY_WRITERS)
+    # can change the hit's ability factors too (``foe_move`` reads the foe's move alone).
+    writes = uses_move & _any_of(effect, ABILITY_WRITERS)
+    foe_action = foe_action | (live & (fmt.B == 4) & jnp.any(writes))
 
     # A White Herb resets its holder's lowered stages to 0 (hooks.held_item_check,
     # battle_lib.c:4875-4887). The hit reads two stages only, the attacker's Attack / Sp. Atk
@@ -2044,15 +2055,22 @@ def outcome_laws(
     )
     crit = lands & rolled[:, None]
     secondary = lands & ((chance != 0) & _any_of(effect, _PROC_EFFECTS))[:, None]
-    holders = _holds(
-        tables, state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
-    )
     # G-69: a side whose Transform lands before the foe's contact hit holds the foe's ability then
     # (BtlCmd_Transform copies ``ability``, battle_script.c:5346-5348, battle_mon.h:84), but not its
     # gender (a separate field, battle_mon.h after ``ability``; ``transformedGender`` is the
     # sprite's, :5338). Over-approximate: the Transform may move later or fail.
-    xform = uses_move & (effect == _E.TRANSFORM)
-    holders = holders | (xform & foes(holders))
+    # Its own Role Play (subscript_copy_ability.s:14-15) or Skill Swap
+    # (subscript_exchange_abilities.s:21-24) gives it the foe's raw ability alike (E3-B2-5,
+    # E3-2-5): ``copier``; ``gains`` is ``_holds`` with that copy.
+    copier = uses_move & _any_of(effect, (_E.TRANSFORM, _E.ROLE_PLAY, _E.SKILL_SWAP))
+    raw_now = state.ability[party(fmt, sides), mons]
+
+    def gains(abilities) -> jnp.ndarray:
+        return _holds(tables, state, actions, abilities) | (
+            copier & foes(_any_of(raw_now, abilities))
+        )
+
+    holders = gains((AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY))
     # BtlCmd_TryAttract (effects._attractable): different genders, neither genderless.
     gender = state.gender.astype(_I32)[party(fmt, jnp.arange(fmt.B))]  # each battler's party
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.gender.shape[1] - 1)
@@ -2074,7 +2092,7 @@ def outcome_laws(
     # A Transform user copies the foe's Cute Charm (G-69) and keeps its own gender. Raw: the
     # copy is BattleMon.ability's (battle_script.c:5342-5348).
     foe_charm = foes(state.ability[party(fmt, sides), mons] == AbilityId.CUTE_CHARM)
-    charm_copied = xform & foe_charm & lovers(gender[sides, mons], attacker_gender)
+    charm_copied = copier & foe_charm & lovers(gender[sides, mons], attacker_gender)
     # An armed Trace that can copy Cute Charm at a MoveEnd (outcome.trace_copies), on the holder
     # active then (the one it switches in, if it switches).
     holder_gender = jnp.where(switch, gender[sides, incoming], gender[sides, mons])
@@ -2083,7 +2101,7 @@ def outcome_laws(
     )
     charm = (charm_now | charm_later | charm_copied | charm_traced) & calm
     if loose:
-        charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
+        charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (copier & foe_charm)
     holders = holders | charm
     # H-4 Destiny Knot (battle_lib.c:4546-4566): a knot holder's contact hit that makes a Cute
     # Charm foe infatuate it infatuates that foe back: the foe's attract check, if it moves later
@@ -2216,7 +2234,7 @@ def outcome_laws(
     if loose:
         calm_now = jnp.ones((fmt.B,), bool)
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
-    kings_rock = outcome_kings_rock_chance(tables, state)
+    kings_rock = outcome_kings_rock_chance(tables, state, actions, moves)
     kings_move = (tables.move_flags[moves] & MoveFlag.KINGS_ROCK) != 0
     # E3-B2-1: a Fling inflicts what its item's fling effect says on the foe (effects._fling): a
     # paralysis (Light Ball), a confusion (a flavor berry: it confuses the foe whose nature
@@ -2386,8 +2404,8 @@ def outcome_laws(
         | plucks
         | item
     )
-    static = _holds(tables, state, actions, (AbilityId.STATIC,))
-    sync_foe = foes(_holds(tables, state, actions, (AbilityId.SYNCHRONIZE,)))
+    static = gains((AbilityId.STATIC,))
+    sync_foe = foes(gains((AbilityId.SYNCHRONIZE,)))
     # A Lum or Cheri Berry cures paralysis, held or plucked (hooks.held_item_check,
     # pluck_berry).
     lum = _holds_item(
@@ -2920,7 +2938,7 @@ def outcome_laws(
             )
             # A foe whose Transform copies the side's own Wonder Guard (G-69): the raw
             # BattleMon.ability (battle_script.c:5342-5348).
-            | (foes(xform) & (state.ability[party(fmt, sides), mons] == AbilityId.WONDER_GUARD))
+            | (foes(copier) & (state.ability[party(fmt, sides), mons] == AbilityId.WONDER_GUARD))
             # A foe's armed Trace that can copy one (outcome.trace_copies).
             | foes(trace_copies(tables, state, actions, (AbilityId.WONDER_GUARD,)))
         ),
@@ -2947,7 +2965,10 @@ def outcome_laws(
     # CalcCrit draws its crit as a class of the CRIT_DRAWS values (_crit), not in damage classes.
     odds_variants, odds_possible = crit_variants(tables, state, actions, moves)
     if loose:
-        odds_possible = jnp.ones_like(odds_possible)
+        # Every write variant; the trace columns (every stage's odds) stay where an armed Trace
+        # can copy a crit ability (outcome.crit_variants): the brute force reads the odds the
+        # writes reach.
+        odds_possible = odds_possible.at[:, :CRIT_WRITE_VARIANTS].set(True)
     crit_moves = jnp.any(odds_possible & (odds_variants != odds_variants[:, :1]), axis=1)
     compress = jnp.stack(
         [
@@ -2964,6 +2985,7 @@ def outcome_laws(
         compress = jnp.zeros_like(compress)
     thresholds, possible, later_thr = hit_threshold_pair(tables, state, actions, moves)
     later_ok = possible
+    sec_thr, sec_ok = secondary_thresholds(tables, state, actions, moves)
     future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
     if loose:
         # The brute force: the hit law cut at every threshold variant, possible or not
@@ -2980,8 +3002,9 @@ def outcome_laws(
         hit_possible=possible,
         hit_later_thresholds=later_thr,
         hit_later_possible=later_ok,
-        # A lock aimed at its user, or an armed Trace on the field (outcome.trace_whole).
-        hit_whole=lock | trace_whole(tables, state, actions),
+        # A lock aimed at its user, or an ability change the threshold grid does not follow
+        # (outcome.ability_whole: an armed Trace, a B = 4 third battler's ability writer).
+        hit_whole=lock | ability_whole(tables, state, actions, moves),
         crit_variants=odds_variants,
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored); not for a
@@ -2996,6 +3019,8 @@ def outcome_laws(
         )
         & ~lock,
         secondary_chance=secondary_chance(tables, state, moves),
+        secondary_thresholds=sec_thr,
+        secondary_possible=sec_ok,
         duration_kind=kind.astype(_I32),
         relevant=relevant,
         branch_relevant=per_branch,
@@ -3336,12 +3361,30 @@ def _roll(laws: OutcomeLaws, side: int) -> _Law:
     return list(range(16)), [1] * 16, 16  # rand % 16
 
 
+def secondary_class_law(chances) -> _Law:
+    """The law of the secondary roll ``r = RandNext() % 100`` (battle_lib.c:1552-1556,
+    :1571-1575; battle_script.c:8369-8378) reduced to its class over ``chances`` (the possible
+    ones; ``outcome.secondary_class``): the cuts are the chances within 1-99, each class weighs
+    its width, and its value is its smallest ``r + 1``, or 0 when it fails at every chance.
+    Values in increasing order."""
+    cs = sorted({min(max(int(c), 0), 100) for c in chances})
+    cuts = [c for c in cs if 1 <= c <= 99]
+    lows, highs = [0, *cuts], [*cuts, 100]
+    law = sorted(
+        (0 if low >= cs[-1] else low + 1, high - low)
+        for low, high in zip(lows, highs)
+        if high > low
+    )
+    return [v for v, _ in law], [w for _, w in law], 100
+
+
 def _secondary(laws: OutcomeLaws, side: int) -> _Law:
-    chance = int(laws.secondary_chance[side])
-    if chance == 0:  # applies on every hit
+    """``secondary`` and ``fang_flinch``: the roll's class over the chances its hit can read
+    (``secondary_thresholds``); a chance-0 (``ON_HIT``) effect applies on every hit."""
+    if int(laws.secondary_chance[side]) == 0:  # applies on every hit
         return [1], [1], 1
-    chance = min(max(chance, 0), 100)  # rand % 100 < chance
-    return [0, 1], [100 - chance, chance], 100
+    possible = np.asarray(laws.secondary_possible[side], bool)
+    return secondary_class_law(np.asarray(laws.secondary_thresholds[side])[possible])
 
 
 def _contact(laws: OutcomeLaws, side: int) -> _Law:
@@ -3650,7 +3693,7 @@ def _any_proc(*values: np.ndarray) -> np.ndarray:
     assert values, "a proc condition needs at least one secondary roll"
     out = np.zeros(np.shape(values[0]), bool)
     for v in values:
-        out = out | (v == 1)
+        out = out | _may_proc(v)
     return out
 
 
@@ -3933,8 +3976,14 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
 
 
 def _proc(v: np.ndarray) -> np.ndarray:
-    # 1: the secondary roll passed. SKIPPED (not drawn: the hit did not land) is no proc.
+    # 1: the roll passed (Chatter's). SKIPPED (not drawn: the hit did not land) is no proc.
     return v == 1
+
+
+def _may_proc(v: np.ndarray) -> np.ndarray:
+    # A secondary roll's class (outcome.secondary_class): a value above 0 passes at some chance
+    # the hit can read (1 passes at every one). SKIPPED (not drawn) and 0 never proc.
+    return v >= 1
 
 
 def _tri_value(status: int) -> Callable[[np.ndarray], np.ndarray]:
@@ -3974,7 +4023,7 @@ def _tri_attack_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None
         if not bool(laws.reads.tri_attack[s]) or elem not in plan:
             continue
         sec = ("secondary", (s, 0))
-        plan.restrict(elem, "move", Condition((sec,), _proc) if sec in plan else NEVER)
+        plan.restrict(elem, "move", Condition((sec,), _may_proc) if sec in plan else NEVER)
         if branch.first != s:
             continue
         for name, status in (("thaw", Status.FREEZE), ("full_para", Status.PARALYSIS)):
