@@ -148,7 +148,7 @@ from nuzline.engine.format import foe, format_of, party
 from nuzline.engine.ids import AbilityId, ItemId, Type
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
-SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
+SWITCH_SITES = 9  # the vanilla layout's width (roark.md 11.1); the bound below is 8
 # Its bound for every vanilla trainer the flat layout accepts (every party move in
 # ``commands.MOVE_EFFECTS``: Roark, id 246, and four one-Pokemon parties with Tackle): a draw needs
 # a move flagged SUPER_EFFECTIVE (``BattleSystem_CalcEffectiveness``, battle_lib.c:2681-2730, no
