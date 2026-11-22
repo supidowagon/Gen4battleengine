@@ -86,8 +86,7 @@ if [ "$DELTA" = 0 ]; then
   # Test list: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]". The uploaded copy drops comment
   # and blank lines, and that copy is what gets checked.
   L=$(tr -d '\r' < "$LIST" | pick -vE "$COMMENT") || exit 3
-  printf '%s
-' "$L" | sed '/^$/d' > "$P/files.txt"
+  printf '%s\n' "$L" | sed '/^$/d' > "$P/files.txt"
   [ -s "$P/files.txt" ] || refuse "test list has no entries" "$LIST"
   deny "files.txt lines outside the format '<tests path or id> <ids per chunk> [A] [<GB>G]'" "$(cat "$P/files.txt")" -vE "$LINE"
   COMMIT=$(git -C "$REPO" rev-parse --verify "$C^{commit}")
@@ -95,8 +94,7 @@ if [ "$DELTA" = 0 ]; then
   git -C "$REPO" -c core.autocrlf=false archive --format=tar -o "$P/code.tar" "$COMMIT"
   cp "$TB" "$P/tables.tar.xz"
 else
-  printf '%s
-' "$IDS" | sed '/^$/d' > "$P/ids.txt"   # at most 5, checked above
+  printf '%s\n' "$IDS" | sed '/^$/d' > "$P/ids.txt"   # at most 5, checked above
   COMMIT="$NEW"
   pack_delta_build "$REPO" "$OLD" "$NEW" "$P"
   [ "$SHIP" = 0 ] || cp "$TBS" "$P/tables.tar.xz"
@@ -105,46 +103,17 @@ pod_bin "$TOP" "$OPS" "$P/bin" || refuse "could not extract tools/ops/day/pod at
 pack_draw_beacons   # WF, WD
 PODSUM=$(pod_sum "$P/bin"); PODW=$(pod_wsum "$P/bin")
 if [ "$DELTA" = 0 ]; then
-  printf 'COMMIT=%s
-DECOMP=%s
-OPS=%s
-MARK="%s"
-GATE_VERSION=2
-POD_SCRIPTS=%s
-POD_WEIGHTS=%s
-TREE=%s
-TABLES_KEY=%s
-WATCH_F=%s
-WATCH_D=%s
-' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$PODW" "$TREE" "$TKEY" "$WF" "$WD" > "$P/meta.env"
+  printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nTREE=%s\nTABLES_KEY=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$PODW" "$TREE" "$TKEY" "$WF" "$WD" > "$P/meta.env"
   CT=$(tar -tf "$P/code.tar")
 else
-  printf 'MODE=delta
-OLD=%s
-NEW=%s
-OLD_TREE=%s
-NEW_TREE=%s
-OLD_TABLES_KEY=%s
-TABLES_KEY=%s
-COMMIT=%s
-DECOMP=%s
-OPS=%s
-GATE_VERSION=2
-POD_SCRIPTS=%s
-POD_WEIGHTS=%s
-WATCH_F=%s
-WATCH_D=%s
-' "$OLD" "$NEW" "$OLD_TREE" "$NEW_TREE" "$OKEY" "$NKEY" "$COMMIT" "$DECOMP" "$OPS" "$PODSUM" "$PODW" "$WF" "$WD" > "$P/meta.env"
+  printf 'MODE=delta\nOLD=%s\nNEW=%s\nOLD_TREE=%s\nNEW_TREE=%s\nOLD_TABLES_KEY=%s\nTABLES_KEY=%s\nCOMMIT=%s\nDECOMP=%s\nOPS=%s\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$OLD" "$NEW" "$OLD_TREE" "$NEW_TREE" "$OKEY" "$NKEY" "$COMMIT" "$DECOMP" "$OPS" "$PODSUM" "$PODW" "$WF" "$WD" > "$P/meta.env"
   CT=$(tar -tf "$P/delta.tar")
 fi
 TALL=""; T=""
 if [ -f "$P/tables.tar.xz" ]; then TALL=$(tar -tJf "$P/tables.tar.xz")   # TALL: directories included
-  T=$(printf '%s
-' "$TALL" | pick -v '/$') || exit 3; fi                  # T: files only
+  T=$(printf '%s\n' "$TALL" | pick -v '/$') || exit 3; fi                  # T: files only
 deny "tables entry with '..', a leading '/' or './'" "$TALL" -E "$BADPATH"
-deny "forbidden files" "$(printf '%s
-%s
-' "$CT" "$TALL")" -iE "$FORBID"
+deny "forbidden files" "$(printf '%s\n%s\n' "$CT" "$TALL")" -iE "$FORBID"
 deny "calc or docs-sheet extraction in code.tar" "$CT" -E "$TABLE_DENY"
 deny "calc or docs-sheet extraction in tables" "$TALL" -E "$TABLE_DENY"
 deny "tables entry outside the allowed data/ paths" "$T" -vE "$TABLE_ALLOW"

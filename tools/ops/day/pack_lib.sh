@@ -55,6 +55,13 @@ pack_send() {
 # as D + A. Refuses: another status, a path with a newline, '..', a leading '/' or './',
 # a forbidden file, more than DELTA_MAX_FILES (default 1000) changed files (a delta that large is a
 # full run). Sets DELTA_ADD and DELTA_DEL (counts) and DELTA_PATHS (the A/M/T paths, one per line).
+# pack_delta_batch <repo> <new> <outdir> <path>...: git archive of those paths of <new>, appended
+# to <outdir>/delta.tar.
+pack_delta_batch() { local repo=$1 new=$2 out=$3; shift 3
+  git -C "$repo" -c core.autocrlf=false --literal-pathspecs archive --format=tar -o "$out/delta.part.tar" "$new" -- "$@" \
+    || refuse "git archive of the changed files failed" ""
+  tar -A -f "$out/delta.tar" "$out/delta.part.tar" || refuse "tar --concatenate of the delta failed" ""
+  rm -f "$out/delta.part.tar"; }
 pack_delta_build() {
   local repo=$1 old=$2 new=$3 out=$4 st f paths=() dels=() max="${DELTA_MAX_FILES:-1000}"
   git -C "$repo" -c core.quotepath=off diff --no-renames --name-status -z "$old" "$new" > "$out/changes.z" \
@@ -70,9 +77,14 @@ pack_delta_build() {
 $(printf '%s\n' "${dels[@]+"${dels[@]}"}")" -E "$BADPATH"
   deny "forbidden files in the delta" "$DELTA_PATHS" -iE "$FORBID"
   deny "calc or docs-sheet extraction in the delta" "$DELTA_PATHS" -E "$TABLE_DENY"
-  if [ "${#paths[@]}" -gt 0 ]; then
-    git -C "$repo" -c core.autocrlf=false --literal-pathspecs archive --format=tar -o "$out/delta.tar" "$new" -- "${paths[@]}" \
-      || refuse "git archive of the changed files failed" ""
-  else tar -cf "$out/delta.tar" -T /dev/null; fi   # no path: git archive would pack the whole tree
+  # git archive per batch of at most DELTA_ARG_CHARS (default 12000) characters of paths, so no
+  # command line nears Git Bash's 32 KB limit; the batches are joined with tar --concatenate.
+  tar -cf "$out/delta.tar" -T /dev/null   # no path: an empty tar (git archive would pack the whole tree)
+  local batch=() len=0 lim="${DELTA_ARG_CHARS:-12000}"
+  for f in "${paths[@]+"${paths[@]}"}"; do
+    if [ "${#batch[@]}" -gt 0 ] && [ $(( len + ${#f} + 1 )) -gt "$lim" ]; then
+      pack_delta_batch "$repo" "$new" "$out" "${batch[@]}"; batch=(); len=0; fi
+    batch+=("$f"); len=$(( len + ${#f} + 1 )); done
+  [ "${#batch[@]}" = 0 ] || pack_delta_batch "$repo" "$new" "$out" "${batch[@]}"
   printf '%s\n' "${dels[@]+"${dels[@]}"}" | sed '/^$/d' > "$out/deletions.txt"
   DELTA_ADD=${#paths[@]}; DELTA_DEL=${#dels[@]}; }
