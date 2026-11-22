@@ -3545,6 +3545,40 @@ def _move_slot(state: BattleState, b, move) -> jnp.ndarray:
     return jnp.argmax(row == jnp.asarray(move, _I32)).astype(_I32)
 
 
+def _pursuit_pp(state: BattleState, b, move) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(knows bool, pp int32)``: the PP cell ``BtlCmd_TryPursuit`` reads and spends for battler
+    ``b``'s ``move`` (battle_script.c:6910-6922): ``ppCur[Battler_SlotForMove]``. SlotForMove
+    gives LEARNED_MOVES_MAX (4) when no slot holds the move (battle_lib.c:2376-2387), and
+    ``ppCur[4]`` is ``ppUps[0]``, the byte after ``ppCur`` (battle_mon.h:99-100): reachable when a
+    carried TEMP_VALUE 5 reads an IV word that is Pursuit (``order.past_moves_word``) and the
+    Pokemon does not know it (review 7). ``knows``: a slot holds it (``_move_slot``'s)."""
+    fmt = format_of(state)
+    mon = state.active[b]
+    row = state.moves[party(fmt, b), mon].astype(_I32)
+    knows = jnp.any(row == jnp.asarray(move, _I32))
+    slot = _move_slot(state, b, move)
+    pp = jnp.where(
+        knows, state.pp[party(fmt, b), mon, slot], state.pp_ups[party(fmt, b), mon, 0]
+    ).astype(_I32)
+    return knows, pp
+
+
+def _spend_pursuit_pp(state: BattleState, b, move, spend) -> BattleState:
+    """``state`` with ``spend`` (0-2) taken from ``_pursuit_pp``'s cell: a move slot's PP, or
+    ``ppUps[0]`` where no slot holds the move (battle_mon.h:99-100)."""
+    fmt = format_of(state)
+    mon = state.active[b]
+    knows, _ = _pursuit_pp(state, b, move)
+    slot = _move_slot(state, b, move)
+    spend = jnp.asarray(spend, _I32)
+    on_pp = jnp.where(knows, spend, 0).astype(state.pp.dtype)
+    on_ups = jnp.where(knows, 0, spend).astype(state.pp_ups.dtype)
+    return state._replace(
+        pp=state.pp.at[party(fmt, b), mon, slot].add(-on_pp),
+        pp_ups=state.pp_ups.at[party(fmt, b), mon, 0].add(-on_ups),
+    )
+
+
 def _pursuer_move(state: BattleState, pursuer, action, move, struggling):
     """``(has, move)`` of ``BtlCmd_TryPursuit``'s move choice for ``pursuer`` (battle_script.c:
     6905-6909): its Encore move when the Encore slot still holds it, whatever it selected (a FIGHT,
@@ -3578,13 +3612,12 @@ def _pursuer_ready(tables: Tables, state: BattleState, pursuer, action, move, st
     mon = state.active[pursuer]
     status = state.status[party(fmt, pursuer), mon]
     has, used = _pursuer_move(state, pursuer, action, move, struggling)
-    slot = _move_slot(state, pursuer, used)
     return (
         ~truant_loafs(state, pursuer)
         & (state.over == 0)
         & has
         & (tables.move_effect[used] == EffectId.PURSUIT)
-        & (state.pp[party(fmt, pursuer), mon, slot] > 0)
+        & (_pursuit_pp(state, pursuer, used)[1] > 0)
         & (state.hp[party(fmt, pursuer), mon] > 0)
         & (status != Status.SLEEP)
         & (status != Status.FREEZE)
@@ -3680,23 +3713,17 @@ def _pursuit_hit(
     ``effects.shell_bell_heal``) or Life Orb's recoil (``effects.life_orb_recoil``; one
     holder holds one of them). The switching side chose no FIGHT, so no Custap flag is set.
     ``switcher``: the switching battler (``switchedMon``)."""
-    fmt = format_of(state)
     # The move (an Encored pursuer's whatever it chose) and the PP slot: the first slot holding it
     # (battle_script.c:6905-6917, ``Battler_SlotForMove``).
     _, move = _pursuer_move(
         state, pursuer, actions[pursuer], choices[0][pursuer], choices[1][pursuer]
     )
-    slot = _move_slot(state, pursuer, move)
-    mon = state.active[pursuer]
-    state = state._replace(pp=state.pp.at[party(fmt, pursuer), mon, slot].add(jnp.int8(-1)))
+    # ``_pursuit_pp``: ppUps[0] where no slot holds the move (battle_mon.h:99-100, review 7).
+    state = _spend_pursuit_pp(state, pursuer, move, 1)
     # battle_script.c:6919-6922: one more while PP is left when the switching battler has
     # Pressure (Battler_Ability, its own: the switch has not happened yet), ruling G-9.
-    extra = pressure_holder(state, switcher) & (state.pp[party(fmt, pursuer), mon, slot] > 0)
-    state = state._replace(
-        pp=state.pp.at[party(fmt, pursuer), mon, slot].add(
-            jnp.where(extra, -1, 0).astype(state.pp.dtype)
-        )
-    )
+    extra = pressure_holder(state, switcher) & (_pursuit_pp(state, pursuer, move)[1] > 0)
+    state = _spend_pursuit_pp(state, pursuer, move, jnp.where(extra, 1, 0))
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
     # TryGrudge's slot is ATTACKER_MOVE_SLOT (battle_script.c:6753-6754; common.h:8,

@@ -7381,6 +7381,21 @@ def _pursuer_choice(s: RefState, pursuer: int, actions, choices) -> tuple[bool, 
     return bool(move), move
 
 
+def _pursuit_pp(mon, move: int) -> int:
+    """The PP cell TryPursuit reads for ``move`` (battle_script.c:6910-6922; ``step._pursuit_pp``):
+    ``ppCur[Battler_SlotForMove]``, which is 4 when no slot holds it (battle_lib.c:2376-2387), and
+    ``ppCur[4]`` is ``ppUps[0]`` (battle_mon.h:99-100): a carried IV-word Pursuit (review 7)."""
+    return mon.pp[mon.moves.index(move)] if move in mon.moves else mon.pp_ups[0]
+
+
+def _spend_pursuit_pp(mon, move: int) -> None:
+    """One PP from ``_pursuit_pp``'s cell."""
+    if move in mon.moves:
+        mon.pp[mon.moves.index(move)] -= 1
+    else:
+        mon.pp_ups[0] -= 1
+
+
 def _next_pursuer(
     tables, s: RefState, switcher: int, actions, choices, moved: list[bool]
 ) -> int | None:
@@ -7398,7 +7413,7 @@ def _next_pursuer(
         if (
             has
             and _t(tables, "move_effect", move) == EffectId.PURSUIT
-            and mon.pp[mon.moves.index(move)] > 0
+            and _pursuit_pp(mon, move) > 0
         ):
             return i
     return None
@@ -7442,12 +7457,11 @@ def _pursuit_hit(
     tables = turn.tables
     mon = _active(s, pursuer)
     move = _pursuer_choice(s, pursuer, actions, choices)[1]
-    slot = mon.moves.index(move)
-    mon.pp[slot] -= 1
+    _spend_pursuit_pp(mon, move)  # ppUps[0] where no slot holds it (review 7)
     # script.c:6919-6922: one more while PP is left when the switching battler has Pressure
     # (ruling G-9).
-    if _ability(s, _active(s, side)) == AbilityId.PRESSURE and mon.pp[slot] > 0:
-        mon.pp[slot] -= 1
+    if _ability(s, _active(s, side)) == AbilityId.PRESSURE and _pursuit_pp(mon, move) > 0:
+        _spend_pursuit_pp(mon, move)
     turn.done[pursuer] = True
     # SetupLoop zeroes moveStatusFlags (lib.c:3359) and the Pursuit's ApplyTypeEffectiveness sets
     # the bit (subscript_pursuit.s:12, script.c:6964-6973): the tail's Enigma Berry reads the
