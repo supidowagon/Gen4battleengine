@@ -581,11 +581,15 @@ def future_threshold(tables: Tables, state: BattleState, defender) -> jnp.ndarra
     )
 
 
-def acid_rain_pairs(state: BattleState, actions, uses, effect) -> jnp.ndarray:
+def acid_rain_pairs(state: BattleState, actions, uses, effect, pursuers=None) -> jnp.ndarray:
     """``bool[B, B]``: ``[b, x]``, an Acid Rain write (subscript_pursuit.s:100, :115; ledger
     G-12, H-1) can happen this turn with battler ``b`` chased and battler ``x`` of the other side
     its pursuer: ``acid_rain_reachable``'s test for that pair. Battlers are looped, never derived
-    from one another (doubles-state-design section 5, rules 1 and 4)."""
+    from one another (doubles-state-design section 5, rules 1 and 4). The chased mask is a switch
+    or a U-turn user (``uses`` and ``effect``, the moves the battlers run); the pursuer mask a
+    battler running a Pursuit-effect move, or one of ``pursuers`` (``chase_pursuers``: its chase
+    move is TryPursuit's, battle_script.c:6905-6909, which can differ from the move it runs:
+    review 7)."""
     fmt = format_of(state)
     live = state.over == 0
     # A switch action's chase runs at its switch, before every move (switches go first): a turn
@@ -594,6 +598,8 @@ def acid_rain_pairs(state: BattleState, actions, uses, effect) -> jnp.ndarray:
     switch = is_switch(actions) & (state.pivot_battler == 0)
     chased = live & (switch | (uses & (effect == EffectId.U_TURN)))
     pursues = uses & (effect == EffectId.PURSUIT)
+    if pursuers is not None:
+        pursues = pursues | jnp.asarray(pursuers, bool)
     rows = []
     for b in range(fmt.B):
         row = []
@@ -607,7 +613,7 @@ def acid_rain_pairs(state: BattleState, actions, uses, effect) -> jnp.ndarray:
     return jnp.stack(rows)
 
 
-def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarray:
+def acid_rain_reachable(state: BattleState, actions, uses, effect, pursuers=None) -> jnp.ndarray:
     """``bool``: an Acid Rain write (subscript_pursuit.s:100, :115; ledger G-12) can happen this
     turn (any pair of ``acid_rain_pairs``). ``BtlCmd_TryPursuit`` runs only from a switch (subscript_switch_pokemon.s:11) and from
     U-turn (subscript_attack_then_switch_out.s:54), and takes only a battler of the other side
@@ -618,7 +624,20 @@ def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarra
     and write it. In singles there is none (a switch's chase comes before every move; a U-turn's
     pursuer has not acted, and U-turn writes no field condition), and :115 and the switcher's
     FAINT_MON only clear bits, so a mask that is 0 now stays 0 at :115."""
-    return jnp.any(acid_rain_pairs(state, actions, uses, effect))
+    return jnp.any(acid_rain_pairs(state, actions, uses, effect, pursuers))
+
+
+def chase_pursuers(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``bool[B]``: the battlers that can be some chase's pursuer this turn by the move TryPursuit
+    takes (``_chase_capable``: a held Encore's whatever they chose, else ``Battler_SelectedMove``,
+    battle_script.c:6905-6909), whatever move they run: a locked or Struggling battler's carried
+    Pursuit, an Encored item or switch action. For ``acid_rain_pairs``' pursuer mask (review 7).
+    A takeover Encore (B11-1) makes the run move Pursuit itself: ``effect`` holds it there.
+    Reads the state as this turn's selection leaves it (``with_selection``, idempotent)."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    state = with_selection(tables, state, actions)
+    return jnp.stack([_chase_capable(tables, state, p, actions[p]) for p in range(fmt.B)])
 
 
 # future_thresholds' grid per defender: attacker slot (SLOTS) x defender slot (SLOTS) x stage
@@ -629,7 +648,9 @@ _FUTURE_WEATHERS = 3
 _FUTURE_FIELDS = 4
 
 
-def _future_fields(tables: Tables, state: BattleState, actions, uses, effect) -> jnp.ndarray:
+def _future_fields(
+    tables: Tables, state: BattleState, actions, uses, effect, pursuers=None
+) -> jnp.ndarray:
     """``bool[_FUTURE_FIELDS]``: which (Gravity on, deep fog) pairs the Future Sight hit's
     accuracy check can read at this turn's end; field ``f`` is Gravity ``f // 2``, fog ``f % 2``.
     The check reads the mask through sand, hail and deep fog (bcp.c:2926-2937) and the Gravity
@@ -656,7 +677,7 @@ def _future_fields(tables: Tables, state: BattleState, actions, uses, effect) ->
     fog = [fcm.fog(mask), jnp.asarray(False)]
     ok = [jnp.asarray(True)] * 2
     if fmt.B == 2:
-        pairs = acid_rain_pairs(state, actions, uses, effect)
+        pairs = acid_rain_pairs(state, actions, uses, effect, pursuers)
         switch = is_switch(actions) & (state.pivot_battler == 0)
         rearm = tables.gravity_rearm != 0
         for b in range(fmt.B):
@@ -764,7 +785,8 @@ def future_thresholds(
     weathers = jnp.asarray(
         [0, int(FieldCondition.SANDSTORM_TEMP), int(FieldCondition.HAILING_TEMP)], _I32
     )
-    fields = _future_fields(tables, state, actions, uses, effect)
+    pursuers = chase_pursuers(tables, state, actions)  # a carried Pursuit's chase (review 7)
+    fields = _future_fields(tables, state, actions, uses, effect, pursuers)
     a_mon, d_mon, total, wi, fi, conf, lk = (
         g.reshape(-1)
         for g in jnp.meshgrid(
@@ -862,7 +884,7 @@ def future_thresholds(
     # a newcomer's weather ability, subscript_sand_stream.s:11-12; Gravity; an earlier KO's
     # FAINT_MON clearing its Uproar bit; an earlier chase), and two chases compose. The exact
     # B = 4 handling goes to the doubles milestone (E2).
-    acid = acid_rain_reachable(state, actions, uses, effect) if fmt.B > 2 else False
+    acid = acid_rain_reachable(state, actions, uses, effect, pursuers) if fmt.B > 2 else False
     field_change = (
         jnp.any(
             uses
@@ -2591,7 +2613,7 @@ def pursuit_armored(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 
 def chase_widening(
-    tables: Tables, state: BattleState, actions, moves, fires
+    tables: Tables, state: BattleState, actions, moves, fires, taken=None
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """``(both bool[B], armor bool[B], chase int32[B])`` for the laws and the sampler, given ``moves`` (the moves
     the battlers run, ``pursuit_chase``'s ``move`` where it ``pursues``) and its ``fires``.
@@ -2613,7 +2635,13 @@ def chase_widening(
     2's switch chase is p's only move (``pursuit_chase``); a B = 2 U-turn user is the defender of
     p's own move too, whose ``armored`` covers the earlier chase; at B = 4 a U-turn chase is never
     cut (an earlier action can change its user's ability). ``chase``: p's chase move
-    (``step._pursuer_move``)."""
+    (``step._pursuer_move``).
+
+    ``taken`` (``bool[B]``, a takeover variant's tag, B11-1): a foe's faster Encore made the
+    side's last move its encoredMove before its action, so a later U-turn's TryPursuit takes that
+    move (the Encore branch, battle_script.c:6905-6907): the U-turn chase reads the encored
+    state (``order.encored_state``, review 7). The switch chases come before every move and read
+    the turn-start state."""
     from nuzline.engine.step import _pursuer_move  # step imports this module
 
     fmt = format_of(state)
@@ -2621,6 +2649,7 @@ def chase_widening(
     moves = jnp.asarray(moves, _I32)
     fires = jnp.asarray(fires, bool)
     state = with_selection(tables, state, actions)
+    took = state if taken is None else encored_state(tables, state, jnp.asarray(taken, bool))
     live = state.over == 0
     fights = live & ~is_switch(actions) & ~is_item(actions)
     uturn = fights & (tables.move_effect[moves] == EffectId.U_TURN)
@@ -2629,15 +2658,18 @@ def chase_widening(
     both, armor, chase = [], [], []
     for p in range(fmt.B):
         opp = [s for s in range(fmt.B) if side_of(s) != side_of(p)]
-        carried = _pursuer_move(state, p, actions[p], 0, False)[1]
-        chase.append(carried)
+        carried = _pursuer_move(state, p, actions[p], 0, False)[1]  # a switch chase's
+        carried_u = _pursuer_move(took, p, actions[p], 0, False)[1]  # a U-turn chase's
         may_u = (
             fights[p]
-            & _chase_capable(tables, state, p, actions[p])
+            & _chase_capable(tables, took, p, actions[p])
             & jnp.any(jnp.stack([uturn[s] for s in opp]))
         )
         may = fires[p] | may_u
-        both.append(fights[p] & (carried != moves[p]) & (may_u | (fires[p] & (fmt.B == 4))))
+        sw_both = fires[p] & (fmt.B == 4) & (carried != moves[p])
+        u_both = may_u & (carried_u != moves[p])
+        both.append(fights[p] & (sw_both | u_both))
+        chase.append(jnp.where(sw_both, carried, carried_u))
         chased = jnp.all(jnp.stack([~switching[s] | _armor_against(state, p, s) for s in opp]))
         if fmt.B == 4:
             chased = chased & ~may_u
@@ -3064,7 +3096,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                 )
             )
         alt_moves = jnp.where(pursues, chase_move, jnp.stack(alt_moves))
-        alt_chase = chase_widening(tables, state, actions, alt_moves, fires)[:2]
+        alt_chase = chase_widening(tables, state, actions, alt_moves, fires, taken)[:2]
         fields = _move_draws(alt_key, tables, state, actions, alt_moves, chase=alt_chase)
         fields["call"] = alt_call
         replaced = jnp.any(which, axis=0)

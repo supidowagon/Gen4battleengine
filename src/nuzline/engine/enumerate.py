@@ -345,6 +345,7 @@ from nuzline.engine.outcome import (
     Outcome,
     ability_whole,
     acid_rain_reachable,
+    chase_pursuers,
     chase_widening,
     crit_class,
     crit_variants,
@@ -2057,7 +2058,7 @@ def outcome_laws(
     # own move's, so its flags join the own move's; its crit, damage-class and hit-gate widenings
     # follow below. ``chase_armor``: the crit cut over every battler it may chase.
     chase_both, chase_armor, chase_moves = chase_widening(
-        tables, state, actions, moves, chase_fires
+        tables, state, actions, moves, chase_fires, taken
     )
     chase_damaging = (tables.move_category[chase_moves] != STATUS) & (
         tables.move_power[chase_moves] != 0
@@ -2611,8 +2612,11 @@ def outcome_laws(
     # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO of a switcher or a U-turn user
     # subtracts a battler from a nonzero mask before the turn end's sort, which can set the rain
     # and sun bits (FCM 3.1); only where that write can happen (``acid_rain_reachable``).
-    acid = acid_rain_reachable(state, actions, uses_move, effect) | acid_rain_reachable(
-        state, actions, uses_move & chase_both, jnp.where(chase_both, chase_effect, effect)
+    # The chased mask: a switch or a U-turn user; the pursuer mask: a Pursuit run, or a battler
+    # whose TryPursuit move is a Pursuit whatever it runs (``chase_pursuers``: a Struggling or
+    # locked carried Pursuit, an Encored item or switch action; review 7).
+    acid = acid_rain_reachable(
+        state, actions, uses_move, effect, chase_pursuers(tables, state, actions)
     )
     weather_free = live & (
         jnp.any((uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter))
