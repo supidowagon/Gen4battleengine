@@ -3,7 +3,7 @@
 # GB = ceil(max(1.25 m, m + 2)), m = peak summed RSS of the pytest tree in GB (10^9 bytes), polled every 0.5 s,
 # one file's non-slow ROM-only ids per process (measuring harness tools/ops/ramgate_measure.py: NUZLINE_RAMGATE_NO_WAIT=1, watchdog at 4 GB free).
 # `local-measure-c479eff-...` figures of ids whose inputs are absent on the PC (the test skips) are the skip-time peak (about 0.5 GB), figure 3.
-# `engine-test-pod`: an engine test (step, enumerate, playouts, prep search) that belongs on the pod list, not a local ROM-only run: weight 14, never measured locally.
+# `engine-test-pod`: an engine test (step, enumerate, playouts, prep search) that belongs on the pod list, not a local ROM-only run: weight 14, never measured locally; refused by the gate (pod_only.txt). Never in a merge-gate ROM-only run. Running them on the PC at a split close is against the owner's no-engine-tests order as it stands: the managing session puts that question to the owner at the first split close (manager ruling, 22 Nov 2026); there is no standing slot.
 
 tests/kaizo/test_extract_kaizo_docs.py 3 local-measure-c66b229-20261122
 tests/kaizo/test_extract_pkcalc.py 3 local-measure-c66b229-20261122

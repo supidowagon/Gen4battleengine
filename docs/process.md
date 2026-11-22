@@ -171,6 +171,7 @@ per day is the rate used for estimates.
   steps in it itself.
   A `tools.kaizo.*` run (it needs the ROM or the docs sheet, so it cannot go to the pod):
   `python tools/ops/ramgate.py --build [--weight GB] -- python -m tools.kaizo.<module> ...`.
+- **ROM + engine tests** (the five Roark/scoreboard ids tagged `engine-test-pod` in `rom_weights.txt`, listed in `pod_only.txt`): refused on the PC and never in a merge-gate ROM-only run; running them on the PC at a split close is against the owner's no-engine-tests order as it stands, so the managing session puts that question to the owner at the first split close (manager ruling, 22 Nov 2026); there is no standing slot.
 - **Quick lane (engine tests, a few ids):** send the managing session a request of at most 5
   test ids at your tip; run name `q-<stream>-<sha7>`. It starts at once on any pod with memory
   room, ahead of in-work lists, behind push gates only when memory is short. The result you
