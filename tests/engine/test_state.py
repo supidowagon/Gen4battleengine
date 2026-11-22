@@ -180,17 +180,19 @@ def test_state_md_accounts_for_every_struct_field():
 # The Task 6 adversarial audit (ledger) found these "not needed" judgements wrong: the
 # switch-in ability checks re-run after every move gated by the announced flags
 # (battle_lib.c:3649-4168, battle_controller_player.c:3673/3973), Quick Claw, Protect,
-# the speed values and Sketch are read later in the turn. They are needed for M6, not M1
-# (``moveLockedInto`` moved to ``locked_move`` in milestone 4a; ``moveProtect`` folded into
-# ``protect_count`` in K3b2 Task 6, test_move_protect_is_folded_into_protect_count; the four
-# announced flags mapped with Skill Swap, E3-2-5, ``hooks.move_end_switch_in``).
-AUDIT_LATER_ROWS = ("BattleContext.moveSketched",)
+# the speed values and Sketch are read later in the turn. All are mapped now: ``moveLockedInto``
+# moved to ``locked_move`` in milestone 4a; ``moveProtect`` folded into ``protect_count`` in K3b2
+# Task 6 (test_move_protect_is_folded_into_protect_count); the four announced flags mapped with
+# Skill Swap, E3-2-5, ``hooks.move_end_switch_in``; ``moveSketched`` mapped to ``sketch_move`` in
+# I-3 (test_move_sketched_maps_to_sketch_move).
 
 
-def test_state_md_audit_rows_are_later_m6():
-    status = {field: status for field, _, status in _state_md_rows()}
-    for field in AUDIT_LATER_ROWS:
-        assert status[field] == "later (M6)", f"{field}: {status[field]!r}"
+def test_move_sketched_maps_to_sketch_move():
+    # I-3: moveSketched, written by UpdateMoveBuffers (bcp.c:3952-3954) and read by
+    # BtlCmd_TrySketch (battle_script.c:4848-4851): the per-battler `sketch_move`.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleContext.moveSketched"] == ("sketch_move", "mapped")
+    assert "sketch_move" in BattleState._fields and LAYOUT["sketch_move"][0] == (2,)
 
 
 def test_mon_speed_values_map_to_speed_rec():

@@ -18,7 +18,6 @@ from nuzline.ai.policy import (
     ai_refusals,
     ai_scores,
 )
-from nuzline.ai.switching import switching_refusals
 from nuzline.engine.format import SINGLES
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 from tests.ai.fixtures import CRANIDOS, outcome, trace_a, trace_e, trace_f, versus
@@ -127,18 +126,9 @@ def test_factored_distribution_refused_states_nan(tables, names):
     scoring = trace_a(tables, names)
     scoring = scoring._replace(moves=scoring.moves.at[1, 0, 2].set(names.move("Ember")))
     assert bool(_refused(tables, scoring).scoring)
-    # Four Rock Throws on each of Roark's three: 12 voluntary-switch draws > 9 sites.
-    # The moves themselves score fine, so only the switch layout is refused.
-    switch = trace_f(tables, names)
-    switch = switch._replace(
-        moves=switch.moves.at[1, :3].set(jnp.full((4,), names.move("Rock Throw"), jnp.int16))
-    )
-    assert not bool(_refused(tables, switch).any)
-    assert switching_refusals(tables, switch)
-    for s in (scoring, switch):
-        new, old = _both(tables, s)
-        assert np.isnan(new).all()
-        assert np.isnan(old).all()
+    new, old = _both(tables, scoring)
+    assert np.isnan(new).all()
+    assert np.isnan(old).all()
 
 
 def test_tie_shares_use_tiebreak_probabilities(tables, names):

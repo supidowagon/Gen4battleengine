@@ -14,6 +14,9 @@
 # docs sheet; copied into the build checkout when it has none), .cache/decomp/<commit>/main.nef.xMAP
 # (symbols) and external/pokeplatinum (linked when the build checkout has none). These stay on the PC.
 # Python: $NUZLINE_PY (an existing venv's python, run with PYTHONPATH) or else `uv run --group rom python`.
+# RAM: the build steps run as the child of `tools/ops/ramgate.py --build` (docs/process.md section 5):
+# they start once free RAM > 6 GB + the build weight and the machine lock is free, and hold the lock
+# until they end. A reuse needs neither. A wait that times out exits 14.
 set -euo pipefail
 OPS_DIR=$(cd "$(dirname "$0")" && pwd); . "$OPS_DIR/common.sh"
 ARG="${1:?usage: build_tables.sh --here | <commit>}"
@@ -71,8 +74,8 @@ DC=$("${PY[@]}" -c "from tools.rom.symbols import DECOMP_COMMIT; print(DECOMP_CO
 SYM="$B/.cache/decomp/$DC/main.nef.xMAP"; [ -f "$SYM" ] || SYM="$REPO/.cache/decomp/$DC/main.nef.xMAP"
 [ -f "$SYM" ] || { echo "ERROR: symbols map missing: $SYM (docs/rom_pipeline.md, Decomp build)"; exit 2; }
 
+wp() { if command -v cygpath >/dev/null; then cygpath -w "$1"; else echo "$1"; fi; }
 if [ "$MODE" = commit ]; then
-  wp() { if command -v cygpath >/dev/null; then cygpath -w "$1"; else echo "$1"; fi; }
   KEY=$("${PY[@]}" "$(wp "$OPS_DIR/table_key.py")" --root "$(wp "$B")" --ops "$(wp "$OPS_DIR")" --decomp "$(wp "$B/external/pokeplatinum")" \
     --symbols "$(wp "$SYM")" --config "$(wp "$B/data/local.toml")" | tr -d '\r')
   echo "$KEY" | grep -qE '^[0-9a-f]{64}$' || { echo "ERROR: table_key.py printed no key: $KEY"; exit 2; }
@@ -83,13 +86,15 @@ if [ "$MODE" = commit ]; then
   if [ -f "$KA" ]; then record; echo "BUILD_OK $RENT/tables_$C.tar.xz (reused $KA, key ${KEY:0:16})"; exit 0; fi
 fi
 
-"${PY[@]}" -m tools.extract_decomp --decomp external/pokeplatinum --out data/intermediate
-"${PY[@]}" -m tools.build_tables
-"${PY[@]}" -m tools.extract_rom --game kaizo --out data/intermediate_kaizo/rom --symbols "$SYM"
-"${PY[@]}" -m tools.extract_pkcalc --out data/intermediate_kaizo/pkcalc
-"${PY[@]}" -m tools.extract_kaizo_docs --out data/intermediate_kaizo/docs
-"${PY[@]}" -m tools.kaizo.overrides check
-"${PY[@]}" -m tools.build_tables --game kaizo
+# The steps, as one bash child of the RAM gate: $1 = symbols map, the rest = the python command.
+"${PY[@]}" "$(wp "$OPS_DIR/ramgate.py")" --build -- "$(wp "$BASH")" -c 'set -euo pipefail; SYM=$1; shift
+"$@" -m tools.extract_decomp --decomp external/pokeplatinum --out data/intermediate
+"$@" -m tools.build_tables
+"$@" -m tools.extract_rom --game kaizo --out data/intermediate_kaizo/rom --symbols "$SYM"
+"$@" -m tools.extract_pkcalc --out data/intermediate_kaizo/pkcalc
+"$@" -m tools.extract_kaizo_docs --out data/intermediate_kaizo/docs
+"$@" -m tools.kaizo.overrides check
+"$@" -m tools.build_tables --game kaizo' build-steps "$SYM" "${PY[@]}"
 [ "$MODE" = here ] && { echo "BUILD_OK in place: $B"; exit 0; }
 
 L="$RENT/tables_$C.list"

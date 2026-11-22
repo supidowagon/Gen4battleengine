@@ -171,14 +171,14 @@ def test_mold_breaker_pierces_limber_then_the_move_end_cures(tables, names):
     assert int(hit.ai_ability_known[0]) == 0
     out = _jit_step(tables, s, A("Leer", "Thunder Wave", s, names), empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE  # RecoverStatusByAbility at MoveEnd
-    assert int(out.ai_ability_known[0]) != 0  # subscript_ability_forbids_status.s
+    assert int(out.ai_ability_known[0]) == 0  # the cure tags BTLSCR_MSG_TEMP (I-6)
 
 
 def test_limber_cures_a_paralyzed_newcomer(tables, names):
     s = _ability(roark_state(tables, names), 0, 1, AbilityId.LIMBER)
     s = s.with_status(0, 1, Status.PARALYSIS)
     out = _jit_step(tables, s, A(SWITCH_TO_1, "Leer", s, names), empty_outcome())
-    assert int(out.status[0, 1]) == Status.NONE and int(out.ai_ability_known[0]) != 0
+    assert int(out.status[0, 1]) == Status.NONE and int(out.ai_ability_known[0]) == 0  # BTLSCR_MSG_TEMP: no reveal (I-6)
 
 
 # --- Adaptability and Solid Rock ------------------------------------------------------

@@ -91,8 +91,10 @@ def test_mold_breaker_pierces_insomnia(tables, names):
 
     blocked, pierced = run("Geodude"), run("Cranidos")
     assert int(blocked.locked_move[0]) != 0 and int(pierced.locked_move[0]) == 0
-    for out in (blocked, pierced):
-        assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) != 0
+    # The block prints "stayed awake" (the AI learns Insomnia); the pierced sleep is cured at the
+    # move end by a message that tags BTLSCR_MSG_TEMP: no reveal (I-6).
+    assert int(blocked.status[0, 0]) == Status.NONE and int(blocked.ai_ability_known[0]) != 0
+    assert int(pierced.status[0, 0]) == Status.NONE and int(pierced.ai_ability_known[0]) == 0
 
 
 @pytest.mark.slow
@@ -102,13 +104,13 @@ def test_insomnia_cures_on_entry_and_move_end(tables, names, spinarak):
     bench = bench.with_status(0, 1, SLEEP, counter=3)
     out = jit_step(tables, bench, A(SWITCH_TO_1, "Tackle", bench, names), empty_outcome())
     assert int(out.status[0, 1]) == Status.NONE and int(out.status_counter[0, 1]) == 0
-    assert int(out.ai_ability_known[0]) != 0
+    assert int(out.ai_ability_known[0]) == 0  # BTLSCR_MSG_TEMP: no reveal (I-6)
     # An asleep Insomnia active wakes at the end of its own action (MoveEnd).
     asleep = spinarak.with_status(0, 0, SLEEP, counter=3)
     leer = A("Poison Sting", "Tackle", asleep, names)
     out = jit_step(tables, asleep, leer, empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE and int(out.status_counter[0, 0]) == 0
-    assert int(out.ai_ability_known[0]) != 0
+    assert int(out.ai_ability_known[0]) == 0
     # Other abilities keep the sleep.
     bare = asleep._replace(ability=asleep.ability.at[0, 0].set(AbilityId.NONE))
     assert int(jit_step(tables, bare, leer, empty_outcome()).status[0, 0]) == SLEEP

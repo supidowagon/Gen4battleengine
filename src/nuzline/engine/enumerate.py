@@ -158,7 +158,10 @@ of the turn:
   Plucks / Bug Bites a foe holding one, or Recycles one; or a battle-start berry is still open
   (``starf_open``). Five values while the count of stats below +6 stays 5, else all 60
   (``_starf_reads``). ``starf[d, 1]``: a faint replacement's draw (five values), where a holder
-  can enter at its pinch after the turn (``step.starf_kept`` keeps it). ``starf[d, 2]`` (F-O3,
+  can enter at its pinch after the turn (``step.starf_kept`` keeps it); also ``d``'s own holder
+  on the field or entering when a Future Sight hit lands this turn (``step.starf_kept_active``:
+  it can stand at its pinch with its berry until the next ShowBattleMon), five values while
+  the count stays 5, else all 60 (stored modulo 5 or whole to match). ``starf[d, 2]`` (F-O3,
   G-27): battler ``d``'s second eat this turn, where two of its eat sources can meet in one call
   (a U-turn / Baton Pass newcomer eats after the pause, from the resumed outcome's ``[d, 0]``);
   five values where the later eater is a fresh Roar newcomer, else as ``[d, 0]`` with one more +2.
@@ -228,7 +231,7 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
 from nuzline.engine import targets
-from nuzline.engine.actions import absent_now, imprisoning_foe, replacement_bench
+from nuzline.engine.actions import absent_now, imprisoning_foe, replacement_bench, sealed_mask
 from nuzline.engine.damage import (
     NUM_TYPES,
     PHYSICAL,
@@ -259,7 +262,13 @@ from nuzline.engine.effects import (
 )
 from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.hooks import PLUCKABLE, entry_damage_up, reverted_stats, starf_holders
+from nuzline.engine.hooks import (
+    FLING_STAT_UP,
+    PLUCKABLE,
+    entry_damage_up,
+    reverted_stats,
+    starf_holders,
+)
 from nuzline.engine.ids import (
     CALL_GRAVITY,
     CHATTER_CHANCES,
@@ -267,6 +276,7 @@ from nuzline.engine.ids import (
     FOCUS_BAND_PARAM,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
+    MOVE_SKETCH,
     NO_IN_BATTLE_HOLD_EFFECT_ITEMS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
@@ -327,6 +337,7 @@ from nuzline.engine.order import (
     qc_transfer,
     sealed_state,
     selected_move,
+    sketched_state,
     takeover_possible,
     truant_loafs,
     used_moves,
@@ -479,8 +490,7 @@ class OutcomeLaws(NamedTuple):
     branch_ok: jnp.ndarray  # bool[2]: the speed_tie branches this call is consistent with
     call_pending: jnp.ndarray  # bool[]: an invoker is used but no call was given
     # E2 batch 5: the Future Sight hit of this turn's end (outcome.future_thresholds), per defender.
-    future_thresholds: jnp.ndarray  # int32[B, K]
-    future_possible: jnp.ndarray  # bool[B, K]
+    future_values: jnp.ndarray  # bool[B, 101]: the thresholds 0-100 its hit can have
     future_loose: jnp.ndarray  # bool[B]: every roll its own class
     # E2 batch 12 (B12-9): Acupressure's draw, per side: the count of its user's stats below +6
     # at the turn start, and whether that count can change before the move (every residue class
@@ -981,6 +991,9 @@ INPUT_NEUTRAL_EFFECTS = (
     # whose ON_HIT subscript_chatter.s only confuses, which no damage input reads (G-70).
     _E.MIMIC,
     _E.CHATTER,
+    # I-3: Sketch (BtlCmd_TrySketch, battle_script.c:4839-4884) writes only its user's moves, ppCur
+    # and lastResortCount, no input of the side's hit, whose move is chosen already.
+    _E.SKETCH,
     # E3 batch 1: Splash / Kaizo Thief deals no damage and writes no state but its user's
     # last move (effect_script_0085.s:5), Teleport fails (effect_script_0153.s:9-10): neither
     # changes an input of the side's hit (E3-1-1, E3-1-4).
@@ -1590,6 +1603,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.NATURAL_GIFT,
     _E.EMBARGO,  # B13-31: a status move, no damage
     _E.MIMIC,  # G-68, G-69: status moves, no damage
+    _E.SKETCH,  # I-3: a status move, no damage
     _E.TRANSFORM,
     _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
     _E.FLEE,  # a status move that fails: no damage (E3-1-4)
@@ -1967,6 +1981,10 @@ def outcome_laws(
     damaged a target that has not moved."""
     fmt = format_of(state)
     paused_rock = _paused_rock(tables, state)
+    # An armed Trace holder before the view rewrites its ability (``_starf_gain``, B = 4).
+    trace_armed = (battler_ability(state, jnp.arange(fmt.B)) == AbilityId.TRACE) & (
+        state.trace_announced == 0
+    )
     state, actions = pivot_view(tables, state, actions)
     live = state.over == 0
     sides = jnp.arange(fmt.B)
@@ -2002,16 +2020,27 @@ def outcome_laws(
         call = jnp.asarray(call, _I32)
         # A Sleep Talk variant that assumes a faster foe's Disable lands (CALL_DISABLED, ruling
         # B5-13) calls from the set with the user's last move disabled; one that assumes a faster
-        # foe's Imprison (CALL_SEALED, ruling B7-13) from the set without the moves it seals.
+        # foe's Imprison (CALL_SEALED, ruling B7-13) from the set without the moves it seals; one
+        # that assumes an imprisoning foe's Sketch (CALL_SKETCHED) from the set without its copy.
         talking = kinds == CALL_SLEEP_TALK
         disabled = talking & (call >= CALL_DISABLED) & (call < CALL_SEALED)
-        sealed = talking & (call >= CALL_SEALED) & (call < CALL_GRAVITY)
+        sealed = talking & (call >= CALL_SEALED) & (call < CALL_SKETCHED)
+        sketched = talking & (call >= CALL_SKETCHED) & (call < CALL_GRAVITY)
         # A variant that assumes a faster foe's Gravity lands first (CALL_GRAVITY, G-67) calls
         # from the set Gravity leaves (Sleep Talk, Metronome, Assist).
         grav = (call >= CALL_GRAVITY) & ~taken
         after_foe = copycat & (call == 1)
         disabled = disabled & ~taken
         sealed = sealed & ~taken
+        sketched = sketched & ~taken
+        copied = jnp.stack(
+            [
+                used_moves(
+                    tables, sketched_state(state, _foe(sd), sd), actions, call, after_foe, chosen
+                )[sd]
+                for sd in range(fmt.B)
+            ]
+        )
         moves = jnp.where(
             disabled,
             used_moves(tables, disabled_state(state, disabled), actions, call, after_foe, chosen),
@@ -2019,12 +2048,18 @@ def outcome_laws(
                 sealed,
                 used_moves(tables, sealed_state(state, sealed), actions, call, after_foe, chosen),
                 jnp.where(
-                    taken,
-                    used_moves(tables, took_state, actions, call, after_foe, chosen),
+                    sketched,
+                    copied,
                     jnp.where(
-                        grav,
-                        used_moves(tables, gravity_state(state), actions, call, after_foe, chosen),
-                        used_moves(tables, state, actions, call, after_foe, chosen),
+                        taken,
+                        used_moves(tables, took_state, actions, call, after_foe, chosen),
+                        jnp.where(
+                            grav,
+                            used_moves(
+                                tables, gravity_state(state), actions, call, after_foe, chosen
+                            ),
+                            used_moves(tables, state, actions, call, after_foe, chosen),
+                        ),
                     ),
                 ),
             ),
@@ -2758,7 +2793,7 @@ def outcome_laws(
         quick_claw = jnp.broadcast_to(live & anywhere, (fmt.B,))
 
     starf_draw, starf_loose = _starf_reads(
-        tables, state, actions, uses_move, effect, params, dragged, loose
+        tables, state, actions, uses_move, effect, params, moves, dragged, loose, trace_armed
     )
 
     band_party = jnp.any(
@@ -3063,7 +3098,7 @@ def outcome_laws(
     thresholds, possible, later_thr = hit_threshold_pair(tables, state, actions, moves)
     later_ok = possible
     sec_thr, sec_ok = secondary_thresholds(tables, state, actions, moves)
-    future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
+    future_values, future_loose = future_thresholds(tables, state, actions, moves)
     if loose:
         # The brute force: the hit law cut at every threshold variant, possible or not
         # (an extra cut only splits a class), and the Future Sight roll whole.
@@ -3111,8 +3146,7 @@ def outcome_laws(
         call=call,
         branch_ok=branch_ok,
         call_pending=call_pending,
-        future_thresholds=future_thr,
-        future_possible=future_ok,
+        future_values=future_values,
         future_loose=future_loose,
         acupressure_count=acu_count,
         acupressure_loose=acu_loose,
@@ -3136,7 +3170,131 @@ _STARF_STAGE_JUMPS = (
 )
 
 
-def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loose):
+def _starf_gain(
+    tables, state, actions, uses_move, effect, params, moves, dragged, armed_before=None
+):
+    """``(gain int32[B], fresh int32[B])``: an upper bound on how far one of battler ``d``'s five
+    Starf stats can rise this turn before any of its eats (``_starf_reads``), and the same for a
+    fresh Roar newcomer of ``d``'s side. Every source of a raise in the engine, summed (each adds
+    at most its amount to any one stat; over-approximate):
+
+    - ``d``'s own action (one per battler): a stat move's stage param (``STAT_SELF``,
+      ``SECONDARY_STAT_SELF``; twice for a ``MoveFlag.HIT_TWICE`` move, a proc per hit), 2 for
+      Acupressure, 1 for Dragon Dance and kin, AncientPower, Curse (each stat +1), 1 for Pluck /
+      Bug Bite (a plucked Liechi / Ganlon / Salac / Petaya / Apicot, battle_lib.c:5753-5797), 1 for
+      a ``CHARGE_DEF_UP`` charge turn (Skull Bash, effect_script_0145.s:8); or a bag item: each
+      stage param +1 once (BattleSystem_UseBagItem, battle_system.c:575-615; the trainer's item
+      action comes first, battle_controller_player.c:753-761).
+    - every other battler's move at ``d`` (a loop over battlers, section 5 of
+      docs/doubles-state-design.md; the partner can target its ally): Swagger / Flatter and a
+      raising ``STAT_FOE`` / ``SECONDARY_STAT_FOE`` param (twice for ``HIT_TWICE``); a Fling of a
+      stat berry, +1 (FLING_EFFECT_ATK_UP..SPDEF_UP, battle_lib.c:6075-6108,
+      subscript_held_item_raise_stat.s); at B = 4 the partner's Acupressure, +2
+      (RANGE_USER_OR_ALLY).
+      A flung or plucked Starf Berry is an eat of its own (``_starf_reads``' ``+2`` per earlier
+      eat). When another battler uses Magic Coat, every raise ``d`` aims at another battler
+      counts on ``d`` too (an over-count: ``MoveFlag.MAGIC_COAT`` reflects only its Swagger /
+      Flatter and stat moves, the code adds its Fling of a stat berry as well).
+    - abilities, each +1: Speed Boost at the turn end (MON_COND_CHECK_STATE_ABILITY bcp.c:1354,
+      battle_lib.c:3555-3562, before USE_ITEM :1362 and ITEM_CONDITION :1699), Steadfast on a
+      flinch (subscript_flinched.s:10-14), Download on entry (battle_lib.c:3814-3851); +2 when a
+      Skill Swap / Role Play can hand ``d`` either of the first two this turn.
+    - an armed Trace, +1: ``d``'s active Trace holder with ``trace_announced`` 0 (an earlier
+      trace found no target: a foe at 0 HP or with Forecast / Trace / Multitype,
+      ChooseTraceTarget battle_lib.c:7750-7781), or a Trace holder ``d`` switches in (its own
+      trace can find nothing while a foe still switches after it), where a battler of the other
+      side can enter this turn (a switch action or a Roar / Whirlwind drag).
+      SWITCH_IN_CHECK_STATE_TRACE loops over every battler with traceAnnounced FALSE
+      (:3711-3731), so that newcomer is copied: Download fires at once (:3814-3851; engine
+      ``hooks.switch_in_effects``), a copied Speed Boost at the turn end, a copied Steadfast on a
+      flinch. The copy sets traceAnnounced (:3726), so one copy per stint: +1. Where ``d`` stays
+      and its foe's switch action is copied, ``outcome.pivot_view`` already shows ``d`` holding
+      the copy (``_armed_trace``, ruling G-25), so ``_holds`` counts it and this term is 0
+      (``d`` no longer holds Trace); the term covers the rest: a drag (random pick), ``d``'s own
+      Trace newcomer, ``d``'s Pursuit on the switch (``_armed_trace`` leaves Trace). At B = 2 a
+      U-turn or Baton Pass newcomer enters in the resumed call, whose ``pivot_view`` shows the
+      copy. At B = 4 the term is +1 with no entry condition wherever ``d``'s active Pokemon
+      held Trace with ``trace_announced`` 0 before ``pivot_view`` (``armed_before``: the view
+      can have rewritten it) or ``d`` switches in a Trace holder: ``switch_in._trace_state``
+      (:3711-3737, ``TRACE_ROUNDS``) lets a holder copy a partner's newcomer through the foe's
+      earlier copy, either foe's entry (``_armed_trace`` pairs ``d`` with ``d ^ 1`` only), a
+      diagonal foe's ability (ChooseTraceTarget's third branch, :7774-7778), or a resumed
+      pivot of either foe. Still one copy per stint: traceAnnounced (:3726) and
+      downloadAnnounced (:3838) are set once, so a chain gives ``d`` one raise, +1. So at
+      B = 4 this term reads neither ``dragged`` nor the switch actions; the B = 4 diagonal-drag
+      ``dragged`` gap (D6-D7) concerns only the fresh newcomer's term. A
+      Trace that Skill Swap / Role Play hands ``d`` is in their +2. Faint replacements come at
+      TurnEnd (bcp.c:1848), after every eat of index 0; the replacement's own check is
+      ``_starf_reads``' index 1.
+
+    Not modelled, so not here (each maps to ``AbilityId.UNSUPPORTED`` / ``EffectId.UNSUPPORTED``;
+    add it here with its mechanic): Anger Point (Attack to +6, subscript_critical_hit.s:10-15),
+    Motor Drive (battle_lib.c:3532-3536), Rage (bcp.c:4605-4611), the real Stockpile
+    (subscript_stockpile.s; Kaizo's move named Stockpile has the ``DRAGON_DANCE`` effect,
+    ``ids.EffectId.DRAGON_DANCE``, and counts above), Thief / Covet / Trick giving ``d`` a berry.
+    Simple scales only the stat calc, not the stored stage (battle_lib.c:1171-1185,
+    :6850-6870), so it adds nothing.
+
+    The fresh newcomer (``InitBattleMon`` resets its stages, battle_lib.c:97-101) does not act and
+    has entered this turn (no Speed Boost, battle_lib.c:3558): the other battlers' gains plus its
+    Download."""
+    fmt = format_of(state)
+    sides = jnp.arange(fmt.B)
+    rows = party(fmt, sides)
+    flags = tables.move_flags[moves].astype(_I32)
+    hits = jnp.where((flags & MoveFlag.HIT_TWICE) != 0, 2, 1)
+    param1 = jnp.maximum(params[:, 1].astype(_I32), 0)
+    own_move = jnp.where(
+        _any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)),
+        param1 * hits,
+        jnp.where(
+            effect == _E.ACUPRESSURE,
+            2,
+            _any_of(
+                effect, (_E.DRAGON_DANCE, _E.RAISE_ALL_STATS_HIT, _E.CURSE, _E.EAT_BERRY)
+            ).astype(_I32),
+        ),
+    ) + ((flags & MoveFlag.CHARGE_DEF_UP) != 0).astype(_I32)
+    own = jnp.where(uses_move, own_move, 0) + is_item(actions).astype(_I32)
+    at_foe = jnp.where(
+        uses_move & _any_of(effect, (_E.SWAGGER, _E.STAT_FOE, _E.SECONDARY_STAT_FOE)),
+        param1 * hits,
+        0,
+    )
+    fling_up = jnp.asarray([int(k) for k in FLING_STAT_UP], _I32)
+    flung = tables.item_fling_effect[state.item[rows, state.active]].astype(_I32)
+    at_foe = at_foe + (uses_move & (effect == _E.FLING) & jnp.isin(flung, fling_up)).astype(_I32)
+    others = jnp.sum(at_foe) - at_foe  # every battler but d
+    if fmt.B == 4:
+        acu = jnp.where(uses_move & (effect == _E.ACUPRESSURE), 2, 0)
+        others = others + acu[sides ^ 2]
+    coat = uses_move & (effect == _E.MAGIC_COAT)
+    reflected = jnp.where((jnp.sum(coat.astype(_I32)) - coat.astype(_I32)) > 0, at_foe, 0)
+    swap = jnp.any(uses_move & _any_of(effect, (_E.SKILL_SWAP, _E.ROLE_PLAY)))
+    ability = (
+        _holds(tables, state, actions, (AbilityId.SPEED_BOOST,)).astype(_I32)
+        + _holds(tables, state, actions, (AbilityId.STEADFAST,)).astype(_I32)
+        + _holds(tables, state, actions, (AbilityId.DOWNLOAD,)).astype(_I32)
+        + jnp.where(swap, 2, 0)
+    )
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
+    armed = (
+        (battler_ability(state, sides) == AbilityId.TRACE) & (state.trace_announced[sides] == 0)
+    ) | (is_switch(actions) & (battler_ability(state, sides, incoming) == AbilityId.TRACE))
+    if fmt.B == 4:
+        before = jnp.zeros((fmt.B,), bool) if armed_before is None else armed_before
+        ability = ability + (armed | before).astype(_I32)
+    else:
+        enters = is_switch(actions) | dragged
+        across = side_of(sides)[:, None] != side_of(sides)[None, :]
+        foe_enters = jnp.any(across & enters[None, :], axis=1)
+        ability = ability + (armed & foe_enters).astype(_I32)
+    return own + others + reflected + ability, others + 1
+
+
+def _starf_reads(
+    tables, state, actions, uses_move, effect, params, moves, dragged, loose, armed_before=None
+):
     """``(relevant bool[B, 4], loose bool[B, 4])`` of ``Outcome.starf`` (F-10). Index 0, the first
     eat's draw, is read where side ``d`` can eat a Starf Berry this turn: its active Pokemon or the
     one it switches in holds one, or any living holder of its party can enter (its own U-turn or
@@ -3148,16 +3306,19 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     a battle-start berry is still open (``starf_open``). Index 1, the faint replacement's draw,
     where a living holder of the party can be at its pinch when a replacement sends it in: at its
     pinch now, on the field this turn when it can leave, or with Spikes / Stealth Rock up or set
-    this turn (``step.starf_kept``).
+    this turn (``step.starf_kept``); or where its own holder on the field (or entering) meets a
+    Future Sight hit this turn: it can stand at its pinch with its berry at TurnEnd, eaten by a
+    replacement's switch-in item check (``step.starf_kept_active``).
 
     The law: the draw is read modulo the count of the five stats below +6 at the eating. A fresh
     newcomer has all five below +6; an active one keeps that count when its highest of them plus
-    the most this turn can add stays below +6: the side's own stat move (its stage param, 1 for
-    Dragon Dance, AncientPower, Curse, 2 for Acupressure), a foe's Swagger / Flatter or raising
-    stat move (its param) and 2 for the rest (Steadfast, Speed Boost, a plucked pinch berry,
-    Download); no Belly Drum, Psych Up, Power / Guard Swap, Transform, Baton Pass or Recycle
-    (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The replacement's
-    draw is always 5 values: a fresh battler (``step.starf_kept`` stores it modulo 5).
+    the most this turn can add stays below +6 (``_starf_gain``: its own move or bag item, the
+    other battlers' raising moves and Flings of a stat berry, its abilities and an armed Trace);
+    no Belly Drum, Psych Up, Power / Guard Swap, Transform, Baton Pass or Recycle
+    (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The
+    replacement's draw is 5 values for a fresh battler (``step.starf_kept`` stores it
+    modulo 5); for the Future Sight holder its count is the turn end's (``step`` keeps the whole
+    draw): 5 values while ``highest + gain + 1 + 2 * eats`` stays below +6, else all.
 
     Index 2 (F-O3, G-27), battler ``d``'s second eat this turn: every eat draws its own
     (battle_lib.c:4864-4866, :5286-5288, Pluck :5808). Read where two of its eat sources can meet
@@ -3173,9 +3334,10 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     foe's Roar newcomer holder (Roar's priority -6 drags after d's move). The k-th eat's law: the
     same battler's while it has k sources of its own, the index-0 rule with +2 per earlier eat;
     else the fresh Roar newcomer's (``InitBattleMon`` resets the stages, battle_lib.c:97-101; a
-    dragged battler does not act, so only a foe's bounded gains and 2 for the rest reach it): five
-    values unless those reach +6. A foe's Fling of a Starf Berry at d (``flung``, lib:6110-6127,
-    its own ``RandNext() % 5`` loop at :6121, at TryFling, hit or miss: ``hooks.fling_try``) is
+    dragged battler does not act, so only the other battlers' gains and its Download reach it,
+    ``_starf_gain``): five values unless those reach +6. A foe's Fling of a Starf Berry at d
+    (``flung``, lib:6110-6127, its own ``RandNext() % 5`` loop at :6121, at TryFling, hit or
+    miss: ``hooks.fling_try``) is
     one more of d's own sources: it takes the next queue entry like an eat (E3-B2-1 on G-28). In
     singles the foe has one move: a flinger or a foe that Recycles a Starf Berry for d's Pluck
     has no Roar the same turn, a Recycling foe does not Fling, and a plucked or flung foe Starf
@@ -3188,6 +3350,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     rows = party(fmt, sides)
     live = state.over == 0
     switch = is_switch(actions)
+    # ``pinched`` halves the param for the raw Gluttony: for an active holder under Gastro Acid
+    # (``Battler_Ability`` none, battle_lib.c:3088-3093, :5273-5278) it is a superset of the
+    # eat's test, a sound over-read of relevance (review 4, must 1).
     holds, pinched = starf_holders(tables, state)
     holds_b, pinched_b = holds[rows], pinched[rows]  # [B, SLOTS]
     slots = jnp.arange(state.hp.shape[1])[None, :]
@@ -3253,20 +3418,22 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # The count: fixed at 5 unless a stat can reach +6 before the eating.
     five = jnp.asarray([int(x) for x in STARF_STATS], _I32)
     highest = jnp.maximum(jnp.max(state.stages[:, five].astype(_I32), axis=1), 0)
-    param1 = jnp.maximum(params[:, 1].astype(_I32), 0)
-    own_gain = jnp.where(
-        _any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)),
-        param1,
-        jnp.where(
-            effect == _E.ACUPRESSURE,
-            2,
-            _any_of(effect, (_E.DRAGON_DANCE, _E.RAISE_ALL_STATS_HIT, _E.CURSE)).astype(_I32),
-        ),
+    gain, fresh_gain = _starf_gain(
+        tables, state, actions, uses_move, effect, params, moves, dragged, armed_before
     )
-    foe_gain = jnp.where(
-        _any_of(effect, (_E.SWAGGER, _E.STAT_FOE, _E.SECONDARY_STAT_FOE)), param1, 0
+    # d's own held stat pinch berry (or Kaizo's Berserk Gene), +1 (``hooks._raise_stat``;
+    # battle_lib.c:4773-4836, subscript_held_item_raise_stat.s), eaten before a Starf Berry d does
+    # not hold: a foe's Fling reads its draw at TryFling (effect_script_0233.s:7, lib.c:6110-6127),
+    # after d's earlier move whose recoil puts d at its pinch and whose AFTER_MOVE_EFFECT_
+    # ATTACKER_ITEM eats the berry (bcp.c:3684-3689; subscript_recoil_1_3.s:14 is UPDATE_HP with
+    # no item check); or d's Pluck / Bug Bite of a foe's Starf Berry after a faster foe's hit
+    # put d at its pinch and AFTER_MOVE_EFFECT_DEFENDER_ITEM ate it (bcp.c:3691-3696). Only the
+    # flung and plucked paths: a holder of that item holds no Starf Berry (review 4, must 2).
+    field_item = jnp.where(switch, state.item[rows, incoming], state.item[rows, state.active])
+    own_pinch = _any_of(
+        tables.item_effect[field_item].astype(_I32), (ItemId.PINCH_BERRY, ItemId.BERSERK_GENE)
     )
-    gain = jnp.where(uses_move, own_gain, 0) + foes(jnp.where(uses_move, foe_gain, 0)) + 2
+    gain = gain + ((flung | plucked) & own_pinch).astype(_I32)
     jump = jnp.any(uses_move & _any_of(effect, _STARF_STAGE_JUMPS))
     turn_loose = jump | (highest + gain >= STAGE_MAX) | open_
     # Indices 2 and 3: battler d's eats this turn (F-O3), counted: ``own`` the same battler's,
@@ -3335,8 +3502,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     )
     sources = own + jnp.where(newcomer, entries, 0)
     # The k-th eat (k = 2, 3) is the same battler's while ``own >= k``, its stages up 2 per
-    # earlier eat; else the Roar newcomer's, fresh (only a foe's bounded gains reach it).
-    fresh_loose = jump | (foes(jnp.where(uses_move, foe_gain, 0)) + 2 >= STAGE_MAX)
+    # earlier eat; else the Roar newcomer's, fresh (``_starf_gain``'s ``fresh``).
+    fresh_loose = jump | (fresh_gain >= STAGE_MAX)
 
     def later(k):
         same = turn_loose | (highest + gain + 2 * (k - 1) >= STAGE_MAX)
@@ -3344,8 +3511,25 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
 
     second, second_loose = later(2)
     third, third_loose = later(3)
+    # Index 1, also battler d's own holder on the field at the turn end
+    # (``step.starf_kept_active``):
+    # a Future Sight hit (SIDE_COND_CHECK_STATE_FUTURE_SIGHT, bcp.c:1758-1783: it lands where the
+    # count is 1) comes after its ITEM_CONDITION (bcp.c:1699) and its script checks no item
+    # (subscript_future_sight_damage.s), so it can stand at its pinch with its berry when a
+    # replacement's ShowBattleMon checks every battler's item (battle_lib.c:4151-4165). That eat
+    # reads the whole draw: its count is that of the turn's end, below 5 where a stat can reach +6
+    # (the gains, an armed Trace copying the newcomer's Download, +1, and +2 per earlier eat).
+    # Not modelled, so not here: Liquid Ooze (no ``AbilityId`` member; step.py's unsupported list)
+    # is a second way. The MON_COND loop is battler-major (bcp.c:1302-1310, :1720-1724), so a
+    # slower seeded battler's Liquid Ooze hurts the seeder after the seeder's own ITEM_CONDITION
+    # (subscript_leech_seed_effect.s:23, :41-43: UPDATE_HP, no item check); add it with the
+    # mechanic, here and in ``step.starf_kept_active`` (review 4, should 5).
+    foreseen = state.future_timer[sides].astype(_I32) == 1
+    standing = live & foreseen & jnp.any(candidates, axis=1)
+    rep = rep | standing
+    rep_loose = standing & (turn_loose | (highest + gain + 1 + 2 * own >= STAGE_MAX))
     relevant = jnp.stack([turn, rep, second, third], axis=1)
-    loose_out = jnp.stack([turn_loose, jnp.zeros_like(turn), second_loose, third_loose], axis=1)
+    loose_out = jnp.stack([turn_loose, rep_loose, second_loose, third_loose], axis=1)
     if loose:
         # The brute force: the turn's draw, all STARF_DRAWS values, wherever a living holder is
         # in the side's party (or its foe's, for a Pluck / Bug Bite) or a berry is open, and the
@@ -3363,7 +3547,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
         )
         relevant = jnp.stack([first, live & anyone, first & more, first & more], axis=1)
         all_ = jnp.ones_like(first)
-        loose_out = jnp.stack([all_, jnp.zeros_like(first), all_, all_], axis=1)
+        foresight = state.future_timer[sides] != 0  # the active holder's index 1 (above)
+        loose_out = jnp.stack([all_, live & anyone & foresight, all_, all_], axis=1)
     return relevant, loose_out
 
 
@@ -3408,8 +3593,7 @@ def _future_hit(laws: OutcomeLaws, side: int) -> _Law:
     Rain write's included, H-1), or every roll 1-100 where ``future_loose`` (a due hit only)."""
     if bool(laws.future_loose[side]):
         return list(range(1, 101)), [1] * 100, 100
-    possible = np.asarray(laws.future_possible[side], bool)
-    thresholds = np.asarray(laws.future_thresholds[side])[possible]
+    thresholds = np.flatnonzero(np.asarray(laws.future_values[side], bool))
     if thresholds.size == 0:  # no hit this turn can read it
         return [1], [1], 1
     return hit_class_law(thresholds)
@@ -4380,10 +4564,14 @@ CALL_VALUES = METRONOME_DRAW
 # without the moves the foe's Imprison seals. ``order.invoked_move`` takes ``call % count`` with
 # ``count`` 1-4, a divisor of every offset, so ``step`` plays every encoding of ``u`` alike, on
 # the live set; ``call_consistent`` keeps each row in the one variant whose assumption its turn
-# met (one foe move a turn: never both).
+# met (one foe move a turn: never both). ``u + CALL_SKETCHED`` assumes the set left after an
+# imprisoning foe Sketches the user before its move (``order.sketched_state``): the copy joins the
+# imprisoner's moves and Move_Imprisoned reads them live (battle_lib.c:3316-3338, battle_script.c:
+# 4927). 7 * 12 leaves 4-6 * 12 to the Transform / Mimic / leave copies of the ledger's Open F.
 CALL_KEEP = SLEEP_TALK_VALUES
 CALL_DISABLED = 2 * SLEEP_TALK_VALUES
 CALL_SEALED = 3 * SLEEP_TALK_VALUES
+CALL_SKETCHED = 7 * SLEEP_TALK_VALUES
 
 
 def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
@@ -4413,6 +4601,25 @@ def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]
     return disabled, sealed
 
 
+def sketched_events(state: BattleState, events) -> jnp.ndarray:
+    """``bool[B]``: the side's sealed slots when its action started (the ``seal_mask_at_move``
+    event) differ from the turn-start ones and equal those after its foe's Sketch
+    (``order.sketched_state``), while a foe imprisoned at the turn start: an imprisoning Sketch
+    user moved first and its copy is sealed (battle_script.c:4868, battle_lib.c:3316-3338). Equal
+    masks give equal Sleep Talk sets (``actions.sealed_mask``)."""
+    fmt = format_of(state)
+    seen = jnp.asarray(events["seal_mask_at_move"])
+    out = []
+    for side in range(fmt.B):
+        start = sealed_mask(state, side)
+        # TODO(D2): at B = 4 the Smeargle may Sketch the sleeper's partner, not ``side``: ``after``
+        # then misses the seen mask, ``seen`` falls to CALL_KEEP and that row keeps wrong weights
+        # silently. Needs the Sketch's chosen target (and every imprisoning foe) (D11).
+        after = sealed_mask(sketched_state(state, _foe(side), side), side)
+        out.append(imprisoning_foe(state, side) & (seen[side] != start) & (seen[side] == after))
+    return jnp.stack(out)
+
+
 def gravity_events(state: BattleState, events) -> jnp.ndarray:
     """``bool[B]``: Gravity was up when the side's action started (the ``gravity_at_move`` event
     of ``step_events``) and down at the turn start: a faster foe's Gravity landed before its
@@ -4435,8 +4642,9 @@ def call_consistent(
     turn: a side that ``order.takeover_possible`` allows keeps a row only where its encored move
     replaced the chosen one (``taken_events``) exactly when the tag says so. For each Sleep Talk
     side not taken over whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED`` /
-    ``CALL_SEALED`` / ``CALL_GRAVITY``), whether a Disable, an Imprison or a Gravity changed its
-    set before its action (``_split_events`` and ``gravity_events`` of ``step_events`` on
+    ``CALL_SEALED`` / ``CALL_SKETCHED`` / ``CALL_GRAVITY``), whether a Disable, an Imprison, an
+    imprisoner's Sketch or a Gravity changed its set before its action (``_split_events``,
+    ``sketched_events`` and ``gravity_events`` of ``step_events`` on
     ``state``, ``actions``, ``outcome``) matches the variant. A Metronome or Assist side not
     taken over keeps a row only where its call is a Gravity variant (``>= CALL_GRAVITY``)
     exactly when a foe's Gravity landed before it (G-67). Unsplit Sleep Talk rows always keep."""
@@ -4453,19 +4661,28 @@ def call_consistent(
     call = jnp.asarray(outcome.call, _I32)
     split = talk & (call >= CALL_KEEP)
     disabled, sealed = _split_events(state, events)
+    sketched = sketched_events(state, events)
     landed = gravity_events(state, events)
     seen = jnp.where(
         landed,
         CALL_GRAVITY,
-        jnp.where(sealed, CALL_SEALED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP)),
+        jnp.where(
+            sealed,
+            CALL_SEALED,
+            jnp.where(sketched, CALL_SKETCHED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP)),
+        ),
     )
     want = jnp.where(
         call >= CALL_GRAVITY,
         CALL_GRAVITY,
         jnp.where(
-            call >= CALL_SEALED,
-            CALL_SEALED,
-            jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP),
+            call >= CALL_SKETCHED,
+            CALL_SKETCHED,
+            jnp.where(
+                call >= CALL_SEALED,
+                CALL_SEALED,
+                jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP),
+            ),
         ),
     )
     listed_ok = ~listing | ((call >= CALL_GRAVITY) == landed)
@@ -4492,9 +4709,14 @@ class CallLaws(NamedTuple):
     # int32[B, CALL_VALUES]: likewise from the set a faster foe's Imprison can leave
     # (``order.sealed_state``, ruling B7-13); ``called`` where no such set can arise.
     sealed: jnp.ndarray
-    # bool[B]: a faster foe's Disable / Imprison can change the side's Sleep Talk set this turn.
+    # int32[B, CALL_VALUES]: likewise from the set left after a foe that imprisons at the turn
+    # start Sketches the side (``order.sketched_state``); ``called`` where no such set can arise.
+    sketched: jnp.ndarray
+    # bool[B]: a faster foe's Disable / Imprison / Sketch can change the side's Sleep Talk set
+    # this turn.
     can_disable: jnp.ndarray
     can_seal: jnp.ndarray
+    can_sketch: jnp.ndarray
     # The takeover variant (ruling B11-1): bool[B] a foe's Encore can replace the side's move
     # (``order.takeover_possible``), and the call law of the encored move read with the encored
     # state (``order.encored_state``): its kind, weights and calls as above.
@@ -4628,7 +4850,10 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       uniform redraw, battle_script.c:4931-4933; ``order.invoked_move`` takes the allowed slot
       ``value % count``), from the turn-start set; ``alt`` from the set a faster foe's Disable can
       leave (ruling B5-13), possible while nothing is disabled, the user has a last move and its
-      foe uses a move; ``sealed`` from the set a faster foe's Imprison can leave (B7-13). Drawn
+      foe uses a move; ``sealed`` from the set a faster foe's Imprison can leave (B7-13);
+      ``sketched`` from the set left when a foe that imprisons already Sketches the user first
+      (its copy is sealed: Move_Imprisoned reads its live moves, battle_lib.c:3316-3338,
+      battle_script.c:4927; possible where that foe knows Sketch and uses a move). Drawn
       only when it can be read: the user sleeps at the start, or its foe uses an invoker or a
       move that can put it to sleep (over-approximate);
     * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536)
@@ -4676,6 +4901,17 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         & ~jnp.stack([imprisoning_foe(state, side) for side in range(fmt.B)])
         & foes(uses_move)
     )
+    # A foe that imprisons already and knows Sketch can copy the user's moveSketched before its
+    # move (chosen, or called by Sleep Talk: battle_script.c:4916-4925; no other invoker calls
+    # Sketch, battle_lib.c:7152-7177).
+    knows_sketch = jnp.stack(
+        [jnp.any(state.moves[party(fmt, b), state.active[b]] == MOVE_SKETCH) for b in range(fmt.B)]
+    )
+    can_sketch = (
+        (kinds == CALL_SLEEP_TALK)
+        & jnp.stack([imprisoning_foe(state, side) for side in range(fmt.B)])
+        & foes(uses_move & knows_sketch)
+    )
     can_take = jnp.stack(
         [takeover_possible(tables, state, actions, side, _foe(side)) for side in range(fmt.B)]
     )
@@ -4688,7 +4924,7 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         [gravity_possible(tables, state, actions, side, _foe(side)) for side in range(fmt.B)]
     ) & (kinds != CALL_NONE)
     heavy = gravity_state(state)
-    weights, called, alts, seals, t_weights, t_called = [], [], [], [], [], []
+    weights, called, alts, seals, sketches, t_weights, t_called = [], [], [], [], [], [], []
     g_weights, g_called = [], []
     for side in range(fmt.B):
         foe = _foe(side)
@@ -4709,6 +4945,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         )(values)
         alts.append(jnp.where(can_split[side], alt, call))
         seals.append(jnp.where(can_seal[side], seal, call))
+        copy = sketched_state(state, foe, side)
+        sketch = jax.vmap(
+            lambda v, side=side, copy=copy: invoked_move(tables, copy, side, chosen[side], v)
+        )(values)
+        sketches.append(jnp.where(can_sketch[side], sketch, call))
         took = encored_state(tables, state, jnp.arange(fmt.B) == side)
         t_weight, t_call = _side_call_law(
             tables, took, side, encored[side], taken_kinds[side], chosen[foe], uses_move[foe],
@@ -4728,8 +4969,10 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         called=jnp.stack(called),
         alt=jnp.stack(alts),
         sealed=jnp.stack(seals),
+        sketched=jnp.stack(sketches),
         can_disable=can_split,
         can_seal=can_seal,
+        can_sketch=can_sketch,
         can_take=can_take,
         taken_kind=taken_kinds.astype(_I32),
         taken_weight=jnp.stack(t_weights),
@@ -4740,18 +4983,20 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     )
 
 
-def _side_variants(kind, weight, called, alt, sealed, heavy, offsets) -> list[tuple[int, int, int]]:
+def _side_variants(
+    kind, weight, called, alt, sealed, sketched, heavy, offsets
+) -> list[tuple[int, int, int]]:
     """``(value, numerator, denominator)`` per call variant of one side's law
     (``call_variants``); ``heavy`` is Sleep Talk's call from the set Gravity leaves."""
     if kind in (CALL_SLEEP_TALK, CALL_METRONOME, CALL_ASSIST):
-        groups: dict[tuple[int, int, int, int], list[int]] = {}
+        groups: dict[tuple[int, int, int, int, int], list[int]] = {}
         for v in np.flatnonzero(weight):
-            key = (int(called[v]), int(alt[v]), int(sealed[v]), int(heavy[v]))
+            key = (int(called[v]), int(alt[v]), int(sealed[v]), int(sketched[v]), int(heavy[v]))
             groups.setdefault(key, [int(v), 0])[1] += int(weight[v])
         den = int(weight.sum())
         out = []
-        for (move, other, shut, grav), (v, w) in groups.items():
-            if move == other == shut == grav:
+        for (move, other, shut, copy, grav), (v, w) in groups.items():
+            if move == other == shut == copy == grav:
                 out.append((v, w, den))
             else:
                 # One variant per set the turn can leave, each kept only where the turn met
@@ -4781,7 +5026,8 @@ def call_variants(laws: CallLaws) -> list[Variant]:
     smallest, with the group's summed weight). A Sleep Talk group whose values call another move
     from the Disable-shrunk set (``CallLaws.alt``) is two variants of the same weight,
     ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13), and one more, ``CALL_SEALED``, where a
-    faster foe's Imprison can land (B7-13), and ``CALL_GRAVITY`` where a faster foe's Gravity can
+    faster foe's Imprison can land (B7-13), ``CALL_SKETCHED`` where an imprisoning foe's Sketch
+    can (``CallLaws.can_sketch``), and ``CALL_GRAVITY`` where a faster foe's Gravity can
     (G-67, ``CallLaws.can_gravity``). A Metronome or Assist side whose foe's Gravity can land
     first also has the Gravity variants: the law under Gravity, values ``+ CALL_GRAVITY``, of
     total weight 1 beside the turn-start law's 1. Where a foe's Encore can replace the side's move
@@ -4796,20 +5042,28 @@ def call_variants(laws: CallLaws) -> list[Variant]:
         offsets = [CALL_KEEP]
         offsets += [CALL_DISABLED] if bool(laws.can_disable[side]) else []
         offsets += [CALL_SEALED] if bool(laws.can_seal[side]) else []
+        offsets += [CALL_SKETCHED] if bool(laws.can_sketch[side]) else []
         kind = int(laws.kind[side])
         gravity = bool(laws.can_gravity[side])
         talk = kind == CALL_SLEEP_TALK
         offsets += [CALL_GRAVITY] if gravity and talk else []
         heavy = laws.gravity_called[side] if talk else laws.called[side]
-        law = (laws.weight[side], laws.called[side], laws.alt[side], laws.sealed[side], heavy)
+        law = (
+            laws.weight[side],
+            laws.called[side],
+            laws.alt[side],
+            laws.sealed[side],
+            laws.sketched[side],
+            heavy,
+        )
         out = [(v, False, w, d) for v, w, d in _side_variants(kind, *law, offsets)]
         if gravity and kind in (CALL_METRONOME, CALL_ASSIST):
             heavy = laws.gravity_called[side]
-            law = (laws.gravity_weight[side], heavy, heavy, heavy, heavy)
+            law = (laws.gravity_weight[side], heavy, heavy, heavy, heavy, heavy)
             out += [(v + CALL_GRAVITY, False, w, d) for v, w, d in _side_variants(kind, *law, [])]
         if bool(laws.can_take[side]):
             took = laws.taken_called[side]
-            law = (laws.taken_weight[side], took, took, took, took)
+            law = (laws.taken_weight[side], took, took, took, took, took)
             kind = int(laws.taken_kind[side])
             out += [(v, True, w, d) for v, w, d in _side_variants(kind, *law, [])]
         per_side.append(out)

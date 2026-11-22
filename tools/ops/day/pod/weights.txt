@@ -144,6 +144,8 @@ tests/engine/test_d45_opponent_actions.py 14 e2-m4m2-47658b1
 tests/engine/test_d6_future.py 14 e2-d67w8-59f64e1
 tests/engine/test_disable.py 14 slow-20261120-8c5cd83
 tests/engine/test_e1_batch_i.py 14 e1-i1b-1ee048a
+tests/engine/test_e1_batch_i.py::test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk 12 q-e1-f8727f3
+tests/engine/test_e1_batch_i.py::test_the_call_law_follows_an_imprisoners_sketch 21 e1-igf-a4fe340
 tests/engine/test_field_mask.py 14 batch-h-8450531
 tests/engine/test_pivot_review.py 14 e1-h9-8eeff1d
 tests/engine/test_power_moves.py 14 e2-d3g-e4fbd40
@@ -357,6 +359,8 @@ tests/tools/test_extract_trainers.py 6 e3-pfix2-5a43e21
 tests/tools/test_offsite.py 6 cachevol-c9e9a57
 tests/tools/test_pod_gate.py 6 ops-merged-27db518
 tests/tools/test_pod_weights.py 6 gatefix-merged-72de30b
+tests/tools/test_quick_lane.py 6 ops-rg-estimate-as-sibling-tools-tests
+tests/tools/test_ramgate.py 6 ops-rg-estimate-as-sibling-tools-tests
 tests/tools/test_snap_compare.py 6 e2-d67w1-4f3f58f
 tests/tools/test_snap_parallel.py 6 cachevol-c9e9a57
 tests/tools/test_table_key.py 6 ops-merged-27db518
