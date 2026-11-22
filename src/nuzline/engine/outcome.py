@@ -1020,12 +1020,11 @@ def trace_sources(tables: Tables, state: BattleState, actions, moves=None) -> Tr
     which also clears ``traceAnnounced``, :5352) or Skill Swap (subscript_exchange_abilities.s:
     21-24) with another battler holding Trace, or another battler's Skill Swap from a Trace
     holder; neither script tests Trace or ``traceAnnounced``, and the gainer's flag is clear
-    unless it traced before (over-approximate: any flag). What it can copy: the raw ability of
-    every other battler on the field and of every newcomer another battler switches in, where
-    ChooseTraceTarget accepts it (any side and slot: a Skill Swap, Role Play or Transform can hand
-    an ally's ability to an opposing battler first, and at B = 4 ``Outcome.trace_pick`` picks
-    between two), and Insomnia where a battler uses Worry Seed
-    (subscript_give_target_insomnia.s:11). A drag's newcomer enters in the Roar script
+    unless it traced before (over-approximate: any flag). What it can copy is what the
+    turn-start invariant below leaves (``ok``, ``insomnia``, the bench columns, ``start``,
+    ``changed``), where ChooseTraceTarget accepts it: at B = 4 any side and slot (a Skill Swap,
+    Role Play or Transform can hand an ally's ability to an opposing battler first;
+    ``Outcome.trace_pick`` picks between two). A drag's newcomer enters in the Roar script
     (subscript_force_target_to_switch_or_flee.s:20-31; :8 fails it only in a battle typed
     DOUBLES|2vs2|AI). At B = 2 no hit follows a drag: a chosen Roar has priority -6 and no
     damaging move a lower one (``tests/engine/test_trace_laws.py`` checks both games' tables),
@@ -1049,8 +1048,9 @@ def trace_sources(tables: Tables, state: BattleState, actions, moves=None) -> Tr
     5346-5348), Trace, which ChooseTraceTarget skips, or a Skill Swap with the holder takes the
     holder's Trace away (subscript_exchange_abilities.s:21-24). The opposing actives as they
     stand count for a gainer (its Trace is new), a newcomer holder (one may switch out after it
-    enters) and in a state paused mid-turn (``learn_site``, ``pivot_battler``: no turn start
-    since the last firing point)."""
+    enters), in a state paused mid-turn (``learn_site``, ``pivot_battler``: no turn start since
+    the last firing point), and for a battler waiting for ShowBattleMon (``entry_pending``, a
+    B = 4 start or replacement round; 0 at a B = 2 turn start) and every holder opposing one."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     moves = _turn_moves(tables, state, actions, moves)
@@ -1114,7 +1114,14 @@ def trace_sources(tables: Tables, state: BattleState, actions, moves=None) -> Tr
     # follows no ShowBattleMon: at a learn prompt (``learn_site``) or a U-turn's or Baton Pass's
     # party list (``pivot_battler``).
     paused = (state.learn_site != 0) | (state.pivot_battler != 0)
-    start = gainer | (switch & holder) | paused
+    # A battler waiting for ShowBattleMon (``entry_pending``: a B = 4 start or replacement round,
+    # state.py ``initial_arrays``, step.replace_round; 0 at every B = 2 turn start) has not run its
+    # switch-in states: its own Trace fires at the first MoveEnd (hooks.move_end_switch_in, bcp.c:
+    # 3973, battle_lib.c:3718-3727) on the actives as they stand, and an opposing holder meets it
+    # there as a new target.
+    waiting = state.entry_pending[sides] != 0
+    facing_waiting = jnp.any(across & waiting[None, :], axis=1)
+    start = gainer | (switch & holder) | paused | waiting | facing_waiting
     # A raw ability that can change this turn (the new one is another battler's, on the field or
     # entering): the user of Role Play (subscript_copy_ability.s:14-15) or Transform
     # (battle_script.c:5346-5348), either side of a Skill Swap (subscript_exchange_abilities.s:

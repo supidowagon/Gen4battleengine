@@ -270,8 +270,10 @@ three structs has a row.
   or changes this turn (at B = 2: an opposing newcomer, or the Insomnia of its own Worry Seed;
   at B = 4 also any battler's changed raw ability and a drag's bench); the opposing actives as
   they stand count only for a battler that gains Trace mid-turn, a Trace newcomer (a traceable
-  foe may switch out after it), and in a state paused mid-turn (`learn_site`, `pivot_battler`:
-  no turn start since the last firing point). `step` and the reference do not rely on it (they
+  foe may switch out after it), in a state paused mid-turn (`learn_site`, `pivot_battler`:
+  no turn start since the last firing point), and for a battler waiting for ShowBattleMon
+  (`entry_pending`: a B = 4 start or `replace_round` state, never a B = 2 turn start) and every
+  holder opposing one. `step` and the reference do not rely on it (they
   fire the hook where the decomp does). Generated states keep it: `tests/strategies.settle_traces` sets `trace_announced` 1 on
   a drawn holder that breaks it (no draw; a raw Trace with the flag set is reachable, by a later
   Skill Swap of Trace back, which leaves the flag). A hand-built state that breaks it is not a

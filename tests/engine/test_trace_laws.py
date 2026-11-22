@@ -11,11 +11,15 @@ turn's commands (bcp.c:256), so at a turn start an unannounced holder faces noth
 
 from __future__ import annotations
 
+import inspect
+import re
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.engine import outcome as outcome_mod
 from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.damage import STATUS
 from nuzline.engine.enumerate import outcome_laws
@@ -23,6 +27,7 @@ from nuzline.engine.format import DOUBLES
 from nuzline.engine.ids import AbilityId
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import (
+    ACCURACY_ABILITIES,
     CRIT_WRITE_VARIANTS,
     Outcome,
     ability_whole,
@@ -160,9 +165,9 @@ def test_a_paused_state_is_no_turn_start_for_the_invariant(tables, names):
 
 
 def test_only_an_accuracy_copy_keeps_the_hit_whole(tables, names):
-    # The foe's armed Trace copies the player's newcomer at its entry; where that is paused
-    # mid-switch (a U-turn's list) the copy is the newcomer's ability: Super Luck changes no
-    # accuracy check (bcp.c:2876-2947), Compoundeyes does.
+    # A state paused at a learn prompt (``learn_site``) follows no ShowBattleMon: the foe's armed
+    # Trace can copy the player's active as it stands. Super Luck changes no accuracy check
+    # (bcp.c:2876-2947), Compoundeyes does.
     for ability, whole in ((AbilityId.SUPER_LUCK, False), (AbilityId.COMPOUNDEYES, True)):
         s = _standoff(tables, names, ability)
         s = s._replace(learn_site=jnp.asarray(1, s.learn_site.dtype))
@@ -170,6 +175,19 @@ def test_only_an_accuracy_copy_keeps_the_hit_whole(tables, names):
         acts = A("Tackle", "Tackle", s, names)
         assert bool(trace_copies(tables, s, acts)[1])
         assert np.asarray(ability_whole(tables, s, acts, None)).tolist() == [whole, whole]
+
+
+def test_accuracy_abilities_hold_every_ability_the_threshold_code_reads():
+    # ability_whole keeps a hit whole only for a copy in ACCURACY_ABILITIES: every ability the
+    # threshold code tests (outcome._rate, the turn-start and live thresholds; stage_total, the
+    # stage sum) must be there. The weather setters and Cloud Nine / Air Lock reach the check
+    # through the weather, Klutz through state.held_item; both are in the tuple too.
+    read = set()
+    for fn in (outcome_mod._rate, outcome_mod.stage_total):
+        read |= set(re.findall(r"AbilityId\.([A-Z_0-9]+)", inspect.getsource(fn)))
+    read.discard("NONE")
+    assert read, "the threshold code reads no ability: the test lost its sources"
+    assert read <= {a.name for a in ACCURACY_ABILITIES}, read - {a.name for a in ACCURACY_ABILITIES}
 
 
 def test_a_super_luck_newcomer_is_copied_in_the_view_not_by_the_trace_columns(tables, names):
@@ -255,6 +273,26 @@ def _plain_four(tables, names, moves):
 
 def _set_active(s, b, ability):
     return s._replace(ability=s.ability.at[party_of(s, b), int(s.active[b])].set(ability))
+
+
+def test_b4_a_battler_waiting_for_show_battle_mon_traces_the_actives_as_they_stand(tables, names):
+    # A four-battler start (state.py initial_arrays) or a replacement round (step.replace_round)
+    # sets entry_pending until ShowBattleMon: the switch-in states have not run, so battler 1's
+    # unannounced Trace fires at the first MoveEnd (hooks.move_end_switch_in; bcp.c:3973,
+    # battle_lib.c:3718-3727) on battler 0's Static as it stands. With no battler waiting the
+    # state is a turn start, where the invariant says no such holder exists: no copy counted.
+    s = _plain_four(tables, names, ("Tackle",) * 4)
+    s = _set_active(_set_active(s, 1, AbilityId.TRACE), 0, AbilityId.STATIC)
+    s = s._replace(trace_announced=jnp.zeros_like(s.trace_announced))
+    acts = np.zeros(4, np.int32)
+    static = (AbilityId.STATIC,)
+    assert np.asarray(s.entry_pending).all()  # four(): the start state, before ShowBattleMon
+    assert np.asarray(trace_copies(tables, s, acts, static)).tolist() == [False, True, False, False]
+    # Only battler 0 waits (a replacement round's newcomer): battler 1 meets it as a new target.
+    one = s._replace(entry_pending=jnp.zeros_like(s.entry_pending).at[0].set(1))
+    assert bool(trace_copies(tables, one, acts, static)[1])
+    shown = s._replace(entry_pending=jnp.zeros_like(s.entry_pending))
+    assert not np.asarray(trace_copies(tables, shown, acts, static)).any()
 
 
 @pytest.mark.slow  # the B = 4 laws' compile, about 96 s locally
