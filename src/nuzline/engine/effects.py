@@ -346,7 +346,7 @@ from nuzline.engine.ids import (
     sleepless,
 )
 from nuzline.engine.order import encore_slot_of, move_effects, terrain_index
-from nuzline.engine.outcome import Outcome, crit_lands, read_chance
+from nuzline.engine.outcome import Outcome, crit_lands, read_chance, secondary_procs
 from nuzline.engine.state import (
     MOVES,
     STAGE_MAX,
@@ -797,7 +797,9 @@ def _fang(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     state = _inflict(tables, state, h, outcome, fang & h.proc, False)
     cond = (
         fang
-        & (outcome.fang_flinch[h.side] != 0)
+        # The second CheckEffectActivation reads the chance as the first (battle_script.c:
+        # 8369-8378): Serene Grace as the attacker's ability is now.
+        & secondary_procs(tables, state, h.side, h.move, outcome.fang_flinch[h.side])
         & _alive(state, h.target_side, h.target)
         & ~h.target_moved
         & (h.target_ignorable != AbilityId.INNER_FOCUS)
@@ -4284,7 +4286,10 @@ def play_hit(
         certain=chance == 0,
         landed=landed,
         effective=landed & passes,
-        proc=(chance == 0) | (outcome.secondary[side, hit_index] != 0),
+        # The chance is read at the hit, Serene Grace as the attacker's ability is now
+        # (battle_lib.c:1552-1556, :1571-1575; outcome.secondary_procs).
+        proc=(chance == 0)
+        | secondary_procs(tables, state, side, move, outcome.secondary[side, hit_index]),
         # hitDamage: what the substitute took on its path (bcp.c:3363, :3367).
         dealt=jnp.where(sub_take, to_sub, dealt),
         target_moved=jnp.asarray(target_moved, jnp.bool_),

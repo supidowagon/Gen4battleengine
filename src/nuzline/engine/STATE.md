@@ -260,6 +260,24 @@ three structs has a row.
   `(totalTurns + 1) & 1` at the same writes as `fakeOutTurnNumber` (battle_lib.c:2117-2119,
   :2195-2197; 0 for a lead) and `totalTurns & 1` after a Transform (battle_script.c:5359): the
   field `truant` (`order.truant_loafs`; E1 trial batch, G-69).
+  **The Trace invariant** (e2-tracelaws): ShowBattleMon runs SWITCH_IN_CHECK_STATE_TRACE before
+  every turn's commands (bcp.c:256, from TurnEnd :1858 and TrainerMessage :240-249; the battle
+  start runs it too, `hooks.battle_start`), so in every turn-start state no battler with
+  `Battler_Ability` Trace, HP, no Griseous Orb and `trace_announced` 0 faces an opposing battler
+  with HP whose raw `ability` ChooseTraceTarget accepts (not Forecast, Trace or Multitype,
+  battle_lib.c:7750-7781): it would have traced (:3711-3737). `outcome.trace_sources` /
+  `trace_copies` (the laws and the sampler) rely on it: an armed holder copies only what enters
+  or changes this turn (at B = 2: an opposing newcomer, or the Insomnia of its own Worry Seed;
+  at B = 4 also any battler's changed raw ability and a drag's bench); the opposing actives as
+  they stand count only for a battler that gains Trace mid-turn, a Trace newcomer (a traceable
+  foe may switch out after it), in a state paused mid-turn (`learn_site`, `pivot_battler`:
+  no turn start since the last firing point), and for a battler waiting for ShowBattleMon
+  (`entry_pending`: a B = 4 start or `replace_round` state, never a B = 2 turn start) and every
+  holder opposing one. `step` and the reference do not rely on it (they
+  fire the hook where the decomp does). Generated states keep it: `tests/strategies.settle_traces` sets `trace_announced` 1 on
+  a drawn holder that breaks it (no draw; a raw Trace with the flag set is reachable, by a later
+  Skill Swap of Trace back, which leaves the flag). A hand-built state that breaks it is not a
+  game state; the laws may under-read it.
 - **moveProtect -> `protect_count`** (K3b2 Task 6; docs/kaizo/k3b2-rules.md §2(a),
   §12): `BattleContext.moveProtect`, the move whose attack message the battler last
   showed (`UpdateMoveBuffers`, `src/battle/battle_controller_player.c:3936-3942`),

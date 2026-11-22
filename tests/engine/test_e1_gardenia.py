@@ -14,13 +14,15 @@ import dataclasses
 import re
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from nuzline.data.tables import to_numpy
-from nuzline.engine.actions import legal_actions
+from nuzline.engine.actions import FIRST_ITEM_ACTION, legal_actions
 from nuzline.engine.damage import ai_damage_for_roll, damage_table
+from nuzline.engine.enumerate import enumerate_drawn, outcome_laws
 from nuzline.engine.field import with_weather
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
@@ -258,6 +260,63 @@ def test_wiki_berry_after_a_hit_confuses_before_the_holders_move(tables, names):
     assert int(out.confusion[0]) == 1  # drawn 2, dropped to 1 at the check
     assert int(out.hp[0, 0]) == 100 + 200 // 8
     assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # it still moved (no self-hit)
+
+
+_laws = jax.jit(outcome_laws)
+
+
+def _berry_boards(tables, names):
+    """E2-ML-1 (test_enumerate.py::test_mask_sound falsifier A): an Adamant Wiki Berry holder at
+    ``maxHP / 2`` whose foe acts first with a bag Potion, or with a Leer that may miss. Every
+    action ends in MoveEnd, whose TriggerEffectOnSwitch (bcp.c:1973, :3973) runs the held-item
+    pass over every battler (battle_lib.c:4151-4165): the berry is eaten there and the holder's
+    own check draws its counter and the self-hit coin."""
+    s = roark_state(tables, names, opp_faster=True)
+    s = _full(_item(s, 0, 0, "Wiki Berry", names), 0, 0, 200).replace_hp(0, 0, 100)
+    s = s._replace(nature=s.nature.at[0, 0].set(ADAMANT))
+    s = s.replace_hp(1, 0, int(s.max_hp[1, 0]) - 10)
+    potion = A("Scratch", FIRST_ITEM_ACTION, s, names)
+    leer = A("Scratch", "Leer", s, names)
+    return s, potion, leer
+
+
+def _drawn(tables, s, acts):
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    return laws, enumerate_drawn(laws)[2]
+
+
+def test_a_berry_in_range_is_read_after_any_earlier_action(tables, names):
+    s, potion, leer = _berry_boards(tables, names)
+    for acts in (potion, leer):
+        laws, drawn = _drawn(tables, s, acts)
+        for name in ("confusion_hit", "berry_confusion"):
+            assert bool(getattr(laws.relevant, name)[0]), name
+            assert np.asarray(getattr(drawn, name))[:, 0].all(), name  # a missed Leer too
+        assert np.asarray(drawn.roll)[:, 0, 0].all()
+    # Out of range, a hidden berry (Embargo: Battler_HeldItem, battle_lib.c:5358-5360) or the
+    # holder moving first: no read.
+    for board, acts in (
+        (s.replace_hp(0, 0, 101), potion),
+        (s._replace(embargo=s.embargo.at[0].set(3)), potion),
+    ):
+        laws = jax.tree.map(np.asarray, _laws(tables, board, acts))
+        assert not bool(laws.relevant.confusion_hit[0])
+    slow = s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(1))
+    laws = jax.tree.map(np.asarray, _laws(tables, slow, leer))
+    assert not bool(laws.relevant.confusion_hit[0])
+
+
+@pytest.mark.slow  # two mask-sound steps of the boards (one compiled step program)
+def test_a_berry_in_range_boards_are_mask_sound(tables, names):
+    from tests.engine.test_enumerate import _assert_mask_sound
+
+    s, potion, leer = _berry_boards(tables, names)
+    arbitrary = O._replace(
+        confusion_hit=jnp.asarray([1, 1], jnp.int8),
+        berry_confusion=jnp.asarray([4, 4], jnp.int8),
+    )
+    for acts in (potion, leer):
+        _assert_mask_sound(tables, s, np.asarray(acts), arbitrary, 0)
 
 
 def test_own_tempo_and_safeguard_stop_the_berry_confusion(tables, names):

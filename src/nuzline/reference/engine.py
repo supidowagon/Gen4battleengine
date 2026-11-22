@@ -4458,6 +4458,17 @@ def _fling_hit(turn: _Turn, s: RefState, side: int, target: int, target_moved: b
         _inflict(turn, s, side, target, _FLING_STATUSES[kind], False)
 
 
+def _passes_chance(s: RefState, side: int, chance: int, value) -> bool:
+    """``RandNext() % 100 < effectChance`` for the roll class ``value`` (``outcome.
+    secondary_class``): ``0 < value`` and ``value - 1 < chance``, the chance doubled when the
+    attacker's ``Battler_Ability`` is Serene Grace at the hit (battle_lib.c:1552-1556,
+    :1571-1575; battle_script.c:8369-8373)."""
+    if _ability(s, _active(s, side)) == AbilityId.SERENE_GRACE:
+        chance *= 2
+    value = int(value)
+    return 0 < value and value - 1 < chance
+
+
 def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, landed: bool,
                  effective: bool, dealt: int, target_moved: bool,
                  target: int | None = None) -> None:  # fmt: skip
@@ -4478,7 +4489,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     on_hit = _t(tables, "move_effect", move) in ON_HIT_EFFECTS
     chance = 0 if on_hit else _t(tables, "move_effect_chance", move)
     certain = chance == 0
-    proc = certain or o.secondary[side][hit] != 0
+    proc = certain or _passes_chance(s, side, chance, o.secondary[side][hit])
     target_alive = _active(s, target).hp > 0
     seen = _ignorable(s, side, target)
 
@@ -4544,7 +4555,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         alive = _active(s, target).hp > 0
         blocked = seen in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)  # flinch_mon.s:7, :9
         blocked = blocked or _shielded(turn, s, target)  # flinch_mon.s:6
-        if o.fang_flinch[side] and alive and not target_moved and not blocked:
+        flinch_roll = _passes_chance(s, side, chance, o.fang_flinch[side])
+        if flinch_roll and alive and not target_moved and not blocked:
             s.battlers[target].flinched = 1
     elif effect in (EffectId.FLINCH, EffectId.FAKE_OUT) and effective and proc:
         # subscript_flinch_mon.s: a living target that has not moved yet; Inner Focus,
