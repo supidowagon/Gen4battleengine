@@ -600,7 +600,8 @@ def _sourceless_uproar_boards():
     battle_lib.c:183-189) or a called Uproar does. The stored selection (moveSlot 0, TEMP 3) is
     the generator's free draw; the selection writes both together (bcp.c:525-526) and a locked
     battler writes neither (bcp.c:334-338), so the reachable ones are TEMP = 1 + moveSlot: each
-    held slot."""
+    held slot. The hole was not the lock: the foe's first-turn Sky Attack counted as a sure
+    flinch (``test_a_charging_sky_attack_never_flinches_for_sure_in_the_laws``)."""
     s = stored("u027_state.txt")
     yield "stored", s
     for slot in range(4):
@@ -627,6 +628,17 @@ def test_a_sourceless_uproar_lock_runs_uproar_in_the_laws(tables):
     for label, s in _sourceless_uproar_boards():
         laws = laws_of(tables, s, acts)
         assert bool(laws.relevant.roll[0, 0]), label
+
+
+def test_a_charging_sky_attack_never_flinches_for_sure_in_the_laws(tables):
+    """u_027's cause: the foe's Sky Attack on its first turn (not move-locked) charges
+    (effect_script_0075.s:5: only VOLATILE_CONDITION_MOVE_LOCKED jumps to the strike), so it
+    deals nothing and flinches nothing. The laws took its FLINCH effect as a sure flinch when it
+    moves first and gated off every read of the player's Uproar, which the step then rolled."""
+    acts = np.zeros(2, np.int32)
+    for label, s in _sourceless_uproar_boards():
+        laws = laws_of(tables, s, acts)
+        assert not bool(laws.reads.flinch_sure[1]), label
 
 
 @pytest.mark.slow
