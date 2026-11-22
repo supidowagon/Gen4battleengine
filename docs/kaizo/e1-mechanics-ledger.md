@@ -3014,10 +3014,13 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
     input `terrain_refusal` reads; `terrains` from tools/terrain.py): vanilla 456 of 928 (215 mixed, 241 unplaced),
     Kaizo 522 of 928 (209 mixed, 313 unplaced). The 161 Kaizo trainers with a split are all mixed (Roark Split: Lass
     Natalie 3, Youngster Michael 4, Lass Samantha 11, Bug Catcher Sebastian 356, ...); no split trainer is unplaced.
-    This refusal must be empty once E3's batch 3 (ROM terrain and map labels per trainer) is in main. A trainer still
-    unknown after that is a data gap, filled from the ROM, then the calc repo, then the docs sheet, never a standing
-    refusal. Pin: `test_the_trainers_of_unknown_terrain_are_counted` (`fullset`, pod pending); whoever merges batch 3
-    sets its counts to 0.
+    A mixed trainer's terrain is a run input (`--terrain`, `cli.fight_terrain`, manager ruling 1), not a data gap. An
+    unplaced split trainer would be a data gap (ROM, then the calc repo, then the docs sheet); there is none today.
+    Vanilla's `trainers.json` has no splits. Pin: `test_no_split_trainer_is_unplaced` (`fullset`, pod pending): Kaizo's
+    unplaced trainers among its split trainers = 0.
+  - OWED (batch 4): where the gauntlet walk fixes the fight tile (E3 batch 3's map facts, read by batch 4's planner), a
+    mixed trainer's terrain follows from that tile; the run input `--terrain` is needed only for fights outside a walked
+    group. To be built in batch 4.
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

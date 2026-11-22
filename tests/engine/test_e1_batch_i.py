@@ -515,25 +515,23 @@ def test_a_metronome_reads_the_terrain_through_its_calls(tables, names):
 
 
 @pytest.mark.fullset  # pod pending
-def test_the_trainers_of_unknown_terrain_are_counted():
-    """The trainers ``terrain_refusal`` refuses for a terrain-reading move today: ``terrain`` ==
-    ``TERRAIN_UNKNOWN`` in the built ``trainers.json`` (mixed start tiles or no placing map,
-    tools/terrain.py). A Metronome reaches Secret Power, Nature Power and Camouflage
-    (``reached_moves``), so prep refuses a Metronome candidate against each of them. The count
-    must become 0 when E3's batch 3 (ROM terrain and map labels per trainer) merges; whoever
-    merges batch 3 sets it to 0. A trainer still unknown then is a data gap to fill from the
-    ROM, then the calc repo, then the docs sheet, not a standing refusal. ``fullset``: the
-    count goes stale as the data grows; skipped where a game's intermediates are not built."""
-    from nuzline.data.games import GAMES, KAIZO, VANILLA
-    from nuzline.data.trainer import TERRAIN_UNKNOWN, load_trainers
+def test_no_split_trainer_is_unplaced():
+    """Every Kaizo split trainer (every real battle) has a map placing it: ``terrains`` is not
+    empty (tools/terrain.py). An unplaced trainer has ``terrain`` ``TERRAIN_UNKNOWN`` with no
+    choice, so ``terrain_refusal`` refuses it for a terrain-reading move, a Metronome included
+    (``reached_moves``): a data gap, filled from the ROM, then the calc repo, then the docs
+    sheet. A mixed trainer's terrain is a run input (``cli.fight_terrain``, manager ruling 1),
+    not checked here. Vanilla's ``trainers.json`` has no splits, so only Kaizo is pinned.
+    ``fullset``: it reads the built intermediates, skipped where they are not built."""
+    from nuzline.data.games import GAMES, KAIZO
+    from nuzline.data.trainer import load_trainers
 
-    expected = {VANILLA: 456, KAIZO: 522}
-    for game, count in expected.items():
-        dir = GAMES[game].intermediate_dir
-        if not (dir / "trainers.json").exists():
-            pytest.skip(f"{dir}/trainers.json not built")
-        unknown = [t.id for t in load_trainers(dir) if t.terrain == TERRAIN_UNKNOWN]
-        assert len(unknown) == count, (game, len(unknown))
+    dir = GAMES[KAIZO].intermediate_dir
+    if not (dir / "trainers.json").exists():
+        pytest.skip(f"{dir}/trainers.json not built")
+    split = [t for t in load_trainers(dir) if t.split is not None]
+    assert split
+    assert [t.id for t in split if not t.terrains] == []
 
 
 def test_a_gained_metronomes_calls_stay_on_the_holders_lines(tables, names, monkeypatch):
