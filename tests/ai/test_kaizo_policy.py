@@ -1434,9 +1434,7 @@ def test_setup_first_turn_effects_are_the_decomps():
 
 
 @pytest.mark.parametrize("turn", [0, 1])
-@pytest.mark.parametrize(
-    "jump", [pytest.param(0, marks=pytest.mark.slow), 1]
-)  # jump 0: over 60 s on the pod
+@pytest.mark.parametrize("jump", [0, 1])
 def test_setup_first_turn(kaizo_tables, kaizo_roark_party, turn, jump):
     """SetupFirstTurn_Main (script.s:6417-6433): on totalTurns 0 (LoadTurnCount,
     trainer_ai.c:931-935) a move whose effect is in the table gets +2 unless the 80 roll
@@ -1457,9 +1455,7 @@ def test_setup_first_turn(kaizo_tables, kaizo_roark_party, turn, jump):
     ("weather", "turn", "expected"),
     [
         (Weather.NONE, 0, [5, 5, 5, 5]),
-        pytest.param(
-            Weather.SANDSTORM, 0, [5, 5, 5, 5], marks=pytest.mark.slow
-        ),  # over 60 s on the pod
+        (Weather.SANDSTORM, 0, [5, 5, 5, 5]),
         # The fall-through (E1 Ruling R3): a non-weather move runs Weather_Sun and ends.
         (Weather.SUN, 0, [0, 0, 0, 5]),
         (Weather.RAIN, 0, [5, 5, 5, 0]),
@@ -1497,7 +1493,6 @@ def test_weather(kaizo_tables, kaizo_names, kaizo_roark_party, weather, turn, ex
     assert _delta(t, s, 0x7, 0x207) == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", [0xD, 0xF, 0x1F, 0x207, 0x20F])
 @pytest.mark.parametrize("turn", [0, 1])
 def test_exact_equals_loose_with_setup_and_weather(kaizo_tables, kaizo_roark_party, flags, turn):
@@ -1517,7 +1512,6 @@ def test_exact_equals_loose_with_setup_and_weather(kaizo_tables, kaizo_roark_par
 # --- PRIORITIZE_EXTREMES and CHECK_HP (E1 batch 2c) ------------------------------------------
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("jump", [0, 1])
 def test_prioritize_extremes(kaizo_tables, kaizo_roark_party, jump):
     """PrioritizeExtremes_Main (script.s:6499-6519), against set 0x7 (-> 0x27): a move
@@ -1596,7 +1590,6 @@ def test_check_hp(kaizo_tables, kaizo_roark_party, attacker, target):
     assert _delta(t, s, 0x7, 0x107, jumps) == [0] * MOVES
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", [0x27, 0x10F, 0x107])
 @pytest.mark.parametrize(("attacker", "target"), [(100, 100), (50, 20), (20, 60)])
 def test_exact_equals_loose_with_extremes_and_check_hp(
@@ -1618,7 +1611,6 @@ def test_exact_equals_loose_with_extremes_and_check_hp(
 # --- Effects with no Basic or Expert label (E1 batch 3) --------------------------------------
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", [0x17, 0x27, 0x10F, 0x20F])
 @pytest.mark.parametrize(
     "moves",
@@ -1709,7 +1701,6 @@ def test_status_defense_up(kaizo_tables, kaizo_names, kaizo_roark_party, hp, las
     assert got == [expected, 0, 0, 0]
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_stat_raises_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the batch 4 raises, the first Kaizo move of each effect (ATK_UP,
@@ -1887,7 +1878,6 @@ def test_swagger_with_psych_up(kaizo_tables, kaizo_names, kaizo_roark_party, atk
     assert _delta(t, s, 0x3, 0x7)[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_status_moves_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the batch 6 status moves, against a guessed Gible and Tentacool, at
@@ -2044,7 +2034,6 @@ def test_flare_blitz_recoil_move(
     assert _delta(t, s, 0x3, 0x7)[:2] == [expected, 0]
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_expert_only_hits_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for one Kaizo move of each batch 7 effect, against a guessed Gible and
@@ -2349,7 +2338,6 @@ def test_expert_destiny_bond(
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch9_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the batch 9 moves, against a guessed Gible and Tentacool, at two HP
@@ -2516,7 +2504,6 @@ def test_expert_reflect(kaizo_tables, kaizo_names, kaizo_roark_party, hp, last, 
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch10_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the batch 10 effects, against a guessed Gible and Tentacool, at two
@@ -2646,7 +2633,6 @@ def test_expert_payback(
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 @pytest.mark.parametrize("speeds", [(100, 100), (500, 100), (1, 100)])
 def test_speed_faster_exact_equals_loose(
@@ -2845,7 +2831,6 @@ def test_weather_moves(
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch12_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose on a fight of batch 12's rolling labels (Counter, Mirror Coat, Pluck,
@@ -2908,7 +2893,6 @@ def test_expert_protect(kaizo_tables, kaizo_names, kaizo_roark_party, case, jump
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_protect_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for Protect with no chain, a chain of 1, and the player badly
@@ -2956,7 +2940,6 @@ def test_basic_alt_power_effects(
     assert _delta(t, s, 0x2, 0x3)[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch14_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose on a fight of the batch 14 effects, whose damage the AI estimates
@@ -2976,7 +2959,6 @@ def _all_ivs(s, side: int, iv: int):
     return s._replace(ivs=s.ivs.at[side, 0].set(jnp.full(6, iv, s.ivs.dtype)))
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_hidden_power_ai_type_and_power(kaizo_tables, kaizo_names, kaizo_roark_party):
     """TrainerAI_MoveType's and TrainerAI_CalcDamage's MOVE_HIDDEN_POWER cases
     (trainer_ai.c:3208-3220, :2973-2993): with every IV 31, type bits 63 give
@@ -3079,7 +3061,6 @@ def test_party_member_deals_more_damage_as_the_active(kaizo_tables, kaizo_names,
     assert not bool(c.if_has_super_effective_move(ctx).jump)  # U-turn neutral, Accelerock resisted
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_u_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for U-turn at equal speed (its FASTER tie) and not, against a Grass
@@ -3252,7 +3233,6 @@ def test_expert_blizzard(
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch16_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
@@ -3318,9 +3298,7 @@ def test_force_switch(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps,
         (100, "faster", "Leech Seed", (), 0, 1),  # unseeded: falls into TryScorePlus1
         (100, "faster", "Leech Seed seeded", (), 0, 0),
         # knowing Focus Punch (:2994-2996): +1 unless the 96 roll (:2995) jumps
-        pytest.param(
-            100, "faster", "focus punch", (), 0, 1, marks=pytest.mark.slow
-        ),  # over 60 s on the pod
+        (100, "faster", "focus punch", (), 0, 1),
         (100, "faster", "focus punch", (2995,), 0, 0),
     ],
 )
@@ -3369,7 +3347,6 @@ def test_dream_eater(kaizo_tables, kaizo_names, kaizo_roark_party, asleep, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
 def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
@@ -3386,13 +3363,7 @@ def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
 
 
 @pytest.mark.parametrize(
-    ("own", "speed"),
-    [
-        pytest.param(100, "faster", marks=pytest.mark.slow),  # over 60 s on the pod
-        (60, "faster"),
-        (30, "slower"),
-        (30, "faster"),
-    ],
+    ("own", "speed"), [(100, "faster"), (60, "faster"), (30, "slower"), (30, "faster")]
 )
 def test_roost_scores_as_recover(kaizo_tables, kaizo_names, kaizo_roark_party, own, speed):
     """Roost (214) takes Recover's labels, Basic_CheckCanRecoverHP and Expert_Recovery
@@ -3512,7 +3483,7 @@ def test_accuracy_down(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic
         # Basic_CheckHighStatStage_Evasion (script.s:407-418) / Expert_StatusEvasionUp
         # (:2184-2253): at full HP +3 unless :2204 jumps, then the HP ranges end it
         (0, False, (), 0, 3),
-        pytest.param(0, False, (2204,), 0, 0, marks=pytest.mark.slow),  # over 60 s on the pod
+        (0, False, (2204,), 0, 0),
         (6, False, (), -10, 2),  # +6: Basic -10; Expert +3, then -1 unless :2209 jumps
         (3, True, (), -10, None),  # Simple: above +2 is already the top (:412-413)
     ],
@@ -3601,7 +3572,6 @@ def test_imprison(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic, exp
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
 def test_p1_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
@@ -3728,7 +3698,6 @@ def test_ai_chart_reads_ingrain_and_roosting(kaizo_tables, kaizo_names, kaizo_ro
     assert int(apply_type_chart(t, roosted, 1, accelerock, 40)) * 2 == flying
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
 def test_p2_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
@@ -3813,7 +3782,6 @@ def test_baton_pass_flag_without_baton_pass(
     assert _delta(t, s, 0x1, 0x41, jumps)[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize(
     ("flags", "states"),
     [
@@ -3868,7 +3836,6 @@ def test_expert_solar_beam(kaizo_tables, kaizo_names, kaizo_roark_party, case, e
     assert _delta(t, s, 0x3, 0x7)[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
 def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
@@ -4045,7 +4012,6 @@ def test_shadow_force(kaizo_tables, kaizo_names, kaizo_roark_party, case, expect
     assert _delta(t, s, 0x3, 0x7)[:2] == [expected, 0]
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
 def test_charge_turn_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party, flags, states
@@ -4122,7 +4088,6 @@ def test_expert_encore(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
 def test_batch11_encore_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party, flags, states
@@ -4309,7 +4274,6 @@ def test_mist_check_hp(kaizo_tables, kaizo_names, kaizo_roark_party, attacker, t
     assert _delta(t, s, 0x7, 0x107, ((0, 7718), (0, 7742)))[0] == 0
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 @pytest.mark.parametrize(
     "states", [pytest.param(1, id="one"), pytest.param(None, id="all", marks=pytest.mark.slow)]
 )
@@ -4442,10 +4406,7 @@ def test_perish_song(kaizo_tables, kaizo_names, kaizo_roark_party, perishing, ba
 # --- E1 trial batch: Nature Power -------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("jumps", "harass"),
-    [pytest.param((), 2, marks=pytest.mark.slow), ((8030,), 0)],  # over 60 s on the pod
-)
+@pytest.mark.parametrize(("jumps", "harass"), [((), 2), ((8030,), 0)])
 def test_nature_power(kaizo_tables, kaizo_names, kaizo_roark_party, jumps, harass):
     """NATURE_POWER (173) has no Basic_ScoreMoveEffect or Expert_Main entry: the AI scores the
     slot's own status move (power 0). Its only mention is Harrassment_Effects (script.s:8058):
@@ -5449,7 +5410,6 @@ def test_expert_mirror_move(
 # --- #93 Conversion 2 (E3-B2-3) ---------------------------------------------------------------
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_conversion_2_has_no_basic_or_expert_label(kaizo_tables, kaizo_names, kaizo_roark_party):
     """BATTLE_EFFECT_CONVERSION2 (93) is named by no Basic_ScoreMoveEffect or Expert_Main entry
     (script.s lists it only in the tables Expert_Encore_EncouragedMoveEffects :3223 and the CheckHP
@@ -5474,7 +5434,6 @@ def test_conversion_2_has_no_basic_or_expert_label(kaizo_tables, kaizo_names, ka
 # --- #100 Spite (E3-B2-4) ---------------------------------------------------------------------
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_spite_has_no_basic_or_expert_label(kaizo_tables, kaizo_names, kaizo_roark_party):
     """BATTLE_EFFECT_DECREASE_LAST_MOVE_PP (100) is named by no Basic_ScoreMoveEffect or Expert_Main
     entry (script.s lists it only in the tables CheckHP_Target_DiscourageAtLowHP :7960 and
@@ -5556,7 +5515,6 @@ def test_expert_magic_coat(kaizo_tables, kaizo_names, kaizo_roark_party, hp, tur
     assert (4505 in first_lines) == (turn == 0)
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_magic_coat_is_scored_not_refused_and_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
@@ -5680,7 +5638,6 @@ def test_lucky_chant_check_hp(
     assert _delta(t, s, 0x7, 0x107, ((0, 7718), (0, 7742)))[0] == 0
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_lucky_chant_is_scored_not_refused_and_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
@@ -5736,7 +5693,6 @@ def test_expert_encore_encourages_a_players_last_charge(
 # --- #194 Grudge (E3-B2-9) --------------------------------------------------------------------
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_grudge_has_no_ai_label_and_two_table_entries(kaizo_tables, kaizo_names, kaizo_roark_party):
     """Grudge is BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT, 194, named twice in script.s, in
     Expert_Encore_EncouragedMoveEffects (:3259) and CheckHP_DiscourageAtHighHP (:7757), both
@@ -5902,7 +5858,6 @@ def test_the_ai_reads_the_players_miracle_eye_bit_in_the_chart(
     )
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_miracle_eye_is_scored_not_refused_and_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
@@ -6037,7 +5992,6 @@ def test_expert_last_resort(kaizo_tables, kaizo_names, kaizo_roark_party, typing
     assert _delta(t, s, 0x3, 0x7)[0] == expected
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_last_resort_is_scored_not_refused_and_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
@@ -6674,7 +6628,6 @@ def test_with_the_record_equal_to_the_speeds_the_compare_order_is_irrelevant(
 # --- #34 Pay Day (E3-B2-16) -------------------------------------------------------------------
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_pay_day_has_no_ai_entry_and_scores_as_a_plain_hit(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
@@ -6773,7 +6726,6 @@ def test_expert_lock_on(kaizo_tables, kaizo_names, kaizo_roark_party, move):
     assert _delta(t, s, 0x3, 0x7, jumps=((0, 3321),))[0] == 0
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_lock_on_is_scored_not_refused_and_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
@@ -6894,7 +6846,6 @@ def test_expert_foresight_reads_the_ais_type_not_the_players(
     assert _delta(t, _dark(_ai_types(s, (7, 7)), (12, 12)), 0x3, 0x7)[0] == 2
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_foresight_is_scored_not_refused_and_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
@@ -6973,7 +6924,6 @@ def test_expert_aqua_ring(kaizo_tables, kaizo_names, kaizo_roark_party, hp, jump
     assert (6084 in first_lines) == (hp >= 30)
 
 
-@pytest.mark.slow  # over 60 s on the pod (runs of 20-21 Nov)
 def test_aqua_ring_is_scored_not_refused_and_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party
 ):
