@@ -1128,3 +1128,70 @@ def test_gen_drift_only_in_inputs_the_strategies_draw():
     diverged = sc.compare_dumps(record, dump[:2])[0]
     assert sc.classify_gen(record, dump[:2], diverged) == (diverged, False)
     assert sc.classify_gen(record, dump, None) == (None, False)
+
+
+def test_no_local_constants_pool_does_not_shift_draws(monkeypatch):
+    """Inside no_local_constants a source literal of 100 or more (the local pool) changes no
+    draw, and the pool and its cache are restored after."""
+    from hypothesis import HealthCheck, given, seed, settings
+    from hypothesis import strategies as st
+    from hypothesis.internal.conjecture import providers
+    from hypothesis.internal.constants_ast import Constants
+
+    def draws():
+        got = []
+
+        @seed(7)
+        @settings(max_examples=60, database=None, suppress_health_check=list(HealthCheck))
+        @given(xs=st.lists(st.integers(0, 10**6), min_size=20, max_size=20))
+        def gen(xs):
+            got.append(xs)
+
+        with sc.no_local_constants():
+            assert len(providers._get_local_constants()) == 0
+            gen()
+        return got
+
+    original = providers._get_local_constants
+    base = draws()
+    pool = providers._local_constants
+    monkeypatch.setattr(
+        providers, "_local_constants", Constants(integers=type(pool.integers)([123456, 654321]))
+    )
+    providers.CONSTANTS_CACHE.cache.clear()
+    assert draws() == base
+    assert providers._get_local_constants is original  # restored
+
+
+def test_draw_inputs_draws_inside_no_local_constants(monkeypatch):
+    """draw_inputs makes its first draw inside no_local_constants: the stand-in marks the block,
+    and the first strategy (``supported_state``) records whether it runs inside it. ``saved`` is
+    set, so no step program is loaded; the stub ctx is passed to the stand-in strategy only."""
+    import contextlib
+
+    from tests import strategies
+
+    inside = [False]
+    seen = []
+
+    class Drawn(Exception):
+        pass
+
+    @contextlib.contextmanager
+    def marked():
+        inside[0] = True
+        try:
+            yield
+        finally:
+            inside[0] = False
+
+    def first_draw(*_):
+        seen.append(inside[0])
+        raise Drawn
+
+    monkeypatch.setattr(sc, "no_local_constants", marked)
+    monkeypatch.setattr(strategies, "supported_state", first_draw)
+    ctx = type("Ctx", (), {"tables": None, "names": None})()
+    with pytest.raises(Drawn):
+        sc.draw_inputs(ctx, 0, saved={"seed 0 turn 0": {}})
+    assert seen and all(seen)  # Hypothesis replays the failing example: each draw is inside

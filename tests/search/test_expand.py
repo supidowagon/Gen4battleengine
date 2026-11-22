@@ -46,8 +46,8 @@ EXPAND_ROWS = 1024  # expand's call size in this file's expansions (``small_chun
 @pytest.fixture
 def small_chunk(monkeypatch):
     """``expand``'s programs in ``EXPAND_ROWS``-row calls instead of ``CHUNK`` (16384):
-    each ``calls_rows``, ``laws_rows`` and ``step_rows`` call pads to ``CHUNK`` rows, and
-    this file reached ~15 GB. A row's result depends on neither the call size nor the
+    each ``calls_rows`` and ``step_rows`` call pads to ``CHUNK`` rows (``laws_rows`` to
+    at most ``LAWS_CHUNK``, E3-B2-35), and this file reached ~15 GB. A row's result depends on neither the call size nor the
     device count (expand's module docstring), so the expansions are unchanged.
     ``test_bucket_rows`` reads the default ``CHUNK`` and does not use it."""
     monkeypatch.setattr(expand_mod, "CHUNK", EXPAND_ROWS)

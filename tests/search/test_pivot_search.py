@@ -29,8 +29,8 @@ _sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
 @pytest.fixture(scope="module", autouse=True)
 def _small_chunk():
     """``expand``'s programs in 1024-row calls instead of ``CHUNK`` (16384). Every request
-    here enumerates a few hundred outcomes at most, yet each ``calls_rows``, ``laws_rows``
-    and ``step_rows`` call pads to ``CHUNK`` rows: 12-15 GB sampled peak per test. A row's
+    here enumerates a few hundred outcomes at most, yet each ``calls_rows`` and
+    ``step_rows`` call pads to ``CHUNK`` rows (``laws_rows`` to at most ``LAWS_CHUNK``): 12-15 GB sampled peak per test. A row's
     result depends on neither the call size nor the device count (expand's module
     docstring), so the pivot properties are unchanged; peaks fall under 5 GB."""
     with pytest.MonkeyPatch.context() as mp:

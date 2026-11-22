@@ -1786,6 +1786,49 @@ def rom_terrain_rules(rom: RomFiles, symbols: SymbolMap, decomp: Path):
     return terrain_rules(decomp, list(flags), by_background)
 
 
+def trainer_fog_headers(
+    rom: RomFiles,
+    decomp: Path,
+    symbols: SymbolMap,
+    where: dict[int, list[int]],
+    n_trainers: int,
+) -> list[list[int]]:
+    """Per trainer id, the fog that field Defog can clear: the sorted map headers of the
+    trainer -> map join ``where`` (``trainer_start_conditions``' ``maps``) whose ROM weather
+    byte (``map_header_rows``, MapHeader.weather, include/map_header.h:10-31) is
+    OVERWORLD_WEATHER_FOG (14, include/constants/overworld_weather.h:18), as
+    ``extract_decomp.extract_trainers`` lists them from include/data/map_headers.h
+    (``AreaCondition.fog_headers``, ledger G-15). ``read_trainers`` keeps them only for a
+    fight that starts in fog.
+
+    Weathers 14 and 15 (deep fog) both start a battle in fog (the field-weather switch,
+    src/battle/battle_lib.c:3684-3685), but only 14 turns clear when FLAG_DEFOG_ACTIVE is
+    set (FieldMapChange_UpdateGameData, src/field_map_change.c:273-277), so a deep-fog
+    header is left out here and in the decomp extractor: its fog is no run input. A
+    seasonal header (weather >= OVERWORLD_WEATHER_YEARLY_START) takes its weather from
+    ``sYearlyWeather`` (FieldSystem_GetWeather, src/field_overworld_weather.c:399-422),
+    which in the decomp holds no fog; this ROM's table is read and must hold no 14 either
+    (``ReaderError``), so a seasonal header never gives fog Defog can clear."""
+    fog = _weather_id(Path(decomp), "OVERWORLD_WEATHER_FOG")
+    yearly = symbol_bytes(rom, symbols, YEARLY_SYMBOL)
+    if fog in yearly:
+        day = yearly.index(fog)
+        raise ReaderError(
+            f"{YEARLY_SYMBOL} byte {day} is OVERWORLD_WEATHER_FOG ({fog}): a seasonal header "
+            "can give fog field Defog clears on some days; fog_headers cannot express it"
+        )
+    weathers = [w for _, _, w in map_header_rows(rom, symbols)]
+    out: list[list[int]] = [[] for _ in range(n_trainers)]
+    for tid, headers in where.items():
+        if not 0 <= tid < n_trainers:
+            raise ReaderError(f"trainer -> map join names trainer {tid}; {n_trainers} trainers")
+        for h in headers:
+            if h >= len(weathers):
+                raise ReaderError(f"trainer {tid}: map header {h} past {len(weathers)} headers")
+        out[tid] = sorted(h for h in headers if weathers[h] == fog)
+    return out
+
+
 def trainer_terrain_rows(
     rom: RomFiles,
     decomp: Path,

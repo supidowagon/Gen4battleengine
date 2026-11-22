@@ -3,6 +3,8 @@
 import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -348,9 +350,11 @@ def test_unit_overdue_counts_from_the_start_file(tmp_path):
     assert _run(script).split() == ["n", "y", "n", "n"]
 
 
-def _podcheck(root: Path, pids: dict[int, str], cg: Path, want: str = "") -> tuple[int, list[str]]:
-    """want: podcheck.sh's arguments after <root> (POD_SCRIPTS, POD_WEIGHTS)."""
-    script = (f"{_fake_ps(pids)}\nexport -f ps\nCGROOT='{cg.as_posix()}' bash '{PODCHECK.as_posix()}' "
+def _podcheck(root: Path, pids: dict[int, str], cg: Path, want: str = "", vol: str = "") -> tuple[int, list[str]]:
+    """want: podcheck.sh's arguments after <root> (POD_SCRIPTS, POD_WEIGHTS). vol: the env for the
+    network volume line (default: a folder that does not exist, so the pod's own /vol never shows)."""
+    vol = vol or f"CACHE_VOL='{(root.parent / 'novol').as_posix()}'"
+    script = (f"{_fake_ps(pids)}\nexport -f ps\n{vol} CGROOT='{cg.as_posix()}' bash '{PODCHECK.as_posix()}' "
               f"'{root.as_posix()}' {want}")
     r = subprocess.run([BASH, "-c", script], check=False, capture_output=True, text=True, env=_clean_env())
     return r.returncode, r.stdout.strip().splitlines()
@@ -385,7 +389,8 @@ def test_podcheck_lists_runs_gate_versions_memory_and_claims(tmp_path):
     assert rc == 0
     assert out[0] == "run new-a gate=2 scripts=aaaaaaaaaaaa runner=alive live=0 pending=3"
     assert out[1] == "memory 94 GB limit 137 GB"
-    assert out[2].startswith("claim new-a.u_004 age ") and out[2].endswith(" s weight 30 GB runner not-runner")
+    assert out[2] == "volume none"
+    assert out[3].startswith("claim new-a.u_004 age ") and out[3].endswith(" s weight 30 GB runner not-runner")
     assert out[-1] == "PODCHECK OK"
     assert not any("secretcode" in x for x in out)
 
@@ -394,8 +399,86 @@ def test_podcheck_reads_cgroup_v1_and_an_unlimited_limit(tmp_path):
     root = tmp_path / "work"
     root.mkdir()
     cg = _cg(tmp_path, {"memory/memory.usage_in_bytes": "3000000000", "memory/memory.limit_in_bytes": "9223372036854771712"})
-    assert _podcheck(root, {}, cg) == (0, ["memory 3 GB limit max", "PODCHECK OK"])
-    assert _podcheck(root, {}, tmp_path / "nocg") == (0, ["memory none limit none", "PODCHECK OK"])
+    assert _podcheck(root, {}, cg) == (0, ["memory 3 GB limit max", "volume none", "PODCHECK OK"])
+    assert _podcheck(root, {}, tmp_path / "nocg") == (0, ["memory none limit none", "volume none", "PODCHECK OK"])
+
+
+def test_podcheck_prints_the_network_volume_line(tmp_path):
+    root = tmp_path / "work"
+    root.mkdir()
+    vol = tmp_path / "vol"
+    for d in ("jax/0123456789abcdef", "snap/" + "a" * 40 + "-" + "b" * 16, "snap/.tmp-x-1-k"):
+        (vol / d).mkdir(parents=True)
+    for n in ("e1-cache", "e2-cache", ".tmp-p-1-e3-cache", "used-20261121"):
+        (vol / "jax" / "0123456789abcdef" / n).write_bytes(b"x")
+    rc, out = _podcheck(root, {}, tmp_path / "nocg", vol=f"CACHE_VOL='{vol.as_posix()}' CACHE_VOL_MOUNTCHECK=0")
+    assert rc == 0
+    assert out[1] == f"volume {vol.as_posix()} used 1 GB of 30 GB entries 2 captures 1", out
+    assert not any(x.startswith("WARNING") for x in out)
+    rc, out = _podcheck(root, {}, tmp_path / "nocg", vol=f"CACHE_VOL='{vol.as_posix()}'")   # a plain folder, not a mount
+    assert out[1] == "volume none"
+
+
+def test_podcheck_volume_line_reads_used_space_against_the_quota(tmp_path):
+    """df of the network mount shows the whole storage cluster, so the line reads du against the
+    quota (4th argument, else CACHE_VOL_QUOTA_GB, default 30) and warns under 3 GB left."""
+    root = tmp_path / "work"
+    root.mkdir()
+    vol = tmp_path / "vol"
+    (vol / "jax").mkdir(parents=True)
+    (vol / "jax" / "x").write_bytes(b"x")   # du of a bare folder is 0 on Git Bash, 4 KiB on Linux
+    env = f"CACHE_VOL='{vol.as_posix()}' CACHE_VOL_MOUNTCHECK=0"
+    rc, out = _podcheck(root, {}, tmp_path / "nocg", "'' '' 3", vol=env)
+    assert rc == 0 and out[1] == f"volume {vol.as_posix()} used 1 GB of 3 GB entries 0 captures 0", out
+    assert out[2] == f"WARNING volume {vol.as_posix()} has 2 GB left of 3 GB (under 3 GB): tell the owner"
+    assert out[-1] == "PODCHECK OK"
+    rc, out = _podcheck(root, {}, tmp_path / "nocg", vol=f"{env} CACHE_VOL_QUOTA_GB=40")
+    assert out[1].endswith("used 1 GB of 40 GB entries 0 captures 0") and len(out) == 3, out
+    # the threshold: 5th argument, else CACHE_FREE_WARN_GB (prune's knob), default 3
+    _, out = _podcheck(root, {}, tmp_path / "nocg", "'' '' 40 41", vol=env)
+    assert out[2] == f"WARNING volume {vol.as_posix()} has 39 GB left of 40 GB (under 41 GB): tell the owner", out
+    _, out = _podcheck(root, {}, tmp_path / "nocg", "'' '' 3", vol=f"{env} CACHE_FREE_WARN_GB=2")
+    assert len(out) == 3, out   # 2.99... GB left is not under 2 GB
+
+
+def test_podcheck_counts_volume_bytes_in_decimal_gb(tmp_path):
+    """GB is 10^9 bytes (the unit of the volume's size): 26 GiB (27.9 GB) of 30 GB leaves 2.1 GB,
+    under 3 (GiB against the quota's number would read 4 left and warn late)."""
+    root = tmp_path / "work"
+    root.mkdir()
+    vol = tmp_path / "vol"
+    (vol / "jax").mkdir(parents=True)
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "du").write_text("#!/bin/bash\necho \"27262976\t$2\"\n", encoding="utf-8", newline="\n")   # 26 GiB
+    os.chmod(shim / "du", 0o755)
+    sp = subprocess.run([BASH, "-c", 'cygpath -u "$0" 2>/dev/null || echo "$0"', str(shim)], capture_output=True,
+                        text=True, check=True).stdout.strip()  # fmt: skip
+    env = f"CACHE_VOL='{vol.as_posix()}' CACHE_VOL_MOUNTCHECK=0 PATH=\"{sp}:$PATH\""
+    _, out = _podcheck(root, {}, tmp_path / "nocg", vol=env)
+    assert out[1] == f"volume {vol.as_posix()} used 28 GB of 30 GB entries 0 captures 0", out   # 27.9, up
+    assert out[2] == f"WARNING volume {vol.as_posix()} has 2 GB left of 30 GB (under 3 GB): tell the owner", out
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="timeout signals a bash shim's process group: Linux only (WSL runner, the pod)")
+def test_podcheck_volume_line_with_a_du_that_hangs_reports_used_unknown(tmp_path):
+    root = tmp_path / "work"
+    root.mkdir()
+    vol = tmp_path / "vol"
+    (vol / "jax").mkdir(parents=True)
+    env = f"CACHE_VOL='{vol.as_posix()}' CACHE_VOL_MOUNTCHECK=0"
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "du").write_text("#!/bin/bash\nexec sleep 30\n", encoding="utf-8", newline="\n")
+    os.chmod(shim / "du", 0o755)
+    sp = subprocess.run([BASH, "-c", 'cygpath -u "$0" 2>/dev/null || echo "$0"', str(shim)], capture_output=True,
+                        text=True, check=True).stdout.strip()  # fmt: skip
+    t0 = time.monotonic()
+    _, out = _podcheck(root, {}, tmp_path / "nocg", vol=f'{env} PODCHECK_DU_TIMEOUT=1 PATH="{sp}:$PATH"')
+    assert time.monotonic() - t0 < 20
+    assert out[1] == f"volume {vol.as_posix()} used ? GB of 30 GB entries 0 captures 0", out
+    assert not any(x.startswith("WARNING") for x in out)
 
 
 def test_podcheck_fails_on_an_active_old_script_or_other_script_run(tmp_path):
@@ -464,7 +547,7 @@ def test_podcheck_body_carries_heads_gate_and_podcheck_and_their_sum():
     assert list(files) == ["gate.sh", "podcheck.sh"]
     for name, data in files.items():
         assert data == _head(name)
-    assert re.search(r"; bash \$W/podcheck.sh /work [0-9a-f]{64} [0-9a-f]{64}$", script)
+    assert re.search(r"; bash \$W/podcheck.sh /work [0-9a-f]{64} [0-9a-f]{64} 30 3$", script)
     assert script.startswith("W=/work/_podcheck;")
 
 
@@ -479,9 +562,12 @@ def test_exec_body_script_writes_the_files_byte_for_byte(tmp_path):
         w = tmp_path / str(i)
         w.mkdir()
         (w / "map_count").write_text("1048576\n")
-        script = cmd[2].replace("W=/work/_podcheck;", f"W='{w.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
+        # W=. in the folder: the script leaves $W unquoted (the pod's /work/_podcheck has no
+        # space), and the test folder's path may have one
+        script = cmd[2].replace("W=/work/_podcheck;", "W=.;").replace("bash $W/podcheck.sh", "echo RAN")
         script = script.replace("/proc/sys/vm/max_map_count", f"'{(w / 'map_count').as_posix()}'")
-        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
+        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env(),
+                             cwd=w)  # fmt: skip
         assert run.returncode == 0, (sh, run.stderr)
         assert run.stdout.startswith("RAN /work "), sh
         assert sorted(p.name for p in w.iterdir()) == ["gate.sh", "map_count", "podcheck.sh"], sh
@@ -504,9 +590,11 @@ def test_podcheck_body_refuses_a_low_or_unreadable_max_map_count(tmp_path, value
         mc.write_text(value + "\n")
     for i, sh in enumerate(_posix_shells()):
         w = tmp_path / str(i)
-        script = cmd[2].replace("W=/work/_podcheck;", f"W='{w.as_posix()}';").replace("bash $W/podcheck.sh", "echo RAN")
+        w.mkdir()
+        script = cmd[2].replace("W=/work/_podcheck;", "W=.;").replace("bash $W/podcheck.sh", "echo RAN")
         script = script.replace("/proc/sys/vm/max_map_count", f"'{mc.as_posix()}'")
-        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env())
+        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env(),
+                             cwd=w)  # fmt: skip
         assert run.returncode == 1, (sh, run.stdout, run.stderr)
         assert run.stdout.strip().splitlines()[-1].startswith("PODCHECK REFUSED vm.max_map_count="), sh
         assert "RAN" not in run.stdout, sh
@@ -534,8 +622,9 @@ def test_exec_body_writes_a_multi_chunk_file_and_an_empty_file_byte_for_byte(tmp
     assert [len(x) for x in cmd[4:]] == [4, 4000, 4000, 1336, 6]
     for i, sh in enumerate(_posix_shells()):
         w = tmp_path / f"w{i}"
-        run = subprocess.run([*sh, script.replace("W=/work/_podcheck;", f"W='{w.as_posix()}';"), *cmd[3:]],
-                             check=False, capture_output=True, text=True, env=_clean_env())
+        w.mkdir()
+        run = subprocess.run([*sh, script.replace("W=/work/_podcheck;", "W=.;"), *cmd[3:]],
+                             check=False, capture_output=True, text=True, env=_clean_env(), cwd=w)  # fmt: skip
         assert run.returncode == 0, (sh, run.stderr)
         assert run.stdout.strip() == "RAN", sh
         assert sorted(p.name for p in w.iterdir()) == ["big", "empty"], sh
@@ -632,7 +721,7 @@ def test_runner_kills_a_unit_over_unit_max_s_with_rc_96(tmp_path):
     (d / "out" / "u_001.w").write_text("1\n", encoding="utf-8", newline="\n")
     (d / "run.env").write_text("export RESERVE_PCT='80'\n", encoding="utf-8", newline="\n")   # setup.sh's
     cg = _cg(tmp_path, {"memory.current": "1000000000"})
-    env = (f"CGROOT='{cg}' WORK='{work}' RUNNER_LOCK='{tmp_path / 'lock'}' CLAIMS='{tmp_path / 'claims'}' "
+    env = (f"CACHE_VOL='{tmp_path / 'novol'}' CGROOT='{cg}' WORK='{work}' RUNNER_LOCK='{tmp_path / 'lock'}' CLAIMS='{tmp_path / 'claims'}' "
            "WARMUP=none SPACING=0 UNIT_MAX_S=2 RESERVE_PCT=80 RESERVE_TOP=3")
     log = d / "runner.log"
     subprocess.run([BASH, "-c", f"{env} bash '{d / 'bin/runner.sh'}' > '{log}' 2>&1"], check=True, timeout=120, env=_clean_env())

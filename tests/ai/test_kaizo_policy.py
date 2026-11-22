@@ -4793,35 +4793,47 @@ def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
         assert bool(policy._refused(t, s2, KAIZO).move_type[0, 0]) == refused, weather
 
 
-@pytest.mark.slow  # 307 s, 5.0 GB peak at 0x11F (fast tier: 60 s, 4 GB)
+# The batch 13 sweep's move sets, one test id each: every set is two layouts of its own (a
+# fight's effects, E1 Ruling R6) at about 40 s of trace and compile each, so one id over all
+# of them ran 1000-2600 s and held a whole pod chunk (pod run train-e3-82e5446, unit u_098).
+_BATCH13_SWEEP_MOVES = (
+    ("Recycle", "Water Spout", "Wake-Up Slap", "Assurance"),
+    ("Trump Card", "Punishment", "Cross Poison", "Blaze Kick"),
+    ("Twineedle", "Triple Kick", "Beat Up", "Hurricane"),
+    ("Embargo", "Recycle", "Natural Gift", "Assurance"),  # B13-32
+    ("Disable", "Hammer Arm", "Thief", "Mist Ball"),  # E3-1-1..E3-1-5
+    ("Skill Swap", "Worry Seed", "Accelerock", ""),  # E3-2-5
+    ("Role Play", "Spite", "Accelerock", ""),  # E3-B2-5
+    ("Lucky Chant", "Mist", "Accelerock", ""),  # E3-B2-7
+    ("Magic Coat", "Accelerock", "", ""),  # E3-B2-6
+    ("Miracle Eye", "Accelerock", "", ""),  # E3-B2-10
+    ("Last Resort", "Accelerock", "Mist", ""),  # E3-B2-11
+    ("Feint", "Accelerock", "", ""),  # E3-B2-13
+    ("Defog", "Accelerock", "", ""),  # E3-B2-14
+)
+
+
+def _moves_id(moves) -> str:
+    """A move set's test id, without spaces: list and weights lines split on whitespace
+    (tools/ops/day/pod/weights.py), so an id there must be one word."""
+    return "-".join(m for m in moves if m).replace(" ", "_")
+
+
+@pytest.mark.slow  # 60-150 s and up to 5.0 GB peak per id
+@pytest.mark.parametrize("moves", _BATCH13_SWEEP_MOVES, ids=_moves_id)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, moves):
     t, n = kaizo_tables, kaizo_names
     lum = n.item_names.index("Lum Berry")
-    for moves in (
-        ("Recycle", "Water Spout", "Wake-Up Slap", "Assurance"),
-        ("Trump Card", "Punishment", "Cross Poison", "Blaze Kick"),
-        ("Twineedle", "Triple Kick", "Beat Up", "Hurricane"),
-        ("Embargo", "Recycle", "Natural Gift", "Assurance"),  # B13-32
-        ("Disable", "Hammer Arm", "Thief", "Mist Ball"),  # E3-1-1..E3-1-5
-        ("Skill Swap", "Worry Seed", "Accelerock", ""),  # E3-2-5
-        ("Role Play", "Spite", "Accelerock", ""),  # E3-B2-5
-        ("Lucky Chant", "Mist", "Accelerock", ""),  # E3-B2-7
-        ("Magic Coat", "Accelerock", "", ""),  # E3-B2-6
-        ("Miracle Eye", "Accelerock", "", ""),  # E3-B2-10
-        ("Last Resort", "Accelerock", "Mist", ""),  # E3-B2-11
-        ("Feint", "Accelerock", "", ""),  # E3-B2-13
-        ("Defog", "Accelerock", "", ""),  # E3-B2-14
-    ):
-        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
-        s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
-        for faster, stage in ((True, 3), (False, 6)):
-            s2 = _stage(s, 0, Stat.ATK, stage)
-            s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
-            s2 = s2._replace(pp=s2.pp.at[1, 0, 0].set(2))
-            layout = layout_for(t, flags, s2)
-            assert policy.ai_refusals(t, s2, n, layout) == []
-            _assert_exact_equals_loose(t, s2, layout)
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
+    s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
+    for faster, stage in ((True, 3), (False, 6)):
+        s2 = _stage(s, 0, Stat.ATK, stage)
+        s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
+        s2 = s2._replace(pp=s2.pp.at[1, 0, 0].set(2))
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)
 
 
 # --- E3 batch 1: Disable, Teleport, Hammer Arm; Mist Ball and Thief have no label (E3-1-1..5) --
