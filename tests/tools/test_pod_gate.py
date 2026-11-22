@@ -3,6 +3,7 @@
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -420,12 +421,12 @@ def test_podcheck_prints_the_network_volume_line(tmp_path):
 
 def test_podcheck_volume_line_reads_used_space_against_the_quota(tmp_path):
     """df of the network mount shows the whole storage cluster, so the line reads du against the
-    quota (4th argument, else CACHE_VOL_QUOTA_GB, default 30) and warns under 3 GB left; a du
-    that takes too long gives "used ?" and no warning."""
+    quota (4th argument, else CACHE_VOL_QUOTA_GB, default 30) and warns under 3 GB left."""
     root = tmp_path / "work"
     root.mkdir()
     vol = tmp_path / "vol"
     (vol / "jax").mkdir(parents=True)
+    (vol / "jax" / "x").write_bytes(b"x")   # du of a bare folder is 0 on Git Bash, 4 KiB on Linux
     env = f"CACHE_VOL='{vol.as_posix()}' CACHE_VOL_MOUNTCHECK=0"
     rc, out = _podcheck(root, {}, tmp_path / "nocg", "'' '' 3", vol=env)
     assert rc == 0 and out[1] == f"volume {vol.as_posix()} used 1 GB of 3 GB entries 0 captures 0", out
@@ -433,6 +434,16 @@ def test_podcheck_volume_line_reads_used_space_against_the_quota(tmp_path):
     assert out[-1] == "PODCHECK OK"
     rc, out = _podcheck(root, {}, tmp_path / "nocg", vol=f"{env} CACHE_VOL_QUOTA_GB=40")
     assert out[1].endswith("used 1 GB of 40 GB entries 0 captures 0") and len(out) == 3, out
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="timeout signals a bash shim's process group: Linux only (WSL runner, the pod)")
+def test_podcheck_volume_line_with_a_du_that_hangs_reports_used_unknown(tmp_path):
+    root = tmp_path / "work"
+    root.mkdir()
+    vol = tmp_path / "vol"
+    (vol / "jax").mkdir(parents=True)
+    env = f"CACHE_VOL='{vol.as_posix()}' CACHE_VOL_MOUNTCHECK=0"
     shim = tmp_path / "shim"
     shim.mkdir()
     (shim / "du").write_text("#!/bin/bash\nexec sleep 30\n", encoding="utf-8", newline="\n")
@@ -440,7 +451,7 @@ def test_podcheck_volume_line_reads_used_space_against_the_quota(tmp_path):
     sp = subprocess.run([BASH, "-c", 'cygpath -u "$0" 2>/dev/null || echo "$0"', str(shim)], capture_output=True,
                         text=True, check=True).stdout.strip()  # fmt: skip
     t0 = time.monotonic()
-    rc, out = _podcheck(root, {}, tmp_path / "nocg", vol=f'{env} CACHE_DU_TIMEOUT=1 PATH="{sp}:$PATH"')
+    _, out = _podcheck(root, {}, tmp_path / "nocg", vol=f'{env} CACHE_DU_TIMEOUT=1 PATH="{sp}:$PATH"')
     assert time.monotonic() - t0 < 20
     assert out[1] == f"volume {vol.as_posix()} used ? GB of 30 GB entries 0 captures 0", out
     assert not any(x.startswith("WARNING") for x in out)
