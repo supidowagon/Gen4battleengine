@@ -139,8 +139,13 @@ def test_sketch_is_mapped_and_pinned(tables, names, kaizo_tables, kaizo_names):
 
 @pytest.mark.fullset
 def test_sketch_forbidden_ids_match_the_decomp():
-    """``ids.SKETCH_FORBIDDEN`` is ``BtlCmd_TrySketch``'s three moves (battle_script.c:4848-4850)."""
+    """``ids.SKETCH_FORBIDDEN`` is ``BtlCmd_TrySketch``'s three moves (battle_script.c:4848-4850).
+    A decomp pin: ``fullset``, as the other decomp-reading pins (test_e1_batch_d.py
+    ``test_speed_halving_hold_effects_match_the_decomp``), and skipped where the decomp is not
+    cloned (run locally then, CLAUDE.md "After merging main")."""
     decomp = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum"
+    if not decomp.exists():
+        pytest.skip("external/pokeplatinum not cloned")
     moves = (decomp / "generated" / "moves.txt").read_text().split()
     source = (decomp / "src" / "battle" / "battle_script.c").read_text(encoding="utf-8")
     body = source[source.rindex("static BOOL BtlCmd_TrySketch") :]
