@@ -221,19 +221,20 @@ def test_gate_weight_is_the_heaviest_collected_item_not_the_args():
     assert gate([PLAIN], free=10.9, env=env)[0] == "TIMEOUT"
 
 
-def test_rom_only_items_weigh_twenty_until_measured():
+def test_rom_only_items_weigh_fourteen_until_measured():
     light = item("tests/b/test_y.py::t[x]", "kaizo_inputs")  # pod table says 4
-    assert rg.item_weight(light, TABLE, {}) == 20.0
+    assert rg.ROM_UNMEASURED_GB == 14.0
+    assert rg.item_weight(light, TABLE, {}) == 14.0
+    assert rg.item_weight(item("tests/zzz.py::t", "docs"), TABLE, {}) == 14.0  # no pod key
     assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}) == 30.0
     assert rg.item_weight(item("tests/b/test_y.py::t", "tmp_path"), TABLE, {}) == 4.0
     measured = {"tests/b/test_y.py": 7.0, "tests/b/test_y.py::t": 9.0}
     assert rg.item_weight(light, TABLE, measured) == 9.0  # longest prefix wins
     assert rg.item_weight(item("tests/b/test_y.py::u", "docs"), TABLE, measured) == 7.0
-    assert (
-        gate([light], free=25.0, rom_table={"tests/b/test_y.py": 7.0}, env={rg.ENV_TIMEOUT: "0"})[0]
-        == "GO"
-    )
-    assert gate([light], free=25.0, rom_table={}, env={rg.ENV_TIMEOUT: "0"})[0] == "TIMEOUT"
+    env = {rg.ENV_TIMEOUT: "0"}
+    assert gate([light], free=20.1, rom_table={}, env=env)[0] == "GO"  # needs > 20
+    assert gate([light], free=19.9, rom_table={}, env=env)[0] == "TIMEOUT"
+    assert gate([light], free=13.1, rom_table={"tests/b/test_y.py": 7.0}, env=env)[0] == "GO"
 
 
 def test_load_rom_weights(tmp_path):

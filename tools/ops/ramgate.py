@@ -66,7 +66,7 @@ ROM_ONLY_IDS = frozenset(
 # tests/conftest.py imports it for every run under tests/.
 # A ROM-only item's pod weight was measured while it skipped, so a ROM-only item weighs
 # ROM_UNMEASURED_GB until rom_weights.txt (same format as weights.txt, measured locally) has it.
-ROM_UNMEASURED_GB = 20.0
+ROM_UNMEASURED_GB = 14.0  # an unmeasured ROM-only item waits for > 6 + 14 = 20 GB free
 ROM_WEIGHTS = ROOT / "tools" / "ops" / "day" / "rom_weights.txt"
 ENGINE_PREFIX = "nuzline.engine"
 MAX_LISTED = 5
@@ -283,12 +283,14 @@ def is_rom_only(item) -> bool:
 
 def item_weight(item, table: Mapping[str, float], rom_table: Mapping[str, float]) -> float:
     """Pod weights come from runs where ROM-only tests skip: a ROM-only item weighs the figure of
-    rom_weights.txt (measured locally), else 20 GB or its pod weight if higher."""
-    w = weight(item.nodeid, table)
+    rom_weights.txt (measured locally), else 14 GB or its pod weight (if it has a key) when higher."""
     if is_rom_only(item):
         measured = lookup(item.nodeid, rom_table)
-        return measured if measured is not None else max(ROM_UNMEASURED_GB, w)
-    return w
+        if measured is not None:
+            return measured
+        pod = lookup(item.nodeid, table)
+        return ROM_UNMEASURED_GB if pod is None else max(ROM_UNMEASURED_GB, pod)
+    return weight(item.nodeid, table)
 
 
 def engine_loaded(modules: Iterable[str]) -> bool:

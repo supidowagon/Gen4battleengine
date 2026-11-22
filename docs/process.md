@@ -116,7 +116,13 @@ per day is the rate used for estimates.
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
   20 GB), a message every 60 s, giving up after `NUZLINE_RAMGATE_TIMEOUT` minutes (default 30).
   `--collect-only` is allowed without a wait. A ROM-only item weighs its figure in
-  `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`), else 20 GB.
+  `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
+  weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured
+  ROM-only item waits for more than 20 GB free. Local measuring pass: one file's ROM-only ids
+  per process, strictly serial, started when free RAM is above 20 GB and no other local run
+  is live; a watchdog polls every 0.5 s and kills that pytest tree when free RAM drops below
+  4 GB (the file is then marked `pod-measure needed`, weight 20); figure = ceil(max(1.25 m,
+  m + 2)) GB of the peak summed RSS m of the tree, tag `local-measure-<sha7>-<yyyymmdd>`.
   The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
   never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
   engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a
