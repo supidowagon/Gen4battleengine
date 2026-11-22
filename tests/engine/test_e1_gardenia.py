@@ -788,7 +788,9 @@ def test_b4_a_diagonal_switcher_meets_a_carried_pursuit_in_the_laws(tables, name
     """Review 6 #1: at B = 4 TryPursuit scans every battler of the other side (battle_script.c:
     6899-6904), so battler 0, Struggling with a carried Pursuit, chases battler 3's switch
     (``_foe(0)`` is 1). It may chase or Struggle at its own turn: both moves' reads are relevant
-    (``chase_widening``'s ``both``); before, the laws read Struggle only."""
+    (``chase_widening``'s ``both``). Struggle alone already makes its crit and roll relevant; what
+    the old laws lacked is the chase's crit classes (every stage's odds) and the lifted hit gate
+    (the chase has no accuracy check, subscript_pursuit.s:8-12)."""
     from nuzline.engine.outcome import chase_widening, pursuit_chase
 
     s = _carrying(_idle_four(tables, names), names, 0)
@@ -848,6 +850,77 @@ def test_a_u_turn_meets_a_carried_pursuit_in_the_laws(tables, names):
     both = np.asarray(chase_widening(tables, s, acts, move, fires)[0])
     assert both.tolist() == [False, True]
     _assert_chase_widened(jax.tree.map(np.asarray, _laws(tables, s, acts)), 1)
+
+
+def test_a_u_turn_chase_by_a_carried_pursuit_reaches_acid_rain(tables, names):
+    """Review 7 #1: the Struggling carried-Pursuit foe chases the player's U-turn
+    (subscript_attack_then_switch_out.s:54); a KO there runs subscript_pursuit.s:115 on a nonzero
+    mask (:39 -> _166). Acid Rain's pursuer mask takes the battler whose TryPursuit move is a
+    Pursuit (``chase_pursuers``), not only a battler running one: Struggle's effect alone
+    misses the pair."""
+    from nuzline.engine.ids import FieldCondition
+    from nuzline.engine.order import move_effects
+    from nuzline.engine.outcome import acid_rain_reachable, chase_pursuers
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Pursuit"], 30)],
+    )
+    s = _carrying(s, names, 1)
+    s = s._replace(field_mask=jnp.asarray(int(FieldCondition.SANDSTORM_TEMP), s.field_mask.dtype))
+    acts = jnp.asarray([0, 0], jnp.int32)
+    moves = jnp.asarray([n.move("U-turn"), n.move("Struggle")], jnp.int32)
+    effect, _ = move_effects(tables, s, moves)
+    uses = jnp.asarray([True, True])
+    pursuers = chase_pursuers(tables, s, acts)
+    assert np.asarray(pursuers).tolist() == [False, True]
+    assert not bool(acid_rain_reachable(s, acts, uses, effect))  # Struggle's effect alone
+    assert bool(acid_rain_reachable(s, acts, uses, effect, pursuers))
+
+
+def test_b4_a_switch_chase_is_cut_only_by_the_chased_battlers_armor(tables, names):
+    """Review 7 (should-fix): battler 0 chooses Pursuit and diagonal battler 3 switches; battler 1
+    (``_foe(0)``) holds Shell Armor, battler 3 does not. The chase's defender is the switcher
+    (battle_script.c:6927), so the crit is not cut (the old cut read battler 1's armor)."""
+    from tests.engine.d2_states import with_ability, with_moves
+
+    s = with_moves(_idle_four(tables, names), names, 0, ["Pursuit"])
+    s = with_ability(s, 1, AbilityId.SHELL_ARMOR)
+    acts = jnp.asarray([0, 0, 0, MOVE_ACTIONS + 2], jnp.int32)
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    assert not bool(laws.no_crit[0])
+    assert bool(laws.relevant.crit[0, 0])
+    shelled = with_ability(s, 3, AbilityId.SHELL_ARMOR)  # every battler it may meet is armored
+    assert bool(np.asarray(_laws(tables, shelled, acts).no_crit)[0])
+
+
+def test_b4_a_takeover_pursuit_meets_the_u_turn_users_armor(tables, names):
+    """Review 7 #2: battler 1 chose Tackle; in the takeover variant (B11-1) battler 0's faster
+    Encore makes its last move, Pursuit, its encoredMove, and battler 2's U-turn then meets it
+    (TryPursuit's Encore branch, battle_script.c:6905-6907). Battler 0, its own target, holds
+    Shell Armor; the U-turn user does not: the takeover row's crit is not cut."""
+    from nuzline.engine.outcome import chase_widening
+    from tests.engine.d2_states import with_ability, with_moves
+
+    n = names
+    s = _idle_four(tables, names)
+    s = with_moves(s, names, 0, ["Encore"])
+    s = with_moves(s, names, 1, ["Tackle", "Pursuit"])
+    s = with_moves(s, names, 2, ["U-turn"])
+    s = with_ability(s, 0, AbilityId.SHELL_ARMOR)
+    s = s._replace(last_move=s.last_move.at[1].set(n.move("Pursuit")))
+    acts = jnp.asarray([0, 0, 0, 0], jnp.int32)
+    taken = jnp.asarray([False, True, False, False])
+    moves = jnp.asarray(
+        [n.move("Encore"), n.move("Pursuit"), n.move("U-turn"), n.move("Swords Dance")], jnp.int32
+    )
+    fires = jnp.zeros(4, bool)
+    both, armor, _ = (np.asarray(x) for x in chase_widening(tables, s, acts, moves, fires, taken))
+    assert not bool(armor[1]) and not bool(both[1])  # the chase move is the run move
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts, None, taken))
+    assert not bool(laws.no_crit[1])
 
 
 @pytest.mark.slow  # a step against the reference
