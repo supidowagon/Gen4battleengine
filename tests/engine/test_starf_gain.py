@@ -15,6 +15,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.enumerate import enumerate_outcomes, outcome_laws
@@ -61,6 +62,7 @@ def test_the_fling_x_speed_speed_boost_board_eats_at_four_stats(tables, names):
         assert int(stages[Stat.SPE]) == 6 and int(stages[stat]) == 2
 
 
+@pytest.mark.slow  # peaks near 8.6 GB, over the fast-tier memory limit
 def test_the_law_is_loose_and_the_rows_match_the_full_product(tables, names):
     """The law reads all ``STARF_DRAWS`` values of side 1's first eat, and the mask is sound on
     the board: for one enumerated group (every draw but ``starf[1, 0]`` fixed), the children of
