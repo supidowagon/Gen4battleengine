@@ -3,6 +3,7 @@ skips without the Kaizo ROM and the decomp), the tool's output for every group a
 in ``data/kaizo/overrides.toml``."""
 
 import os
+import random
 import re
 import struct
 from pathlib import Path
@@ -27,16 +28,20 @@ from tools.kaizo.gauntlet_map import (
     MapObject,
     MapReadError,
     Pos,
+    Seer,
     Sighting,
     StaticMaps,
     Walker,
     Warp,
+    _State,
     _wayward_next,
+    _wayward_union,
     _wayward_walker,
     bdhc_heights,
     chain_facts,
     eterna_clock_tables,
     gap_fields,
+    grid_y,
     gym_reach,
     live_table,
     pc_reachable,
@@ -835,6 +840,196 @@ def test_the_split_badges_follow_the_split_order():
     )
 
 
+# --- C5b: the fast walk equals the plain exact walk (brute-force references) ----------------------
+
+
+class PlainWalker(Walker):
+    """The reference: every sight table built afresh from the full ``moved`` (no key, no
+    cache), as the exact search reads it."""
+
+    def _sight_table(self, header, defeated, removable, flags, moved=()):
+        moved = tuple(e for e in moved if e[0] == header)
+        area = self.maps.area(header)
+        table = {}
+        for o in area.objects:
+            t = o.trainer
+            if t is None or t in defeated or self._ignored(header, o, flags):
+                continue
+            look = self.facing(o)
+            if look is None:
+                continue
+            seer = Seer(o.index, t, look[1])
+            gy = grid_y(area.object_height(o))
+            for sx, sz, _, _ in self.sight_tiles(header, o, removable, flags, moved):
+                table.setdefault((sx, sz), []).append((seer, gy))
+        return table
+
+
+def _random_map(rng, header, ids, warp_to=None):
+    """A small cave: walls, two boulders, trainers ``ids`` (random facing and range, some
+    turning), an npc; a free start tile (returned) and, with ``warp_to``, a warp there."""
+    w, h = rng.randint(5, 8), rng.randint(4, 6)
+    rows = ["".join("#" if rng.random() < 0.15 else "." for _ in range(w)) for _ in range(h)]
+    free = [(x, z) for z, r in enumerate(rows) for x, c in enumerate(r) if c == "."]
+    rng.shuffle(free)
+    start, *spots = free
+    objs = [boulder(19, *spots[0]), boulder(26, *spots[1])]
+    for k, t in enumerate(ids):
+        x, z = spots[2 + k]
+        o = trainer(t, x, z, rng.randrange(4), rng.randint(1, 3), rng.choice((0, 0, 2, 6)))
+        objs.append(o._replace(index=len(objs)))
+    objs.append(npc(30, *spots[2 + len(ids)])._replace(index=len(objs)))
+    objs = [o._replace(index=i) for i, o in enumerate(objs)]
+    warps = [Warp(0, *spots[3 + len(ids)], warp_to, 0)] if warp_to is not None else []
+    return area(header, rows, objs, warps), Pos(header, *start)
+
+
+def _moved_trainer(rng, a, ids):
+    """One trainer of ``ids`` walked 1..range tiles along its facing (a sight fight's
+    approach) when the tiles are free, as a ``moved`` entry; or None."""
+    t = rng.choice(ids)
+    o = next(o for o in a.objects if o.trainer == t)
+    dx, dz = ((0, -1), (0, 1), (-1, 0), (1, 0))[o.direction]
+    k = rng.randint(1, max(1, o.sight))
+    x, z = o.x + dx * k, o.z + dz * k
+    if (x, z) not in a.tiles or a.object_at.get((x, z)):
+        return None
+    return (a.header, o.index, x, z), o.trainer
+
+
+def _walk_facts(w):
+    return (
+        set(w.seen),
+        set(w.states),
+        {f: {s.state + (s.how,) for s in v} for f, v in w.starts.items()},
+        set(w.talk),
+        w.held,
+        set(w.crossed),
+    )
+
+
+def _layout_facts(w):
+    """What ``walk_layouts`` keeps of a walk (``layouts``: the number of states)."""
+    n = w.layouts or len(w.states)
+    starts = {f: {s.state + (s.how,) for s in v} for f, v in w.starts.items()}
+    return set(w.seen), n, starts, set(w.talk), set(w.crossed)
+
+
+def _random_case(rng, ids):
+    """A random two-header case: the cave (header 1, a warp to header 2 and back, a blocking
+    coord on an unknown var), Strength on or off, and maybe a moved trainer (defeated)."""
+    a, start = _random_map(rng, 1, ids, warp_to=2)
+    free = [p for p in a.tiles if not a.object_at.get(p) and p != (start.x, start.z)]
+    coord = Coord(9, *rng.choice(free), 1, 1, 0, 0x4999)
+    a = Area(1, a.tiles, a.objects, a.warps, (coord,))
+    there = area(2, ["..."], warps=[Warp(0, 1, 0, 1, 0)])
+    on = frozenset({STRENGTH_ACTIVE}) if rng.random() < 0.5 else frozenset()
+    moved, defeated = (), ()
+    m = _moved_trainer(rng, a, ids) if rng.random() < 0.6 else None
+    if m is not None:
+        moved, defeated = (m[0],), (m[1],)
+    return StaticMaps([a, there]), start, on, moved, defeated
+
+
+def test_c5b_the_cut_sight_key_equals_the_plain_walk_with_boulders_and_moved_trainers():
+    # Random small maps with two Strength boulders, trainers (turning ones too) and a moved
+    # trainer: the walk with the cut sight-table key and the shared tuples gives the same
+    # states, tiles, fight starts, talks and coords as the reference that builds every table
+    # from the full ``moved``, from the start and from fight starts.
+    rng = random.Random(5)
+    ids = (1, 2, 3)
+    pushed = 0
+    for _ in range(60):
+        maps, start, on, moved, defeated = _random_case(rng, ids)
+        for two in (True, False):
+            fast = Walker(maps, ids, moves=STRONG, two_alive=two)
+            plain = PlainWalker(maps, ids, moves=STRONG, two_alive=two)
+            want = plain.walk(start, defeated, flags=on, moved=moved)
+            assert _walk_facts(fast.walk(start, defeated, flags=on, moved=moved)) == _walk_facts(
+                want
+            )
+            for f, sights in want.starts.items():
+                for sg in sorted(sights, key=repr)[:2]:
+                    d = set(defeated) | set(f)
+                    kw = {"y": sg.y, "flags": sg.flags, "bridge": sg.bridge, "moved": sg.moved}
+                    assert _walk_facts(fast.walk(sg.pos, d, **kw)) == _walk_facts(
+                        plain.walk(sg.pos, d, **kw)
+                    )
+            assert fast.reached_headers() == plain.reached_headers()
+            pushed += any(len(e) == 5 for st in want.states for e in st.moved)
+    assert pushed > 20  # the boulders moved in many of them
+
+
+def test_c5b_the_layout_walk_equals_the_walk_over_every_state():
+    # ``walk_layouts`` (one label per tile state, the layouts as a bit mask) against
+    # ``walk_from`` of the plain reference over the same seeds: the seeds are every fight start
+    # of a first walk (each with its own layout: approaches, pushed boulders) plus the start.
+    rng = random.Random(7)
+    ids = (1, 2, 3)
+    big = 0
+    for _ in range(60):
+        maps, start, on, moved, defeated = _random_case(rng, ids)
+        plain = PlainWalker(maps, ids, moves=STRONG)
+        first = plain.walk(start, defeated, flags=on, moved=moved)
+        seeds = {s for s in sorted(first.states) if rng.random() < 0.3} or {
+            _seed_of(plain, start, on, moved)
+        }
+        cases = [(seeds, frozenset(defeated))]
+        for f, sights in first.starts.items():
+            st = {_State(g.pos, g.y, g.bridge, g.flags, g.moved) for g in sights}
+            cases.append((st, frozenset(defeated) | set(f)))
+        for st, done in cases:
+            fast = Walker(maps, ids, moves=STRONG)
+            ref = PlainWalker(maps, ids, moves=STRONG)
+            got = fast.walk_layouts(st, done)
+            want = ref.walk_from(st, done)
+            assert _layout_facts(got) == _layout_facts(want)
+            assert got.states == set() and got.layouts == len(want.states)
+            assert fast.reached_headers() == ref.reached_headers()
+            big += len({s.moved for s in want.states}) > 3
+    assert big > 20  # many layouts in many of them
+
+
+def _seed_of(walker, pos, flags, moved):
+    return _State(pos, walker.arrival_height(pos), False, flags, moved)
+
+
+def test_c5b_one_walk_from_all_starts_equals_the_union_of_the_walks_per_start():
+    # ``_wayward_union`` (one layout walk from every start of a prefix) against the union of
+    # the plain walks per start (``_wayward_next``): tiles, states, fights with every start
+    # state, talks and headers, on random Wayward-header maps with boulders and Strength.
+    rng = random.Random(11)
+    ids = (383, 443, 380)
+    checked = 0
+    for _ in range(40):
+        a, start = _random_map(rng, WAYWARD_HEADER, ids)
+        maps = StaticMaps([a])
+        fast = _wayward_walker(maps, True)
+        ref = _wayward_walker(maps, True)
+        ref.__class__ = PlainWalker
+        _, fights0 = _wayward_next(ref, start, frozenset())
+        level = [  # up to 12 starts of each fight (with their layouts)
+            (frozenset(f), set(rng.sample(sorted(sights, key=repr), min(12, len(sights)))))
+            for f, sights in sorted(fights0.items())
+        ]
+        level.append((frozenset(), {start}))
+        for done, starts in level:
+            u, unext = _wayward_union(fast, starts, done)
+            seen, n, talk, nxt = set(), set(), set(), {}
+            for sg in starts:
+                w, fights = _wayward_next(ref, sg, done)
+                seen |= set(w.seen)
+                n |= w.states
+                talk |= set(w.talk)
+                for g, ss in fights.items():
+                    nxt.setdefault(g, set()).update(x.state for x in ss)
+            assert set(u.seen) == seen and u.layouts == len(n) and set(u.talk) == talk
+            assert {g: {x.state for x in ss} for g, ss in unext.items()} == nxt
+            checked += 1
+        assert fast.reached_headers() == ref.reached_headers()
+    assert checked > 80
+
+
 # --- the Eterna Gym tables -----------------------------------------------------------------------
 
 
@@ -1237,10 +1432,8 @@ def test_wayward_order_join_points_and_the_459_talk_tiles(rom_files, derived):
     joined = _wayward_walker(maps, True)
     starts, done = {WAYWARD_START}, frozenset()
     for pair in ((383, 443), (380, 458), (450, 496)):
-        nxt = set()
-        for start in starts:
-            _, fights = _wayward_next(joined, start, done)
-            nxt |= {s for f, sights in fights.items() if set(f) == set(pair) for s in sights}
+        _, fights = _wayward_union(joined, starts, done)  # the walks from every start at once
+        nxt = {s for f, sights in fights.items() if set(f) == set(pair) for s in sights}
         assert nxt
         starts, done = nxt, done | set(pair)
     for s in starts:  # from every start state of the third pair
