@@ -945,7 +945,7 @@ three structs has a row.
 | `BattleContext.movePrevByBattler` | `last_move` | mapped |
 | `BattleContext.moveCopied` | `move_copied` | mapped |
 | `BattleContext.moveCopiedHit` | `move_copied_hit` | mapped |
-| `BattleContext.moveSketched` | `sketch_move` | mapped (I-3) |
+| `BattleContext.moveSketched` | `sketch_move` | mapped |
 | `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.moveSlot` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.conversion2Move` | `conv2_move` | mapped |
