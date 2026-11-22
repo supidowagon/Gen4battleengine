@@ -150,11 +150,11 @@ def test_vanilla_map_labels_match_decomp(vanilla_files, decomp, symbols):
 
 def test_kaizo_map_labels(kaizo_files, symbols):
     # Kaizo's getter reads byte 18 of the d_test.narc member (docs/kaizo/rom_diff.md); header 454,
-    # the rematch trainers' map, has label 82 and headers 2 and 34 (Byron 250) labels 7 and 119
+    # the rematch trainers' map, has label 82 and headers 2 and 34 (Byron 250) labels 119 and 7
     # (ledger E3-B3-5.a).
     labels = map_header_labels(kaizo_files, symbols)
     assert len(labels) == 618
-    assert (labels[454], labels[2], labels[34]) == (82, 7, 119)
+    assert (labels[454], labels[2], labels[34]) == (82, 119, 7)
 
 
 def test_start_conditions_overrides_none_means_none(vanilla_files, decomp, symbols):

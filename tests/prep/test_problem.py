@@ -226,7 +226,7 @@ def test_a_hatched_member_in_a_gym_prep_runs(tmp_path, tables, names, learnsets)
         tmp_path,
         tables,
         names,
-        [(("Geodude", 16, ("Tackle",)), egg), (("Furret", 16, ("Scratch",)), away)],
+        [(("Geodude", 16, ("Tackle",)), egg), (("Geodude", 16, ("Tackle",)), away)],
         [],
     )
     p, _ = _build(tables, names, save, learnsets)
