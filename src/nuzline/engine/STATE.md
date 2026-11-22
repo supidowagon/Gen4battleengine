@@ -681,6 +681,18 @@ three structs has a row.
   in `VOLATILE_FIELDS`. Readers: CalcTurnOrder's priority, `moves[moveSlot]` as it stands now
   (battle_lib.c:1375-1397; `order.order_moves`), and TryGrudge's ATTACKER_MOVE_SLOT (common.h:8).
   Written in `step._action_phase` (`order.selection_slots`) and the reference's `_ref_step`.
+- The selected move's carried value (E2-ML-8): `selected_temp` (per battler,
+  `battlerActions[b][BATTLE_ACTION_TEMP_VALUE]`, initial 0). The selection writes 1 + the slot for
+  a FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447), the party slot for a switch
+  (:595) and the BattleItemUse data for a bag item (:565); a Struggling, locked or absent battler
+  keeps it, and nothing resets it (BattleContext_Init, battle_lib.c:1974-2017). The engine keeps a
+  value only where `Battler_SelectedMove` (battle_lib.c:2858-2868, `moves[TEMP_VALUE - 1]` under a
+  FIGHT command) reads a move with it: 1..4; a party slot 0 or 5 and an item's data are kept as 0
+  (5 and the item data read past `moves[4]`, battle_mon.h:64: the engine models that read as
+  MOVE_NONE). Readers: Pursuit (battle_script.c:6909) and Me First (:7296), through
+  `order.battler_selected_move`; a locked battler reads the value of its last selection, not its
+  lock's move. Written by `order.with_selection` (`step._action_phase`, the laws' entry points) and
+  the reference's `_ref_step`. Not in `VOLATILE_FIELDS`.
 - The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
   counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
   written at B = 4 only.
@@ -943,7 +955,7 @@ three structs has a row.
 | `BattleContext.selectedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged`, `chosen_target` | mapped |
+| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged`, `chosen_target`, `selected_temp` | mapped |
 | `BattleContext.battlerActionOrder` | `ts_order` | mapped |
 | `BattleContext.monSpeedOrder` | `war_swaps`, `ts_speed_order` | mapped |
 | `BattleContext.monSpeedValues` | `speed_rec` | mapped |

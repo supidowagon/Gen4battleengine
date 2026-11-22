@@ -122,6 +122,7 @@ from nuzline.engine.order import (
     takeover_possible,
     used_move,
     used_moves,
+    with_selection,
 )
 from nuzline.engine.state import (
     BATON_PASSED_FIELDS,
@@ -2375,7 +2376,9 @@ def _armed_trace(
         loss = hazards_loss(tables, state, foe, slot, ingrained, magnet)
         alive = state.hp[party(fmt, foe), slot].astype(_I32) - loss > 0
         stays = ~jnp.where(paused, sides[side] == pivot, is_switch(actions[side]) & ~noop[side])
-        pursued = ~paused & ~resumed & pursuit_fires(tables, state, foe, actions, choices)
+        # TryPursuit reads the selection's TEMP_VALUE (E2-ML-8).
+        chosen = with_selection(tables, state, actions)
+        pursued = ~paused & ~resumed & pursuit_fires(tables, chosen, foe, actions, choices)
         copies = (
             enters[foe]
             & stays
@@ -2514,6 +2517,7 @@ def pursuit_chase(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndar
     from nuzline.engine.step import pursuit_fires  # step imports this module
 
     fmt = format_of(state)
+    state = with_selection(tables, state, actions)  # TEMP_VALUE for TryPursuit (E2-ML-8)
     picks = [selected_move(tables, state, s, actions[s]) for s in range(fmt.B)]
     choices = (jnp.stack([q[0] for q in picks]), jnp.stack([q[1] for q in picks]))
     paused = state.pivot_battler != 0
@@ -2717,6 +2721,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
 
     state_in, actions_in = state, jnp.asarray(actions, _I32)
     state, actions = pivot_view(tables, state, actions)
+    # The state as the command selection leaves it (moveSlot, TEMP_VALUE: E2-ML-5, E2-ML-8).
+    state = with_selection(tables, state, actions)
     k = jax.random.split(key, 14)
     per_side = (fmt.B,)
 

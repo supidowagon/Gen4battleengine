@@ -590,15 +590,15 @@ def _gravity_banned(s: RefState, move: int) -> bool:
     return _gravity_on(s) and move in GRAVITY_MOVES
 
 
-def _me_first_copy(tables, s: RefState, target: int, pick: int, fights: bool) -> int:
+def _me_first_copy(tables, s: RefState, target: int, fights: bool) -> int:
     """``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312) on ``target``'s battler, 0 when it fails: its
     encored move when it still holds it in its slot (:7293-7296), else ``Battler_SelectedMove``
-    (``pick`` if it chose FIGHT); not struggling, no battle effect shared with a
+    (``_selected_move``, the selection's carried TEMP_VALUE, E2-ML-8) if it chose FIGHT; not struggling, no battle effect shared with a
     ``ME_FIRST_BANNED_MOVES`` move (``Move_MeFirstCanCopy``, battle_lib.c:7242-7252), with power
     (E3-2-3)."""
     sd, mon = s.battlers[target], _active(s, target)
     held = sd.encore_move and sd.encore_move == mon.moves[sd.encore_slot]
-    move = sd.encore_move if held else (pick if fights else 0)
+    move = sd.encore_move if held else (_selected_move(s, target) if fights else 0)
     banned = {_t(tables, "move_ai_effect", m) for m in ME_FIRST_BANNED_MOVES}
     if (
         not any(_usable(tables, s, target))
@@ -6569,13 +6569,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         if _t(tables, "move_effect", move) == EffectId.ME_FIRST and not moved[turn.target_side]:
             # The copied move is the resolved defender's (:7286-7312; D3-5), the foe at B = 2.
             copied_from = turn.target_side
-            first = _me_first_copy(
-                tables,
-                s,
-                copied_from,
-                turn.choices[copied_from][0],
-                turn.actions[copied_from] < MOVE_ACTIONS,
-            )
+            first = _me_first_copy(tables, s, copied_from, turn.actions[copied_from] < MOVE_ACTIONS)
         called = _invoked_move(tables, s, side, move, turn.outcome.call[side], first)
         sleep_talk = _t(tables, "move_effect", move) == EffectId.SLEEP_TALK
         if called == 0 or (sleep_talk and mon.status != Status.SLEEP):
@@ -7372,14 +7366,14 @@ def _roar(turn: _Turn, s: RefState, side: int, foe: int) -> bool:
 def _pursuer_choice(s: RefState, pursuer: int, actions, choices) -> tuple[bool, int]:
     """``(has, move)`` of ``BtlCmd_TryPursuit``'s move choice for ``pursuer`` (script.c:6905-6909;
     ``step._pursuer_move``): its Encore move when the Encore slot still holds it, whatever it
-    selected, else ``Battler_SelectedMove`` (a FIGHT's chosen move; none for any other command or
-    Struggle). Every format (SF2 (e), E2-ML-6): no command test before the Encore's move."""
-    move, struggling, _ = choices[pursuer]
-    picked = _command(actions[pursuer]) == FIGHT and not struggling
+    selected, else ``Battler_SelectedMove`` (``_selected_move`` of a FIGHT, the value a locked or
+    Struggling battler carries; none for any other command). Every format (SF2 (e), E2-ML-6): no command test before the Encore's move."""
+    del choices  # Battler_SelectedMove reads the selection's TEMP_VALUE (E2-ML-8)
+    move = _selected_move(s, pursuer) if _command(actions[pursuer]) == FIGHT else 0
     sd, mon = s.battlers[pursuer], _active(s, pursuer)
     if sd.encore_move and mon.moves[sd.encore_slot] == sd.encore_move:
         return True, sd.encore_move
-    return picked, move
+    return bool(move), move
 
 
 def _next_pursuer(
@@ -8714,6 +8708,14 @@ def _command(action: int) -> str:
     return SWITCH if action >= MOVE_ACTIONS else FIGHT
 
 
+def _selected_move(s: RefState, b: int) -> int:
+    """``Battler_SelectedMove`` (battle_lib.c:2858-2868) of battler ``b`` choosing FIGHT (the
+    caller's test): ``moves[selected_temp - 1]``, MOVE_NONE for 0 (E2-ML-8;
+    ``order.battler_selected_move``)."""
+    temp = s.battlers[b].selected_temp
+    return _active(s, b).moves[temp - 1] if temp else 0
+
+
 def _order_move(s: RefState, b: int, choices) -> int:
     """The move whose priority CalcTurnOrder reads for battler ``b``'s FIGHT (battle_lib.c:
     1375-1397; ``order.order_moves``): Struggle where the selection set ``turnFlags.struggling``,
@@ -8853,6 +8855,18 @@ def _ref_step(
             sd.move_slot = (
                 sd.encore_slot if sd.encore_move else min(actions[side], MOVE_ACTIONS - 1)
             )
+        # battlerActions[b][TEMP_VALUE] (E2-ML-8; order.selection_temps): 1 + the FIGHT's slot, 0
+        # under an Encore (bcp.c:447, :525); a party pick's slot where it names a move slot
+        # (:595); a bag item's BattleItemUse (:565) and a party slot 0 or 5 read no move: 0.
+        if locked or _absent_now(s, side):
+            continue
+        if commands[side] == FIGHT and not struggling:
+            sd.selected_temp = 0 if sd.encore_move else min(actions[side], MOVE_ACTIONS - 1) + 1
+        elif commands[side] == SWITCH:
+            pick = actions[side] - MOVE_ACTIONS
+            sd.selected_temp = pick if 1 <= pick <= MOVE_ACTIONS else 0
+        elif commands[side] == ITEM:
+            sd.selected_temp = 0
     # TrainerAI_RecordLastMove (trainer_ai.c:2705-2717) runs on the AI's FIGHT path
     # (TrainerAI_MainSingles, :295), which a forced Struggle skips (bcp.c:433): the
     # player's movePrevByBattler joins the AI's list of move ids: the first empty entry, unless

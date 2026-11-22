@@ -166,6 +166,57 @@ def selection_slots(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     return jnp.stack(out)
 
 
+def selection_temps(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``int32[B]``: ``battlerActions[b][BATTLE_ACTION_TEMP_VALUE]`` as ``Battler_SelectedMove``
+    reads it (battle_lib.c:2858-2868: ``moves[TEMP_VALUE - 1]`` when it is nonzero and the
+    SELECTED_COMMAND is FIGHT), after this turn's command selection (E2-ML-8): ``1 + slot`` for a
+    FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447); a party pick writes the party
+    slot (:595), kept where it names a move slot (1..4; slot 0 reads none, slot 5 reads past the
+    moves, battle_mon.h:64: kept as 0); a bag item writes its BattleItemUse (:565), past the moves
+    too: 0. A Struggling FIGHT (:433-434), a locked battler (:333-337) and an absent one keep it;
+    nothing resets it (BattleContext_Init, battle_lib.c:1974-2017). A paused state kept the
+    selection's. Idempotent on a state the selection wrote."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    out = []
+    for b in range(fmt.B):
+        action = actions[b]
+        picks_command = (state.over == 0) & ~absent_now(state, b) & (locked_slot(state, b) < 0)
+        fight = (action < MOVE_ACTIONS) & jnp.any(usable_moves(tables, state, b))
+        fight_temp = jnp.where(
+            state.encore_move[b] != 0, 0, jnp.clip(action, 0, MOVE_ACTIONS - 1) + 1
+        )
+        party_slot = action - MOVE_ACTIONS
+        party_temp = jnp.where((party_slot >= 1) & (party_slot <= MOVE_ACTIONS), party_slot, 0)
+        new = jnp.where(fight, fight_temp, jnp.where(is_switch(action), party_temp, 0))
+        writes = picks_command & (fight | is_switch(action) | is_item(action)) & ~paused
+        out.append(jnp.where(writes, new, state.selected_temp[b].astype(_I32)))
+    return jnp.stack(out)
+
+
+def with_selection(tables: Tables, state: BattleState, actions) -> BattleState:
+    """``state`` as this turn's command selection leaves it: ``move_slot`` (``selection_slots``)
+    and ``selected_temp`` (``selection_temps``) written (E2-ML-5, E2-ML-8); a paused state is
+    returned as it is. Idempotent."""
+    return state._replace(
+        move_slot=selection_slots(tables, state, actions).astype(state.move_slot.dtype),
+        selected_temp=selection_temps(tables, state, actions).astype(state.selected_temp.dtype),
+    )
+
+
+def battler_selected_move(state: BattleState, b, fights) -> jnp.ndarray:
+    """``int32``: ``Battler_SelectedMove`` (battle_lib.c:2858-2868) of battler ``b`` on a state the
+    selection wrote (``with_selection``): ``moves[selected_temp - 1]`` when its SELECTED_COMMAND is
+    FIGHT (``fights``: its action this turn is a move, a locked battler's included) and
+    ``selected_temp`` is nonzero, else MOVE_NONE (E2-ML-8)."""
+    fmt = format_of(state)
+    temp = state.selected_temp[b].astype(_I32)
+    slot = jnp.clip(temp - 1, 0, MOVE_ACTIONS - 1)
+    move = state.moves[party(fmt, b), state.active[b], slot].astype(_I32)
+    return jnp.where(jnp.asarray(fights, bool) & (temp > 0), move, 0)
+
+
 def order_moves(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     """``int32[B]``: the move whose priority CalcTurnOrder reads for each battler's FIGHT
     (battle_lib.c:1375-1397): Struggle where the selection set ``turnFlags.struggling`` (a battler
@@ -379,12 +430,13 @@ def mirror_copied(state: BattleState, side, call) -> jnp.ndarray:
     return jnp.where(own != 0, own, jnp.where(count > 0, pick, 0)).astype(_I32)
 
 
-def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fights) -> jnp.ndarray:
+def me_first_copy(tables: Tables, state: BattleState, target_side, fights) -> jnp.ndarray:
     """``int32``: the move ``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312) copies from
     ``target_side``'s battler, 0 when it fails, for a target that has not acted yet (the caller's
     test: ``BATTLE_ACTION_PICK_COMMAND`` is not MOVE_END). The move is the target's encored move when
     it still holds it in its encored slot (:7293-7296), else ``Battler_SelectedMove`` (battle_lib.c:
-    2858-2868): ``picked`` (its ``selected_move``) when it chose FIGHT (``fights``), else MOVE_NONE.
+    2858-2868; ``battler_selected_move`` on ``state`` as the selection left it, E2-ML-8) when it
+    chose FIGHT (``fights``), else MOVE_NONE.
     It must not be struggling (the target's ``usable_moves`` leave no slot, bcp.c:433), differ in
     battle effect from every ``ME_FIRST_BANNED_MOVES`` move (``Move_MeFirstCanCopy``, battle_lib.c:
     7242-7252, ``tables.move_ai_effect``) and have power (:7300)."""
@@ -393,7 +445,7 @@ def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fight
     moves = state.moves[party(fmt, target_side), mon].astype(_I32)
     encored = state.encore_move[target_side].astype(_I32)
     held = (encored != 0) & (encored == moves[state.encore_slot[target_side]])
-    move = jnp.where(held, encored, jnp.where(fights, jnp.asarray(picked, _I32), 0))
+    move = jnp.where(held, encored, battler_selected_move(state, target_side, fights))
     banned = tables.move_ai_effect[jnp.asarray(ME_FIRST_BANNED_MOVES, _I32)]
     struggling = ~jnp.any(usable_moves(tables, state, target_side))
     ok = (
@@ -701,9 +753,7 @@ def used_moves(
         # says it has (E3-2-3; D3-5: the defender, the foe at B = 2).
         target = me_first_target(tables, state, side, chosen[side])
         fights = (state.over == 0) & ~is_switch(actions[target]) & ~is_item(actions[target])
-        first = jnp.where(
-            after_foe[side], 0, me_first_copy(tables, state, target, chosen[target], fights)
-        )
+        first = jnp.where(after_foe[side], 0, me_first_copy(tables, state, target, fights))
         # Mirror Move copies what the foe's move this turn recorded for its user (UpdateFlagsWhenHit,
         # bcp.c:4480-4486): the foe's chosen move when it has MoveFlag.MIRROR_MOVE and is aimed at
         # the user, else the turn-start ``move_copied`` (E3-B2-2).

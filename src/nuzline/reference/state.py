@@ -202,6 +202,7 @@ class RefBattler:
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
     move_slot: int  # BattleContext.moveSlot[b], written at a FIGHT's selection (E2-ML-5)
+    selected_temp: int  # battlerActions[b][TEMP_VALUE] as Battler_SelectedMove reads it (E2-ML-8)
 
 
 @dataclass

@@ -331,6 +331,7 @@ from nuzline.engine.order import (
     takeover_possible,
     truant_loafs,
     used_moves,
+    with_selection,
 )
 from nuzline.engine.outcome import (
     ACUPRESSURE_DRAWS,
@@ -1969,6 +1970,8 @@ def outcome_laws(
     fmt = format_of(state)
     paused_rock = _paused_rock(tables, state)
     state, actions = pivot_view(tables, state, actions)
+    # The state as the command selection leaves it (moveSlot, TEMP_VALUE: E2-ML-5, E2-ML-8).
+    state = with_selection(tables, state, actions)
     live = state.over == 0
     sides = jnp.arange(fmt.B)
     switch, item = is_switch(actions), is_item(actions)
@@ -4566,15 +4569,14 @@ def _side_call_law(
         copycat_call(tables, state.move_prev, state),
         jnp.where(values == 1, copycat_call(tables, foe_chosen, state), 0),
     )
-    # Me First (E3-2-3): value 0, its target has not acted (it copies the target's chosen move),
+    # Me First (E3-2-3): value 0, its target has not acted (it copies the target's
+    # Battler_SelectedMove, ``state`` as the selection left it: E2-ML-8),
     # value 1, it has (the call fails).
     if copy_from is None:
-        first_from, first_move, first_fights = _foe(side), foe_chosen, foe_uses_move
+        first_from, first_fights = _foe(side), foe_uses_move
     else:
-        first_from, first_move, first_fights = copy_from, chosen_all[copy_from], uses_all[copy_from]
-    first_called = jnp.where(
-        values == 0, me_first_copy(tables, state, first_from, first_move, first_fights), 0
-    )
+        first_from, first_fights = copy_from, uses_all[copy_from]
+    first_called = jnp.where(values == 0, me_first_copy(tables, state, first_from, first_fights), 0)
     # Mirror Move (E3-B2-2): value 0, the foe has not recorded a move for it this turn (it calls
     # its turn-start moveCopied), value 1, the foe's move before it did (the foe's chosen move when
     # it is Mirror-Move-able and aimed at the user, else the moveCopied it had).
@@ -4654,6 +4656,8 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       battle_script.c:4916-4930)."""
     fmt = format_of(state)
     state, actions = pivot_view(tables, state, actions)
+    # The state as the command selection leaves it (moveSlot, TEMP_VALUE: E2-ML-5, E2-ML-8).
+    state = with_selection(tables, state, actions)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     chosen = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])

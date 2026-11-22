@@ -735,6 +735,12 @@ class BattleState(NamedTuple):
     # not a switch or a faint). CalcTurnOrder reads its move's priority (battle_lib.c:1375-1397),
     # TryGrudge zeroes its PP (common.h:8)
     move_slot: jnp.ndarray
+    # int8[B], battlerActions[b][BATTLE_ACTION_TEMP_VALUE] as Battler_SelectedMove reads it
+    # (battle_lib.c:2858-2868; E2-ML-8): 1 + the slot of a FIGHT's pick (bcp.c:525), 0 under an
+    # Encore (:447), a party pick's slot where it names a move slot (:595), else 0; a locked or a
+    # Struggling battler keeps it, nothing resets it. Me First and Pursuit read it
+    # (``order.battler_selected_move``)
+    selected_temp: jnp.ndarray
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
@@ -1148,6 +1154,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "chosen_target": (_BATTLER, np.int8),
     "last_hit_by": (_BATTLER, np.int8),
     "move_slot": (_BATTLER, np.int8),
+    "selected_temp": (_BATTLER, np.int8),
 }
 
 

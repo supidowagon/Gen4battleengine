@@ -272,6 +272,7 @@ from nuzline.engine.order import (
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
+    battler_selected_move,
     call_kind,
     called_move,
     claw_flags,
@@ -287,9 +288,9 @@ from nuzline.engine.order import (
     resort_action_order,
     resort_claw_flags,
     selected_move,
-    selection_slots,
     sort_mon_speed,
     truant_loafs,
+    with_selection,
 )
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -1467,9 +1468,9 @@ def _use_move(
     # selected move and struggling flag (``_act``); with none given the call finds nothing.
     me_first = jnp.asarray(0, _I32)
     if picks is not None:
-        copy_action, copy_move = picks[0][target_side], picks[1][0][target_side]
+        copy_action = picks[0][target_side]
         foe_fights = ~is_switch(copy_action) & ~is_item(copy_action)
-        copied = me_first_copy(tables, state, target_side, copy_move, foe_fights)
+        copied = me_first_copy(tables, state, target_side, foe_fights)
         me_first = jnp.where(jnp.asarray(moved, bool)[target_side], 0, copied)
     invoked = invoked_move(tables, state, side, move, outcome.call[side], me_first=me_first)
     call_failed = invoker & (
@@ -3540,13 +3541,19 @@ def _move_slot(state: BattleState, b, move) -> jnp.ndarray:
 def _pursuer_move(state: BattleState, pursuer, action, move, struggling):
     """``(has, move)`` of ``BtlCmd_TryPursuit``'s move choice for ``pursuer`` (battle_script.c:
     6905-6909): its Encore move when the Encore slot still holds it, whatever it selected (a FIGHT,
-    a bag item or a switch), else ``Battler_SelectedMove`` (the chosen slot's move of a FIGHT, 0
-    for any other command and for Struggle: lib.c:2858-2868; ``move`` / ``struggling`` are
-    ``selected_move``'s). ``has`` is false when it has no move. Every format (E2-ML-6, SF2 (e)):
+    a bag item or a switch), else ``Battler_SelectedMove`` (lib.c:2858-2868): moves[TEMP_VALUE - 1]
+    of a FIGHT, 0 for any other command; a locked or Struggling battler reads the value it carries
+    from an earlier selection (``state.selected_temp``, E2-ML-8; ``move`` / ``struggling`` are
+    unused). ``has`` is false when it has no move. Every format (E2-ML-6, SF2 (e)):
     at B = 2 too an Encored battler that picked a bag item, a switch or is locked pursues."""
     fmt = format_of(state)
     mon = state.active[pursuer]
-    picked = ~is_switch(action) & ~is_item(action) & ~jnp.asarray(struggling)
+    # Battler_SelectedMove (E2-ML-8): moves[TEMP_VALUE - 1] of a FIGHT, the carried value for a
+    # locked or a Struggling battler (``state.selected_temp``, which the selection wrote).
+    fights = ~is_switch(action) & ~is_item(action)
+    move = battler_selected_move(state, pursuer, fights)
+    picked = move != 0
+    del struggling  # TryPursuit has no Struggle test: Battler_SelectedMove's own value
     enc = state.encore_move[pursuer].astype(_I32)
     holds = (enc != 0) & (
         state.moves[party(fmt, pursuer), mon, state.encore_slot[pursuer]].astype(_I32) == enc
@@ -5691,14 +5698,13 @@ def _action_phase(
     state = state._replace(starf_roll=queue.astype(state.starf_roll.dtype), starf_taken=opened)
     fresh = _clear_stale_choice_locks(tables, state, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
-    # The selection's moveSlot (bcp.c:445, :526; E2-ML-5), before the order reads it.
-    fresh = fresh._replace(
-        move_slot=selection_slots(tables, state, actions).astype(state.move_slot.dtype)
-    )
+    # The selection's moveSlot and TEMP_VALUE (bcp.c:445-447, :525-526, :565, :595; E2-ML-5,
+    # E2-ML-8), before the order and the Pursuit scan read them.
+    fresh = with_selection(tables, fresh, actions)
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
     order = jnp.where(paused, state.ts_order, order).astype(_I32)
-    power_mul = replacement_power_mul(tables, state, actions)
+    power_mul = replacement_power_mul(tables, fresh, actions)
     s = _where(paused, state, fresh)
     s, read, shown, scratch, cur = _execute_actions(
         tables, s, actions, outcome, order, paused, power_mul

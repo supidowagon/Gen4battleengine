@@ -31,8 +31,9 @@ LATER_FIELDS = tuple(
 )
 # D2's fields after the scratch (ruling D2-38): `chosen_target` starts at b ^ 1 (D2-1; the
 # game's 0 is never read, every battler selects on turn 1, bcp.c:507-531), `last_hit_by` at 0;
-# then E2-ML-5's `move_slot` at 0 (BattleContext_New's zero, bcp.c:182).
-D2_FIELDS = ("chosen_target", "last_hit_by", "move_slot")
+# then E2-ML-5's `move_slot` and E2-ML-8's `selected_temp` at 0 (BattleContext_New's zero,
+# bcp.c:182).
+D2_FIELDS = ("chosen_target", "last_hit_by", "move_slot", "selected_temp")
 
 
 def test_new_fields_start_values(tables, names):
@@ -40,7 +41,7 @@ def test_new_fields_start_values(tables, names):
     assert LATER_FIELDS and BattleState._fields[-len(LATER_FIELDS + D2_FIELDS) :] == (
         LATER_FIELDS + D2_FIELDS
     )
-    for name in NEW_FIELDS + LATER_FIELDS + ("last_hit_by", "move_slot"):
+    for name in NEW_FIELDS + LATER_FIELDS + ("last_hit_by", "move_slot", "selected_temp"):
         assert not np.any(np.asarray(getattr(s, name))), name
     b = np.arange(len(s.chosen_target))
     assert np.asarray(s.chosen_target).tolist() == (b ^ 1).tolist()

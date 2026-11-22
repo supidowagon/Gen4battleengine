@@ -36,10 +36,17 @@ from nuzline.engine.ids import (
     Status,
     Weather,
 )
-from nuzline.engine.order import MOVE_ACTIONS, action_order, fight_move
+from nuzline.engine.order import (
+    MOVE_ACTIONS,
+    action_order,
+    battler_selected_move,
+    fight_move,
+    me_first_copy,
+    with_selection,
+)
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import replace
+from nuzline.engine.step import _pursuer_move, replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace
 from tests.engine.helpers import (
@@ -501,6 +508,54 @@ def test_an_encored_pursuer_with_an_item_draws_its_pursuit_in_the_laws(tables, n
     acts = jnp.asarray([MOVE_ACTIONS + 1, FIRST_ITEM_ACTION], jnp.int32)
     laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
     assert bool(laws.relevant.crit[1, 0]) and bool(laws.relevant.roll[1, 0])
+
+
+def _carried_board(tables, names):
+    """E2-ML-8: the foe locked into Rollout (slot 0) whose last selection's TEMP_VALUE is still
+    2, Pursuit (slot 1); the player switches its lead out (party slot 1)."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 35), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Rollout", "Pursuit", "Tackle"], 35)],
+    )
+    s = s._replace(
+        locked_move=s.locked_move.at[1].set(n.move("Rollout")),
+        rollout_count=s.rollout_count.at[1].set(1),
+        selected_temp=s.selected_temp.at[1].set(2),
+    )
+    return s, jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
+
+
+def test_a_locked_battler_reads_its_carried_selected_move(tables, names):
+    """E2-ML-8: a locked battler picks no command (bcp.c:333-337), so its TEMP_VALUE stays its
+    last selection's and Battler_SelectedMove (battle_lib.c:2858-2868) reads that slot's move, not
+    the lock's: Pursuit's (battle_script.c:6909) and Me First's (:7296) read."""
+    n = names
+    s, acts = _carried_board(tables, names)
+    sel = with_selection(tables, s, acts)
+    assert int(sel.selected_temp[1]) == 2  # kept by the lock
+    assert int(sel.selected_temp[0]) == 1  # the switch writes its party slot (bcp.c:595)
+    assert int(battler_selected_move(sel, 1, True)) == n.move("Pursuit")
+    assert int(battler_selected_move(sel, 1, False)) == 0  # not a FIGHT: MOVE_NONE
+    has, move = _pursuer_move(sel, 1, acts[1], n.move("Rollout"), False)
+    assert bool(has) and int(move) == n.move("Pursuit")
+    tackle = sel._replace(selected_temp=sel.selected_temp.at[1].set(3))
+    assert int(me_first_copy(tables, tackle, 1, True)) == n.move("Tackle")
+    none = sel._replace(selected_temp=sel.selected_temp.at[1].set(0))
+    assert int(me_first_copy(tables, none, 1, True)) == 0  # MOVE_NONE has no power (:7300)
+
+
+@pytest.mark.slow  # a step against the reference
+def test_a_locked_pursuer_pursues_with_its_carried_move_in_both_engines(tables, names):
+    """E2-ML-8: the foe locked into Rollout carries Pursuit's TEMP_VALUE, so TryPursuit reads
+    Pursuit (battle_script.c:6909) and chases the player's switch, spending its PP (:6914), in
+    both engines."""
+    s, acts = _carried_board(tables, names)
+    out = assert_matches_reference(tables, s, tuple(int(a) for a in acts), O)
+    assert int(out.hp[0, 0]) < int(s.hp[0, 0])  # the Pursuit hit the switcher
+    assert int(out.pp[1, 0, 1]) == int(s.pp[1, 0, 1]) - 1
+    assert int(out.selected_temp[1]) == 2
 
 
 def test_a_klutz_lansat_at_its_pinch_reads_its_crit_after_a_gastro_acid(tables, names):
