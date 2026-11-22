@@ -978,7 +978,7 @@ class TraceSources(NamedTuple):
     armed: jnp.ndarray  # bool[B]: the battler's Trace can fire at a MoveEnd this turn
     raw: jnp.ndarray  # int[B, 2]: each battler's raw ability, active and incoming
     ok: jnp.ndarray  # bool[B, 2]: ChooseTraceTarget accepts it (and the incoming one enters)
-    insomnia: jnp.ndarray  # bool[]: a Worry Seed can write Insomnia first
+    insomnia: jnp.ndarray  # bool[B]: a Worry Seed can write Insomnia on an opposing battler
     bench_raw: jnp.ndarray  # int[B, M]: the raw abilities of battler b's party
     bench_ok: jnp.ndarray  # bool[B, M]: a B = 4 drag can bring that member in, traceable
     bench_live: jnp.ndarray  # bool[B, M]: a B = 4 drag can bring that member in
@@ -1040,12 +1040,17 @@ def trace_sources(tables: Tables, state: BattleState, actions, moves=None) -> Tr
 
     The turn-start invariant (``STATE.md``, Trace): ShowBattleMon has fired every holder with a
     target, so an unannounced holder faces no opposing active that ChooseTraceTarget accepts.
-    Its sources are then what enters or changes this turn: a newcomer (``ok[:, 1]``), an
-    opposing battler whose raw ability a Skill Swap, its own Role Play or Transform or, at
-    B = 4, its own Trace can change (``changed``: it can then hold any raw ability on the field
-    or entering, ``trace_copies``), Insomnia, and a B = 4 drag's bench. The opposing actives as
-    they stand count for a gainer (its Trace is new) and in a state resumed mid-turn at a learn
-    prompt (``learn_site``: no turn start in between)."""
+    Its sources are then what enters or changes this turn: an opposing newcomer (``ok[:, 1]``),
+    Insomnia written on an opposing battler by a Worry Seed, and at B = 4 an opposing battler
+    whose raw ability a Skill Swap, its own Role Play or Transform or its own Trace can change
+    (``changed``: it can then hold any raw ability on the field or entering, ``trace_copies``)
+    and a drag's bench. At B = 2 a changed foe adds nothing: its new raw ability is the
+    holder's (Role Play, subscript_copy_ability.s:14-15; Transform, battle_script.c:
+    5346-5348), Trace, which ChooseTraceTarget skips, or a Skill Swap with the holder takes the
+    holder's Trace away (subscript_exchange_abilities.s:21-24). The opposing actives as they
+    stand count for a gainer (its Trace is new), a newcomer holder (one may switch out after it
+    enters) and in a state paused mid-turn (``learn_site``, ``pivot_battler``: no turn start
+    since the last firing point)."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     moves = _turn_moves(tables, state, actions, moves)
@@ -1098,10 +1103,18 @@ def trace_sources(tables: Tables, state: BattleState, actions, moves=None) -> Tr
     bench_ok = bench_live & ~jnp.isin(decomp[rows], untraceable)
     dragged_trace = jnp.any(bench_live & (bench_raw == AbilityId.TRACE))
     armed = (state.over == 0) & (holder | gainer | dragged_trace)
-    worry = jnp.any(uses & (effect == EffectId.WORRY_SEED))
-    # The holder's targets as they stand: a gainer's (its Trace is new), and every holder's in a
-    # state resumed at a learn prompt, which follows no ShowBattleMon.
-    start = gainer | (state.learn_site != 0)
+    # Worry Seed writes Insomnia on its target (subscript_give_target_insomnia.s:11), which an
+    # armed holder opposing it can copy: at B = 2 the target is the user's one foe, so the holder
+    # is the user itself; at B = 4 the chosen target (over-approximate: any holder).
+    worry = uses & (effect == EffectId.WORRY_SEED)
+    worry = jnp.broadcast_to(jnp.any(worry), (fmt.B,)) if fmt.B == 4 else worry
+    # The holder's targets as they stand: a gainer's (its Trace is new), a newcomer holder's
+    # (``faced`` counts only the staying opposing battlers, so a traceable one that switches out
+    # may still be there when it enters), and every holder's in a state paused mid-turn, which
+    # follows no ShowBattleMon: at a learn prompt (``learn_site``) or a U-turn's or Baton Pass's
+    # party list (``pivot_battler``).
+    paused = (state.learn_site != 0) | (state.pivot_battler != 0)
+    start = gainer | (switch & holder) | paused
     # A raw ability that can change this turn (the new one is another battler's, on the field or
     # entering): the user of Role Play (subscript_copy_ability.s:14-15) or Transform
     # (battle_script.c:5346-5348), either side of a Skill Swap (subscript_exchange_abilities.s:
@@ -1118,22 +1131,24 @@ def trace_sources(tables: Tables, state: BattleState, actions, moves=None) -> Tr
 
 
 def _copies(fmt, src: TraceSources, abilities, changed) -> jnp.ndarray:
-    """``trace_copies`` with the battlers ``changed`` whose raw ability can change."""
+    """``trace_copies`` with the battlers ``changed`` whose raw ability can change (B = 4)."""
     hit = src.ok & (True if abilities is None else any_of(src.raw, abilities))
-    bench = src.bench_ok & (True if abilities is None else any_of(src.bench_raw, abilities))
     insomnia = src.insomnia & (abilities is None or AbilityId.INSOMNIA in tuple(abilities))
     sides = jnp.arange(fmt.B)
     across = side_of(sides)[:, None] != side_of(sides)[None, :]
-    # The abilities a changed battler can take: any accepted raw one on the field or entering,
-    # a B = 4 drag's newcomer's, Insomnia (Worry Seed).
-    pool = jnp.any(hit) | jnp.any(bench) | insomnia
-    # By the opposing source battler e: its newcomer; its changed raw ability; its active's
-    # raw ability now, where the holder may copy it (``start``). A B = 4 drag puts a bench
-    # Pokemon in a slot opposing every holder (over-approximate).
+    # By the opposing source battler e: its newcomer; its active's raw ability now, where the
+    # holder may copy it (``start``).
     new = across & hit[None, :, 1]
     now = src.start[:, None] & across & hit[None, :, 0]
-    moved = across & (changed & pool)[None, :]
-    copies = jnp.any(new | now | moved, axis=1) | jnp.any(bench) | insomnia
+    copies = jnp.any(new | now, axis=1) | insomnia
+    if fmt.B == 4:
+        bench = src.bench_ok & (True if abilities is None else any_of(src.bench_raw, abilities))
+        # The abilities a changed battler can take: any accepted raw one on the field or
+        # entering, a drag's newcomer's, Insomnia (Worry Seed). A drag puts a bench Pokemon in
+        # a slot opposing every holder (over-approximate).
+        pool = jnp.any(hit) | jnp.any(bench) | jnp.any(insomnia)
+        moved = across & (changed & pool)[None, :]
+        copies = copies | jnp.any(moved, axis=1) | jnp.any(bench)
     return src.armed & copies
 
 
@@ -1190,6 +1205,32 @@ def doubles_ability_change(
     return movers | jnp.any(trace_copies(tables, state, actions, src=src, moves=moves))
 
 
+# The abilities an accuracy check reads (BattleControllerPlayer_CheckMoveHitAccuracy, bcp.c:
+# 2876-2947, :3016-3021): Simple and Unaware on the stages, Compoundeyes, Sand Veil and Snow
+# Cloak (in their weather), Tangled Feet, No Guard, Mold Breaker (Battler_IgnorableAbility),
+# Klutz (Battler_HeldItemEffect hides the accuracy items, battle_lib.c:5352-5356), and the
+# abilities that change the weather it reads: Cloud Nine / Air Lock (NO_CLOUD_NINE) and the
+# weather setters (SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES follows the trace state in the same
+# pass, battle_lib.c:3625-3626). Hustle (:2930) is no engine ability.
+ACCURACY_ABILITIES = (
+    AbilityId.SIMPLE,
+    AbilityId.UNAWARE,
+    AbilityId.COMPOUNDEYES,
+    AbilityId.SAND_VEIL,
+    AbilityId.SNOW_CLOAK,
+    AbilityId.TANGLED_FEET,
+    AbilityId.NO_GUARD,
+    AbilityId.MOLD_BREAKER,
+    AbilityId.KLUTZ,
+    AbilityId.CLOUD_NINE,
+    AbilityId.AIR_LOCK,
+    AbilityId.DRIZZLE,
+    AbilityId.DROUGHT,
+    AbilityId.SAND_STREAM,
+    AbilityId.SNOW_WARNING,
+)
+
+
 def ability_whole(tables: Tables, state: BattleState, actions, moves, src=None) -> jnp.ndarray:
     """``bool[B]``: each side's accuracy roll is kept whole (every roll its own class, as
     ``self_lock``'s) where an ability can change before its check in a way ``_threshold_grid``
@@ -1204,7 +1245,7 @@ def ability_whole(tables: Tables, state: BattleState, actions, moves, src=None) 
     fmt = format_of(state)
     if src is None:
         src = trace_sources(tables, state, actions, moves)
-    traced = jnp.any(trace_copies(tables, state, actions, src=src))
+    traced = jnp.any(trace_copies(tables, state, actions, ACCURACY_ABILITIES, src=src))
     doubles = doubles_ability_change(tables, state, actions, moves, src)
     return jnp.broadcast_to(traced | doubles, (fmt.B,))
 
