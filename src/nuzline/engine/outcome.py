@@ -117,6 +117,7 @@ from nuzline.engine.order import (
     move_effects,
     sealed_state,
     selected_move,
+    sketched_state,
     takeover_possible,
     used_move,
     used_moves,
@@ -2651,8 +2652,12 @@ def replacement_known(tables: Tables, state: BattleState) -> bool:
     and a ``can_call_encore`` caller; Metronome, Assist and Copycat, ``can_call_encore``'s
     other callers). False means ``replacement_possible`` is false at ``state`` and at every
     state a turn or a playout reaches from it, so ``sample_outcome``'s static ``replacement``
-    may be False there. A move that changes a battler's set mid-battle (Mimic, Sketch,
-    Transform: unsupported, ``coverage.RELOAD_STATE_EFFECTS``) joins Encore when supported.
+    may be False there. The moves that change a battler's set mid-battle copy only a move some
+    Pokemon of the fight knows: Transform its target's slots (battle_script.c:5346-5348), Mimic
+    its target's ``movePrevByBattler`` (:4481), a used slot move or a locked move (bcp.c:
+    3945-3946, :1885-1888), and Sketch its target's ``moveSketched`` (:4839-4884, the same
+    ``moveTemp``, bcp.c:3952-3954). A locked move is never Encore or an invoker
+    (``coverage.LOCK_EFFECTS``), so a copied Encore or invoker is a known one, already counted.
     The guard: tests/engine/test_batch11.py, on generated states."""
     species = np.asarray(state.species).astype(np.int64)
     learnt = np.asarray(tables.learnset_move)[species]
@@ -2677,7 +2682,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     events are played on A (``step.turn_events``, only where ``replacement_possible``) and a side
     whose event fired (``enumerate._split_events``, ``enumerate.taken_events``) takes outcome B's
     move-dependent fields (``MOVE_FIELDS``), redrawn for the move it then runs: from the Sleep
-    Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``),
+    Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``)
+    or an imprisoning foe's Sketch left (``order.sketched_state``, ``enumerate.sketched_events``),
     the encored move a faster Encore forced (``order.encored_state``) or, for a Sleep Talk,
     Metronome or Assist user, the set a faster Gravity left (``order.gravity_state``, its call
     redrawn from that set's law, G-67). Exact: the event is
@@ -2688,7 +2694,12 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     ``replacement_known`` is False (where the predicate is always false)."""
     fmt = format_of(state)
     # importers of this module
-    from nuzline.engine.enumerate import _split_events, gravity_events, taken_events
+    from nuzline.engine.enumerate import (
+        _split_events,
+        gravity_events,
+        sketched_events,
+        taken_events,
+    )
     from nuzline.engine.step import turn_events
 
     state_in, actions_in = state, jnp.asarray(actions, _I32)
@@ -2878,7 +2889,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         kinds = call_kind(tables, chosen)
         listing = (kinds == CALL_SLEEP_TALK) | (kinds == CALL_METRONOME) | (kinds == CALL_ASSIST)
         landed = gravity_events(state_in, events) & listing
-        which = jnp.stack([disabled, sealed, taken_events(state_in, events), landed])
+        sketched = sketched_events(state_in, events)
+        which = jnp.stack([disabled, sealed, taken_events(state_in, events), landed, sketched])
         sides = jnp.arange(fmt.B)
         taken = which[2]
         # The moveTemp each side runs: the encored move where taken. The invokers' draws do not
@@ -2901,6 +2913,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                 sealed_state(state, mine),
                 encored_state(tables, state, mine),
                 heavy,
+                # TODO(D2): at B = 4 the Sketch may target the sleeper's partner (see
+                # ``enumerate.sketched_events``): the hypothesis needs the chosen target (D11).
+                sketched_state(state, _foe(side), side),
             )
             options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
             alt_moves.append(
@@ -2910,7 +2925,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                     jnp.where(
                         which[2, side],
                         options[2],
-                        jnp.where(which[1, side], options[1], options[0]),
+                        jnp.where(
+                            which[1, side],
+                            options[1],
+                            jnp.where(which[4, side], options[4], options[0]),
+                        ),
                     ),
                 )
             )

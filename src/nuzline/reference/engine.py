@@ -88,6 +88,7 @@ from nuzline.engine.ids import (
     MOVE_LAST_RESORT,
     MOVE_MIMIC,
     MOVE_NATURAL_GIFT,
+    MOVE_SKETCH,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_SOLAR_BEAM,
@@ -110,6 +111,7 @@ from nuzline.engine.ids import (
     SECRET_POWER_EFFECTS,
     SEMI_HIT_FLAGS,
     SEMI_SET_FLAGS,
+    SKETCH_FORBIDDEN,
     SLEEPLESS_ABILITIES,
     SNORE_PARAM,
     SPECIES_ARCEUS,
@@ -2284,6 +2286,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "flinched",
         "choice_lock",
         "last_move",
+        "sketch_move",  # moveSketched, cleared with movePrevByBattler (lib.c:2130, :2208), I-3
         "protect_count",
         "rollout_count",
         "charge_turn",
@@ -3407,8 +3410,8 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
     test (H-2): a status its ``Battler_Ability`` forbids (``_FORBIDDEN``), Own Tempo's confusion
     (:4390-4395) or Oblivious' infatuation (:4426-4431) is cleared by
     subscript_ability_forbids_status.s (:11-13, :_045, :_052). Its message tags BTLSCR_MSG_TEMP
-    (no BattleAI_SetAbility, script.c:11801-11802); the Insomnia, Vital Spirit and Limber reveal
-    stays for now (``hooks.REVEALS_ON``). Run at each move end for the attacker then the defender
+    (no BattleAI_SetAbility, script.c:11801-11802): no cure reveals the ability (I-6;
+    ``hooks.REVEALS_ON``). Run at each move end for the attacker then the defender
     (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
     mon = _active(s, side)
     _arm_unburden(s, side)
@@ -3425,8 +3428,6 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
             sd.nightmare = 0
         mon.status = Status.NONE
         mon.status_counter = 0
-        if ability in (*SLEEPLESS_ABILITIES, AbilityId.LIMBER):
-            _know_ability(s, side)
 
 
 def _form_change(tables, s: RefState) -> None:
@@ -4797,6 +4798,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.battlers[target].confusion = o.duration[side]
     elif effect == EffectId.MIMIC and landed:
         _mimic(tables, s, side, target)
+    elif effect == EffectId.SKETCH and landed:
+        _sketch(tables, s, side, target, _shielded(turn, s, target))
     elif effect == EffectId.TRANSFORM and landed:
         if _transform(tables, s, side, target):
             # SYNCHRONIZE_STATUS's TriggerFormChange first (lib.c:4536-4544, bcp.c:3665-3672): a
@@ -8465,6 +8468,34 @@ def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
     )
 
 
+def _sketch(tables, s: RefState, side: int, target: int, shielded: bool) -> None:
+    """Sketch (effect_script_0095.s:5; subscript_sketch.s:5-6, ``BtlCmd_TrySketch``, script.c:
+    4839-4884): fails on a defender with a Substitute, a Transformed user (:4847), a defender's
+    ``moveSketched`` that is MOVE_NONE or forbidden (``SKETCH_FORBIDDEN``, :4848-4851) or a move
+    the user knows in a slot that is not Sketch (:4855-4860); else the user's first Sketch slot
+    takes the move with its table PP (no cap; the slot's ``pp_ups`` stays: none on a Sketch slot,
+    as each learn path zeroes them, battle_script.c:10170, evolution.c:632, move_reminder.c:934,
+    party_menu/callbacks.c:1111, and PP Up refuses a max PP under 5, item_use_pokemon.c:20,
+    :187), a copied Last Resort zeroes ``lastResortCount``
+    (:4876-4878), and the party Pokemon keeps it (no shadow: ``BtlIOCmd_UpdatePartyMon``
+    writes every unflagged slot, battle_io_command.c:575-587)."""
+    last = s.battlers[target].sketch_move
+    mon, sd = _active(s, side), s.battlers[side]
+    if (
+        sd.transformed
+        or shielded  # subscript_sketch.s:5, BtlCmd_CheckSubstitute (script.c:9180-9181)
+        or not last
+        or last in SKETCH_FORBIDDEN
+        or last in mon.moves
+    ):
+        return
+    j = mon.moves.index(MOVE_SKETCH)
+    mon.moves[j] = last
+    mon.pp[j] = _t(tables, "move_pp", last)
+    if last == MOVE_LAST_RESORT:
+        sd.last_resort_count = 0
+
+
 def _mimic(tables, s: RefState, side: int, target: int) -> None:
     """Mimic (effect_script_0082.s:3; ``BtlCmd_TryMimic``, script.c:4476-4524): fails on a
     defender's ``movePrevByBattler`` that is MOVE_NONE or not Mimic-able (``MIMIC_FORBIDDEN``,
@@ -8478,7 +8509,7 @@ def _mimic(tables, s: RefState, side: int, target: int) -> None:
         last in MIMIC_FORBIDDEN
         or not last
         or sd.transformed  # :4482
-        or s.battlers[target].substitute_hp
+        or s.battlers[target].substitute_hp  # :4483, the volatile only: no CheckSubstitute
         or last in mon.moves
     ):
         return
@@ -9041,6 +9072,11 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
             # battle's movePrev is moveTemp (the chosen move) when the attack message showed.
             s.move_prev = move if turn.attack_message else 0
+            # moveSketched, bcp.c:3952-3954 (I-3): the mover's, also after a Magic Coat
+            # reflection (the nested holder pass writes none: LoopSpreadMoves swaps the
+            # attacker back first, bcp.c:3831-3835).
+            if turn.attack_message:
+                s.battlers[side].sketch_move = move
             copied = (0, 0) if turn.reflected else _copied_writes(tables, turn, move, record)
             conv2 = None if turn.reflected else _conv2_writes(tables, s, turn, side, move, record)
             # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
@@ -9718,6 +9754,7 @@ def _resume(
     _update_choice_lock(turn, s, side, defender, move, exempt)
     s.move_prev = move
     s.battlers[side].last_move = move
+    s.battlers[side].sketch_move = move  # bcp.c:3952-3954 (I-3)
     s.battlers[side].protect_count = 0
     copied = (_copied_writes(tables, turn, move, record)[0], 0)  # a pivot is never self-ranged
     # The pivot's hit landed (it paused): the foe records it for Conversion 2 (E3-B2-3).

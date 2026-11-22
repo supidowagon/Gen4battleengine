@@ -462,6 +462,7 @@ class BattleState(NamedTuple):
     flinched: jnp.ndarray  # int8
     choice_lock: jnp.ndarray  # int16
     last_move: jnp.ndarray  # int16
+    sketch_move: jnp.ndarray  # int16, BattleContext.moveSketched (I-3)
     protect_count: jnp.ndarray  # int8
     rollout_count: jnp.ndarray  # int8
     charge_turn: jnp.ndarray  # int8
@@ -814,6 +815,7 @@ VOLATILE_FIELDS = (
     "flinched",
     "choice_lock",
     "last_move",
+    "sketch_move",
     "protect_count",
     "rollout_count",
     "charge_turn",
@@ -967,6 +969,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "flinched": (_BATTLER, np.int8),
     "choice_lock": (_BATTLER, np.int16),
     "last_move": (_BATTLER, np.int16),
+    "sketch_move": (_BATTLER, np.int16),
     "protect_count": (_BATTLER, np.int8),
     "rollout_count": (_BATTLER, np.int8),
     "charge_turn": (_BATTLER, np.int8),

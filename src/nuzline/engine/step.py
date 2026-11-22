@@ -92,6 +92,7 @@ from nuzline.engine.actions import (
     locked_slot,
     move_imprisoned,
     replacement_bench,
+    sealed_mask,
 )
 from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
@@ -575,6 +576,14 @@ def _set_last_move(state: BattleState, side, move, cond) -> BattleState:
     return state._replace(last_move=state.last_move.at[side].set(value))
 
 
+def _set_sketch(state: BattleState, side, move, cond) -> BattleState:
+    """``moveSketched[side] = move`` where ``cond`` (``BattleState.sketch_move``): UpdateMoveBuffers
+    writes it when the attack message showed (battle_controller_player.c:3952-3954) and keeps the
+    old value otherwise (``movePrevByBattler`` would become MOVE_NONE, :3945-3949)."""
+    value = jnp.where(cond, move, state.sketch_move[side]).astype(state.sketch_move.dtype)
+    return state._replace(sketch_move=state.sketch_move.at[side].set(value))
+
+
 def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
     """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717), at the start of the turn:
     the AI adds the player's ``movePrevByBattler`` to its list of the player's moves
@@ -983,6 +992,7 @@ def _empty_events(fmt: Format) -> dict:
             "move_failed",
             "disabled_at_move",
             "sealed_at_move",
+            "seal_mask_at_move",
             "encored_at_move",
             "gravity_at_move",
             *EVENT_FLAGS,
@@ -1210,6 +1220,10 @@ def _use_move(
     # Likewise a battler of the other side imprisoning (the Sleep Talk set's other change within
     # the turn, ruling B7-13).
     sealed_at_move = ready & imprisoning_foe(state, side)
+    # The battler's sealed slots when its action starts (``actions.sealed_mask``): a faster
+    # imprisoning foe's Sketch changes them while the bit stays (battle_script.c:4868; the event
+    # the Sketch call variants split on, enumerate.sketched_events).
+    seal_mask_at_move = jnp.where(ready, sealed_mask(state, side), 0)
     # Gravity is up when the action starts: a faster foe's Gravity this turn changes the
     # invokers' sets (G-67), the event their Gravity call variants split on.
     gravity_at_move = ready & fcm.gravity_on(state)
@@ -3168,6 +3182,15 @@ def _use_move(
     prev = jnp.where(ready_t, jnp.where(shown_t, move, 0), state.move_prev)
     prev = jnp.where(tail, prev, state.move_prev)
     state = state._replace(move_prev=prev.astype(state.move_prev.dtype))
+    # UpdateMoveBuffers' moveSketched (bcp.c:3952-3954), I-3: moveTemp where the attack message
+    # showed, outside the REUSE_LAST_MOVE block and kept otherwise (``_set_sketch``). The same
+    # battler and move as ``movePrevByBattler``; Pursuit's pre-switch hit never reaches it. A
+    # Magic Coat reflection: LoopSpreadMoves swaps the attacker back to the mover
+    # (``magicCoatMon``, bcp.c:3831-3835) before UpdateMoveBuffers, so the mover records its own
+    # move (this pass) and the holder's reflected pass writes nothing (``ready_t`` is False
+    # there); the holder's moveSketched stays Magic Coat from its own action. Sketch has no
+    # MOVE_FLAG_MAGIC_COAT (res/moves/sketch/data.json:21), so it is never reflected.
+    state = _set_sketch(state, side, move, ready_t & tail & shown_t)
     # UpdateFlagsWhenHit's conversion2 fields (bcp.c:4509-4533, E3-B2-3) for the foe defender
     # (``record``): where SYSCTL_MOVE_SUCCEEDED is set and the move has no MOVE_STATUS_NO_EFFECTS
     # (``succeeded`` and ``worked``: a hit that connected; the tail modes' U-turn landed) and its
@@ -3267,6 +3290,7 @@ def _use_move(
         "move_failed": move_failed,
         "disabled_at_move": disabled_at_move,
         "sealed_at_move": sealed_at_move,
+        "seal_mask_at_move": seal_mask_at_move,
         "encored_at_move": encored_at_move,
         "gravity_at_move": gravity_at_move,
     }
