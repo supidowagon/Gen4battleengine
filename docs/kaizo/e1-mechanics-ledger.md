@@ -3030,6 +3030,18 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
     `order.sketched_state(state, _foe(side), side)`, the Sketch aimed at the sleeper. At B = 4 the Smeargle may
     Sketch the sleeper's partner; the seen mask then misses `after`, the side reads `CALL_KEEP` and the KEEP row keeps
     wrong weights silently. Needs the Sketch's chosen target and every imprisoning foe (the `TODO(D2)` at both calls).
+- I-S1 closing compare `snapcmp-e1c-830e730`: 830e7308 (bd2555bc with I-6's engine change reverted, throwaway
+  `e1-close-i-1`) vs `snapmain-fd3c1fc`, 200 seeds, 122 parts, `--allow-new sketch_move`: compare ok, 122 ok,
+  0 diverged, 0 error, 0 sampler or generator drift (`_scratch/rent/out/snapcmp-e1c-830e730/compare.log`). So class A
+  (I-6) is the whole of the `snapcmp-e1i-bd2555b` divergence; the only new field is `sketch_move`.
+- Merge of main d2ec0fc1 (merge candidate A: e2-lawsbag, e2-tracelaws, the quick lane; e2-mechanics-ledger.md
+  "Merge candidate A") into batch I at 86b0faec. One conflict, the import lines of `src/nuzline/engine/effects.py`:
+  both kept (batch I's `order.sketch_copy` for `_sketch`; main's `outcome.secondary_procs`, the secondary chance read
+  at the hit with the live Serene Grace, battle_lib.c:1552-1556, :1571-1575, battle_script.c:8369-8378). The rest
+  auto-merged; no read of `outcome.secondary` / `fang_flinch` outside `secondary_procs` / reference `_passes_chance`
+  remains, and `sketch_move` is outside `settle_traces` (Trace invariant, STATE.md). `MANIFEST_VERSION` stays 44 (main
+  43). Tables rebuilt; the merge's allow-new fields are in `_scratch/e1/i-next/merge-candidate-report.md`.
+
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

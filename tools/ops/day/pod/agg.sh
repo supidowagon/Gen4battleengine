@@ -21,9 +21,9 @@ done < queue.txt | awk '{k=$1; if(!(k in c)) o[++m]=k; c[k]+=$2; for(i=3;i<=9;i+
          print s, r[k]+0, w[k]+0, (t==c[k] ? "yes" : "NO")}}')
 echo "$TAB"
 NF=$(echo "$TAB" | awk 'NR>1 {f+=$4+$6} END {print f+0}'); NI=$(echo "$TAB" | awk 'NR>1 && $12=="NO"' | wc -l)
-echo "--- collection failures (collect_rc not 0 or 5)"
+echo "--- collection failures (collect_rc not 0 or 5, or module_skipped: a listed file that collected nothing because a module skipped itself)"
 CF=$(grep -vE 'collect_rc=(0|5)$' "$D/collected.txt" 2>/dev/null); [ -n "$CF" ] && echo "$CF"
-grep -hE '^ERROR ' "$D"/col/*.out 2>/dev/null | cut -c1-260
+grep -hE '^(ERROR|SKIPPED) ' "$D"/col/*.out 2>/dev/null | cut -c1-260
 NC=$( [ -n "$CF" ] && echo "$CF" | wc -l || echo 0)
 NK=$(cat crashed.txt 2>/dev/null | wc -l); [ "$NK" -gt 0 ] && echo "--- crashed units (rc 97): $(tr '\n' ' ' < crashed.txt)"
 NO=$(cat overkilled.txt 2>/dev/null | wc -l); [ "$NO" -gt 0 ] && echo "--- units killed a third time at the memory limit, or left without a result after two requeues (those are in lost.txt) (rc 98): $(tr '\n' ' ' < overkilled.txt)"

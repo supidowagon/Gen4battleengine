@@ -33,6 +33,16 @@ at every one of them (``hit_class``). ``step`` compares it with the live thresho
 (``live_hit_threshold``): the move hits when ``0 < hit <= threshold``. With a single
 threshold ``t`` below 100 this is the old boolean (1 = hits, 0 = misses); 0 in a
 hand-built outcome forces a miss.
+
+The secondary rolls (``secondary``, ``fang_flinch``) are classed the same way: the decomp
+reads the chance at the hit, doubled for a Serene Grace attacker as ``Battler_Ability``
+shows it then (``BattleSystem_TriggerSecondaryEffect``, battle_lib.c:1552-1556, :1571-1575;
+``BtlCmd_CheckEffectActivation``, battle_script.c:8369-8378), and the attacker's ability
+can change before its hit (``secondary_thresholds``). The stored value is the roll
+``r = RandNext() % 100`` reduced to its class over the possible chances, as its smallest
+``r + 1``, or 0 when ``r`` fails at every one of them (``secondary_class``); ``step``
+procs when ``0 < value`` and ``value - 1 < chance`` with the live chance
+(``secondary_procs``). With one chance this is the old boolean (1 = procs, 0 = not).
 """
 
 from __future__ import annotations
@@ -51,6 +61,7 @@ from nuzline.engine.damage import (
     PRESENT_HEAL,
     ability_weather,
     conv2_pick,
+    decomp_abilities,
     entry_ability,
     entry_weather,
     hazards_loss,
@@ -66,11 +77,14 @@ from nuzline.engine.ids import (
     CHATTER_CHANCES,
     FOCUS_BAND_PARAM,
     GRAVITY_TURNS,
+    ITEM_GRISEOUS_ORB,
     ON_HIT_EFFECTS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
+    SPECIES_SHAYMIN,
     STARF_DRAWS,
     TRACE_FIRES,
+    UNTRACEABLE_ABILITIES,
     AbilityId,
     EffectId,
     FieldCondition,
@@ -736,7 +750,11 @@ def future_thresholds(
         | (effect == EffectId.PSYCH_UP)
         | (effect == EffectId.ACUPRESSURE)
     )
-    free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
+    # A trainer bag item's X Accuracy raises its user's accuracy stage (BattleSystem_UseBagItem,
+    # battle_system.c:610-615), which the hit reads for an attacker that stays: free for any item
+    # action (over-approximate).
+    bag = jnp.any(live & is_item(actions))
+    free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs | bag
     # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
     # As weather bits (field.weather_bits): none, a sandstorm, a hail; the field axis adds the
@@ -953,6 +971,299 @@ def _can_go_first(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
         for tie in (0, 1)
     ]
     return jnp.stack([(firsts[0] == side) | (firsts[1] == side) for side in range(fmt.B)])
+
+
+class TraceSources(NamedTuple):
+    """``trace_sources``: who can trace mid-turn and what it can copy."""
+
+    armed: jnp.ndarray  # bool[B]: the battler's Trace can fire at a MoveEnd this turn
+    raw: jnp.ndarray  # int[B, 2]: each battler's raw ability, active and incoming
+    ok: jnp.ndarray  # bool[B, 2]: ChooseTraceTarget accepts it (and the incoming one enters)
+    insomnia: jnp.ndarray  # bool[B]: a Worry Seed can write Insomnia on an opposing battler
+    bench_raw: jnp.ndarray  # int[B, M]: the raw abilities of battler b's party
+    bench_ok: jnp.ndarray  # bool[B, M]: a B = 4 drag can bring that member in, traceable
+    bench_live: jnp.ndarray  # bool[B, M]: a B = 4 drag can bring that member in
+    start: jnp.ndarray  # bool[B]: the holder can copy what its opposing actives hold now
+    changed: jnp.ndarray  # bool[B]: the battler's raw ability can change this turn
+
+
+def _turn_moves(tables: Tables, state: BattleState, actions, moves) -> jnp.ndarray:
+    """``moves`` as given, else each side's ``used_move`` (no invoker's call)."""
+    if moves is not None:
+        return jnp.asarray(moves, _I32)
+    fmt = format_of(state)
+    return jnp.stack([used_move(tables, state, b, actions[b]) for b in range(fmt.B)])
+
+
+def trace_sources(tables: Tables, state: BattleState, actions, moves=None) -> TraceSources:
+    """The armed Trace holders of the turn and the abilities they can copy (``trace_copies``).
+
+    ``BattleControllerPlayer_MoveEnd`` runs ``BattleSystem_TriggerEffectOnSwitch`` after every
+    action (bcp.c:3973: a move, :3959; a bag item, :1971-1973; a switch, through
+    CHECK_ANY_FAINTED, :1984, :4008), and so does a move's
+    ``AFTER_MOVE_EFFECT_TRIGGER_SWITCH_IN_EFFECTS`` (:3672-3673): its
+    ``SWITCH_IN_CHECK_STATE_TRACE`` (battle_lib.c:3711-3737) fires for every battler whose
+    ``traceAnnounced`` is clear, with HP, no Griseous Orb and ``Battler_Ability`` Trace, once
+    ``ChooseTraceTarget`` (:7750-7781) finds an opposing battler with HP whose raw
+    ``BattleMon.ability`` is not Forecast, Trace or Multitype; ``subscript_trace.s:6-7`` copies
+    that raw ability (a Gastro Acid suppressed one too). The copy then holds for every later
+    event of the turn (``hooks.move_end_switch_in``, ``hooks.trace``). ShowBattleMon runs the same
+    pass before every turn's commands (bcp.c:256, from TurnEnd :1858 and TrainerMessage
+    :240-249), so in a game state a holder with a target has fired already: a Trace is armed at a
+    turn's start only while nothing it faces is traceable, and it copies mid-turn only what an
+    action hands over (a newcomer, a Skill Swap, Role Play or Transform, Worry Seed's Insomnia).
+
+    Armed (over-approximate): ``d``'s active Pokemon with Trace and ``trace_announced`` clear
+    that stays (``state`` is the laws' view, ``pivot_view``: one whose foe's newcomer it copies
+    at the switch holds the copy there already); the Trace newcomer ``d`` switches in where no
+    opposing battler offers a target at its entry; and a battler that can gain Trace mid-turn:
+    its own Role Play (subscript_copy_ability.s:14-15), Transform (battle_script.c:5346-5348,
+    which also clears ``traceAnnounced``, :5352) or Skill Swap (subscript_exchange_abilities.s:
+    21-24) with another battler holding Trace, or another battler's Skill Swap from a Trace
+    holder; neither script tests Trace or ``traceAnnounced``, and the gainer's flag is clear
+    unless it traced before (over-approximate: any flag). What it can copy is what the
+    turn-start invariant below leaves (``ok``, ``insomnia``, the bench columns, ``start``,
+    ``changed``), where ChooseTraceTarget accepts it: at B = 4 any side and slot (a Skill Swap,
+    Role Play or Transform can hand an ally's ability to an opposing battler first;
+    ``Outcome.trace_pick`` picks between two). A drag's newcomer enters in the Roar script
+    (subscript_force_target_to_switch_or_flee.s:20-31; :8 fails it only in a battle typed
+    DOUBLES|2vs2|AI). At B = 2 no hit follows a drag: a chosen Roar has priority -6 and no
+    damaging move a lower one (``tests/engine/test_trace_laws.py`` checks both games' tables),
+    and a called one (Metronome, whose sCannotMetronomeMoves, battle_lib.c:7152-7179, lacks
+    Roar and Whirlwind; Assist, Sleep Talk, Copycat, Mirror Move) drags the one foe, whose
+    action, if still to come, ends with the drag (UpdateAfterSwitch). At B = 4 a called Roar
+    runs at its invoker's priority 0 and a later battler's hit meets the newcomer: where any
+    battler uses a ROAR effect (``moves`` holds the called move), every living party member
+    off the field is a source (``bench_ok``; ChooseTraceTarget takes it once it enters) and a
+    Trace one among them is armed in every slot (it traces at that MoveEnd, bcp.c:3973). The
+    turn end keeps every Trace holder's reads (``outcome_laws``' ``tracer``).
+
+    The turn-start invariant (``STATE.md``, Trace): ShowBattleMon has fired every holder with a
+    target, so an unannounced holder faces no opposing active that ChooseTraceTarget accepts.
+    Its sources are then what enters or changes this turn: an opposing newcomer (``ok[:, 1]``),
+    Insomnia written on an opposing battler by a Worry Seed, and at B = 4 an opposing battler
+    whose raw ability a Skill Swap, its own Role Play or Transform or its own Trace can change
+    (``changed``: it can then hold any raw ability on the field or entering, ``trace_copies``)
+    and a drag's bench. At B = 2 a changed foe adds nothing: its new raw ability is the
+    holder's (Role Play, subscript_copy_ability.s:14-15; Transform, battle_script.c:
+    5346-5348), Trace, which ChooseTraceTarget skips, or a Skill Swap with the holder takes the
+    holder's Trace away (subscript_exchange_abilities.s:21-24). The opposing actives as they
+    stand count for a gainer (its Trace is new), a newcomer holder (one may switch out after it
+    enters), in a state paused mid-turn (``learn_site``, ``pivot_battler``: no turn start since
+    the last firing point), and for a battler waiting for ShowBattleMon (``entry_pending``, a
+    B = 4 start or replacement round; 0 at a B = 2 turn start) and every holder opposing one."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    moves = _turn_moves(tables, state, actions, moves)
+    sides = jnp.arange(fmt.B)
+    rows = party(fmt, sides)
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
+    switch = is_switch(actions)
+    uses = (state.over == 0) & ~switch & ~is_item(actions)
+    effect = tables.move_effect[moves]
+    mons = jnp.where(switch, incoming, state.active)
+    decomp = decomp_abilities(tables, state)
+    untraceable = jnp.asarray(UNTRACEABLE_ABILITIES, decomp.dtype)
+
+    def accepted(mon) -> jnp.ndarray:
+        """``bool[B]``: battler ``b``'s party slot ``mon[b]`` is a target ChooseTraceTarget takes."""
+        return (state.hp[rows, mon] > 0) & ~jnp.isin(decomp[rows, mon], untraceable)
+
+    ok = jnp.stack([accepted(state.active), switch & accepted(incoming)], axis=1)
+    raw = jnp.stack([state.ability[rows, state.active], state.ability[rows, incoming]], axis=1)
+    others = ~jnp.eye(fmt.B, dtype=bool)
+    across = side_of(sides)[:, None] != side_of(sides)[None, :]
+    # The newcomer's own entry trace finds nothing: no staying opposing battler accepted (one
+    # that switches out first may leave before the newcomer enters, ChooseTraceTarget
+    # battle_lib.c:7750-7781 then meeting its own newcomer, counted below).
+    faced = jnp.any(across & ok[None, :, 0] & ~switch[None, :], axis=1)
+    holds = battler_ability(state, sides, mons) == AbilityId.TRACE
+    stays = ~switch & (state.trace_announced[sides] == 0)
+    holder = (
+        holds
+        & (stays | (switch & ~faced))
+        & (state.hp[rows, mons] > 0)
+        & (state.item[rows, mons] != ITEM_GRISEOUS_ORB)
+    )
+    raw_trace = state.ability[rows, state.active] == AbilityId.TRACE
+    trace_near = jnp.any(others & raw_trace[None, :], axis=1)
+    copier = uses & any_of(effect, (EffectId.ROLE_PLAY, EffectId.TRANSFORM, EffectId.SKILL_SWAP))
+    swap_from = uses & (effect == EffectId.SKILL_SWAP) & raw_trace
+    swapped = jnp.any(others & swap_from[None, :], axis=1)
+    gainer = ~switch & ((copier & trace_near) | swapped)
+    # B = 4: a Roar (chosen or called) can drag any living party member off the field in.
+    drag = jnp.asarray(fmt.B == 4) & jnp.any(uses & (effect == EffectId.ROAR))
+    members = jnp.arange(state.ability.shape[1])[None, :]
+    bench_raw = state.ability[rows]
+    bench_live = (
+        drag
+        & (members != state.active[:, None])
+        & (state.species[rows] != 0)
+        & (state.hp[rows] > 0)
+    )
+    bench_ok = bench_live & ~jnp.isin(decomp[rows], untraceable)
+    dragged_trace = jnp.any(bench_live & (bench_raw == AbilityId.TRACE))
+    armed = (state.over == 0) & (holder | gainer | dragged_trace)
+    # Worry Seed writes Insomnia on its target (subscript_give_target_insomnia.s:11), which an
+    # armed holder opposing it can copy: at B = 2 the target is the user's one foe, so the holder
+    # is the user itself; at B = 4 the chosen target (over-approximate: any holder).
+    worry = uses & (effect == EffectId.WORRY_SEED)
+    worry = jnp.broadcast_to(jnp.any(worry), (fmt.B,)) if fmt.B == 4 else worry
+    # The holder's targets as they stand: a gainer's (its Trace is new), a newcomer holder's
+    # (``faced`` counts only the staying opposing battlers, so a traceable one that switches out
+    # may still be there when it enters), and every holder's in a state paused mid-turn, which
+    # follows no ShowBattleMon: at a learn prompt (``learn_site``) or a U-turn's or Baton Pass's
+    # party list (``pivot_battler``).
+    paused = (state.learn_site != 0) | (state.pivot_battler != 0)
+    # A battler waiting for ShowBattleMon (``entry_pending``: a B = 4 start or replacement round,
+    # state.py ``initial_arrays``, step.replace_round; 0 at every B = 2 turn start) has not run its
+    # switch-in states: its own Trace fires at the first MoveEnd (hooks.move_end_switch_in, bcp.c:
+    # 3973, battle_lib.c:3718-3727) on the actives as they stand, and an opposing holder meets it
+    # there as a new target.
+    waiting = state.entry_pending[sides] != 0
+    facing_waiting = jnp.any(across & waiting[None, :], axis=1)
+    start = gainer | (switch & holder) | paused | waiting | facing_waiting
+    # A raw ability that can change this turn (the new one is another battler's, on the field or
+    # entering): the user of Role Play (subscript_copy_ability.s:14-15) or Transform
+    # (battle_script.c:5346-5348), either side of a Skill Swap (subscript_exchange_abilities.s:
+    # 21-24: at B = 2 the user and its foe; at B = 4 any battler, the target being the chosen
+    # one). At B = 4 an armed Trace that copies changes too (``trace_copies``' second pass).
+    own = uses & any_of(effect, (EffectId.ROLE_PLAY, EffectId.TRANSFORM, EffectId.SKILL_SWAP))
+    swap = uses & (effect == EffectId.SKILL_SWAP)
+    if fmt.B == 4:
+        swapped_into = jnp.broadcast_to(jnp.any(swap), (fmt.B,))
+    else:
+        swapped_into = foes(swap)
+    changed = (own | swapped_into) & (state.hp[rows, mons] > 0)
+    return TraceSources(armed, raw, ok, worry, bench_raw, bench_ok, bench_live, start, changed)
+
+
+def _copies(fmt, src: TraceSources, abilities, changed) -> jnp.ndarray:
+    """``trace_copies`` with the battlers ``changed`` whose raw ability can change (B = 4)."""
+    hit = src.ok & (True if abilities is None else any_of(src.raw, abilities))
+    insomnia = src.insomnia & (abilities is None or AbilityId.INSOMNIA in tuple(abilities))
+    sides = jnp.arange(fmt.B)
+    across = side_of(sides)[:, None] != side_of(sides)[None, :]
+    # By the opposing source battler e: its newcomer; its active's raw ability now, where the
+    # holder may copy it (``start``).
+    new = across & hit[None, :, 1]
+    now = src.start[:, None] & across & hit[None, :, 0]
+    copies = jnp.any(new | now, axis=1) | insomnia
+    if fmt.B == 4:
+        bench = src.bench_ok & (True if abilities is None else any_of(src.bench_raw, abilities))
+        # The abilities a changed battler can take: any accepted raw one on the field or
+        # entering, a drag's newcomer's, Insomnia (Worry Seed). A drag puts a bench Pokemon in
+        # a slot opposing every holder (over-approximate).
+        pool = jnp.any(hit) | jnp.any(bench) | jnp.any(insomnia)
+        moved = across & (changed & pool)[None, :]
+        copies = copies | jnp.any(moved, axis=1) | jnp.any(bench)
+    return src.armed & copies
+
+
+def trace_copies(
+    tables: Tables, state: BattleState, actions, abilities=None, src=None, moves=None
+) -> jnp.ndarray:
+    """``bool[B]``: side ``d``'s battler can hold one of ``abilities`` (``None``: any ability)
+    this turn by its armed Trace firing mid-turn (``trace_sources``, whose docstring gives the
+    sources under the turn-start invariant; ``src``: one computed already for this call's
+    ``state``, ``actions`` and ``moves``)."""
+    fmt = format_of(state)
+    if src is None:
+        src = trace_sources(tables, state, actions, moves)
+    changed = src.changed
+    if fmt.B == 4:
+        # An armed Trace that copies changes its own raw ability, which a third battler's Trace
+        # can then copy (ChooseTraceTarget reads the raw ability, battle_lib.c:7750-7781); a
+        # copy is one of the pool's abilities, and a chain passes through at most B - 1 copiers.
+        for _ in range(fmt.B - 1):
+            changed = changed | _copies(fmt, src, None, changed)
+    return _copies(fmt, src, abilities, changed)
+
+
+# The effects that move an ability mid-turn: the writers (``ABILITY_WRITERS``, another
+# battler's ability) and the copies of a battler's own (Role Play, subscript_copy_ability.s:14-15;
+# Transform, battle_script.c:5346-5348).
+ABILITY_MOVERS = (
+    EffectId.SKILL_SWAP,
+    EffectId.WORRY_SEED,
+    EffectId.GASTRO_ACID,
+    EffectId.ROLE_PLAY,
+    EffectId.TRANSFORM,
+)
+
+
+def doubles_ability_change(
+    tables: Tables, state: BattleState, actions, moves=None, src=None
+) -> jnp.ndarray:
+    """``bool[]``: at B = 4, an ability can change mid-turn in a way the singles pairing of the
+    laws does not follow (each side read against ``foe`` alone; ``step`` takes the chosen targets,
+    step.py:5677-5680): any battler's ``ABILITY_MOVERS`` move, an armed Trace with a copy
+    (``trace_sources``), which can fire at any battler's MoveEnd, or a Roar (``moves`` holds an
+    invoker's call), whose drag at its invoker's priority 0 puts a new Pokemon, its ability
+    included, before a later battler's hit (``trace_sources``). Every mask that reads an
+    ability at the turn start is loose then. False at B = 2, where the laws follow the foe's
+    move and its MoveEnd themselves."""
+    fmt = format_of(state)
+    if fmt.B != 4:
+        return jnp.asarray(False)
+    actions = jnp.asarray(actions, _I32)
+    moves = _turn_moves(tables, state, actions, moves)
+    uses = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    movers = jnp.any(uses & any_of(tables.move_effect[moves], ABILITY_MOVERS + (EffectId.ROAR,)))
+    return movers | jnp.any(trace_copies(tables, state, actions, src=src, moves=moves))
+
+
+# The abilities an accuracy check reads (BattleControllerPlayer_CheckMoveHitAccuracy, bcp.c:
+# 2876-2947, :3016-3021): Simple and Unaware on the stages, Compoundeyes, Sand Veil and Snow
+# Cloak (in their weather), Tangled Feet, No Guard, Mold Breaker (Battler_IgnorableAbility),
+# Klutz (Battler_HeldItemEffect hides the accuracy items, battle_lib.c:5352-5356), and the
+# abilities that change the weather it reads: Cloud Nine / Air Lock (NO_CLOUD_NINE) and the
+# weather setters (SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES follows the trace state in the same
+# pass, battle_lib.c:3625-3626). Hustle (:2930) is no engine ability.
+ACCURACY_ABILITIES = (
+    AbilityId.SIMPLE,
+    AbilityId.UNAWARE,
+    AbilityId.COMPOUNDEYES,
+    AbilityId.SAND_VEIL,
+    AbilityId.SNOW_CLOAK,
+    AbilityId.TANGLED_FEET,
+    AbilityId.NO_GUARD,
+    AbilityId.MOLD_BREAKER,
+    AbilityId.KLUTZ,
+    AbilityId.CLOUD_NINE,
+    AbilityId.AIR_LOCK,
+    AbilityId.DRIZZLE,
+    AbilityId.DROUGHT,
+    AbilityId.SAND_STREAM,
+    AbilityId.SNOW_WARNING,
+)
+
+
+def ability_whole(tables: Tables, state: BattleState, actions, moves, src=None) -> jnp.ndarray:
+    """``bool[B]``: each side's accuracy roll is kept whole (every roll its own class, as
+    ``self_lock``'s) where an ability can change before its check in a way ``_threshold_grid``
+    does not follow: at B = 4, ``doubles_ability_change`` (the grid follows the foe's move alone);
+    and an armed Trace on the field, which can copy an ability at a MoveEnd before the side's
+    check (``trace_copies``), which can change its threshold: the attacker's Compoundeyes,
+    Hustle, No Guard, Simple, Unaware or Klutz (its Wide Lens, Zoom Lens or Micle Berry hidden),
+    the target's Sand Veil, Snow Cloak, Tangled Feet, No Guard, Simple or Unaware, Mold Breaker
+    against them (bcp.c:2876-2947, :3016-3021), and a copied weather ability or Cloud Nine /
+    Air Lock, which changes the weather every check reads (battle_lib.c:3740-3790, the weather
+    state after the trace state of the same pass)."""
+    fmt = format_of(state)
+    if src is None:
+        src = trace_sources(tables, state, actions, moves)
+    traced = jnp.any(trace_copies(tables, state, actions, ACCURACY_ABILITIES, src=src))
+    doubles = doubles_ability_change(tables, state, actions, moves, src)
+    return jnp.broadcast_to(traced | doubles, (fmt.B,))
+
+
+def any_of(x, values) -> jnp.ndarray:
+    """``bool``, shaped like ``x``: ``x`` equals one of ``values``."""
+    out = jnp.zeros(jnp.shape(x), bool)
+    for v in values:
+        out = out | (x == v)
+    return out
 
 
 def _stage_variants(start, changed, from_zero, changes, herb) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -1264,8 +1575,13 @@ def _threshold_grid(
             tables, state, foe, target_mon, state.item[party(fmt, side), state.active[side]]
         )
         confuseds = jnp.stack([confused0, ~confused0])
+        # The foe's trainer bag item acts before every move (bcp.c:753-769) and can end its own
+        # confusion (BattleSystem_UseBagItem's HEAL_CONFUSION, battle_system.c:543-551; Full
+        # Restore's clear, subscript_use_full_restore.s:8): Tangled Feet (bcp.c:2944-2946) then
+        # no longer halves the side's rate. Over-approximate: any item action.
+        bag_cure = live & is_item(actions[foe])
         confused_ok = jnp.stack(
-            [jnp.asarray(True), jnp.where(confused0, changes[foe], live & berry)]
+            [jnp.asarray(True), jnp.where(confused0, changes[foe] | bag_cure, live & berry)]
         )
         # Grid order: moved (2) x weather (2) x confusion (2) x accuracy (4) x evasion (4).
         acc_grid = jnp.tile(jnp.repeat(accs, _STAGE_VARIANTS), 8)
@@ -1546,10 +1862,12 @@ def _lansat_pinch(tables: Tables, state: BattleState) -> BattleState:
     )
 
 
-# The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
-# is set in v (in ``CRIT_ODDS_EFFECTS`` order, then the Lansat pinch's); variant 0 is the turn
-# start.
-CRIT_VARIANTS = 2 ** (len(CRIT_ODDS_EFFECTS) + 1)
+# The odds variants of ``crit_variants``: variant v < CRIT_WRITE_VARIANTS applies the writes of
+# the effects whose bit is set in v (in ``CRIT_ODDS_EFFECTS`` order, then the Lansat pinch's);
+# variant 0 is the turn start. The last ``len(_CRIT_ODDS)`` are every stage's odds, possible where
+# an armed Trace can copy a crit ability first (``crit_variants``).
+CRIT_WRITE_VARIANTS = 2 ** (len(CRIT_ODDS_EFFECTS) + 1)
+CRIT_VARIANTS = CRIT_WRITE_VARIANTS + int(_CRIT_ODDS.shape[0])
 
 
 def crit_variants(
@@ -1560,7 +1878,13 @@ def crit_variants(
     ``CRIT_ODDS_EFFECTS`` entries in v applied; it can occur when, for each of them, a battler
     that can act before this one's hit (``before[b, o]``: battler ``o`` may act before ``b``'s
     hit; default every other battler) uses that effect and the write alone changes ``b``'s odds.
-    Over-approximate: that battler may move later, miss, or aim elsewhere."""
+    Over-approximate: that battler may move later, miss, or aim elsewhere.
+
+    The last variants are the odds of every stage (``sCriticalStageRates``, battle_lib.c:7097),
+    possible for ``b`` when its armed Trace can copy Super Luck (the stage +1, :7126) or Klutz (its
+    crit item hidden, :7117, :5352-5356) at the MoveEnd of an action before its hit
+    (``trace_copies``): with every other write as well, its odds can be any stage's, so its draw
+    is classed over all of them."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     if moves is None:
@@ -1571,7 +1895,7 @@ def crit_variants(
     before = jnp.asarray(before, bool)
     writes = (*CRIT_ODDS_EFFECTS.values(), _lansat_pinch)
     odds, singles = [], []
-    for v in range(CRIT_VARIANTS):
+    for v in range(CRIT_WRITE_VARIANTS):
         s = state
         for e, write in enumerate(writes):
             if v >> e & 1:
@@ -1589,12 +1913,21 @@ def crit_variants(
         reached = jnp.any(before & used[None, :], axis=1)  # [B], by the battler hit after
         singles.append(reached & (odds[1 << e] != base))
     possible = []
-    for v in range(CRIT_VARIANTS):
+    for v in range(CRIT_WRITE_VARIANTS):
         ok = jnp.ones(base.shape, bool)
         for e in range(len(writes)):
             if v >> e & 1:
                 ok = ok & singles[e]
         possible.append(ok)
+    src = trace_sources(tables, state, actions, moves)
+    traced = trace_copies(tables, state, actions, (AbilityId.SUPER_LUCK, AbilityId.KLUTZ), src=src)
+    # B = 4: an ability mover the write variants do not pair (a partner's Skill Swap handing the
+    # side Super Luck or Klutz, ``doubles_ability_change``).
+    traced = traced | doubles_ability_change(tables, state, actions, moves, src)
+    traced = traced & jnp.any(before, axis=1)
+    for rate in _CRIT_ODDS:
+        odds.append(jnp.broadcast_to(rate, base.shape).astype(base.dtype))
+        possible.append(traced)
     return jnp.stack(odds, axis=1), jnp.stack(possible, axis=1)
 
 
@@ -1668,10 +2001,16 @@ def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndar
         | (foe_effect == EffectId.SKILL_SWAP)
         | (foe_effect == EffectId.ROLE_PLAY)
     )
+    # An armed Trace of the side can copy Mold Breaker before its CalcCrit (``trace_copies``).
+    src = trace_sources(tables, state, actions, moves)
+    traced_mold = trace_copies(tables, state, actions, (AbilityId.MOLD_BREAKER,), src=src)
+    # B = 4: a third battler's ability mover (or a Trace firing at its MoveEnd) can take the
+    # target's armor or hand the side Mold Breaker first (``doubles_ability_change``).
+    doubles = doubles_ability_change(tables, state, actions, moves, src)
     out = []
     for side in range(fmt.B):
         target, switches, target_mon = _target_mon(state, actions, side)
-        mold = battler_ability(state, side) == AbilityId.MOLD_BREAKER
+        mold = (battler_ability(state, side) == AbilityId.MOLD_BREAKER) | traced_mold[side]
         # A newcomer holds its entry ability, the traced copy included (ruling B3-19).
         own = jnp.where(
             switches,
@@ -1682,7 +2021,7 @@ def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndar
         # Raw: the foe's Transform / Skill Swap copies BattleMon.ability (battle_script.c:5342-5348).
         own_ability = state.ability[party(fmt, side), state.active[side]]
         copied = (own_ability == AbilityId.SHELL_ARMOR) | (own_ability == AbilityId.BATTLE_ARMOR)
-        out.append(~mold & armor & (~xform[_foe(side)] | copied))
+        out.append(~mold & armor & (~xform[_foe(side)] | copied) & ~doubles)
     return jnp.stack(out)
 
 
@@ -1705,6 +2044,79 @@ def secondary_chance(tables: Tables, state: BattleState, moves) -> jnp.ndarray:
     chance = read_chance(tables, moves)
     grace = battler_ability(state, jnp.arange(fmt.B)) == AbilityId.SERENE_GRACE
     return jnp.where(grace, chance * 2, chance)
+
+
+def secondary_procs(tables: Tables, state: BattleState, side, move, value) -> jnp.ndarray:
+    """``bool``: ``Outcome.secondary`` / ``fang_flinch`` value ``value`` passes
+    ``RandNext() % 100 < effectChance`` at ``side``'s hit of ``move`` with ``state`` as it is
+    then: the chance doubled when ``Battler_Ability`` of the attacker is Serene Grace at that
+    moment (battle_lib.c:1552-1556, :1571-1575; battle_script.c:8369-8373). The value is the
+    roll's class (module docstring): ``0 < value`` and ``value - 1 < chance``. A chance-0
+    (``ON_HIT``) effect is the caller's (it applies on every hit)."""
+    chance = read_chance(tables, move)
+    grace = battler_ability(state, side) == AbilityId.SERENE_GRACE
+    live = jnp.where(grace, chance * 2, chance)
+    value = jnp.asarray(value, _I32)
+    return (value > 0) & (value - 1 < live)
+
+
+def secondary_class(r, chances, possible) -> jnp.ndarray:
+    """The class value of the secondary roll ``r = RandNext() % 100`` (0-99) among the
+    ``possible`` entries of ``chances`` (last axis; ``r`` broadcasts): the smallest ``r' + 1``
+    that passes or fails alike at each of them, or 0 when ``r`` fails at every one of them."""
+    r = jnp.asarray(r, _I32)[..., None]
+    c = jnp.clip(jnp.asarray(chances, _I32), 0, 100)
+    below = possible & (c <= r)  # r fails at these
+    low = jnp.max(jnp.where(below, c, 0), axis=-1) + 1
+    fails_all = jnp.all(below | ~possible, axis=-1)
+    return jnp.where(fails_all, 0, low)
+
+
+# The effects whose user writes another battler's ability: Skill Swap swaps both
+# (subscript_exchange_abilities.s:21-24), Worry Seed writes Insomnia
+# (subscript_give_target_insomnia.s:11), Gastro Acid suppresses it
+# (subscript_suppress_target_ability.s:10). Role Play and Transform write their user's own
+# (subscript_copy_ability.s:14-15; battle_script.c:5346-5348), which is that user's own action.
+ABILITY_WRITERS = (EffectId.SKILL_SWAP, EffectId.WORRY_SEED, EffectId.GASTRO_ACID)
+
+
+def secondary_thresholds(
+    tables: Tables, state: BattleState, actions, moves
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[B, 2], bool[B, 2])``: the chances each side's secondary rolls can be read with at
+    its hit (``secondary_procs``), the table's ``effectChance`` and the Serene Grace double, and
+    which of them are possible. The turn-start one (``Battler_Ability``) always is; the other
+    where the attacker's ability can change before its hit: an armed Trace's copy of Serene Grace
+    (``trace_copies``), another battler's Skill Swap (its user's raw Serene Grace given, or the
+    side's taken), Worry Seed or Gastro Acid (the side's taken), or, for a Sky Forme Shaymin, any other
+    battler's move (a freezing hit reverts it to Land Forme, ``hooks.shaymin_land``, F-16;
+    over-approximate). Over-approximate otherwise too: the writer may move later or miss."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    sides = jnp.arange(fmt.B)
+    rows = party(fmt, sides)
+    chance = read_chance(tables, moves)
+    grace = battler_ability(state, sides) == AbilityId.SERENE_GRACE
+    uses = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    effect = tables.move_effect[jnp.asarray(moves, _I32)]
+    writes = uses & any_of(effect, ABILITY_WRITERS)
+    others = ~jnp.eye(fmt.B, dtype=bool)
+    # A writer takes a holder's Serene Grace (Skill Swap, Worry Seed, Gastro Acid); only a Skill
+    # Swap whose user holds it raw gives it (subscript_exchange_abilities.s:21-24).
+    taken = grace & jnp.any(others & writes[None, :], axis=1)
+    raw_grace = state.ability[rows, state.active] == AbilityId.SERENE_GRACE
+    giver = uses & (effect == EffectId.SKILL_SWAP) & raw_grace
+    given = ~grace & jnp.any(others & giver[None, :], axis=1)
+    written = taken | given
+    sky = (state.species[rows, state.active] == SPECIES_SHAYMIN) & (
+        state.form[rows, state.active] != 0
+    )
+    reverted = sky & jnp.any(others & uses[None, :], axis=1)
+    gains = trace_copies(tables, state, actions, (AbilityId.SERENE_GRACE,), moves=moves)
+    changes = written | reverted | gains
+    chances = jnp.stack([chance, chance * 2], axis=1)
+    possible = jnp.stack([~grace | changes, grace | changes], axis=1)
+    return chances.astype(_I32), possible
 
 
 def _magnitude_level(rand) -> jnp.ndarray:
@@ -1947,15 +2359,31 @@ def fresh_switch(state: BattleState, actions, side) -> jnp.ndarray:
     )
 
 
-def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
+def kings_rock_chance(tables: Tables, state: BattleState, actions=None, moves=None) -> jnp.ndarray:
     """``int32[B]``: the hold param of each side's active King's Rock / Razor Fang
     (``HOLD_EFFECT_SOMETIMES_FLINCH``, ``Battler_HeldItemPower(attacker, 0)``,
     battle_controller_player.c:4633), else 0. The attacker's item cannot become one during the
     turn (no implemented path gives a King's Rock: Recycle gives back only an item a RemoveItem
     took, and only to its user, whose move has run). A Fling of the item (E3-B2-1) removes it
     before the hit, so the roll is drawn and never read (over-approximate); the flung King's Rock's
-    own effect is the target's flinch (``effects._fling``)."""
+    own effect is the target's flinch (``effects._fling``).
+
+    With ``actions`` and ``moves``: a Klutz holder's hidden item (``Battler_HeldItem``,
+    battle_lib.c:5352-5356) is live at its hit when another battler's ``ABILITY_WRITERS`` move
+    can take the Klutz first (a Worry Seed, Gastro Acid or Skill Swap), so its raw item's param
+    is the roll's chance there; ``step`` reads the item as it is at the hit (``kings_rock_flinch``),
+    so the draw is exact either way."""
     item = held_items(state)  # Battler_HeldItemEffect (B13-29)
+    if actions is not None:
+        fmt = format_of(state)
+        actions = jnp.asarray(actions, _I32)
+        sides = jnp.arange(fmt.B)
+        uses = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+        writes = uses & any_of(tables.move_effect[jnp.asarray(moves, _I32)], ABILITY_WRITERS)
+        written = jnp.any(~jnp.eye(fmt.B, dtype=bool) & writes[None, :], axis=1)
+        klutz = battler_ability(state, sides) == AbilityId.KLUTZ
+        raw = state.item[party(fmt, sides), state.active]
+        item = jnp.where(klutz & written, raw, item)
     holder = tables.item_effect[item] == ItemId.KINGS_ROCK
     return jnp.where(holder, tables.item_param[item, 0].astype(_I32), 0)
 
@@ -2089,8 +2517,10 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=N
     # Gated by a move action as the law is (enumerate.outcome_laws ``lock``).
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
     lock = (uses_move & self_lock(tables, state))[:, None]
-    hit = jnp.where(lock, rolls, hit)
-    later_hit = jnp.where(lock, rolls, later_hit)
+    # An ability change the grid does not follow keeps it whole too (``ability_whole``).
+    whole = lock | ability_whole(tables, state, actions, moves)[:, None]
+    hit = jnp.where(whole, rolls, hit)
+    later_hit = jnp.where(whole, rolls, later_hit)
     hit = jnp.where(jnp.arange(MAX_HITS)[None, :] == 0, hit, later_hit)
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
     # Battle Armor / Shell Armor (:7135-7136). A lock aimed at its user is not cut: its defender
@@ -2110,10 +2540,16 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=N
     r = _per_hit(fmt, key, jax.random.fold_in(key, 41), "crit_class", 0, CRIT_DRAWS)
     crit = jnp.where(moving, crit_class(r, odds[:, None, :], odds_ok[:, None, :]), fixed)
     crit = jnp.where(no_crit, 0, crit)
-    # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance (Serene
-    # Grace doubled); chance 0 means the effect applies on every hit (ids.EffectId).
-    chance = secondary_chance(tables, state, moves)[:, None]
-    secondary = (_per_hit(fmt, key, k[2], "secondary", 0, 100) < chance) | (chance == 0)
+    # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance, Serene
+    # Grace doubled as the attacker's ability is at the hit: the roll's class over the chances
+    # it can meet (secondary_thresholds, secondary_class); chance 0 means the effect applies on
+    # every hit (ids.EffectId).
+    chance = read_chance(tables, moves)[:, None]
+    chances, chances_ok = secondary_thresholds(tables, state, actions, moves)
+    secondary = secondary_class(
+        _per_hit(fmt, key, k[2], "secondary", 0, 100), chances[:, None, :], chances_ok[:, None, :]
+    )
+    secondary = jnp.where(chance == 0, 1, secondary)
     # BtlCmd_Random (battle_script.c:3207) ``Random r, o`` is rand % (r + 1) + o, by the
     # acting side's move: Random 3, 2 (subscript_fall_asleep.s, subscript_confuse.s),
     # Random 3, 3 (subscript_bind_start.s, subscript_uproar.s:6), Random 2, 3
@@ -2136,10 +2572,13 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=N
         "crit": crit,
         "secondary": secondary,
         # subscript_paralyze_or_flinch.s:9: the second CheckEffectActivation (battle_script.c:
-        # 8377), RandNext() % 100 < chance, independent of the first (``secondary``). A fang
-        # never has chance 0 (tools/build_tables.py refuses it: the decomp asserts it).
-        "fang_flinch": jax.random.randint(jax.random.fold_in(key, 16), per_side, 0, 100, dtype=_I32)
-        < chance[:, 0],
+        # 8369-8378), RandNext() % 100 < chance, independent of the first (``secondary``), classed
+        # alike. A fang never has chance 0 (tools/build_tables.py refuses it: the decomp asserts it).
+        "fang_flinch": secondary_class(
+            jax.random.randint(jax.random.fold_in(key, 16), per_side, 0, 100, dtype=_I32),
+            chances,
+            chances_ok,
+        ),
         "duration": duration,
         # The Future Sight hit's CheckMoveHit roll at the turn's end (bcp.c:2976, RandNext() % 100
         # + 1), as its class over future_thresholds (the raw roll where loose).
@@ -2303,7 +2742,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         # RandNext() % 100 < the attacker's King's Rock / Razor Fang param, per hit. From a
         # fold_in key: every field above keeps its samples.
         flinch_item=_per_hit(fmt, key, jax.random.fold_in(key, 24), "flinch_item", 0, 100)
-        < kings_rock_chance(tables, state)[:, None],
+        < kings_rock_chance(tables, state, actions, moves)[:, None],
         # The turn's speedRand (bcp.c:853-857, after the order is fixed), Quick Claw's
         # % (100 / param) == 0 (battle_lib.c:1278-1286): uniform 1/5 by the project's % n
         # convention (exact 13108/65536). Read by the end-of-turn order, stored for the next
