@@ -199,8 +199,7 @@ def main(argv: list[str]) -> int:
         body.append("")
     for f in others:
         body += [
-            f"== {f['name']}  node {f['node']}  seed {f['seed']}  {f['result']} rc={f['rc']}"
-            ", no falsifier in the log",
+            f"== {f['name']}  node {f['node']}  seed {f['seed']}  {f['result']} rc={f['rc']}, no falsifier in the log",
             f"  CLASS KEY: {f['key']}",
             *[f"  log tail: {t[:200]}" for t in f["tail"]],
             "",
