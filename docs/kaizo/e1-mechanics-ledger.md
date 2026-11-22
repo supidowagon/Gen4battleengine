@@ -2940,6 +2940,9 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
     (lib.c:2013-2015 from bcp.c:3998, :1855), and Sketch deals no damage.
   - Fix 5 this ledger: the clash line and these lines.
 
+- I-S1 Batch I compare `snapcmp-e1i-bd2555b` (tip bd2555bc vs the main fd3c1fcc capture `snapmain-fd3c1fc`, 200 seeds, 122 parts, `--allow-new sketch_move`): COMPARE_RC=1, 110 ok, 12 diverged, 0 sampler or generator drift. Log `_scratch/rent/out/snapcmp-e1i-bd2555b/`. One class only:
+  - Diverged, class A (I-6): 6 `step` and 6 `jitstep` parts (seeds 0-9, 20-29, 30-39, 130-139, 160-169, 180-189). Each first diff is `ai_ability_known[slot]` 72 -> 0 or 1 at turn 1-4: seed 4 [0], seed 29 [2], seed 34 [0], seed 139 [3], seed 167 [1], seed 184 [2]. 72 is ABILITY_VITAL_SPIRIT (generated/abilities.txt line 73, NONE = 0). Main recorded Vital Spirit as revealed when it cured a status. Batch I keeps the slot's earlier value: 0 none, or the generator's drawn 1. The decomp gives that cure the forbids-status script (BattleSystem_RecoverStatusByAbility, battle_lib.c:4397-4410). Its message tags BTLSCR_MSG_TEMP (subscript_ability_forbids_status.s:6), so it skips `BattleAI_SetAbility` (battle_script.c:11799-11806): no reveal. Intended I-6 mechanic. No other group or field moved; `sketch_move` is the only new field. The `sample`, `rest`, `ai`, `gen` and `roark` groups are identical.
+
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
