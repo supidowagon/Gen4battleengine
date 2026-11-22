@@ -230,11 +230,9 @@ per day is the rate used for estimates.
   reads only that checkout and the built tables; it runs after the run's list has finished;
   its output is text written into the run's results folder and collected with the results.
   The exact command, sha and pod go in `_scratch/handoff/DISPATCH.md` before it runs.
-- **Local pytest with four streams.** With four streams working, the pod is the default place
-  for in-work tests. A local pytest (CLAUDE.md, Where tests run: one process, one file or
-  chunk) runs only when more than 6 GB of RAM is free, checked right before it starts
-  (PowerShell: `(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB`), not earlier
-  in the session.
+- **Local pytest with four streams.** The pod is the place for every engine test; the PC runs
+  only ROM-only and engine-free tests, under the gate above (one process; it waits for free RAM
+  > 6 GB + weight itself, no manual check). Engine tests go to the quick lane.
 - **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
   sends no new tip while that run is going, unless the run has already failed (a first-failure
   report counts). The managing session holds any other request until the run is back.
@@ -681,7 +679,7 @@ gh auth status
 ls _scratch/rent/bin/runpodctl-windows-amd64.exe _scratch/rent/home/.runpod/config.toml
 ls data/local.toml external/pokeplatinum/src .cache/decomp >/dev/null && echo INPUTS_OK
 python -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/settings.json')))['enabledPlugins'])"
-powershell -NoProfile -Command "[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)"   # free GB; local pytest needs more than 6
+powershell -NoProfile -Command "[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)"   # free GB; the ramgate waits for > 6 + weight
 ```
 Then confirm in the session that the skills `superpowers:*` and `runpod:*` are listed and
 that the Runpod tools answer. Report to the owner in five lines: what matched, what was
