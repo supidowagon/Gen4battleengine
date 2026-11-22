@@ -2334,8 +2334,11 @@ def _sketch(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     Last Resort zeroes ``lastResortCount`` (:4876-4878). The slot's ``ppUps`` is not written
     (TrySketch sets ``moves`` and ``ppCur`` only; ``BtlIOCmd_UpdatePartyMon`` copies move and PP,
     battle_io_command.c:581-582), so its max PP (``hooks.max_pp``, MoveTable_CalcMaxPP,
-    move_table.c:25-34) is the copy's table PP with Sketch's slot's PP Ups: none in play, as PP Up
-    needs a max PP of 5 or more (item_use_pokemon.c:20, :187) and Sketch has 1. The engine's
+    move_table.c:25-34) is the copy's table PP with Sketch's slot's PP Ups: none in play. PP Up
+    needs a max PP of 5 or more (item_use_pokemon.c:20, :187) and Sketch has 1, and every way
+    Sketch enters a slot zeroes its ``ppUps`` first (an in-battle level-up, battle_script.c:10170;
+    evolution.c:632; move_reminder.c:934; party_menu/callbacks.c:1111): ``Pokemon_SetMoveSlot``
+    alone keeps them (pokemon.c:3920-3933). The engine's
     ``moves`` / ``pp`` are the party Pokemon's, and ``BtlIOCmd_UpdatePartyMon`` writes every
     unflagged slot (battle_io_command.c:575-587), so the write is permanent: no shadow and no
     ``mimic_slots`` bit (Mimic cannot copy Sketch, ``Move_CanBeMimicked``). Only Sleep Talk

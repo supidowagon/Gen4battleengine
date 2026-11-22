@@ -2968,7 +2968,9 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
   - Max PP of a sketched slot: TrySketch writes `moves` and `ppCur` = table PP (bs:4868-4870), not `ppUps`.
     UpdatePartyMon copies move and PP only (battle_io_command.c:581-582). So the max PP (`hooks.max_pp`,
     MoveTable_CalcMaxPP, move_table.c:25-34) is the copy's table PP with the Sketch slot's PP Ups. That is 0 in
-    play: PP Up needs a max PP of 5 or more (item_use_pokemon.c:20, :187), and Sketch has 1. Both engines leave
+    play: PP Up needs a max PP of 5 or more (item_use_pokemon.c:20, :187), and Sketch has 1; and each path that
+    puts Sketch in a slot zeroes its `ppUps` first (battle_script.c:10170, evolution.c:632, move_reminder.c:934,
+    party_menu/callbacks.c:1111), as `Pokemon_SetMoveSlot` alone keeps them (pokemon.c:3920-3933). Both engines leave
     `pp_ups` alone. Test: `test_a_sketched_slot_keeps_its_pp_ups`.
 
 - Batch I delta-review fixes (`_scratch/e1/i-next/review-delta.md`; report `_scratch/e1/i-next/gate-fix-report.md`):
