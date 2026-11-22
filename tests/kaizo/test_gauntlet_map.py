@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from nuzline.data.gauntlet import MoveCase
 from tools.kaizo.gauntlet_map import (
     CLOCK_SIDE,
     CLOCK_STATES,
@@ -39,13 +40,16 @@ from tools.kaizo.gauntlet_map import (
     _wayward_walker,
     bdhc_heights,
     chain_facts,
+    chain_group_facts,
     eterna_clock_tables,
     gap_fields,
     grid_y,
     gym_reach,
     live_table,
+    move_subsets,
     pc_reachable,
     pc_spots,
+    relevant_moves,
     runs,
 )
 from tools.rom.inputs import REPO_ROOT
@@ -1104,6 +1108,92 @@ def test_a_fight_coord_stops_the_gym_walk_until_its_fight_is_won():
     assert won.coords == {} and (3, 0) in won.seen
 
 
+# --- field-move cases (B3 fix 3 C6) ---------------------------------------------------------
+# A field move needs a party member that knows it, not only the badge (FindPartySlotWithMove,
+# scripts_field_moves.s:27, :131, :189, :249, :318, :420; Party_HasMonWithMove,
+# field_control.c:690-692): the facts come per case, the moves the walk uses.
+
+# Trainer 1 sees (3, 1) and trainer 2 sees (6, 1) on the corridor z 1; the bypass z 3 is entered
+# from the start only past the rock at (0, 2).
+ROCK_ROWS = ["###.##.", ".......", ".#####.", "......."]
+ROCK_SPEC = ChainSpec(members=(1, 2), headers=(1,), entries=(Pos(1, 0, 1),))
+
+
+def _rock_maps():
+    objs = [trainer(1, 3, 0, SOUTH, 1), trainer(2, 6, 0, SOUTH, 1), npc(5, 0, 2, script=10001)]
+    return StaticMaps([area(1, ROCK_ROWS, objs)])
+
+
+def _walkers_for(maps):
+    return lambda moves: {c: Walker(maps, (1, 2), moves=moves, two_alive=c == 2) for c in (1, 2)}
+
+
+def test_a_rock_between_two_trainers_gives_one_order_per_case():
+    maps = _rock_maps()
+    held = FieldMoves(cut=True, rock_smash=True)  # Cut held too: no tree, so not relevant
+    facts = chain_group_facts(maps, _walkers_for(maps), held, ROCK_SPEC, (1, 2), ())
+    assert facts["field_moves"] == ["rock_smash"]
+    assert facts["orders"] == [[[1], [2]], [[2], [1]]]
+    (case,) = facts["cases"]
+    assert case["moves"] == [] and case["orders"] == [[[1], [2]]]
+    assert case["leave_gaps"] == [[]] and case["locked_gaps"] == [] and case["live_next"] is None
+
+
+def test_a_case_with_no_full_sequence_is_stored_empty():
+    # the corridor is walled at (2, 1): only the bypass past the rock reaches either trainer
+    rows = ["###.##.", "..#....", ".#####.", "......."]
+    objs = [trainer(1, 3, 0, SOUTH, 1), trainer(2, 6, 0, SOUTH, 1), npc(5, 0, 2, script=10001)]
+    maps = StaticMaps([area(1, rows, objs)])
+    facts = chain_group_facts(
+        maps, _walkers_for(maps), FieldMoves(rock_smash=True), ROCK_SPEC, (1, 2), ()
+    )
+    assert facts["orders"] == [[[2], [1]]]
+    assert facts["cases"] == [
+        {
+            "moves": [],
+            "orders": [],
+            "leave_gaps": [],
+            "fight_headers": [],
+            "pc_gaps": [],
+            "heal_gaps": [],
+            "locked_gaps": [],
+            "live_next": None,
+        }
+    ]
+    with pytest.raises(MapReadError, match="no full sequence"):
+        chain_group_facts(maps, _walkers_for(maps), FieldMoves(), ROCK_SPEC, (1, 2), ())
+
+
+def test_relevant_moves_are_the_moves_a_walk_used():
+    maps = _rock_maps()
+    w = Walker(maps, (1, 2), moves=FieldMoves(cut=True, rock_smash=True, surf=True))
+    w.walk(Pos(1, 0, 1))
+    assert relevant_moves([w]) == {"rock_smash"}
+    assert relevant_moves([Walker(maps, (1, 2))]) == set()
+    held = FieldMoves.for_split("Wake")
+    assert held.names == ("cut", "rock_smash")
+    assert held.restrict(["rock_smash", "surf"]) == FieldMoves(rock_smash=True)
+    assert move_subsets(("rock_smash", "cut")) == [
+        (),
+        ("cut",),
+        ("rock_smash",),
+        ("cut", "rock_smash"),
+    ]
+    with pytest.raises(MapReadError, match="unknown field moves"):
+        held.restrict(["fly"])
+
+
+def test_a_boulder_pushed_onto_an_unsmashed_rock_collides():
+    # without Rock Smash in the case the rock at (4, 0) stays and stops the boulder at (3, 0)
+    # (sub_02063EBC, map_object_move.c:614-621: an object on the target tile); with it the walk
+    # takes the rock as smashed and the boulder goes on to the map's end
+    on = frozenset({STRENGTH_ACTIVE})
+    a = area(1, ["......"], [boulder(6, 2, 0), npc(7, 4, 0, script=10001)])
+    for moves, last in ((STRONG, 3), (FieldMoves(strength=True, rock_smash=True), 5)):
+        w = Walker(StaticMaps([a]), moves=moves).walk(Pos(1, 1, 0), flags=on)
+        assert max(e[2] for s in w.states for e in s.moved) == last
+
+
 # --- ROM-backed (slow) ----------------------------------------------------------------------------
 
 
@@ -1350,6 +1440,9 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
         _fights(o): h for o, h in zip(f.orders, f.fight_headers, strict=True)
     }
     assert d["live_next"] == ([r.to_dict() for r in f.live_next] or None)
+    # the field-move cases (chain_group_facts): the relevant moves and every other subset's facts
+    assert d["field_moves"] == list(f.field_moves)
+    assert [MoveCase.from_dict(c) for c in d["cases"]] == list(f.cases)
     if f.partner is None:
         assert d["partner"] is None
     else:

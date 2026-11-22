@@ -602,3 +602,68 @@ def test_run_input_counts(plain):
         assert e.value.key == key
     ok = resolve_settings(plain, run=RunInput(swaps_left=-1, horizon=0, growth_cap=-1))
     assert ok.run.swaps_left == -1 and ok.run.growth_cap == -1
+
+
+# --- field-move cases (B3 fix 3 C6) ---------------------------------------------------------
+
+
+def _case(moves, orders=(((10,), (11, 12), (13,)),), **over) -> dict:
+    d = {
+        "moves": list(moves),
+        "orders": [[list(f) for f in o] for o in orders],
+        "leave_gaps": [[1]] * len(orders),
+        "pc_gaps": [2],
+        "heal_gaps": [],
+        "locked_gaps": [2],
+    }
+    return {**d, **over}
+
+
+def case_facts(**over) -> dict:
+    """``facts_dict`` with Rock Smash relevant: without it only the first order."""
+    d = facts_dict(
+        field_moves=["rock_smash"], field_moves_source="rom:test rocks", cases=[_case([])]
+    )
+    return {**d, **over}
+
+
+def test_field_move_cases_round_trip_and_follow_the_party():
+    f = GauntletFacts.from_dict(case_facts())
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+    # a party without Rock Smash takes the () case; a move outside field_moves changes nothing
+    assert f.case(["cut"]).orders == (((10,), (11, 12), (13,)),)
+    top = f.case(["rock_smash", "surf"])
+    assert (top.moves, top.orders, top.leave_gaps) == (("rock_smash",), f.orders, f.leave_gaps)
+    with pytest.raises(ValueError, match="unknown field moves"):
+        f.case(["fly"])
+    # a group without field moves: every party takes the top level
+    plain = GauntletFacts.from_dict(facts_dict())
+    assert plain.case(["cut"]).orders == plain.orders and "cases" not in plain.to_dict()
+
+
+def test_a_case_with_no_full_sequence_is_refused_by_name():
+    empty = {"moves": [], "orders": [], "pc_gaps": [], "heal_gaps": [], "locked_gaps": []}
+    f = GauntletFacts.from_dict(case_facts(cases=[{**empty, "leave_gaps": []}]))
+    with pytest.raises(ValueError, match="needs Rock Smash"):
+        f.case(())
+
+
+@pytest.mark.parametrize(
+    "over, match",
+    [
+        ({"cases": []}, "every other subset"),
+        ({"field_moves": ["rock_smash", "cut"]}, "in that order"),
+        ({"field_moves": ["cut", "rock_smash"]}, "every other subset"),
+        ({"field_moves_source": ""}, "needs field_moves_source"),
+        ({"cases": [_case([], orders=(((10,), (13,)),))]}, "not the group"),
+        ({"cases": [_case([], leave_gaps=[[1], [1]])]}, "one entry per order"),
+        ({"cases": [_case([], heal_gaps=None)]}, "absent without a live_next"),
+        (
+            {"cases": [_case([], live_next=[{"fought": [], "live": 1, "next": [[10]]}])]},
+            "no row before the first fight at 2",
+        ),
+    ],
+)
+def test_field_move_cases_refused(over, match):
+    with pytest.raises(ValueError, match=match):
+        GauntletFacts.from_dict(case_facts(**over))

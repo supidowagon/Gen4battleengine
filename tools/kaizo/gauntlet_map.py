@@ -50,7 +50,15 @@ Method (every rule cited to the decomp; paths relative to ``external/pokeplatinu
   needs the Forest Badge (:29), a Rock Smash rock (10001) the Coal Badge (:134;
   ``FieldMoves_CheckRockSmash``, ``src/field_move_tasks.c:545``); without it the object blocks.
   The badges held at a group are those of the splits before the group's split
-  (``FieldMoves.for_split``). A Strength boulder is never removed. Facing it (the boulder script
+  (``FieldMoves.for_split``). A badge is not enough: each field-move script also needs a party
+  member that knows the move (``FindPartySlotWithMove``, ``scripts_field_moves.s:27`` Cut,
+  ``:131`` Rock Smash, ``:189`` Strength, ``:249`` Rock Climb, ``:318`` Surf, ``:420`` Waterfall;
+  the field Surf prompt ``Party_HasMonWithMove``, ``src/overlay005/field_control.c:690-692``;
+  both skip eggs only, so a fainted member counts: ``src/scrcmd_party.c:140-164``,
+  ``src/unk_02054884.c:86-105``), and the player may decline (the yes/no menu, :31-33). So a
+  group's facts come per field-move case: the moves the walk uses, a subset of the relevant
+  moves (``relevant_moves``: the held moves some walk used), one walker set per subset
+  (``chain_group_facts``). A Strength boulder is never removed. Facing it (the boulder script
   10002, :183-198, or the party menu facing graphics 0x54, ``src/field_move_tasks.c:249-256``)
   with the Mine Badge and the move (:189-191; ``field_move_tasks.c:457-469``) turns Strength on
   (``FLAG_STRENGTH_ACTIVE``, :207-208, :230-234; ``src/system_flags.c:438-441``). A warp or a
@@ -161,6 +169,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import NamedTuple
 
+from nuzline.data.gauntlet import FIELD_MOVES
 from tools.rom.nds import RomFiles
 from tools.rom.readers.maps import (
     DOUBLE_BATTLE_SCRIPTS,
@@ -303,6 +312,10 @@ class MapReadError(ValueError):
     """The ROM holds a map the read cannot model."""
 
 
+class NoFullSequence(MapReadError):
+    """The walk reaches no full sequence of the group's fights (``chain_facts``)."""
+
+
 class Pos(NamedTuple):
     header: int
     x: int
@@ -318,10 +331,11 @@ def grid_y(height: int) -> int:
 
 @dataclass(frozen=True)
 class FieldMoves:
-    """The field moves the walk may use: a badge held and no partner where the script refuses
-    one (``res/field/scripts/scripts_field_moves.s``; the party knowing the move is the player's
-    choice: HM06 Rock Smash ``scripts_oreburgh_gate_1f.s:30``, HM03 Surf
-    ``scripts_celestic_town_cave.s:129``, HM04 Strength ``scripts_iron_island.s:98``)."""
+    """The field moves the walk may use: a badge held, no partner where the script refuses one
+    (``res/field/scripts/scripts_field_moves.s``) and a party member that knows the move
+    (``FindPartySlotWithMove``, :27, :131, :189, :249, :318, :420; ``Party_HasMonWithMove``,
+    ``src/overlay005/field_control.c:690-692``). The badges come from the split
+    (``for_split``); the party's moves are the field-move case (``restrict``)."""
 
     cut: bool = False
     rock_smash: bool = False
@@ -352,8 +366,26 @@ class FieldMoves:
         held = [b for s, b in SPLIT_BADGES[: names.index(split)] if b is not None]
         return cls.from_badges(held, partner)
 
+    @property
+    def names(self) -> tuple[str, ...]:
+        """The moves allowed, in ``FIELD_MOVES`` order."""
+        return tuple(m for m in FIELD_MOVES if getattr(self, m))
+
+    def restrict(self, moves: Collection[str]) -> FieldMoves:
+        """These moves less those not in ``moves`` (the party's field moves of one case)."""
+        unknown = set(moves) - set(FIELD_MOVES)
+        if unknown:
+            raise MapReadError(f"unknown field moves {sorted(unknown)}")
+        return FieldMoves(**{m: getattr(self, m) and m in moves for m in FIELD_MOVES})
+
 
 NO_FIELD_MOVES = FieldMoves()
+
+
+def move_subsets(moves: Collection[str]) -> list[tuple[str, ...]]:
+    """Every subset of ``moves``, each in ``FIELD_MOVES`` order, smallest first."""
+    ordered = tuple(m for m in FIELD_MOVES if m in moves)
+    return [c for n in range(len(ordered) + 1) for c in combinations(ordered, n)]
 
 
 class MapObject(NamedTuple):
@@ -860,6 +892,24 @@ class Walker:
         # walk share them (a representation only: equal values, so every key and set is the same)
         self._canon: dict = {}
         self._reads: set | None = None  # walk_layouts: the tiles and lines a move reads
+        # the field moves some step, push, talk or sight line of this walker used
+        # (``relevant_moves``): a move never used here changes none of its walks
+        self.used: set[str] = set()
+
+    def _has(self, move: str) -> bool:
+        """Whether the walk may use ``move`` (``FieldMoves``); a yes is recorded in ``used``."""
+        if getattr(self.moves, move):
+            self.used.add(move)
+            return True
+        return False
+
+    def _cleared(self, o: MapObject) -> bool:
+        """``MapObject.cleared`` under this walker's moves, the field move it takes recorded."""
+        if o.script == CUT_SCRIPT:
+            return self._has("cut")
+        if o.script == ROCK_SMASH_SCRIPT:
+            return self._has("rock_smash")
+        return o.cleared(self.moves)
 
     def reached_headers(self) -> set[int]:
         """Every header a walk of this walker has reached (kept or not, ``walk_from``)."""
@@ -937,7 +987,7 @@ class Walker:
         """An object on the tile within 2 height units of ``y`` that blocks (``sub_02063F00``),
         the ``moved`` objects on their new tiles."""
         for o in self.objects_on(area, x, z, moved):
-            if removable and o.cleared(self.moves):
+            if removable and self._cleared(o):
                 continue
             if self._ignored(area.header, o, flags):
                 continue
@@ -1322,7 +1372,7 @@ class Walker:
         if surfing:
             if hit <= {"water"}:
                 return [self._at(area, s, x, z)]
-            if b == WATERFALL and self.moves.waterfall:
+            if b == WATERFALL and self._has("waterfall"):
                 return self._traverse(area, s, d, {WATERFALL})
             return None
         if "jump" in hit:  # JUMP_FAR: two tiles, landing not tested (player_move.c:1024-1026)
@@ -1336,10 +1386,10 @@ class Walker:
             return [self._at(area, s, x, z)]
         if hit == {"water"} or (hit == {"water", "collide"} and b in SURFABLE):
             on_bridge = area.behaviour(s.pos.x, s.pos.z) in BRIDGES | {BRIDGE_START}
-            if self.moves.surf and not (on_bridge and s.bridge):
+            if not (on_bridge and s.bridge) and self._has("surf"):
                 return [self._at(area, s, x, z)]  # the surf mount jumps one tile (ov5:707-716)
             return None
-        if b == ROCK_CLIMB[d] and self.moves.rock_climb and "object" not in hit:
+        if b == ROCK_CLIMB[d] and "object" not in hit and self._has("rock_climb"):
             return self._traverse(area, s, d, {ROCK_CLIMB[d]})
         return None
 
@@ -1361,8 +1411,7 @@ class Walker:
         front = [
             o
             for o in self.objects_on(area, tx, tz, s.moved)
-            if not self._ignored(area.header, o, s.flags)
-            and not (removable and o.cleared(self.moves))
+            if not self._ignored(area.header, o, s.flags) and not (removable and self._cleared(o))
         ]
         if not front or not front[0].boulder:
             return None
@@ -1532,8 +1581,8 @@ class Walker:
             if (
                 o is not None
                 and o.strength_target
-                and self.moves.strength
                 and STRENGTH_ACTIVE not in s.flags
+                and self._has("strength")
             ):
                 on = s._replace(flags=self._intern(s.flags | {STRENGTH_ACTIVE}))
                 return [("stay", on, on, False)]
@@ -2143,7 +2192,7 @@ def chain_facts(
         heal = gaps_heal if heal is None else heal & gaps_heal
         pcs = gaps_pc if pcs is None else pcs & gaps_pc
     if not leave:
-        raise MapReadError(f"no full sequence of {group}")
+        raise NoFullSequence(f"no full sequence of {group}")
     orders = sorted(leave)
     return {
         "orders": [[list(f) for f in o] for o in orders],
@@ -2922,6 +2971,8 @@ def _facts(orders, leave_gaps, fight_headers, escape_, **more) -> dict:
         "locked_gaps": [],
         "partner": None,
         "live_next": None,
+        "field_moves": [],
+        "cases": [],
         **more,
     }
 
@@ -2993,13 +3044,104 @@ def gap_fields(facts: Mapping, live_next: list[dict] | None) -> dict:
     return out
 
 
+def relevant_moves(walkers: Iterable[Walker]) -> set[str]:
+    """The field moves the walks of ``walkers`` used (``Walker.used``): a move whose object some
+    step, push or sight line met (a Cut tree, a Rock Smash rock, a boulder turned on by a talk)
+    or whose tile some step entered (water, a waterfall, a Rock Climb wall). A move outside it was
+    never looked at, so the walks without it are the same walks."""
+    return set().union(*(w.used for w in walkers))
+
+
+def chain_group_facts(
+    maps,
+    walkers_for: Callable[[FieldMoves], Mapping[int, Walker]],
+    held: FieldMoves,
+    spec: ChainSpec,
+    group: tuple[int, ...],
+    doubles: Collection[int],
+    *,
+    reached: set[int] | None = None,
+    **kw,
+) -> dict:
+    """The facts of a chain group per field-move case. A field move needs a party member that
+    knows it, not only the badge (``FindPartySlotWithMove``, ``scripts_field_moves.s:27``,
+    ``:131``, ``:189``, ``:249``, ``:318``, ``:420``; ``Party_HasMonWithMove``,
+    ``field_control.c:690-692``), and the player may decline one (:31-33), so the case is the
+    moves the walk uses.
+
+    Every subset T of the ``held`` moves (the split's badges) is walked with
+    ``held.restrict(T)`` (``walkers_for`` gives the walkers by live count): ``chain_facts``,
+    ``chain_live_next`` and ``gap_fields``, or no facts when T gives no full sequence. The
+    relevant moves R are those some walk of some subset used (``relevant_moves``); a walk with
+    T is then the walk with T and R (a move it never looked at changes nothing; checked: the
+    facts must agree). Returns the facts of R at the top (``orders``, ``leave_gaps``,
+    ``fight_headers``, ``pc_gaps``, ``heal_gaps``, ``locked_gaps``, ``live_next``), plus
+    ``field_moves`` (R) and ``cases``: one per other subset of R, ``moves`` with the same
+    facts, or empty ``orders`` and gap lists where it has no full sequence."""
+    by: dict[tuple[str, ...], dict | None] = {}
+    used: set[str] = set()
+    for names in move_subsets(held.names):
+        walkers = walkers_for(held.restrict(names))
+        try:
+            facts = chain_facts(maps, walkers[2], spec, group, **kw)
+        except NoFullSequence:
+            facts = None
+        if facts is not None:
+            live_next = chain_live_next(maps, walkers, spec, group, doubles, **kw)
+            gaps = gap_fields(facts, live_next)
+            facts = {
+                "orders": facts["orders"],
+                "leave_gaps": gaps["leave_gaps"],
+                "fight_headers": facts["fight_headers"],
+                "pc_gaps": gaps["pc_gaps"],
+                "heal_gaps": gaps["heal_gaps"],
+                "locked_gaps": facts["locked_gaps"],
+                "live_next": live_next,
+            }
+        used |= relevant_moves(walkers.values())
+        if reached is not None:
+            reached.update(*(w.reached_headers() for w in walkers.values()))
+        by[names] = facts
+    relevant = tuple(m for m in FIELD_MOVES if m in used)
+    for names, facts in by.items():
+        if facts != by[tuple(m for m in names if m in relevant)]:
+            raise MapReadError(f"{group}: field moves {names} change the walk outside {relevant}")
+    top = by[relevant]
+    if top is None:
+        raise NoFullSequence(f"no full sequence of {group}")
+    empty = {
+        "orders": [],
+        "leave_gaps": [],
+        "fight_headers": [],
+        "pc_gaps": [],
+        "heal_gaps": [],
+        "locked_gaps": [],
+        "live_next": None,
+    }
+    cases = [
+        {"moves": list(names), **(by[names] or empty)}
+        for names in move_subsets(relevant)
+        if names != relevant
+    ]
+    return {**top, "field_moves": list(relevant), "cases": cases}
+
+
 def derive_groups(
-    files: RomFiles, decomp: Path, reached: dict[str, set[int]] | None = None
+    files: RomFiles,
+    decomp: Path,
+    reached: dict[str, set[int]] | None = None,
+    groups: Collection[str] | None = None,
 ) -> dict[str, dict]:
     """The facts of every gauntlet group, read from the ROM: ``orders`` (a list of orders, each
     a list of fights, each a list of trainer ids), ``leave_gaps`` and ``fight_headers`` (one
     list per order), ``escape``, ``pc_gaps``, ``heal_gaps``, ``locked_gaps``, ``partner``
-    (None, or ``{"trainer", "join_before"}``) and ``live_next``.
+    (None, or ``{"trainer", "join_before"}``), ``live_next``, ``field_moves`` and ``cases``.
+
+    Field moves (``chain_group_facts``): the top-level facts are those of the relevant moves
+    ``field_moves`` (the held moves some walk used); ``cases`` holds the facts of every other
+    subset of them, the moves the party knows and uses. The B2B pair (one script entry) and the
+    Eterna Gym (``gym_reach``, every object blocks; no held move removes an object of header
+    67: its Cut trees need the Forest Badge, checked) walk no field move: ``field_moves`` [].
 
     The walk depends on the party's live count (``Walker.two_alive``): with two live Pokemon
     (or a partner) two singles trainers who see the player at once fight as one double battle
@@ -3012,7 +3154,15 @@ def derive_groups(
     order or the count (``gap_fields``). The planner picks by the party.
 
     ``reached`` (when given) gains, per group, every header its walks reach (the ROM test of
-    the persisted map features reads it)."""
+    the persisted map features reads it). ``groups`` (when given): derive only the groups of
+    these names."""
+    names = set(GROUP_SPLITS)
+    if groups is not None and set(groups) - names:
+        raise MapReadError(f"unknown groups {sorted(set(groups) - names)}")
+
+    def wanted(name: str) -> bool:
+        return groups is None or name in groups
+
     maps = RomMaps(files)
     seen: dict[str, set[int]] = {} if reached is None else reached
     scripts = ScriptReader(files, decomp)
@@ -3020,33 +3170,50 @@ def derive_groups(
     out: dict[str, dict] = {}
 
     def chain(name: str, spec: ChainSpec, group: tuple[int, ...], **kw) -> None:
-        walkers = {
-            c: Walker(
-                maps,
-                spec.members,
-                moves=FieldMoves.for_split(GROUP_SPLITS[name]),
-                # the healer's header too: a coord there decides whether the heal is reached
-                strict=(*spec.headers, *(h for h, _ in kw.get("healers", ()))),
-                doubles=doubles,
-                two_alive=c == 2,
-                flags=GROUP_FLAGS[name],
-                on_enter=ENTER_FLAGS,
-            )
-            for c in (1, 2)
-        }
-        facts = chain_facts(maps, walkers[2], spec, group, **kw)
-        live_next = chain_live_next(maps, walkers, spec, group, doubles, **kw)
-        seen.setdefault(name, set()).update(*(w.reached_headers() for w in walkers.values()))
-        gaps = gap_fields(facts, live_next)
+        if not wanted(name):
+            return
+
+        def walkers_for(moves: FieldMoves) -> dict[int, Walker]:
+            return {
+                c: Walker(
+                    maps,
+                    spec.members,
+                    moves=moves,
+                    # the healer's header too: a coord there decides whether the heal is reached
+                    strict=(*spec.headers, *(h for h, _ in kw.get("healers", ()))),
+                    doubles=doubles,
+                    two_alive=c == 2,
+                    flags=GROUP_FLAGS[name],
+                    on_enter=ENTER_FLAGS,
+                )
+                for c in (1, 2)
+            }
+
+        facts = chain_group_facts(
+            maps,
+            walkers_for,
+            FieldMoves.for_split(GROUP_SPLITS[name]),
+            spec,
+            group,
+            doubles,
+            reached=seen.setdefault(name, set()),
+            **kw,
+        )
+        escape_ = group_escape(maps, facts["fight_headers"])
+        for case in facts["cases"]:
+            if case["orders"] and group_escape(maps, case["fight_headers"]) != escape_:
+                raise MapReadError(f"{name}: escape differs in the field-move case {case['moves']}")
         out[name] = _facts(
             facts["orders"],
-            gaps["leave_gaps"],
+            facts["leave_gaps"],
             facts["fight_headers"],
-            group_escape(maps, facts["fight_headers"]),
-            pc_gaps=gaps["pc_gaps"],
-            heal_gaps=gaps["heal_gaps"],
+            escape_,
+            pc_gaps=facts["pc_gaps"],
+            heal_gaps=facts["heal_gaps"],
             locked_gaps=facts["locked_gaps"],
-            live_next=live_next,
+            live_next=facts["live_next"],
+            field_moves=facts["field_moves"],
+            cases=facts["cases"],
         )
 
     chain("Oreburgh Mine", OREBURGH, OREBURGH.members)
@@ -3054,7 +3221,7 @@ def derive_groups(
     for n, group in enumerate(((421, 831), (410, 423), (412, 422)), 1):
         chain(f"Team Galactic Eterna Building #{n}", BUILDINGS, group)
     chain("Route 213", ROUTE_213, ROUTE_213.members, healers=ROUTE_213_HEALERS)
-    for h, local in ROUTE_213_HEALERS:
+    for h, local in ROUTE_213_HEALERS if wanted("Route 213") else ():
         obj = next(o for o in maps.area(h).objects if o.local_id == local)
         trace = scripts.trace(maps.header(h).scripts, obj.script)
         if not any(c == "SCRCMD_HEALPARTY" for _, c, _ in trace):
@@ -3062,29 +3229,46 @@ def derive_groups(
 
     # B2B: two scripted single battles (b2b_facts); the gym: coord scripts and talks of singles
     # trainers (gym_facts). Neither reads the count: live_next None.
-    b2b = b2b_facts(maps, scripts, B2B_HEADER)
-    seen["Route 204 North B2B"] = {B2B_HEADER}  # one script entry: no walk
-    out["Route 204 North B2B"] = _facts(
-        b2b["orders"],
-        b2b["leave_gaps"],
-        b2b["fight_headers"],
-        group_escape(maps, b2b["fight_headers"]),
-        locked_gaps=b2b["locked_gaps"],
-    )
-    gym = gym_facts(
-        maps,
-        decomp,
-        GROUP_FLAGS["Eterna Gym gym trainers"],
-        seen.setdefault("Eterna Gym gym trainers", set()),
-    )
-    out["Eterna Gym gym trainers"] = _facts(
-        gym["orders"],
-        gym["leave_gaps"],
-        gym["fight_headers"],
-        group_escape(maps, gym["fight_headers"]),
-    )
+    if wanted("Route 204 North B2B"):
+        b2b = b2b_facts(maps, scripts, B2B_HEADER)
+        seen["Route 204 North B2B"] = {B2B_HEADER}  # one script entry: no walk
+        out["Route 204 North B2B"] = _facts(
+            b2b["orders"],
+            b2b["leave_gaps"],
+            b2b["fight_headers"],
+            group_escape(maps, b2b["fight_headers"]),
+            locked_gaps=b2b["locked_gaps"],
+        )
+    if wanted("Eterna Gym gym trainers"):
+        # gym_reach takes every object as blocking: exact while no held move removes one (the
+        # Cut trees of row 20 need the Forest Badge, which the Gardenia split does not hold)
+        held = FieldMoves.for_split(GROUP_SPLITS["Eterna Gym gym trainers"])
+        moved = [
+            o
+            for o in maps.area(GYM_HEADER).objects
+            if (o.script == CUT_SCRIPT and held.cut)
+            or (o.script == ROCK_SMASH_SCRIPT and held.rock_smash)
+            or (o.strength_target and held.strength)
+        ]
+        if moved:
+            raise MapReadError(f"header {GYM_HEADER}: objects a held field move acts on: {moved}")
+        gym = gym_facts(
+            maps,
+            decomp,
+            GROUP_FLAGS["Eterna Gym gym trainers"],
+            seen.setdefault("Eterna Gym gym trainers", set()),
+        )
+        out["Eterna Gym gym trainers"] = _facts(
+            gym["orders"],
+            gym["leave_gaps"],
+            gym["fight_headers"],
+            group_escape(maps, gym["fight_headers"]),
+        )
+    if not wanted("Wayward Cave"):
+        return out
     # Wayward Cave: the partner joins before fight 1 and counts two at every fight; the walk
-    # under either party count must give the same facts.
+    # under either party count must give the same facts. Its field-move cases are not derived
+    # here yet: its walk holds every move of the split (Strength among them).
     way_headers = seen.setdefault("Wayward Cave", set())
     way = wayward_facts(maps, scripts, doubles, True, way_headers)
     if wayward_facts(maps, scripts, doubles, False, way_headers) != way:

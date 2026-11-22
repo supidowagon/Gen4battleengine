@@ -24,6 +24,7 @@ import re
 import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import combinations
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -431,6 +432,145 @@ def check_live_rows(name: str, rows: Sequence[LiveRow], orders: Sequence[Order])
         raise ValueError(f"{name}: live_next paths at two live {sorted(paths)} are not the orders")
 
 
+def _check_gap_facts(
+    name: str,
+    orders: Sequence[Order],
+    leave_gaps: Sequence[Sequence[int]] | None,
+    flat: Mapping[str, Sequence[int] | None],
+    live_next: Sequence[LiveRow],
+) -> None:
+    """The gap fields of one set of facts against its ``live_next`` (``GauntletFacts``,
+    ``MoveCase``): one ``leave_gaps`` entry per order; without a table no field is absent;
+    with one the table is well-formed (``check_live_rows``) and each field is absent exactly
+    when the table's gap facts depend on the order or the live count, else that list."""
+    if leave_gaps is not None and len(leave_gaps) != len(orders):
+        raise ValueError(f"{name}: leave_gaps needs one entry per order")
+    values = {"leave_gaps": leave_gaps, **flat}
+    if not live_next:
+        absent = [k for k in FLAT_GAP_FIELDS if values[k] is None]
+        if absent:
+            raise ValueError(
+                f"{name}: {', '.join(absent)} absent without a live_next table "
+                "(only a table that makes a field order- or count-dependent drops it)"
+            )
+        return
+    check_live_rows(name, live_next, orders)
+    for key, kind in FLAT_GAP_FIELDS.items():
+        flat_ = flat_gaps(live_next, kind)
+        value = values[key]
+        if flat_ is None:
+            if value is not None:
+                raise ValueError(
+                    f"{name}: {key} must be absent: its live_next gap facts "
+                    f"({kind!r}) depend on the order or the live count"
+                )
+            continue
+        if key == "leave_gaps":
+            flat_ = tuple(tuple(k for k in flat_ if k < len(o)) for o in orders)
+        if value != flat_:
+            raise ValueError(
+                f"{name}: {key} {value} is not the list its live_next gap facts "
+                f"({kind!r}) give for every order and live count: {flat_}"
+            )
+
+
+# A field move needs its badge and a party member that knows the move: each field-move script
+# runs ``FindPartySlotWithMove`` (res/field/scripts/scripts_field_moves.s:27 Cut, :131 Rock
+# Smash, :189 Strength, :249 Rock Climb, :318 Surf, :420 Waterfall) and the field Surf prompt
+# ``Party_HasMonWithMove`` (src/overlay005/field_control.c:690-692); both skip eggs only, so a
+# fainted member counts (src/scrcmd_party.c:140-164, src/unk_02054884.c:86-105). The player may
+# decline (the yes/no menu, scripts_field_moves.s:31-33), so a case is the moves the walk uses.
+FIELD_MOVES = ("cut", "rock_smash", "strength", "surf", "rock_climb", "waterfall")
+FIELD_MOVE_NAMES = {
+    "cut": "Cut",
+    "rock_smash": "Rock Smash",
+    "strength": "Strength",
+    "surf": "Surf",
+    "rock_climb": "Rock Climb",
+    "waterfall": "Waterfall",
+}
+
+
+def _subsets(moves: tuple[str, ...]) -> list[tuple[str, ...]]:
+    """Every subset of ``moves`` (kept in their order), smallest first."""
+    return [c for n in range(len(moves) + 1) for c in combinations(moves, n)]
+
+
+@dataclass(frozen=True)
+class MoveCase:
+    """The facts of a group when the walk uses only the field moves ``moves`` (a subset of
+    ``GauntletFacts.field_moves``, in ``FIELD_MOVES`` order): the fields of the same name of
+    ``GauntletFacts``, under the same rules (``_check_gap_facts``, so ``check_live_rows`` on
+    its own ``live_next``). Empty ``orders`` (and every list empty): the case has no full
+    sequence; ``GauntletFacts.case`` refuses it by name."""
+
+    moves: tuple[str, ...]
+    orders: tuple[Order, ...]
+    leave_gaps: tuple[tuple[int, ...], ...] | None
+    pc_gaps: tuple[int, ...] | None
+    heal_gaps: tuple[int, ...] | None
+    locked_gaps: tuple[int, ...]
+    fight_headers: tuple[tuple[int, ...], ...] = ()
+    live_next: tuple[LiveRow, ...] = ()
+
+    def __post_init__(self):
+        name = f"field-move case {list(self.moves)}"
+        if self.moves != tuple(m for m in FIELD_MOVES if m in self.moves):
+            raise ValueError(f"{name}: distinct names of {FIELD_MOVES}, in that order")
+        if not self.orders:
+            rest = (self.leave_gaps, self.pc_gaps, self.heal_gaps, self.locked_gaps)
+            if any(v != () for v in rest) or self.fight_headers or self.live_next:
+                raise ValueError(f"{name}: no orders, so every fact is empty")
+            return
+        if self.fight_headers and len(self.fight_headers) != len(self.orders):
+            raise ValueError(f"{name}: fight_headers needs one entry per order")
+        _check_gap_facts(
+            name,
+            self.orders,
+            self.leave_gaps,
+            {"heal_gaps": self.heal_gaps, "pc_gaps": self.pc_gaps},
+            self.live_next,
+        )
+
+    @classmethod
+    def from_dict(cls, d: Mapping) -> MoveCase:
+        def opt(key: str) -> tuple | None:
+            return None if d.get(key) is None else tuple(d[key])
+
+        return cls(
+            moves=tuple(d["moves"]),
+            orders=tuple(tuple(tuple(f) for f in o) for o in d["orders"]),
+            leave_gaps=None
+            if d.get("leave_gaps") is None
+            else tuple(tuple(g) for g in d["leave_gaps"]),
+            pc_gaps=opt("pc_gaps"),
+            heal_gaps=opt("heal_gaps"),
+            locked_gaps=tuple(d["locked_gaps"]),
+            fight_headers=tuple(tuple(h) for h in d.get("fight_headers", ())),
+            live_next=tuple(LiveRow.from_dict(r) for r in d.get("live_next") or ()),
+        )
+
+    def to_dict(self) -> dict:
+        """The inverse of ``from_dict``; an absent gap field and an empty ``fight_headers`` or
+        ``live_next`` are omitted."""
+        out: dict[str, Any] = {
+            "moves": list(self.moves),
+            "orders": [[list(f) for f in o] for o in self.orders],
+        }
+        if self.leave_gaps is not None:
+            out["leave_gaps"] = [list(g) for g in self.leave_gaps]
+        for key in ("pc_gaps", "heal_gaps"):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = list(value)
+        out["locked_gaps"] = list(self.locked_gaps)
+        if self.fight_headers:
+            out["fight_headers"] = [list(h) for h in self.fight_headers]
+        if self.live_next:
+            out["live_next"] = [r.to_dict() for r in self.live_next]
+        return out
+
+
 @dataclass(frozen=True)
 class GauntletFacts:
     """The tracked game facts of one group (design section 2). ``leave_gaps`` holds one
@@ -461,36 +601,36 @@ class GauntletFacts:
     # derive_groups), stored only where the walk depends on the count; empty: it does not, and
     # ``live_rows`` gives the orders' prefixes (``prefix_live_rows``).
     live_next: tuple[LiveRow, ...] = ()
+    # The relevant field moves (``FIELD_MOVES``; tools/kaizo/gauntlet_map.py
+    # ``chain_group_facts``): the facts above are the walk's with all of them, ``cases`` holds
+    # every other subset (the moves the party knows and uses, ``case``). Empty: no field move
+    # changes the walk. ``field_moves_source`` empty: not recorded.
+    field_moves: tuple[str, ...] = ()
+    field_moves_source: str = ""
+    cases: tuple[MoveCase, ...] = ()
 
     def __post_init__(self):
-        if self.leave_gaps is not None and len(self.leave_gaps) != len(self.orders):
-            raise ValueError(f"{self.name}: leave_gaps needs one entry per order")
-        if not self.live_next:
-            absent = [k for k in FLAT_GAP_FIELDS if getattr(self, k) is None]
-            if absent:
-                raise ValueError(
-                    f"{self.name}: {', '.join(absent)} absent without a live_next table "
-                    "(only a table that makes a field order- or count-dependent drops it)"
-                )
-            return
-        check_live_rows(self.name, self.live_next, self.orders)
-        for key, kind in FLAT_GAP_FIELDS.items():
-            flat = flat_gaps(self.live_next, kind)
-            value = getattr(self, key)
-            if flat is None:
-                if value is not None:
-                    raise ValueError(
-                        f"{self.name}: {key} must be absent: its live_next gap facts "
-                        f"({kind!r}) depend on the order or the live count"
-                    )
-                continue
-            if key == "leave_gaps":
-                flat = tuple(tuple(k for k in flat if k < len(o)) for o in self.orders)
-            if value != flat:
-                raise ValueError(
-                    f"{self.name}: {key} {value} is not the list its live_next gap facts "
-                    f"({kind!r}) give for every order and live count: {flat}"
-                )
+        _check_gap_facts(
+            self.name,
+            self.orders,
+            self.leave_gaps,
+            {"heal_gaps": self.heal_gaps, "pc_gaps": self.pc_gaps},
+            self.live_next,
+        )
+        where = f"{self.name}: field_moves {list(self.field_moves)}"
+        if self.field_moves != tuple(m for m in FIELD_MOVES if m in self.field_moves):
+            raise ValueError(f"{where}: distinct names of {FIELD_MOVES}, in that order")
+        if self.field_moves_source == "" and (self.field_moves or self.cases):
+            raise ValueError(f"{where}: field_moves needs field_moves_source")
+        want = [c for c in _subsets(self.field_moves) if c != self.field_moves]
+        if [c.moves for c in self.cases] != want:
+            raise ValueError(
+                f"{where}: cases must be every other subset of field_moves, in order: {want}"
+            )
+        everyone = sorted(t for f in self.orders[0] for t in f)
+        for c in self.cases:
+            if any(sorted(t for f in o for t in f) != everyone for o in c.orders):
+                raise ValueError(f"{self.name}: case {list(c.moves)}: an order is not the group")
 
     @classmethod
     def from_dict(cls, d: Mapping) -> GauntletFacts:
@@ -518,6 +658,9 @@ class GauntletFacts:
             else Partner(p["trainer"], tuple(p["join_before"]), p["source"]),
             fight_headers=tuple(tuple(h) for h in d.get("fight_headers", ())),
             live_next=tuple(LiveRow.from_dict(r) for r in d.get("live_next") or ()),
+            field_moves=tuple(d.get("field_moves", ())),
+            field_moves_source=d.get("field_moves_source", ""),
+            cases=tuple(MoveCase.from_dict(c) for c in d.get("cases", ())),
         )
 
     def to_dict(self) -> dict:
@@ -553,7 +696,43 @@ class GauntletFacts:
             out["fight_headers"] = [list(h) for h in self.fight_headers]
         if self.live_next:
             out["live_next"] = [r.to_dict() for r in self.live_next]
+        if self.field_moves_source:
+            out["field_moves"] = list(self.field_moves)
+            out["field_moves_source"] = self.field_moves_source
+        if self.cases:
+            out["cases"] = [c.to_dict() for c in self.cases]
         return out
+
+    def case(self, moves: Collection[str]) -> MoveCase:
+        """The facts of the field-move case of a party whose usable field moves are ``moves``
+        (``FIELD_MOVES`` names; those outside ``field_moves`` change nothing): the top level
+        for all of ``field_moves``, else the stored case. Raises ``ValueError`` when the case
+        is not stored or has no full sequence (the party lacks a move the chain needs)."""
+        known = set(moves)
+        if known - set(FIELD_MOVES):
+            raise ValueError(f"{self.name}: unknown field moves {sorted(known - set(FIELD_MOVES))}")
+        key = tuple(m for m in self.field_moves if m in known)
+        if key == self.field_moves:
+            return MoveCase(
+                key,
+                self.orders,
+                self.leave_gaps,
+                self.pc_gaps,
+                self.heal_gaps,
+                self.locked_gaps,
+                self.fight_headers,
+                self.live_next,
+            )
+        found = next((c for c in self.cases if c.moves == key), None)
+        if found is None:
+            raise ValueError(f"{self.name}: no field-move case {list(key)} is stored")
+        if not found.orders:
+            lacking = ", ".join(FIELD_MOVE_NAMES[m] for m in self.field_moves if m not in key)
+            raise ValueError(
+                f"{self.name}: no full sequence with the field moves {list(key)}: the chain "
+                f"needs {lacking} ({self.field_moves_source})"
+            )
+        return found
 
     def live_rows(self) -> tuple[LiveRow, ...]:
         """The next-fight table: ``live_next``, or the orders' prefixes when it is empty."""

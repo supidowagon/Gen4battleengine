@@ -32,7 +32,13 @@ Tables (keys are ROM trainer ids unless said otherwise):
   ``leave_gaps``, ``heal_gaps`` and ``pc_gaps`` are present exactly when the table's gap
   facts give one list for every order and live count (that list), and absent when they
   depend on the order or the count (``nuzline.data.gauntlet.flat_gaps``); either way
-  round is an error. Gap k follows
+  round is an error. Optional ``field_moves`` (the relevant field moves, names of
+  ``nuzline.data.gauntlet.FIELD_MOVES`` in that order; the facts above are the walk's with
+  all of them) with ``field_moves_source`` (required with it), and one ``[[gauntlet.case]]``
+  table per other subset of them, in order (``moves``, then ``orders``, ``leave_gaps``,
+  ``pc_gaps``, ``heal_gaps``, ``locked_gaps``, ``fight_headers``, ``live_next`` as above, under
+  the same rules; ``orders = []`` and no other key: the case has no full sequence;
+  ``GauntletFacts.cases``, ``MoveCase``). Gap k follows
   the k-th fight of an order. Each fact has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
   read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
@@ -73,7 +79,7 @@ from dataclasses import dataclass, field
 from itertools import permutations
 from pathlib import Path
 
-from nuzline.data.gauntlet import FLAT_GAP_FIELDS, GauntletFacts, LiveRow, Partner
+from nuzline.data.gauntlet import FLAT_GAP_FIELDS, GauntletFacts, LiveRow, MoveCase, Partner
 from tools.kaizo.trainer_map import (
     Mapping,
     MappingError,
@@ -322,19 +328,7 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
     sizes = [len(o) for o in orders]
     n = min(sizes)
     orders_source = _fact_source(entry, t, "orders_source", "")
-    raw_leave = t.get("leave_gaps")
-    if raw_leave is None:
-        leave = None
-    elif raw_leave == "all":
-        leave = tuple(tuple(range(1, s)) for s in sizes)
-    elif isinstance(raw_leave, list) and raw_leave and all(isinstance(g, list) for g in raw_leave):
-        if len(raw_leave) != len(orders):
-            raise OverridesError(f"{entry}: leave_gaps needs one list per order")
-        leave = tuple(
-            _gaps(entry, "leave_gaps", g, s) for g, s in zip(raw_leave, sizes, strict=True)
-        )
-    else:
-        leave = (_gaps(entry, "leave_gaps", raw_leave, n),) * len(orders)
+    leave = _leave_gaps(entry, t.get("leave_gaps"), sizes)
     p = t.get("partner")
     heads = _fight_headers(entry, t.get("fight_headers"), sizes)
 
@@ -342,6 +336,15 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
         return _fact_source(entry, t, f"{key}_source", orders_source)
 
     live = _live_next(entry, t["live_next"]) if "live_next" in t else ()
+    field_moves = t.get("field_moves", [])
+    if not isinstance(field_moves, list) or not all(isinstance(m, str) for m in field_moves):
+        raise OverridesError(f"{entry}: field_moves must be a list of move names")
+    if "field_moves" in t and "field_moves_source" not in t:
+        raise OverridesError(f"{entry}: field_moves needs field_moves_source")
+    moves_source = (
+        _fact_source(entry, t, "field_moves_source", "") if "field_moves_source" in t else ""
+    )
+    cases = _cases(entry, t.get("case"), trainers)
     try:
         return GauntletFacts(
             name=name,
@@ -361,11 +364,93 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
             partner=None if p is None else _partner(entry, p, n, orders_source),
             fight_headers=heads,
             live_next=live,
+            field_moves=tuple(field_moves),
+            field_moves_source=moves_source,
+            cases=cases,
         )
     except ValueError as e:
         if isinstance(e, OverridesError):
             raise
         raise OverridesError(f"{entry}: {e}") from None
+
+
+def _leave_gaps(entry: str, raw: object, sizes: list[int]) -> tuple[tuple[int, ...], ...] | None:
+    """``leave_gaps``: absent (None), ``"all"``, one list per order or one list for every
+    order."""
+    if raw is None:
+        return None
+    if raw == "all":
+        return tuple(tuple(range(1, s)) for s in sizes)
+    if isinstance(raw, list) and raw and all(isinstance(g, list) for g in raw):
+        if len(raw) != len(sizes):
+            raise OverridesError(f"{entry}: leave_gaps needs one list per order")
+        return tuple(_gaps(entry, "leave_gaps", g, s) for g, s in zip(raw, sizes, strict=True))
+    return (_gaps(entry, "leave_gaps", raw, min(sizes)),) * len(sizes)
+
+
+CASE_KEYS = (
+    "moves",
+    "orders",
+    "leave_gaps",
+    "pc_gaps",
+    "heal_gaps",
+    "locked_gaps",
+    "fight_headers",
+    "live_next",
+)
+
+
+def _cases(entry: str, raw: object, trainers: list[int]) -> tuple[MoveCase, ...]:
+    """The ``[[gauntlet.case]]`` tables (``CASE_KEYS``): a field-move case's facts, read as the
+    group's own; ``orders = []`` alone is a case with no full sequence. The set of cases is
+    checked by ``GauntletFacts``."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(c, dict) for c in raw):
+        raise OverridesError(f"{entry}: case must be [[gauntlet.case]] tables")
+    out = []
+    for i, c in enumerate(raw):
+        where = f"{entry} case[{i}]"
+        bad = sorted(k for k in c if k not in CASE_KEYS)
+        if bad:
+            raise OverridesError(f"{where}: unknown key {', '.join(map(repr, bad))}")
+        moves = c.get("moves")
+        if not isinstance(moves, list) or not all(isinstance(m, str) for m in moves):
+            raise OverridesError(f"{where}: moves must be a list of move names")
+        where = f"{entry} case {moves}"
+        if c.get("orders") == []:
+            if set(c) != {"moves", "orders"}:
+                raise OverridesError(f"{where}: a case with no orders holds no other fact")
+            empty = ((), (), (), ())
+            out.append(MoveCase(tuple(moves), (), *empty))
+            continue
+        optional = set(FLAT_GAP_FIELDS) if "live_next" in c else set()
+        missing = [k for k in CASE_KEYS[:6] if k not in c and k not in optional]
+        if missing:
+            raise OverridesError(f"{where}: missing {', '.join(missing)}")
+        orders = _orders(where, c["orders"], trainers)
+        sizes = [len(o) for o in orders]
+        n = min(sizes)
+        try:
+            out.append(
+                MoveCase(
+                    moves=tuple(moves),
+                    orders=orders,
+                    leave_gaps=_leave_gaps(where, c.get("leave_gaps"), sizes),
+                    pc_gaps=_gaps(where, "pc_gaps", c["pc_gaps"], n) if "pc_gaps" in c else None,
+                    heal_gaps=_gaps(where, "heal_gaps", c["heal_gaps"], n)
+                    if "heal_gaps" in c
+                    else None,
+                    locked_gaps=_gaps(where, "locked_gaps", c["locked_gaps"], n),
+                    fight_headers=_fight_headers(where, c.get("fight_headers"), sizes),
+                    live_next=_live_next(where, c["live_next"]) if "live_next" in c else (),
+                )
+            )
+        except ValueError as e:
+            if isinstance(e, OverridesError):
+                raise
+            raise OverridesError(f"{where}: {e}") from None
+    return tuple(out)
 
 
 LIVE_ROW_KEYS = ("fought", "live", "next", "headers", "to", "at", "gap")
@@ -446,6 +531,9 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
                 "partner",
                 "fight_headers",
                 "live_next",
+                "field_moves",
+                "field_moves_source",
+                "case",
                 *FACT_KEYS,
                 *FACT_SOURCES,
             ),

@@ -1061,3 +1061,58 @@ def test_overrides_check_runs_the_two_placement_rule(tmp_path, capsys):
     path = write(tmp_path, text[:start] + rom + text[end:])
     assert main(["check", "--overrides", str(path), "--intermediate", str(inter)]) == 1
     assert "trainer 539: Trick Room headers [310]" in capsys.readouterr().out
+
+
+# --- field-move cases (B3 fix 3 C6) ---------------------------------------------------------
+
+CASE_FACTS = (
+    "orders = [[[1], [2]], [[2], [1]]]\nleave_gaps = []\nescape = false\npc_gaps = []\n"
+    'heal_gaps = []\nlocked_gaps = []\nfield_moves = ["rock_smash"]\n'
+    'field_moves_source = "rom:header 1 events 2 obj 3 (rock)"\n'
+    'orders_source = "rom:header 1 events 2"\n'
+    "[[gauntlet.case]]\nmoves = []\norders = [[[1], [2]]]\nleave_gaps = []\npc_gaps = []\n"
+    "heal_gaps = []\nlocked_gaps = []\nfight_headers = 1\n"
+)
+
+
+def test_gauntlet_cases_load_and_follow_the_party(tmp_path):
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=CASE_FACTS))).gauntlets[0].facts
+    assert f.field_moves == ("rock_smash",)
+    assert f.field_moves_source == "rom:header 1 events 2 obj 3 (rock)"
+    assert len(f.orders) == 2 and f.case(["rock_smash"]).orders == f.orders
+    c = f.case(())
+    assert c.orders == (((1,), (2,)),) and c.fight_headers == ((1, 1),)
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+
+
+def test_a_gauntlet_case_with_no_orders_is_refused_when_picked(tmp_path):
+    text = CASE_FACTS.split("[[gauntlet.case]]")[0] + "[[gauntlet.case]]\nmoves = []\norders = []\n"
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=text))).gauntlets[0].facts
+    with pytest.raises(ValueError, match="needs Rock Smash"):
+        f.case(["cut"])
+
+
+@pytest.mark.parametrize(
+    "old, new, match",
+    [
+        ('field_moves_source = "rom:header 1 events 2 obj 3 (rock)"\n', "", "needs field_moves"),
+        ('field_moves = ["rock_smash"]', 'field_moves = ["cut", "rock_smash"]', "every other"),
+        ("moves = []\norders = [[[1], [2]]]", "moves = []\norders = [[[1], [3]]]", "exactly once"),
+        ("fight_headers = 1\n", "fight_headers = 1\nescape = true\n", "unknown key 'escape'"),
+        (
+            "moves = []\norders = [[[1], [2]]]\nleave_gaps = []\n",
+            "moves = []\norders = []\n",
+            "no other",
+        ),
+        ("locked_gaps = []\nfight_headers", "fight_headers", "missing locked_gaps"),
+        (
+            "leave_gaps = []\npc_gaps = []\nheal_gaps = []\nlocked_gaps = []\nfight",
+            "leave_gaps = []\npc_gaps = []\nlocked_gaps = []\nfight",
+            "absent without",
+        ),
+    ],
+)
+def test_gauntlet_cases_refused(tmp_path, old, new, match):
+    assert old in CASE_FACTS
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, gauntlet_text(facts=CASE_FACTS.replace(old, new, 1))))
