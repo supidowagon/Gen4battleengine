@@ -2669,6 +2669,9 @@ def chase_widening(
         sw_both = fires[p] & (fmt.B == 4) & (carried != moves[p])
         u_both = may_u & (carried_u != moves[p])
         both.append(fights[p] & (sw_both | u_both))
+        # Where both hold, both chase moves are Pursuit: it is the only move with
+        # BATTLE_EFFECT_HIT_BEFORE_SWITCH (res/moves/pursuit/data.json; no other data.json names
+        # it), which ``_chase_capable`` and ``pursuit_chase`` require of a chase move.
         chase.append(jnp.where(sw_both, carried, carried_u))
         chased = jnp.all(jnp.stack([~switching[s] | _armor_against(state, p, s) for s in opp]))
         if fmt.B == 4:
