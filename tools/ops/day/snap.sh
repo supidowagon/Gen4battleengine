@@ -407,11 +407,13 @@ echo "== code.tar $(printf '%s\n' "$CT" | wc -l) entries; tables $(printf '%s\n'
 echo "== run.sh"; cat "$O/run.sh"
 
 if [ "$DRY" = 1 ]; then CODE="dry-run-no-code"; SPID=""
-else send_start "$O" payload.tar || exit 4; fi
+else send_start "$O" payload.tar 2400 || exit 4; fi   # 2400 s: the receive (1800 s) starts once the body is sent
 # The body (send_body.sh): receive payload.tar (RECEIVE_FAILED after a failed receive or 1800 s),
 # check its sha256 against the PC's (else PAYLOAD_SHA_MISMATCH, payload removed, nothing started),
-# unpack it (UNPACK_FAILED) and run start.sh; prep.log holds every line. Over BODY_LIM: refused.
-SHC="mkdir -p $W && cd $W || exit 1; nohup sh -c '$(recv_frag "$CODE" payload.tar "$PSUM" 1800); tar --no-same-owner -xf payload.tar || { echo UNPACK_FAILED; exit 1; }; bash start.sh' > prep.log 2>&1 < /dev/null & sleep 20; tail -c 300 prep.log"
+# unpack it (UNPACK_FAILED) and run start.sh; prep.log holds every line. A folder that already
+# has a prep.log (an earlier attempt under this name): NAME_USED, exit 1, nothing received.
+# Over BODY_LIM: refused.
+SHC="mkdir -p $W && cd $W || exit 1; [ ! -e prep.log ] || { echo NAME_USED $W holds an earlier attempt: run snap.sh again under a new name; exit 1; }; nohup sh -c '$(recv_frag "$CODE" payload.tar "$PSUM" 1800); tar --no-same-owner -xf payload.tar || { echo UNPACK_FAILED; exit 1; }; bash start.sh' > prep.log 2>&1 < /dev/null & sleep 20; tail -c 300 prep.log"
 BJ=$(body_json "$SHC") || { [ -z "$SPID" ] || kill "$SPID" 2>/dev/null; echo "$BJ"; exit 3; }
 printf '%s\n' "$BJ" > "$O/body.json"
 echo "== exec-pod body ($O/body.json, ${#BJ} characters):"; cat "$O/body.json"

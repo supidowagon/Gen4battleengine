@@ -594,7 +594,7 @@ def _snap_body(snap_dry, mode):
 # The most characters of a printed snapshot body: an agent reproduces it in a tool call, so it
 # is one short script (send_body.sh BODY_LIM is 1000; a run.sh in base64 argv items was about
 # 15-20 KB and arrived changed, RUNSH_SHA_MISMATCH, three times on 21 Nov).
-SNAP_BODY_MAX = 700  # 620 with the dry-run code word; a real code word is about 30 characters
+SNAP_BODY_MAX = 800  # about 730 with the dry-run code word; a real code word is about 30 characters
 
 
 @pytest.mark.parametrize("mode", ["capture", "compare"])
@@ -622,7 +622,8 @@ def test_snap_sh_body_is_one_short_script_and_run_sh_travels_in_the_payload(snap
 def test_snap_sh_body_starts_only_a_received_payload_whose_sha_matches(snap_dry, tmp_path, mode):
     """The body receives payload.tar, checks its sha256 against the PC's and only then unpacks it
     and runs start.sh; a changed payload ends PAYLOAD_SHA_MISMATCH (payload removed), a failed or
-    timed-out receive RECEIVE_FAILED rc=<n>, each exit 1 with nothing started."""
+    timed-out receive RECEIVE_FAILED rc=<n>, each exit 1 with nothing started; a folder holding an
+    earlier attempt ends NAME_USED before any receive."""
     from tests.tools.test_pod_gate import _clean_env, _pod_receive, _posix, _posix_shells
 
     cmd, _, _, name = _snap_body(snap_dry, mode)
@@ -646,6 +647,11 @@ def test_snap_sh_body_starts_only_a_received_payload_whose_sha_matches(snap_dry,
             if case == "good":
                 assert r.returncode == 0 and r.stdout.startswith("STARTED"), (sh, r.stdout, r.stderr)
                 assert {"run.sh", "start.sh", "code.tar"} <= set(r.stdout.split())
+                # The same body again (or another under this name): refused before any receive.
+                again = subprocess.run([*sh, f"PATH='{path}':$PATH; {s}"], capture_output=True, text=True,
+                                       env=_clean_env(), check=False, timeout=60)  # fmt: skip
+                assert again.returncode == 1 and again.stdout.startswith(f"NAME_USED {_posix(w)} holds an earlier "
+                                                                         "attempt"), (sh, again.stdout)  # fmt: skip
             else:
                 first = {"bad": "PAYLOAD_SHA_MISMATCH ", "fail": "RECEIVE_FAILED rc=1",
                          "slow": "RECEIVE_FAILED rc=124"}[case]  # fmt: skip
