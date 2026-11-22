@@ -36,6 +36,7 @@ from tools.kaizo.gauntlet_map import (
     chain_facts,
     eterna_clock_tables,
     gym_reach,
+    live_table,
     pc_reachable,
     runs,
 )
@@ -325,6 +326,62 @@ def test_one_live_pokemon_fights_two_seers_of_one_tile_as_singles_in_turn():
     assert one["orders"] == [[[1], [2]]] and one["fight_headers"] == [[1, 1]]
     after = Walker(maps, two_alive=False).walk(Pos(1, 2, 2), {1}, y=0)
     assert set(after.spot) == {(2,)} and after.spot[(2,)].pos == Pos(1, 2, 2)
+
+
+def test_double_trainer_talk_reads_the_party_not_the_partner():
+    # Talking to a double-battle trainer reads the party (ScrCmd_CheckHasTwoAliveMons,
+    # src/scrcmd_trainer.c:283-289, from scripts_battles.s:21-22); sight takes the partner flag
+    # as two (field_control.c:182-186).
+    talk_only = area(1, ["......"], [trainer(5, 3, 0, SOUTH, 0, trainer_type=0)])
+    maps = StaticMaps([talk_only])
+    for two, partner, fights in ((True, False, True), (False, True, False), (False, False, False)):
+        w = Walker(maps, doubles={5}, two_alive=two, partner=partner).walk(Pos(1, 0, 0))
+        assert ((5,) in w.spot) is fights and (1, 5) in w.talk
+    twins = [trainer(5, 5, 0, WEST, 3), MapObject(1, 1, 0, 1, 5000 + 5 - 1, WEST, 3, 4, 0)]
+    seen = StaticMaps([area(1, ["......"], twins)])
+    w = Walker(seen, doubles={5}, two_alive=False, partner=True).walk(Pos(1, 0, 0))
+    assert set(w.spot) == {(5,)}
+
+
+def test_live_table_zero_step_gap_is_locked():
+    # One live Pokemon and two seers of one tile: 1, then 2 at once on the fight tile, before
+    # any input (the sight check runs before movement and the menu, field_control.c:188 <
+    # :198, :331-333): the gap is locked and offers no count change.
+    rows = ["##.###", "##.###", "......", "##.###"]
+    a = area(1, rows, [trainer(1, 2, 0, SOUTH, 2), trainer(2, 4, 2, WEST, 2)])
+    maps = StaticMaps([a])
+    spec = ChainSpec((1, 2), (1,), (Pos(1, 0, 2),))
+    walkers = {c: Walker(maps, spec.members, two_alive=c == 2) for c in (1, 2)}
+    table = live_table(maps, walkers, spec, ())
+    assert table == [
+        {"fought": [], "live": 1, "next": [[1]], "headers": [1]},
+        {"fought": [], "live": 2, "next": [[1, 2]], "headers": [1]},
+        {"fought": [[1]], "live": 1, "next": [[2]], "headers": [1], "gap": ["locked"]},
+        {"fought": [[1]], "live": 2, "next": [[2]], "headers": [1], "gap": ["locked"]},
+    ]
+
+
+def test_live_table_revive_row_reopens_a_double_battle_trainer():
+    # 1 guards the corridor; twins 5 (a double-battle trainer, objects at (6, 1) and (7, 1))
+    # watch row 0 east of it. One live after 1: the twins are passed and the chain ends; a
+    # revive on any tile reached (the start menu, field_control.c:331-333) reopens them.
+    rows = ["........", "........"]
+    objs = [
+        trainer(1, 2, 1, NORTH, 1),
+        trainer(5, 6, 1, NORTH, 1),
+        MapObject(7, 7, 0, 1, 5000 + 5 - 1, NORTH, 1, 7, 1),
+    ]
+    maps = StaticMaps([area(1, rows, objs)])
+    spec = ChainSpec((1, 5), (1,), (Pos(1, 0, 0),))
+    walkers = {c: Walker(maps, spec.members, doubles={5}, two_alive=c == 2) for c in (1, 2)}
+    table = {
+        (tuple(map(tuple, r["fought"])), r["live"], r.get("at", "")): r["next"]
+        for r in live_table(maps, walkers, spec, {5})
+    }
+    assert table[((), 1, "")] == table[((), 2, "")] == [[1]]
+    assert table[(((1,),), 2, "")] == [[5]]
+    assert table[(((1,),), 1, "")] == []  # one live: nothing left to fight
+    assert table[(((1,),), 1, "bag")] == [[5]]
 
 
 def test_a_hidden_object_neither_blocks_nor_spots():
@@ -633,22 +690,7 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
     assert {_fights(o): tuple(h) for o, h in zip(d["orders"], d["fight_headers"], strict=True)} == {
         _fights(o): h for o, h in zip(f.orders, f.fight_headers, strict=True)
     }
-    if f.one_live is None:
-        assert d["one_live"] is None
-    else:
-        one, alt = f.one_live, d["one_live"]
-        assert {
-            _fights(o): (tuple(g), tuple(h))
-            for o, g, h in zip(alt["orders"], alt["leave_gaps"], alt["fight_headers"], strict=True)
-        } == {
-            _fights(o): (g, h)
-            for o, g, h in zip(one.orders, one.leave_gaps, one.fight_headers, strict=True)
-        }
-        assert (tuple(alt["pc_gaps"]), tuple(alt["heal_gaps"]), tuple(alt["locked_gaps"])) == (
-            one.pc_gaps,
-            one.heal_gaps,
-            one.locked_gaps,
-        )
+    assert d["live_next"] == ([r.to_dict() for r in f.live_next] or None)
     if f.partner is None:
         assert d["partner"] is None
     else:
@@ -1100,13 +1142,36 @@ def test_rom_b2b_battle_operands_are_literal_trainer_ids(rom_files, decomp):
 
 
 @pytest.mark.slow
-def test_rom_route_204_with_one_live_pokemon_skips_the_twins(rom_files, derived):
-    # 15 (Twins Liv & Liz) is a double-battle trainer: with one live Pokemon it is not fought.
-    # No gym trainer is one, and the Wayward pairs fight with the partner, who counts two.
+def test_rom_route_204_live_next_follows_the_count(rom_files, derived):
+    # 15 (Twins Liv & Liz) is a double-battle trainer: with one live Pokemon it is not fought,
+    # and a faint or a revive between fights switches the continuation. No gym trainer is one,
+    # and the Wayward pairs fight with the partner, who counts two: only Route 204 North's walk
+    # depends on the count. Route 213's table is stored for its per-order heal (the lobby healer
+    # is reached at every gap after 106 first, at none after 110 first; heal_gaps is one list).
     from tools.kaizo.gauntlet_map import GYM_FIGHTS, read_double_trainers
 
     doubles = read_double_trainers(rom_files)
     assert 15 in doubles and not set(GYM_FIGHTS) & doubles
-    one = derived["Route 204 North"]["one_live"]
-    assert one["orders"] == [[[13], [14]]] and one["leave_gaps"] == [[1]]
-    assert {n for n, d in derived.items() if d["one_live"] is not None} == {"Route 204 North"}
+    rows = {
+        (tuple(map(tuple, r["fought"])), r["live"], r.get("at", "")): r["next"]
+        for r in derived["Route 204 North"]["live_next"]
+    }
+    assert rows[((), 1, "")] == [[13]] and rows[((), 2, "")] == [[15]]
+    assert rows[(((15,),), 1, "")] == [[13]]  # a faint in the twins' fight
+    assert rows[(((13,),), 2, "")] == [[14], [15]] and rows[(((13,),), 1, "")] == [[14]]
+    assert rows[(((13,), (14,)), 1, "")] == [] and rows[(((13,), (14,)), 1, "bag")] == [[15]]
+    assert {n for n, d in derived.items() if d["live_next"] is not None} == {
+        "Route 204 North",
+        "Route 213",
+    }
+    heal = {
+        tuple(map(tuple, r["fought"]))
+        for r in derived["Route 213"]["live_next"]
+        if "heal" in r.get("gap", ())
+    }
+    assert heal == {
+        ((106,),),
+        ((106,), (103,)),
+        ((106,), (103,), (105,)),
+        ((106,), (103,), (105,), (111,)),
+    }

@@ -480,8 +480,10 @@ source = "Elite Four Split:298"
 # orders: each order is a list of fights, each fight one or two trainer ids (a two-trainer
 # fight is one battle); gap k follows the k-th fight. The first order is the one the sheet's
 # fight ids come from (a fight's id is its first trainer id). fight_headers: the map header
-# each fight starts on (one header for every fight here). Field moves follow the badges of
-# the splits before the group's split (FieldMoves.for_split). A ROM-backed test
+# each fight starts on (one header for every fight here). live_next: the next-fight table by
+# the live count (nuzline.data.gauntlet.LiveRow), only where it is not the orders' prefixes.
+# Field moves follow the badges of the splits before the group's split
+# (FieldMoves.for_split). A ROM-backed test
 # (tests/kaizo/test_gauntlet_map.py) re-derives every value below.
 
 # Worker Mason (Gauntlet Start)*; Worker Colin (Gauntlet End)*
@@ -507,8 +509,11 @@ escape_source = "rom:header 199 map type 3 escape bit 1"
 # rows: Gardenia Split:59=15, Gardenia Split:69=13, Gardenia Split:79=14
 # Assumption: the walk enters from the Ravaged Path side only (header 254 -> warp (180,698)).
 # 15 (the twins) is a double-battle trainer (trdata battle type): with one live Pokemon it is
-# not fought, by sight or by talk (trainer_encounter.c:108-118; scripts_battles.s:19-22), so
-# the one-live facts are 13 then 14.
+# not fought, by sight or by talk (trainer_encounter.c:108-118; scripts_battles.s:19-22). The
+# walk depends on the count: live_next is the next fight after the fights fought (in order)
+# by the count at the last fight's end (live), and at a revive in the gap (at "bag", to 2).
+# A faint in the twins' fight leaves 13 next; after 13 at two live, 14 or 15; after 13, 14 at
+# one live the chain ends and a revive reopens 15.
 [[gauntlet]]
 name = "Route 204 North"
 trainers = [15, 13, 14]
@@ -520,7 +525,25 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 346
-one_live = { orders = [[[13], [14]]], leave_gaps = [1], fight_headers = 346, pc_gaps = [], heal_gaps = [], locked_gaps = [] }
+live_next = [
+  { fought = [], live = 1, next = [[13]], headers = [346] },
+  { fought = [], live = 2, next = [[15]], headers = [346] },
+  { fought = [[13]], live = 1, next = [[14]], headers = [346], gap = ["leave"] },
+  { fought = [[13]], live = 1, to = 2, at = "bag", next = [[14], [15]], headers = [346, 346] },
+  { fought = [[13]], live = 2, next = [[14], [15]], headers = [346, 346], gap = [] },
+  { fought = [[15]], live = 1, next = [[13]], headers = [346], gap = ["leave"] },
+  { fought = [[15]], live = 1, to = 2, at = "bag", next = [[13]], headers = [346] },
+  { fought = [[15]], live = 2, next = [[13]], headers = [346], gap = ["leave"] },
+  { fought = [[13], [14]], live = 1, next = [], headers = [], gap = ["leave"] },
+  { fought = [[13], [14]], live = 1, to = 2, at = "bag", next = [[15]], headers = [346] },
+  { fought = [[13], [14]], live = 2, next = [[15]], headers = [346], gap = ["leave"] },
+  { fought = [[13], [15]], live = 1, next = [[14]], headers = [346], gap = ["leave"] },
+  { fought = [[13], [15]], live = 1, to = 2, at = "bag", next = [[14]], headers = [346] },
+  { fought = [[13], [15]], live = 2, next = [[14]], headers = [346], gap = ["leave"] },
+  { fought = [[15], [13]], live = 1, next = [[14]], headers = [346], gap = ["leave"] },
+  { fought = [[15], [13]], live = 1, to = 2, at = "bag", next = [[14]], headers = [346] },
+  { fought = [[15], [13]], live = 2, next = [[14]], headers = [346], gap = ["leave"] },
+]
 orders_source = "rom:header 346 events 332; warp (180,698) -> header 254"
 
 # Galactic Mercury (B2B With Galactic Terra); GalacticfTerra (B2B With Galactic Mercury)
@@ -610,7 +633,9 @@ source = "Wake Split:215"
 # split: the grunt (obj 28, flag 538), Looker (obj 31, 488) and the lobby's Looker (header 376
 # obj 2, 529), cleared only past the Fen Badge (scr 459 @827-839). Trainer 696's pair and its
 # four spectators (objs 33-38, flag 482) stand until the player enters the lobby (scr 462
-# entry 1 @37, @152). Same orders and gaps either way.
+# entry 1 @37, @152). Same orders and gaps either way. live_next: the walk does not depend on
+# the live count, but the healer's reach does depend on the order: after 106 first it is
+# reached at every gap (gap "heal", a heal change row), after 110 first at none.
 orders = [
   [[106], [103], [105], [111], [110]],
   [[110], [111], [105], [103], [106]],
@@ -621,6 +646,38 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 373
+live_next = [
+  { fought = [], live = 1, next = [[106], [110]], headers = [373, 373] },
+  { fought = [], live = 2, next = [[106], [110]], headers = [373, 373] },
+  { fought = [[106]], live = 1, next = [[103]], headers = [373], gap = ["leave", "heal"] },
+  { fought = [[106]], live = 1, to = 2, at = "bag", next = [[103]], headers = [373] },
+  { fought = [[106]], live = 1, to = 2, at = "heal", next = [[103]], headers = [373] },
+  { fought = [[106]], live = 2, next = [[103]], headers = [373], gap = ["leave", "heal"] },
+  { fought = [[110]], live = 1, next = [[111]], headers = [373], gap = ["leave"] },
+  { fought = [[110]], live = 1, to = 2, at = "bag", next = [[111]], headers = [373] },
+  { fought = [[110]], live = 2, next = [[111]], headers = [373], gap = ["leave"] },
+  { fought = [[106], [103]], live = 1, next = [[105]], headers = [373], gap = ["leave", "heal"] },
+  { fought = [[106], [103]], live = 1, to = 2, at = "bag", next = [[105]], headers = [373] },
+  { fought = [[106], [103]], live = 1, to = 2, at = "heal", next = [[105]], headers = [373] },
+  { fought = [[106], [103]], live = 2, next = [[105]], headers = [373], gap = ["leave", "heal"] },
+  { fought = [[110], [111]], live = 1, next = [[105]], headers = [373], gap = ["leave"] },
+  { fought = [[110], [111]], live = 1, to = 2, at = "bag", next = [[105]], headers = [373] },
+  { fought = [[110], [111]], live = 2, next = [[105]], headers = [373], gap = ["leave"] },
+  { fought = [[106], [103], [105]], live = 1, next = [[111]], headers = [373], gap = ["leave", "heal"] },
+  { fought = [[106], [103], [105]], live = 1, to = 2, at = "bag", next = [[111]], headers = [373] },
+  { fought = [[106], [103], [105]], live = 1, to = 2, at = "heal", next = [[111]], headers = [373] },
+  { fought = [[106], [103], [105]], live = 2, next = [[111]], headers = [373], gap = ["leave", "heal"] },
+  { fought = [[110], [111], [105]], live = 1, next = [[103]], headers = [373], gap = ["leave"] },
+  { fought = [[110], [111], [105]], live = 1, to = 2, at = "bag", next = [[103]], headers = [373] },
+  { fought = [[110], [111], [105]], live = 2, next = [[103]], headers = [373], gap = ["leave"] },
+  { fought = [[106], [103], [105], [111]], live = 1, next = [[110]], headers = [373], gap = ["leave", "heal"] },
+  { fought = [[106], [103], [105], [111]], live = 1, to = 2, at = "bag", next = [[110]], headers = [373] },
+  { fought = [[106], [103], [105], [111]], live = 1, to = 2, at = "heal", next = [[110]], headers = [373] },
+  { fought = [[106], [103], [105], [111]], live = 2, next = [[110]], headers = [373], gap = ["leave", "heal"] },
+  { fought = [[110], [111], [105], [103]], live = 1, next = [[106]], headers = [373], gap = ["leave"] },
+  { fought = [[110], [111], [105], [103]], live = 1, to = 2, at = "bag", next = [[106]], headers = [373] },
+  { fought = [[110], [111], [105], [103]], live = 2, next = [[106]], headers = [373], gap = ["leave"] },
+]
 orders_source = "rom:header 373 events 359; water behaviour 0x15 without Surf (Wake split); door (706,818) -> header 376"
 
 # Collector Gerald (MULTI BATTLE with Clown Bob, GAUNTLET)*; Clown Bob (MULTI BATTLE with Collector Gerald, GAUNTLET); Camper Parker (MULTI BATTLE with Picknicker Tori, GAUNTLET); Picknicker Tori (MULTI BATTLE with Camper Parker, GAUNTLET); Bug Catcher Adalbert (MULTI BATTLE with Camper Mike, GAUNTLET); Camper Mike (MULTI BATTLE with Bug Catcher Adalbert, GAUNTLET); Lass Cassidy (MULTI BATTLE with Youngster Butch, GAUNTLET); Youngster Butch (MULTI BATTLE with Lass Cassidy, GAUNTLET); Hiker Reginald (MULTI BATTLE with Hiker Lorenzo, GAUNTLET); Hiker Lorenzo (MULTI BATTLE with Hiker Reginald, GAUNTLET); Castle Valet Darach (MULTI BATTLE with Lady Caitlin, GAUNTLET END); Lady Caitlin (MULTI BATTLE with Castle Valet Darach, GAUNTLET END)

@@ -219,34 +219,127 @@ def test_gauntlet_fight_headers_one_header_or_one_list_per_order(tmp_path):
             load_overrides(write(tmp_path, text))
 
 
-def test_gauntlet_one_live_facts_cover_the_trainers_less_the_double_ones(tmp_path):
-    # Ruling (2): the facts for a party with one live Pokemon (GauntletFacts.one_live); an
-    # order may leave out a trainer (a double-battle one is not fought), the rest as the group.
+# Route 204 North's shape: 1 is a double-battle trainer who stops the walk at two live and is
+# not fought at one; the two-live order is 1, 2, 3.
+LIVE_ROWS = [
+    {"fought": [], "live": 1, "next": [[2]], "headers": [7]},
+    {"fought": [], "live": 2, "next": [[1]], "headers": [7]},
+    {"fought": [[1]], "live": 1, "next": [[2]], "headers": [7], "gap": ["leave"]},
+    {"fought": [[1]], "live": 1, "to": 2, "at": "bag", "next": [[2]], "headers": [7]},
+    {"fought": [[1]], "live": 2, "next": [[2]], "headers": [7], "gap": ["leave"]},
+    {"fought": [[2]], "live": 1, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[2]], "live": 1, "to": 2, "at": "bag", "next": [[1], [3]], "headers": [7, 7]},
+    {"fought": [[2]], "live": 2, "next": [[1], [3]], "headers": [7, 7], "gap": []},
+    {"fought": [[1], [2]], "live": 1, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[1], [2]], "live": 1, "to": 2, "at": "bag", "next": [[3]], "headers": [7]},
+    {"fought": [[1], [2]], "live": 2, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[2], [1]], "live": 1, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[2], [1]], "live": 1, "to": 2, "at": "bag", "next": [[3]], "headers": [7]},
+    {"fought": [[2], [1]], "live": 2, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[2], [3]], "live": 1, "next": [], "headers": [], "gap": []},
+    {"fought": [[2], [3]], "live": 1, "to": 2, "at": "bag", "next": [[1]], "headers": [7]},
+    {"fought": [[2], [3]], "live": 2, "next": [[1]], "headers": [7], "gap": []},
+]
+
+
+def _toml_row(r: dict) -> str:
+    def value(v):
+        return f'"{v}"' if isinstance(v, str) else str(v).replace("'", '"')
+
+    return "{ " + ", ".join(f"{k} = {value(v)}" for k, v in r.items()) + " }"
+
+
+def live_text(rows=LIVE_ROWS) -> str:
     three = FACTS.replace("[[[1], [2]]]", "[[[1], [2], [3]]]").replace("[1]\n", "[1, 2]\n", 1)
-    one = "one_live = { orders = [[[2], [3]]], leave_gaps = [1], fight_headers = 7, pc_gaps = [], heal_gaps = [], locked_gaps = [] }\n"
-    f = load_overrides(write(tmp_path, gauntlet_text("[1, 2, 3]", three + one))).gauntlets[0].facts
-    assert f.orders == (((1,), (2,), (3,)),) and f.one_live is not None
-    alt = f.one_live
-    assert alt.orders == (((2,), (3,)),) and alt.leave_gaps == ((1,),)
-    assert alt.fight_headers == ((7, 7),) and alt.name == "g" and alt.one_live is None
+    table = "live_next = [\n" + "".join(f"  {_toml_row(r)},\n" for r in rows) + "]\n"
+    return gauntlet_text("[1, 2, 3]", three + "fight_headers = 7\n" + table)
+
+
+def test_gauntlet_live_next_rows_load_and_round_trip(tmp_path):
+    f = load_overrides(write(tmp_path, live_text())).gauntlets[0].facts
+    assert f.orders == (((1,), (2,), (3,)),) and len(f.live_next) == len(LIVE_ROWS)
+    rows = {r.key: r for r in f.live_rows()}
+    assert rows[((), 1, 1, "")].next == ((2,),) and rows[((), 2, 2, "")].next == ((1,),)
+    assert rows[(((2,), (3,)), 1, 2, "bag")].next == ((1,),)  # the revive reopens 1
+    assert rows[(((1,),), 2, 2, "")].gap == ("leave",)
     row = f.to_dict()
-    assert row["one_live"] == {
-        "orders": [[[2], [3]]],
-        "leave_gaps": [[1]],
-        "fight_headers": [[7, 7]],
-        "pc_gaps": [],
-        "heal_gaps": [],
-        "locked_gaps": [],
-    }
+    assert row["live_next"] == LIVE_ROWS
     assert GauntletFacts.from_dict(row) == f
-    assert load_overrides(write(tmp_path, gauntlet_text())).gauntlets[0].facts.one_live is None
-    for bad in (
-        one.replace("[[[2], [3]]]", "[[[2], [4]]]"),  # not a trainer of the group
-        one.replace("[[[2], [3]]]", "[[[2], [2]]]"),  # twice
-        one.replace("pc_gaps = [], ", ""),  # all six keys
-    ):
-        with pytest.raises(OverridesError, match="one_live"):
-            load_overrides(write(tmp_path, gauntlet_text("[1, 2, 3]", three + bad)))
+    plain = load_overrides(write(tmp_path, gauntlet_text())).gauntlets[0].facts
+    assert plain.live_next == () and plain.to_dict()["live_next"] is None
+
+
+def test_gauntlet_without_live_next_is_the_orders_prefixes(tmp_path):
+    facts = (
+        "orders = [[[1], [2]], [[2], [1]]]\nleave_gaps = [[], [1]]\nescape = true\n"
+        'pc_gaps = [1]\nheal_gaps = []\nlocked_gaps = []\norders_source = "rom:x"\n'
+        "fight_headers = 5\n"
+    )
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=facts))).gauntlets[0].facts
+    rows = {r.key: r for r in f.live_rows()}
+    for live in (1, 2):
+        assert rows[((), live, live, "")].next == ((1,), (2,))
+        assert (
+            rows[((), live, live, "")].headers == (5, 5) and rows[((), live, live, "")].gap is None
+        )
+        assert rows[(((1,),), live, live, "")].gap == ("pc",)
+        assert rows[(((2,),), live, live, "")].gap == ("leave", "pc")
+        assert rows[(((2,),), live, live, "")].next == ((1,),)
+    assert rows[(((1,),), 1, 2, "bag")].next == ((2,),)
+    assert rows[(((1,),), 2, 1, "pc")].next == rows[(((1,),), 1, 2, "pc")].next == ((2,),)
+    assert len(rows) == 2 + 2 * (2 + 3)
+
+
+@pytest.mark.parametrize(
+    "change, match",
+    [
+        (lambda rows: rows[1:], "no row before the first fight"),
+        (lambda rows: [*rows, rows[0]], "two rows for one key"),
+        (lambda rows: [r for r in rows if r["fought"] != [[1], [2]]], "no row after"),
+        (lambda rows: [{**rows[0], "next": [[4]]}, *rows[1:]], "unfought fights"),
+        (lambda rows: [{**rows[0], "gap": []}, *rows[1:]], "gap facts"),
+        (
+            lambda rows: [
+                {**rows[3], "to": 1, "at": "bag"} if i == 3 else r for i, r in enumerate(rows)
+            ],
+            "change",
+        ),
+        (
+            lambda rows: [
+                {**r, "next": [[2], [3]], "headers": [7, 7]}
+                if r["fought"] == [[1]] and r["live"] == 2 and "at" not in r
+                else r
+                for r in rows
+            ],
+            "not the orders|no row after",
+        ),
+        (lambda rows: [{**rows[0], "live": 3}, *rows[1:]], "1 or 2"),
+        (lambda rows: [{**rows[0], "nxt": [[2]]}, *rows[1:]], "unknown|nxt"),
+    ],
+)
+def test_gauntlet_live_next_refused(tmp_path, change, match):
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, live_text(change(LIVE_ROWS))))
+
+
+def test_route_204_north_a_faint_switches_the_continuation():
+    # The committed table (tools/kaizo/gauntlet_map.py live_table on the Kaizo ROM). Twins 15
+    # are a double-battle trainer: at two live they stop the walk first, at one they are passed
+    # (trainer_encounter.c:108-116). A faint in the twins' fight leaves 13 next, which no order
+    # of one live Pokemon starts with; a faint in 13's fight before the twins drops them.
+    f = next(g for g in load_overrides().gauntlets if g.name == "Route 204 North").facts
+    rows = {r.key: r for r in f.live_rows()}
+
+    def nxt(fought, live, to=None, at=""):
+        return rows[(tuple((t,) for t in fought), live, to or live, at)].next
+
+    assert nxt([], 2) == ((15,),) and nxt([], 1) == ((13,),)
+    assert nxt([15], 2) == nxt([15], 1) == ((13,),)
+    assert nxt([13], 2) == ((14,), (15,)) and nxt([13], 1) == ((14,),)
+    assert nxt([13, 14], 2) == ((15,),) and nxt([13, 14], 1) == ()  # one live: the chain ends
+    # twins planned after a revive back to two live (a bag item on the player's tile)
+    assert nxt([13, 14], 1, 2, "bag") == ((15,),)
+    assert all(r.headers == (346,) * len(r.next) for r in f.live_rows())
 
 
 def test_missing_file_is_empty(tmp_path):

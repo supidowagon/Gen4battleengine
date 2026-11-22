@@ -75,8 +75,12 @@ Method (every rule cited to the decomp; paths relative to ``external/pokeplatinu
   when the party has two live Pokemon, and does not fight at all otherwise (:113-118). A singles
   trainer fights together with the next undefeated trainer in object order that also sees the
   player, as one double battle (``APPROACH_TYPE_VS2``), when the party has two live Pokemon or a
-  partner (``src/overlay005/field_control.c:181-186``), else alone (:98-106). The walk takes a party
-  with two live Pokemon (``Walker.two_alive``).
+  partner (``src/overlay005/field_control.c:181-186``), else alone (:98-106). The walk takes the
+  party's count (``Walker.two_alive``) and the partner (``Walker.partner``); talking to a
+  double-battle trainer reads the party only (``ScrCmd_CheckHasTwoAliveMons``,
+  ``src/scrcmd_trainer.c:283-289``, from ``res/field/scripts/scripts_battles.s:21-22``). The
+  next-fight table by the count (``live_table``) switches the count at every fight end and, inside
+  a gap, where a revive, a PC or a healer changes it.
 - ``FieldInput_Process`` runs the sight check on every field-input frame (``field_control.c:
   181-196``): on every tile entered, on the arrival tile of every warp and on the start tile, not on
   the tiles a spin crosses. A walk may not enter a tile where a fixed-facing undefeated trainer
@@ -663,6 +667,11 @@ class Walk:
     spot: dict[Fight, Sighting] = field(default_factory=dict)
     talk: dict[tuple[int, int], Pos] = field(default_factory=dict)
     crossed: list[tuple[Pos, Coord]] = field(default_factory=list)
+    # held: the start tile starts a fight on every facing, so the player has no input there
+    # (the sight check runs before movement and the start menu, field_control.c:188 < :198,
+    # :331-333); states: the player states reached (tile, height, bridge, flags)
+    held: bool = False
+    states: set = field(default_factory=set)
 
     def headers(self) -> set[int]:
         return {p.header for p in self.seen}
@@ -693,7 +702,9 @@ class Walker:
     matching coord raises when its header is in ``strict``, every header when None; elsewhere it
     is recorded: the walk beyond a group's own headers only has to show where the player can go).
     ``doubles``: the double-battle trainers (``read_double_trainers``). ``two_alive``: the party
-    has two live Pokemon or a partner (``field_control.c:181-186``). ``flags``: the flags set
+    has two live Pokemon (``Party_HasTwoAliveMons``); ``partner``: the partner flag is set. Sight
+    takes two when either holds (``field_control.c:182-186``); a talk reads the party only
+    (``scrcmd_trainer.c:283-289``). ``flags``: the flags set
     when the walk starts; an object whose hidden flag is set is not created (``hidden``).
     ``on_enter``: header -> the flags its ``INIT_SCRIPT_ON_TRANSITION`` script sets on every
     path; a warp onto the header adds them before its objects are created
@@ -712,6 +723,7 @@ class Walker:
         strict: Collection[int] | None = None,
         doubles: Collection[int] = (),
         two_alive: bool = True,
+        partner: bool = False,
         flags: Collection[int] = (),
         on_enter: Mapping[int, Collection[int]] | None = None,
     ):
@@ -724,6 +736,7 @@ class Walker:
         self.strict = None if strict is None else frozenset(strict)
         self.doubles = frozenset(doubles)
         self.two_alive = two_alive
+        self.partner = partner
         self.flags = frozenset(flags)
         self.on_enter = {h: frozenset(f) for h, f in (on_enter or {}).items()}
         self._sight: dict[tuple, dict[tuple[int, int], list[tuple[Seer, int]]]] = {}
@@ -898,10 +911,11 @@ class Walker:
         if not seeing:
             return None
         first = seeing[0]
+        two = self.two_alive or self.partner  # field_control.c:182-186
         if first.trainer in self.doubles:  # :108-118: both objects, or no fight
-            return (first.trainer,) if self.two_alive else None
+            return (first.trainer,) if two else None
         second = next((s for s in seeing[1:] if s.trainer != first.trainer), None)
-        if self.two_alive and second is not None:  # :98-106, APPROACH_TYPE_VS2
+        if two and second is not None:  # :98-106, APPROACH_TYPE_VS2
             return (first.trainer, second.trainer)
         return (first.trainer,)
 
@@ -1112,11 +1126,37 @@ class Walker:
         walk = Walk({start: None})
         self._walks[key] = walk
         if self._spotted(walk, start, y, "arrival", defeated, removable, flags):
+            walk.held = True
             return walk
         a0 = self.maps.area(start.header)
         s0 = _State(start, y, a0.behaviour(start.x, start.z) == BRIDGE_START, flags)
-        states = {s0}
-        queue = deque([s0])
+        walk.states.add(s0)
+        return self._bfs(walk, deque([s0]), defeated, removable)
+
+    def walk_from(
+        self, seeds: Collection[_State], defeated: Iterable[int] = (), removable: bool = True
+    ) -> Walk:
+        """The walk from every state of ``seeds`` at once (states another walk reached), with
+        the sight check on each seed tile first: the player stands there when the walker's
+        count starts to hold (a revive or a PC on that tile). ``Walk.spot`` holds the fights of
+        every seed's walk."""
+        defeated = frozenset(defeated)
+        key = ("from", frozenset(seeds), defeated, removable)
+        if key in self._walks:
+            return self._walks[key]
+        walk = Walk({s.pos: None for s in seeds})
+        self._walks[key] = walk
+        queue: deque[_State] = deque()
+        for s in sorted(seeds):
+            if not self._spotted(walk, s.pos, s.y, "sight", defeated, removable, s.flags):
+                walk.states.add(s)
+                queue.append(s)
+        return self._bfs(walk, queue, defeated, removable)
+
+    def _bfs(
+        self, walk: Walk, queue: deque[_State], defeated: frozenset[int], removable: bool
+    ) -> Walk:
+        states = walk.states
         while queue:
             s = queue.popleft()
             area = self.maps.area(s.pos.header)
@@ -1200,7 +1240,9 @@ class Walker:
             walk.talk.setdefault((area.header, o.local_id), pos)
             t = o.trainer
             # a double-battle trainer talked to with one live Pokemon only prints a message
-            # (res/field/scripts/scripts_battles.s:19-22, Battles_NotEnoughPokemonMessage)
+            # (res/field/scripts/scripts_battles.s:19-22, Battles_NotEnoughPokemonMessage): the
+            # script reads the party (ScrCmd_CheckHasTwoAliveMons, src/scrcmd_trainer.c:283-289),
+            # not the partner flag
             lone = t in self.doubles and not self.two_alive
             if t is not None and t not in defeated and not self._inert(o) and not lone:
                 walk.spot.setdefault((t,), Sighting(pos, "talk", s.y, s.flags))
@@ -1235,11 +1277,16 @@ class Walker:
 
 def pc_reachable(maps, walk: Walk, headers: Collection[int]) -> bool:
     """Whether a tile next to a PC tile (behaviour 0x83) of ``headers`` was reached."""
+    return bool(pc_spots(maps, walk, headers))
+
+
+def pc_spots(maps, walk: Walk, headers: Collection[int]) -> set[Pos]:
+    """The reached tiles next to a PC tile (behaviour 0x83) of ``headers``."""
+    out = set()
     for h in headers:
         for x, z in maps.area(h).pc_tiles():
-            if any(Pos(h, x + dx, z + dz) in walk.seen for dx, dz in DIRS):
-                return True
-    return False
+            out |= {Pos(h, x + dx, z + dz) for dx, dz in DIRS} & walk.seen.keys()
+    return out
 
 
 # --- chains (chain.js) --------------------------------------------------------------------------
@@ -1351,6 +1398,124 @@ def chain_facts(
         "pc_gaps": sorted(pcs or ()),
         "heal_gaps": sorted(heal or ()),
     }
+
+
+def live_table(
+    maps,
+    walkers: Mapping[int, Walker],
+    spec: ChainSpec,
+    doubles: Collection[int],
+    *,
+    healers: Collection[tuple[int, int]] = (),
+    pc_headers: Collection[int] = (),
+) -> list[dict]:
+    """The next-fight table of a chain by the live count (``LiveRow`` rows as dicts;
+    ``nuzline.data.gauntlet``). ``walkers[c]`` walks with the field count c (1 or 2).
+
+    The walk after ``fought`` starts on the last fight's tile with those trainers beaten
+    (``runs``). Under count 1 the group is the members less the double-battle trainers, who
+    are not fought (``trainer_encounter.c:110-116``; ``scripts_battles.s:19-22``), and come back
+    when the count is two again. The recursion switches the count at every fight end (a faint,
+    a forced heal: both act before the gap's first step, on the fight tile) and, inside a gap,
+    where a revive (``bag``: any reached tile), a PC (``pc``: a reached tile next to a PC of
+    ``pc_headers``, a deposit or a withdraw) or a healer (``heal``: a talk tile of ``healers``)
+    changes it; each of those gives a change row whose fights are the plain row's plus those
+    the walk under the new count starts from such a tile, and the walk goes on from each.
+    Over the entries, entry flags and histories that reach one key, ``next`` is the union and
+    the gap facts the intersection (``chain_facts``). A plain row's ``gap``: ``leave`` (a
+    header outside ``spec.headers`` reached), ``heal`` (a healer's talk tile reached), ``pc``,
+    ``locked`` (``Walk.held``: no input in the gap)."""
+    members = frozenset(spec.members)
+    groups = {2: members, 1: members - frozenset(doubles)}
+    nexts: dict[tuple, dict[Fight, int]] = {}
+    gaps: dict[tuple, set[str]] = {}
+    explored: set[tuple] = set()
+
+    def fights(walk: Walk, c: int, done: frozenset) -> dict[Fight, Sighting]:
+        out = {}
+        for f, sight in walk.spot.items():
+            fs = set(f)
+            if not fs & groups[c] or fs & done:
+                continue
+            if not fs <= members:
+                raise MapReadError(f"fight {f} mixes the chain {sorted(members)} with others")
+            out[f] = sight
+        return out
+
+    def add(key: tuple, found: Mapping[Fight, Sighting]) -> None:
+        row = nexts.setdefault(key, {})
+        for f, sight in found.items():
+            if row.setdefault(f, sight.pos.header) != sight.pos.header:
+                raise MapReadError(f"after {key[0]}: fight {f} starts on two map headers")
+
+    def rec(pos: Pos, y: int | None, flags: frozenset, done: frozenset, seq: tuple) -> None:
+        state = (pos, y, flags, done, seq)
+        if state in explored:
+            return
+        explored.add(state)
+        gap = bool(seq) and done != members
+        for c in (1, 2):
+            walk = walkers[c].walk(pos, done, y=y, flags=flags)
+            found = fights(walk, c, done)
+            add((seq, c, c, ""), found)
+            if gap:
+                kinds = {"locked"} if walk.held else set()
+                if walk.headers() - set(spec.headers):
+                    kinds.add("leave")
+                talks = {walk.talk[k] for k in healers if k in walk.talk}
+                if talks:
+                    kinds.add("heal")
+                spots = pc_spots(maps, walk, pc_headers) if pc_headers else set()
+                if spots:
+                    kinds.add("pc")
+                key = (seq, c)
+                gaps[key] = kinds if key not in gaps else gaps[key] & kinds
+            for f, sight in found.items():
+                rec(sight.pos, sight.y, sight.flags, done | set(f), (*seq, f))
+            if not gap or walk.held:
+                continue
+            changes = []
+            if c == 1:
+                changes.append(("bag", 2, walk.states))
+                changes.append(("heal", 2, {st for st in walk.states if st.pos in talks}))
+            changes.append(("pc", 3 - c, {st for st in walk.states if st.pos in spots}))
+            for at, to, tiles in changes:
+                if not tiles:
+                    continue
+                key = (seq, c, to, at)
+                add(key, found)
+                more = fights(walkers[to].walk_from(tiles, done), to, done)
+                add(key, more)
+                for f, sight in more.items():
+                    rec(sight.pos, sight.y, sight.flags, done | set(f), (*seq, f))
+
+    for i, e in enumerate(spec.entries):
+        extra = spec.entry_flags[i] if spec.entry_flags else (frozenset(),)
+        for f in extra:
+            rec(e, None, walkers[2].flags | f, frozenset(), ())
+    rows = []
+    for (seq, live, to, at), found in nexts.items():
+        done = frozenset(t for f in seq for t in f)
+        if done == members:
+            continue
+        order = sorted(found)
+        row = {
+            "fought": [list(f) for f in seq],
+            "live": live,
+            "next": [list(f) for f in order],
+            "headers": [found[f] for f in order],
+        }
+        if at:
+            if "locked" in gaps[(seq, live)] or (at == "pc" and "pc" not in gaps[(seq, live)]):
+                continue  # a change needs the tile in every history (the gap facts' rule)
+            if at == "heal" and "heal" not in gaps[(seq, live)]:
+                continue
+            row["to"] = to
+            row["at"] = at
+        elif seq:
+            row["gap"] = [g for g in ("leave", "heal", "pc", "locked") if g in gaps[(seq, live)]]
+        rows.append(row)
+    return _rows(rows)
 
 
 # --- scripts ------------------------------------------------------------------------------------
@@ -1650,8 +1815,8 @@ def _wayward_walker(
     or still standing at (72, 13) as an obstacle (0x4091 = 0). Each coord runs by its var
     condition, as the field does (``coord_matches``): a running coord of ``WAYWARD_TAKES`` takes
     the player, so its tiles are not walked through; a coord whose var does not match is walked
-    over; any other running coord raises (not modelled). ``two_alive``: the party's live count
-    before she joins (after, the partner counts two)."""
+    over; any other running coord raises (not modelled). ``two_alive``: the party's live count;
+    once she joins, sight counts two (``Walker.partner``), a talk still reads the party."""
 
     def ignore(header: int, obj: MapObject) -> bool:
         return joined and header == WAYWARD_HEADER and obj.local_id == WAYWARD_MIRA
@@ -1674,7 +1839,8 @@ def _wayward_walker(
         strict={WAYWARD_HEADER},
         coord_rule=rule,
         doubles=doubles,
-        two_alive=joined or two_alive,
+        two_alive=two_alive,
+        partner=joined,
         flags=GROUP_FLAGS["Wayward Cave"],
     )
 
@@ -1708,7 +1874,7 @@ def wayward_facts(
     mira = next((o for o in area.objects if o.local_id == WAYWARD_MIRA), None)
     if mira is None:
         raise MapReadError("Wayward Cave has no partner object")
-    joined = _wayward_walker(maps, True, doubles)
+    joined = _wayward_walker(maps, True, doubles, two_alive)
     alone = _wayward_walker(maps, False, doubles, two_alive)
     rows = [c for c in area.coords if c.script == WAYWARD_EXIT_ROW]
     if len(rows) != 1:
@@ -1925,61 +2091,85 @@ def _facts(orders, leave_gaps, fight_headers, escape_, **more) -> dict:
         "heal_gaps": [],
         "locked_gaps": [],
         "partner": None,
+        "live_next": None,
         **more,
     }
 
 
-# The facts that depend on the live count (``one_live``).
-LIVE_KEYS = ("orders", "leave_gaps", "fight_headers", "pc_gaps", "heal_gaps", "locked_gaps")
+def _rows(rows) -> list[dict]:
+    key = lambda r: (len(r["fought"]), r["fought"], r["live"], r.get("at", ""), r.get("to", 0))
+    return sorted(rows, key=key)
+
+
+def chain_live_next(
+    maps,
+    walkers: Mapping[int, Walker],
+    spec: ChainSpec,
+    group: tuple[int, ...],
+    doubles: Collection[int],
+    **kw,
+) -> list[dict] | None:
+    """``live_next`` of a chain group: None when the chain's walk does not depend on the count
+    (its ``live_table`` is the prefix table of its two-live orders, ``prefix_live_rows``),
+    else the table. A chain shared by several groups (``group`` short of ``spec.members``)
+    whose walk depends on the count raises: its table is not split into groups."""
+    from nuzline.data.gauntlet import prefix_live_rows
+
+    table = _rows(live_table(maps, walkers, spec, doubles, **kw))
+    whole = chain_facts(maps, walkers[2], spec, spec.members, **kw)
+    orders = [tuple(tuple(f) for f in o) for o in whole["orders"]]
+    prefix = prefix_live_rows(
+        orders,
+        whole["leave_gaps"],
+        whole["fight_headers"],
+        whole["pc_gaps"],
+        whole["heal_gaps"],
+        (),
+    )
+    if table == _rows(r.to_dict() for r in prefix):
+        return None
+    if set(group) != set(spec.members):
+        raise MapReadError(
+            f"the walk of the chain {sorted(spec.members)} depends on the live count and the "
+            f"chain holds several groups ({sorted(group)} is one): not modelled"
+        )
+    return table
 
 
 def derive_groups(files: RomFiles, decomp: Path) -> dict[str, dict]:
     """The facts of every gauntlet group, read from the ROM: ``orders`` (a list of orders, each
     a list of fights, each a list of trainer ids), ``leave_gaps`` and ``fight_headers`` (one
     list per order), ``escape``, ``pc_gaps``, ``heal_gaps``, ``locked_gaps``, ``partner``
-    (None, or ``{"trainer", "join_before"}``) and ``one_live``.
+    (None, or ``{"trainer", "join_before"}``) and ``live_next``.
 
     The walk depends on the party's live count (``Walker.two_alive``): with two live Pokemon
     (or a partner) two singles trainers who see the player at once fight as one double battle
     and a double-battle trainer fights; with one, the first sees him alone and the next one
     after it, and a double-battle trainer is not fought at all (``trainer_encounter.c:94-118``,
     ``field_control.c:181-186``; talked to, ``res/field/scripts/scripts_battles.s:19-22``).
-    The facts above are the two-live ones; ``one_live`` holds ``LIVE_KEYS`` for a party with
-    one live Pokemon, or None when they are the same. The planner picks by the party."""
-    two = _derive(files, decomp, True)
-    one = _derive(files, decomp, False)
-    for name, facts in two.items():
-        alt = {k: one[name][k] for k in LIVE_KEYS}
-        facts["one_live"] = None if alt == {k: facts[k] for k in LIVE_KEYS} else alt
-    return two
-
-
-def _derive(files: RomFiles, decomp: Path, two_alive: bool) -> dict[str, dict]:
+    The facts above are the two-live ones; ``live_next`` is the next-fight table by the count
+    (``live_table``), or None when the walk does not depend on it. The planner picks by the
+    party."""
     maps = RomMaps(files)
     scripts = ScriptReader(files, decomp)
     doubles = read_double_trainers(files)
     out: dict[str, dict] = {}
 
     def chain(name: str, spec: ChainSpec, group: tuple[int, ...], **kw) -> None:
-        if not two_alive:  # a double-battle trainer is not fought with one live Pokemon
-            group = tuple(t for t in group if t not in doubles)
-            spec = ChainSpec(
-                tuple(t for t in spec.members if t not in doubles),
-                spec.headers,
-                spec.entries,
-                spec.entry_flags,
+        walkers = {
+            c: Walker(
+                maps,
+                spec.members,
+                moves=FieldMoves.for_split(GROUP_SPLITS[name]),
+                strict=spec.headers,
+                doubles=doubles,
+                two_alive=c == 2,
+                flags=GROUP_FLAGS[name],
+                on_enter=ENTER_FLAGS,
             )
-        walker = Walker(
-            maps,
-            spec.members,
-            moves=FieldMoves.for_split(GROUP_SPLITS[name]),
-            strict=spec.headers,
-            doubles=doubles,
-            two_alive=two_alive,
-            flags=GROUP_FLAGS[name],
-            on_enter=ENTER_FLAGS,
-        )
-        facts = chain_facts(maps, walker, spec, group, **kw)
+            for c in (1, 2)
+        }
+        facts = chain_facts(maps, walkers[2], spec, group, **kw)
         out[name] = _facts(
             facts["orders"],
             facts["leave_gaps"],
@@ -1987,6 +2177,7 @@ def _derive(files: RomFiles, decomp: Path, two_alive: bool) -> dict[str, dict]:
             group_escape(maps, facts["fight_headers"]),
             pc_gaps=facts["pc_gaps"],
             heal_gaps=facts["heal_gaps"],
+            live_next=chain_live_next(maps, walkers, spec, group, doubles, **kw),
         )
 
     chain("Oreburgh Mine", OREBURGH, OREBURGH.members)
@@ -2000,6 +2191,8 @@ def _derive(files: RomFiles, decomp: Path, two_alive: bool) -> dict[str, dict]:
         if not any(c == "SCRCMD_HEALPARTY" for _, c, _ in trace):
             raise MapReadError(f"header {h} object {local} does not heal the party")
 
+    # B2B: two scripted single battles (b2b_facts); the gym: coord scripts and talks of singles
+    # trainers (gym_facts). Neither reads the count: live_next None.
     b2b = b2b_facts(maps, scripts, B2B_HEADER)
     out["Route 204 North B2B"] = _facts(
         b2b["orders"],
@@ -2015,7 +2208,11 @@ def _derive(files: RomFiles, decomp: Path, two_alive: bool) -> dict[str, dict]:
         gym["fight_headers"],
         group_escape(maps, gym["fight_headers"]),
     )
-    way = wayward_facts(maps, scripts, doubles, two_alive)
+    # Wayward Cave: the partner joins before fight 1 and counts two at every fight; the walk
+    # under either party count must give the same facts.
+    way = wayward_facts(maps, scripts, doubles, True)
+    if wayward_facts(maps, scripts, doubles, False) != way:
+        raise MapReadError("Wayward Cave: the facts depend on the party's live count")
     out["Wayward Cave"] = _facts(
         way["orders"],
         way["leave_gaps"],

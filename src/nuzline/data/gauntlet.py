@@ -233,6 +233,184 @@ class Partner:
         return self.join_before[0]
 
 
+# The live count (``Party_HasTwoAliveMons``, ``src/unk_02054884.c:157-160``; the partner flag
+# makes it two, ``src/overlay005/field_control.c:182-186``) decides which fight the walk starts:
+# two singles trainers who see the player at once fight one VS2 battle only with two
+# (``src/trainer_encounter.c:94-106``), and a double-battle trainer is fought only with two
+# (:108-116; talked to, ``res/field/scripts/scripts_battles.s:19-22``). ``LiveRow`` is one row
+# of the next-fight table ``GauntletFacts.live_next``.
+LIVE_AT = ("", "bag", "pc", "heal")  # where in the gap the count changes ("": no change)
+GAP_KINDS = ("leave", "heal", "pc", "locked")
+
+
+@dataclass(frozen=True)
+class LiveRow:
+    """After the fights ``fought`` (in the order played), with the field count ``live`` (1 or
+    2) at the end of the last one: the fights the walk can start next (``next``, each with the
+    map header it starts on in ``headers``; empty ``headers``: not recorded; empty ``next``:
+    the chain ends under that count).
+
+    A plain row (``at == ""``, ``to == live``) is the walk from the last fight's tile under
+    ``live``; it holds the gap's facts in ``gap`` (a subset of ``GAP_KINDS``; None before the
+    first fight). A change row is a count change inside the gap, from ``live`` to ``to``:
+    ``"bag"`` (a revive item, used on any tile the walk under ``live`` reaches: the start menu,
+    ``field_control.c:331-333``), ``"pc"`` (a deposit or a withdraw, on a tile next to a PC the
+    walk reaches) or ``"heal"`` (a healer's ``HealParty``, at the healer's talk tile). Its
+    ``next`` is the plain row's fights plus those the walk under ``to`` starts from those
+    tiles; its gap facts are the plain row's. A count change by the gap's forced steps, before
+    any player step, acts on the fight tile: the plain row of the new count."""
+
+    fought: Order
+    live: int
+    next: tuple[Fight, ...]
+    headers: tuple[int, ...] = ()
+    to: int = 0  # 0: the same as live (a plain row)
+    at: str = ""
+    gap: tuple[str, ...] | None = None
+
+    def __post_init__(self):
+        if self.to == 0:
+            object.__setattr__(self, "to", self.live)
+
+    @property
+    def key(self) -> tuple[Order, int, int, str]:
+        return (self.fought, self.live, self.to, self.at)
+
+    @classmethod
+    def from_dict(cls, d: Mapping) -> LiveRow:
+        gap = d.get("gap")
+        return cls(
+            fought=tuple(tuple(f) for f in d["fought"]),
+            live=d["live"],
+            next=tuple(tuple(f) for f in d["next"]),
+            headers=tuple(d.get("headers", ())),
+            to=d.get("to", d["live"]),
+            at=d.get("at", ""),
+            gap=None if gap is None else tuple(gap),
+        )
+
+    def to_dict(self) -> dict:
+        out: dict = {
+            "fought": [list(f) for f in self.fought],
+            "live": self.live,
+            "next": [list(f) for f in self.next],
+            "headers": list(self.headers),
+        }
+        if self.at:
+            out["to"] = self.to
+            out["at"] = self.at
+        if self.gap is not None:
+            out["gap"] = list(self.gap)
+        return out
+
+
+def prefix_live_rows(
+    orders: Sequence[Order],
+    leave_gaps: Sequence[Sequence[int]],
+    fight_headers: Sequence[Sequence[int]],
+    pc_gaps: Collection[int],
+    heal_gaps: Collection[int],
+    locked_gaps: Collection[int],
+) -> tuple[LiveRow, ...]:
+    """The next-fight table of a group whose walk does not depend on the live count: after
+    ``fought`` the next fights are those of the orders that start with ``fought``, the same
+    under both counts; gap k's facts are ``leave`` when every such order leaves there and the
+    group's ``heal_gaps``, ``pc_gaps`` and ``locked_gaps``. Change rows: a revive (``bag``) at
+    every gap that is not locked, a PC change both ways at the PC gaps that are not locked, a
+    healer at the heal gaps that are not locked; each gives the plain row's fights."""
+    everyone = frozenset(t for f in orders[0] for t in f)
+    nxt: dict[Order, dict[Fight, int | None]] = {}
+    leave: dict[Order, bool] = {}
+    for i, o in enumerate(orders):
+        heads = fight_headers[i] if fight_headers else None
+        for k in range(len(o)):
+            fought = tuple(o[:k])
+            nxt.setdefault(fought, {})[o[k]] = None if heads is None else heads[k]
+            if k:
+                leave[fought] = leave.get(fought, True) and k in leave_gaps[i]
+    rows: list[LiveRow] = []
+    for fought, fights in sorted(nxt.items(), key=lambda kv: (len(kv[0]), kv[0])):
+        order = tuple(sorted(fights))
+        heads = () if None in fights.values() else tuple(fights[f] for f in order)
+        k = len(fought)
+        gap = None
+        if k and frozenset(t for f in fought for t in f) != everyone:
+            kinds = {
+                "leave": leave[fought],
+                "heal": k in heal_gaps,
+                "pc": k in pc_gaps,
+                "locked": k in locked_gaps,
+            }
+            gap = tuple(g for g in GAP_KINDS if kinds[g])
+        for live in (1, 2):
+            rows.append(LiveRow(fought, live, order, heads, gap=gap))
+        if gap is None or "locked" in gap:
+            continue
+        changes = [(1, 2, "bag")]
+        if "pc" in gap:
+            changes += [(1, 2, "pc"), (2, 1, "pc")]
+        if "heal" in gap:
+            changes.append((1, 2, "heal"))
+        for live, to, at in changes:
+            rows.append(LiveRow(fought, live, order, heads, to, at))
+    return tuple(rows)
+
+
+def check_live_rows(name: str, rows: Sequence[LiveRow], orders: Sequence[Order]) -> None:
+    """A stored ``live_next`` table: well-formed rows, one per key, both roots, a plain row
+    for every state a row's fights lead to (both counts) and for every change row, and the
+    paths under two live Pokemon are ``orders`` (the group's facts are the two-live ones).
+    Raises ``ValueError``."""
+    everyone = frozenset(t for f in orders[0] for t in f)
+    keys: dict[tuple, LiveRow] = {}
+    for r in rows:
+        where = f"{name}: live_next row {r.to_dict()}"
+        if r.live not in (1, 2) or r.to not in (1, 2) or r.at not in LIVE_AT:
+            raise ValueError(f"{where}: live and to are 1 or 2, at one of {LIVE_AT}")
+        if (r.at == "") != (r.to == r.live) or (r.at in ("bag", "heal") and r.to < r.live):
+            raise ValueError(f"{where}: a change row changes the count; a revive or heal raises it")
+        seen = [t for f in r.fought for t in f]
+        done = frozenset(seen)
+        if len(done) != len(seen) or not done <= everyone or done == everyone:
+            raise ValueError(f"{where}: fought is distinct trainers of the group, not all of them")
+        if any(len(f) not in (1, 2) or not set(f) <= everyone - done for f in r.next):
+            raise ValueError(f"{where}: next holds unfought fights of the group")
+        if len(set(r.next)) != len(r.next) or (r.headers and len(r.headers) != len(r.next)):
+            raise ValueError(f"{where}: next is distinct, headers one per fight or none")
+        has_gap = bool(r.fought) and r.at == ""
+        if (r.gap is not None) != has_gap or any(g not in GAP_KINDS for g in r.gap or ()):
+            raise ValueError(f"{where}: gap facts on a plain row after a fight, of {GAP_KINDS}")
+        if r.key in keys:
+            raise ValueError(f"{where}: two rows for one key")
+        keys[r.key] = r
+    plain = {(r.fought, r.live): r for r in rows if not r.at}
+    for live in (1, 2):
+        if ((), live) not in plain:
+            raise ValueError(f"{name}: live_next has no row before the first fight at {live}")
+    for r in rows:
+        if r.at and (r.fought, r.live) not in plain:
+            raise ValueError(f"{name}: live_next change row {r.to_dict()} has no plain row")
+        for f in r.next:
+            after = (*r.fought, f)
+            if frozenset(t for g in after for t in g) == everyone:
+                continue
+            for live in (1, 2):
+                if (after, live) not in plain:
+                    raise ValueError(f"{name}: live_next has no row after {after} at {live}")
+    paths: set[Order] = set()
+
+    def follow(fought: Order) -> None:
+        if frozenset(t for g in fought for t in g) == everyone:
+            paths.add(fought)
+            return
+        for f in plain[(fought, 2)].next:
+            follow((*fought, f))
+
+    follow(())
+    if paths != set(orders):
+        raise ValueError(f"{name}: live_next paths at two live {sorted(paths)} are not the orders")
+
+
 @dataclass(frozen=True)
 class GauntletFacts:
     """The tracked game facts of one group (design section 2). ``leave_gaps`` holds one
@@ -256,16 +434,16 @@ class GauntletFacts:
     # Per order, the map header each fight starts on (tools/kaizo/gauntlet_map.py); empty: not
     # recorded.
     fight_headers: tuple[tuple[int, ...], ...] = ()
-    # The facts for a party with one live Pokemon and no partner (orders, leave_gaps,
-    # fight_headers, pc_gaps, heal_gaps, locked_gaps; the rest as above): two trainers who see
-    # the player at once fight one after the other, and a double-battle trainer is not fought
-    # (tools/kaizo/gauntlet_map.py derive_groups). None: the same as above. The planner picks
-    # by the party.
-    one_live: GauntletFacts | None = None
+    # The next-fight table by the live count (``LiveRow``; tools/kaizo/gauntlet_map.py
+    # derive_groups), stored only where the walk depends on the count; empty: it does not, and
+    # ``live_rows`` gives the orders' prefixes (``prefix_live_rows``).
+    live_next: tuple[LiveRow, ...] = ()
 
     def __post_init__(self):
         if len(self.leave_gaps) != len(self.orders):
             raise ValueError(f"{self.name}: leave_gaps needs one entry per order")
+        if self.live_next:
+            check_live_rows(self.name, self.live_next, self.orders)
 
     @classmethod
     def from_dict(cls, d: Mapping) -> GauntletFacts:
@@ -291,10 +469,10 @@ class GauntletFacts:
             else Partner(p["trainer"], tuple(p["join_before"]), p["source"]),
             fight_headers=tuple(tuple(h) for h in d.get("fight_headers", ())),
         )
-        one = d.get("one_live")  # the live-count facts only; the rest as the row's
-        if one is None:
+        rows = d.get("live_next")
+        if not rows:
             return facts
-        return replace(facts, one_live=cls.from_dict({**d, **one, "one_live": None}))
+        return replace(facts, live_next=tuple(LiveRow.from_dict(r) for r in rows))
 
     def to_dict(self) -> dict:
         """The inverse of ``from_dict`` (JSON-ready)."""
@@ -318,15 +496,21 @@ class GauntletFacts:
             if p is None
             else {"trainer": p.trainer, "join_before": list(p.join_before), "source": p.source},
             "fight_headers": [list(h) for h in self.fight_headers],
-            "one_live": None
-            if self.one_live is None
-            else {
-                k: v
-                for k, v in self.one_live.to_dict().items()
-                if k
-                in ("orders", "leave_gaps", "fight_headers", "pc_gaps", "heal_gaps", "locked_gaps")
-            },
+            "live_next": [r.to_dict() for r in self.live_next] or None,
         }
+
+    def live_rows(self) -> tuple[LiveRow, ...]:
+        """The next-fight table: ``live_next``, or the orders' prefixes when it is empty."""
+        if self.live_next:
+            return self.live_next
+        return prefix_live_rows(
+            self.orders,
+            self.leave_gaps,
+            self.fight_headers,
+            self.pc_gaps,
+            self.heal_gaps,
+            self.locked_gaps,
+        )
 
     def _index(self, order: Order) -> int:
         try:

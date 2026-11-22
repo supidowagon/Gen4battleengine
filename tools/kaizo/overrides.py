@@ -25,10 +25,10 @@ Tables (keys are ROM trainer ids unless said otherwise):
   (``trainer``, ``join_before``: the one fight before which the game makes the partner join,
   as a one-item list; ``source``) and ``fight_headers`` (the map header each fight starts on:
   one integer for every fight, or one list per order; it takes ``orders_source``) and
-  ``one_live`` (the same ``orders``, ``leave_gaps``, ``fight_headers``, ``pc_gaps``,
-  ``heal_gaps`` and ``locked_gaps`` for a party with one live Pokemon: a double-battle trainer
-  is not fought, so an order covers the group's trainers less those; absent: the same facts;
-  ``GauntletFacts.one_live``). Gap k follows
+  ``live_next`` (the next-fight table by the live count, a list of rows ``{ fought, live,
+  next, headers }`` plus ``gap`` on a plain row after a fight and ``to``, ``at`` on a change
+  row: ``nuzline.data.gauntlet.LiveRow``; absent: the walk does not depend on the count and
+  the table is the orders' prefixes; ``GauntletFacts.live_next``). Gap k follows
   the k-th fight of an order. Each fact has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
   read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
@@ -69,7 +69,7 @@ from dataclasses import dataclass, field, replace
 from itertools import permutations
 from pathlib import Path
 
-from nuzline.data.gauntlet import GauntletFacts, Partner
+from nuzline.data.gauntlet import GauntletFacts, LiveRow, Partner
 from tools.kaizo.trainer_map import (
     Mapping,
     MappingError,
@@ -350,44 +350,62 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
         partner=None if p is None else _partner(entry, p, n, orders_source),
         fight_headers=heads,
     )
-    if "one_live" not in t:
+    if "live_next" not in t:
         return facts
-    return replace(facts, one_live=replace(facts, **_one_live(entry, t["one_live"], trainers)))
+    try:
+        return replace(facts, live_next=_live_next(entry, t["live_next"]))
+    except ValueError as e:
+        if isinstance(e, OverridesError):
+            raise
+        raise OverridesError(f"{entry}: {e}") from None
 
 
-ONE_LIVE_KEYS = ("orders", "leave_gaps", "fight_headers", "pc_gaps", "heal_gaps", "locked_gaps")
+LIVE_ROW_KEYS = ("fought", "live", "next", "headers", "to", "at", "gap")
 
 
-def _one_live(entry: str, raw: object, trainers: list[int]) -> dict:
-    """``one_live``: the live-count facts (``ONE_LIVE_KEYS``, all required), read as the
-    group's own (``GauntletFacts`` field -> value)."""
-    entry = f"{entry} one_live"
-    if not isinstance(raw, dict):
-        raise OverridesError(f"{entry}: must be a table")
-    _keys(entry, raw, ONE_LIVE_KEYS)
-    missing = [k for k in ONE_LIVE_KEYS if k not in raw]
-    if missing:
-        raise OverridesError(f"{entry}: missing {', '.join(missing)}")
-    orders = _orders(entry, raw["orders"], trainers, subset=True)
-    sizes = [len(o) for o in orders]
-    n = min(sizes)
-    leave = raw["leave_gaps"]
-    if leave == "all":
-        gaps = tuple(tuple(range(1, s)) for s in sizes)
-    elif isinstance(leave, list) and leave and all(isinstance(g, list) for g in leave):
-        if len(leave) != len(orders):
-            raise OverridesError(f"{entry}: leave_gaps needs one list per order")
-        gaps = tuple(_gaps(entry, "leave_gaps", g, s) for g, s in zip(leave, sizes, strict=True))
-    else:
-        gaps = (_gaps(entry, "leave_gaps", leave, n),) * len(orders)
-    return {
-        "orders": orders,
-        "leave_gaps": gaps,
-        "fight_headers": _fight_headers(entry, raw["fight_headers"], sizes),
-        "pc_gaps": _gaps(entry, "pc_gaps", raw["pc_gaps"], n),
-        "heal_gaps": _gaps(entry, "heal_gaps", raw["heal_gaps"], n),
-        "locked_gaps": _gaps(entry, "locked_gaps", raw["locked_gaps"], n),
-    }
+def _live_next(entry: str, raw: object) -> tuple[LiveRow, ...]:
+    """``live_next``: a non-empty list of rows (``LIVE_ROW_KEYS``; ``fought``, ``live``,
+    ``next`` and ``headers`` required), checked as a table by ``check_live_rows``."""
+    entry = f"{entry} live_next"
+    if not isinstance(raw, list) or not raw:
+        raise OverridesError(f"{entry}: must be a non-empty list of rows")
+    rows = []
+    for i, r in enumerate(raw):
+        where = f"{entry}[{i}]"
+        if not isinstance(r, dict):
+            raise OverridesError(f"{where}: must be a table")
+        _keys(where, r, LIVE_ROW_KEYS)
+        missing = [k for k in ("fought", "live", "next", "headers") if k not in r]
+        if missing:
+            raise OverridesError(f"{where}: missing {', '.join(missing)}")
+        fights = []
+        for key in ("fought", "next"):
+            v = r[key]
+            if not isinstance(v, list) or not all(isinstance(f, list) for f in v):
+                raise OverridesError(f"{where}: {key} must be a list of fights")
+            fights.append(tuple(tuple(_ints(where, key, f)) for f in v))
+        for key in ("live", "to"):
+            if key in r and (not isinstance(r[key], int) or isinstance(r[key], bool)):
+                raise OverridesError(f"{where}: {key} must be an integer")
+        if "at" in r and not isinstance(r["at"], str):
+            raise OverridesError(f"{where}: at must be a string")
+        gap = r.get("gap")
+        if gap is not None and (
+            not isinstance(gap, list) or not all(isinstance(g, str) for g in gap)
+        ):
+            raise OverridesError(f"{where}: gap must be a list of strings")
+        rows.append(
+            LiveRow(
+                fought=fights[0],
+                live=r["live"],
+                next=fights[1],
+                headers=tuple(_ints(where, "headers", r["headers"])),
+                to=r.get("to", r["live"]),
+                at=r.get("at", ""),
+                gap=None if gap is None else tuple(gap),
+            )
+        )
+    return tuple(rows)
 
 
 def _fight_headers(entry: str, raw: object, sizes: list[int]) -> tuple[tuple[int, ...], ...]:
@@ -414,7 +432,15 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
         _keys(
             entry,
             t,
-            ("name", "trainers", "partner", "fight_headers", "one_live", *FACT_KEYS, *FACT_SOURCES),
+            (
+                "name",
+                "trainers",
+                "partner",
+                "fight_headers",
+                "live_next",
+                *FACT_KEYS,
+                *FACT_SOURCES,
+            ),
         )
         if not isinstance(t.get("name"), str) or not t["name"]:
             raise OverridesError(f"{entry}: name must be a non-empty string")
