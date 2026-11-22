@@ -5,7 +5,7 @@ import tomllib
 
 import pytest
 
-from nuzline.data.gauntlet import Partner
+from nuzline.data.gauntlet import GauntletFacts, Partner
 from tools.kaizo.overrides import (
     DEFAULT_PATH,
     AreaException,
@@ -217,6 +217,36 @@ def test_gauntlet_fight_headers_one_header_or_one_list_per_order(tmp_path):
         text = gauntlet_text(facts=FACTS + f"fight_headers = {bad}\n")
         with pytest.raises(OverridesError, match="fight_headers"):
             load_overrides(write(tmp_path, text))
+
+
+def test_gauntlet_one_live_facts_cover_the_trainers_less_the_double_ones(tmp_path):
+    # Ruling (2): the facts for a party with one live Pokemon (GauntletFacts.one_live); an
+    # order may leave out a trainer (a double-battle one is not fought), the rest as the group.
+    three = FACTS.replace("[[[1], [2]]]", "[[[1], [2], [3]]]").replace("[1]\n", "[1, 2]\n", 1)
+    one = "one_live = { orders = [[[2], [3]]], leave_gaps = [1], fight_headers = 7, pc_gaps = [], heal_gaps = [], locked_gaps = [] }\n"
+    f = load_overrides(write(tmp_path, gauntlet_text("[1, 2, 3]", three + one))).gauntlets[0].facts
+    assert f.orders == (((1,), (2,), (3,)),) and f.one_live is not None
+    alt = f.one_live
+    assert alt.orders == (((2,), (3,)),) and alt.leave_gaps == ((1,),)
+    assert alt.fight_headers == ((7, 7),) and alt.name == "g" and alt.one_live is None
+    row = f.to_dict()
+    assert row["one_live"] == {
+        "orders": [[[2], [3]]],
+        "leave_gaps": [[1]],
+        "fight_headers": [[7, 7]],
+        "pc_gaps": [],
+        "heal_gaps": [],
+        "locked_gaps": [],
+    }
+    assert GauntletFacts.from_dict(row) == f
+    assert load_overrides(write(tmp_path, gauntlet_text())).gauntlets[0].facts.one_live is None
+    for bad in (
+        one.replace("[[[2], [3]]]", "[[[2], [4]]]"),  # not a trainer of the group
+        one.replace("[[[2], [3]]]", "[[[2], [2]]]"),  # twice
+        one.replace("pc_gaps = [], ", ""),  # all six keys
+    ):
+        with pytest.raises(OverridesError, match="one_live"):
+            load_overrides(write(tmp_path, gauntlet_text("[1, 2, 3]", three + bad)))
 
 
 def test_missing_file_is_empty(tmp_path):

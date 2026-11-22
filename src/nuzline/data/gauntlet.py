@@ -23,7 +23,7 @@ import enum
 import re
 import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -256,6 +256,12 @@ class GauntletFacts:
     # Per order, the map header each fight starts on (tools/kaizo/gauntlet_map.py); empty: not
     # recorded.
     fight_headers: tuple[tuple[int, ...], ...] = ()
+    # The facts for a party with one live Pokemon and no partner (orders, leave_gaps,
+    # fight_headers, pc_gaps, heal_gaps, locked_gaps; the rest as above): two trainers who see
+    # the player at once fight one after the other, and a double-battle trainer is not fought
+    # (tools/kaizo/gauntlet_map.py derive_groups). None: the same as above. The planner picks
+    # by the party.
+    one_live: GauntletFacts | None = None
 
     def __post_init__(self):
         if len(self.leave_gaps) != len(self.orders):
@@ -265,7 +271,7 @@ class GauntletFacts:
     def from_dict(cls, d: Mapping) -> GauntletFacts:
         """The ``gauntlet_facts`` row of ``trainers.json`` (lists read as tuples)."""
         p = d.get("partner")
-        return cls(
+        facts = cls(
             name=d["name"],
             source=d["source"],
             orders=tuple(tuple(tuple(f) for f in o) for o in d["orders"]),
@@ -285,6 +291,10 @@ class GauntletFacts:
             else Partner(p["trainer"], tuple(p["join_before"]), p["source"]),
             fight_headers=tuple(tuple(h) for h in d.get("fight_headers", ())),
         )
+        one = d.get("one_live")  # the live-count facts only; the rest as the row's
+        if one is None:
+            return facts
+        return replace(facts, one_live=cls.from_dict({**d, **one, "one_live": None}))
 
     def to_dict(self) -> dict:
         """The inverse of ``from_dict`` (JSON-ready)."""
@@ -308,6 +318,14 @@ class GauntletFacts:
             if p is None
             else {"trainer": p.trainer, "join_before": list(p.join_before), "source": p.source},
             "fight_headers": [list(h) for h in self.fight_headers],
+            "one_live": None
+            if self.one_live is None
+            else {
+                k: v
+                for k, v in self.one_live.to_dict().items()
+                if k
+                in ("orders", "leave_gaps", "fight_headers", "pc_gaps", "heal_gaps", "locked_gaps")
+            },
         }
 
     def _index(self, order: Order) -> int:

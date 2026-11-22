@@ -506,6 +506,9 @@ escape_source = "rom:header 199 map type 3 escape bit 1"
 # Twins Liv & Liz (DOUBLE) (Gauntlet Start)*; Bug Catcher Brandon (Gauntlet)*; Aroma Lady Taylor (Gauntlet End)*
 # rows: Gardenia Split:59=15, Gardenia Split:69=13, Gardenia Split:79=14
 # Assumption: the walk enters from the Ravaged Path side only (header 254 -> warp (180,698)).
+# 15 (the twins) is a double-battle trainer (trdata battle type): with one live Pokemon it is
+# not fought, by sight or by talk (trainer_encounter.c:108-118; scripts_battles.s:19-22), so
+# the one-live facts are 13 then 14.
 [[gauntlet]]
 name = "Route 204 North"
 trainers = [15, 13, 14]
@@ -517,6 +520,7 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 346
+one_live = { orders = [[[13], [14]]], leave_gaps = [1], fight_headers = 346, pc_gaps = [], heal_gaps = [], locked_gaps = [] }
 orders_source = "rom:header 346 events 332; warp (180,698) -> header 254"
 
 # Galactic Mercury (B2B With Galactic Terra); GalacticfTerra (B2B With Galactic Mercury)
@@ -532,7 +536,7 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = [1]
 fight_headers = 256
-orders_source = "rom:scr 277 entry 2 LockAll @36, battles @44 @73, ReleaseAll @106"
+orders_source = "rom:scr 277 entry 2 LockAll @36, StartTrainerBattle @44 (296, 0) @73 (297, 0): literal ids, ReleaseAll @106"
 
 # Lass Caroline; Aroma Lady Jenna; Artist Angel
 # rows: Gardenia Split:454=324, Gardenia Split:464=259, Gardenia Split:474=260
@@ -602,7 +606,11 @@ trainers = [106, 103, 105, 111, 110]
 source = "Wake Split:215"
 # No Surf before the Fen Badge (field_control.c:690): the beach is one line, walked from the
 # lobby end or from the west end. The lobby healer (scr 462 entry 2 HealParty @74) is reached
-# at every gap from the lobby end only, so no gap heals in every order.
+# at every gap from the lobby end only, so no gap heals in every order. Hidden at the Wake
+# split: the grunt (obj 28, flag 538), Looker (obj 31, 488) and the lobby's Looker (header 376
+# obj 2, 529), cleared only past the Fen Badge (scr 459 @827-839). Trainer 696's pair and its
+# four spectators (objs 33-38, flag 482) stand until the player enters the lobby (scr 462
+# entry 1 @37, @152). Same orders and gaps either way.
 orders = [
   [[106], [103], [105], [111], [110]],
   [[110], [111], [105], [103], [106]],

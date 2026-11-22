@@ -312,6 +312,59 @@ def test_a_double_battle_trainer_fights_once_with_both_objects_or_not_at_all():
     assert one.spot == {} and Pos(1, 3, 0) in one.seen  # no fight: the player walks on
 
 
+def test_one_live_pokemon_fights_two_seers_of_one_tile_as_singles_in_turn():
+    # Ruling (2): the walk depends on the live count. Two live: one VS2 battle; one live: the
+    # first seer in object order, then the second (still seeing the tile), two singles.
+    rows = ["##.###", "##.###", "......", "##.###"]
+    a = area(1, rows, [trainer(1, 2, 0, SOUTH, 2), trainer(2, 4, 2, WEST, 2)])
+    maps = StaticMaps([a])
+    spec = ChainSpec((1, 2), (1,), (Pos(1, 0, 2),))
+    two = chain_facts(maps, Walker(maps, spec.members), spec, (1, 2))
+    one = chain_facts(maps, Walker(maps, spec.members, two_alive=False), spec, (1, 2))
+    assert two["orders"] == [[[1, 2]]] and two["leave_gaps"] == [[]]
+    assert one["orders"] == [[[1], [2]]] and one["fight_headers"] == [[1, 1]]
+    after = Walker(maps, two_alive=False).walk(Pos(1, 2, 2), {1}, y=0)
+    assert set(after.spot) == {(2,)} and after.spot[(2,)].pos == Pos(1, 2, 2)
+
+
+def test_a_hidden_object_neither_blocks_nor_spots():
+    # Ruling (1): an object whose hidden flag is set is not created on the map load
+    # (map_object.c:607-624). Trainer 1 (flag 600) watches the corridor, an NPC (flag 601)
+    # stands in it; a script-less object's flag field is no flag (map_object.c:2333-2337).
+    objs = [
+        trainer(1, 0, 1, EAST, 5)._replace(flag=600),
+        npc(7, 3, 0)._replace(flag=601),
+    ]
+    rows = ["......", "#....."]
+    a = area(1, rows, objs)
+    shown = Walker(StaticMaps([a])).walk(Pos(1, 0, 0))
+    assert Pos(1, 5, 0) not in shown.seen  # the NPC blocks row 0 ...
+    assert (1,) in shown.spot  # ... and trainer 1 sees row 1
+    hidden = Walker(StaticMaps([a]), flags={600, 601}).walk(Pos(1, 0, 0))
+    assert Pos(1, 5, 0) in hidden.seen and Pos(1, 5, 1) in hidden.seen and hidden.spot == {}
+    assert (1, 7) not in hidden.talk
+    none = MapObject(8, 8, 0, 0, 0xFFFF, 0, 0, 3, 0, 0, 601)  # no script: always created
+    b = area(1, ["......"], [none])
+    assert Pos(1, 5, 0) not in Walker(StaticMaps([b]), flags={601}).walk(Pos(1, 0, 0)).seen
+
+
+def test_a_flag_set_on_entering_a_map_hides_objects_on_the_next_load():
+    # The OnTransition script of header 2 sets flag 700 before header 1 is loaded again
+    # (field_map_change.c:254-299, then :341-351): the NPC on (2, 0) is gone on the way back.
+    one = area(1, ["....."], [npc(7, 2, 0)._replace(flag=700)], [Warp(0, 1, 0, 2, 0)])
+    two = area(2, ["..."], warps=[Warp(0, 1, 0, 1, 0)])
+    maps = StaticMaps([one, two])
+    stay = Walker(maps).walk(Pos(1, 0, 0))
+    assert Pos(1, 3, 0) not in stay.seen
+    back = Walker(maps, on_enter={2: {700}}).walk(Pos(1, 0, 0))
+    assert Pos(1, 3, 0) in back.seen and Pos(2, 0, 0) in back.seen
+    # a fight started after the visit carries the flag on (Sighting.flags)
+    guard = trainer(3, 4, 0, WEST, 1)
+    one_t = area(1, ["....."], [npc(7, 2, 0)._replace(flag=700), guard], [Warp(0, 1, 0, 2, 0)])
+    w = Walker(StaticMaps([one_t, two]), on_enter={2: {700}}).walk(Pos(1, 0, 0))
+    assert w.spot[(3,)].flags == frozenset({700})
+
+
 def test_a_ledge_is_one_way():
     a = area(1, ["...", "#v#", "..."])
     down = Walker(StaticMaps([a])).walk(Pos(1, 1, 0)).seen
@@ -580,6 +633,22 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
     assert {_fights(o): tuple(h) for o, h in zip(d["orders"], d["fight_headers"], strict=True)} == {
         _fights(o): h for o, h in zip(f.orders, f.fight_headers, strict=True)
     }
+    if f.one_live is None:
+        assert d["one_live"] is None
+    else:
+        one, alt = f.one_live, d["one_live"]
+        assert {
+            _fights(o): (tuple(g), tuple(h))
+            for o, g, h in zip(alt["orders"], alt["leave_gaps"], alt["fight_headers"], strict=True)
+        } == {
+            _fights(o): (g, h)
+            for o, g, h in zip(one.orders, one.leave_gaps, one.fight_headers, strict=True)
+        }
+        assert (tuple(alt["pc_gaps"]), tuple(alt["heal_gaps"]), tuple(alt["locked_gaps"])) == (
+            one.pc_gaps,
+            one.heal_gaps,
+            one.locked_gaps,
+        )
     if f.partner is None:
         assert d["partner"] is None
     else:
@@ -812,3 +881,232 @@ def test_a_matching_coord_outside_the_strict_headers_is_only_recorded():
     assert Pos(2, 4, 0) in w.seen and [(p.header, c.script) for p, c in w.crossed] == [(2, 7)]
     with pytest.raises(MapReadError):
         Walker(maps).walk(Pos(1, 0, 0))
+
+
+# --- hidden flags, the live count and the B2B operands (manager rulings of 22 Nov) -------------
+
+# The group's own headers (and the Route 213 lobby, the healer's header).
+OWN_HEADERS = {
+    "Oreburgh Mine": (199,),
+    "Route 204 North": (346,),
+    "Route 204 North B2B": (256,),
+    "Eterna Gym gym trainers": (67,),
+    "Team Galactic Eterna Building #1": (72, 73, 74, 75),
+    "Team Galactic Eterna Building #2": (72, 73, 74, 75),
+    "Team Galactic Eterna Building #3": (72, 73, 74, 75),
+    "Route 213": (373, 376),
+    "Wayward Cave": (284,),
+}
+
+
+def _flagged(maps, header):
+    """The objects of a header whose hidden flag matters: a script, a flag that is not map-local
+    (1-0x40, cleared on every map change) and no item ball (``MapObject.cleared``)."""
+    from tools.kaizo.gauntlet_map import NO_FIELD_MOVES
+
+    return [
+        o
+        for o in maps.area(header).objects
+        if o.script != 0xFFFF and o.flag > 0x40 and not o.cleared(NO_FIELD_MOVES)
+    ]
+
+
+@pytest.mark.slow
+def test_rom_flag_writers_are_exactly_the_cited_ones(rom_files, decomp):
+    # Every SetFlag / ClearFlag of a cited hidden flag in the whole script archive, by control
+    # flow from each file's entries. The files the walk cannot read are init-script files (a
+    # header's initScriptsArchiveID, include/map_header.h:14-15, or of the same shape: typed
+    # entries and frame tables, no commands; init_script_ids reads them).
+    import struct as st
+
+    from tools.kaizo.gauntlet_map import FLAG_WRITERS
+    from tools.rom.readers.maps import (
+        HEADER_INIT_SCRIPTS,
+        KAIZO_MAP_HEADERS,
+        SCRIPTS_NARC,
+        ScriptDecodeError,
+        _walk,
+        command_table,
+        init_script_ids,
+    )
+
+    inits = {
+        st.unpack_from("<H", b, HEADER_INIT_SCRIPTS)[0]
+        for b in rom_files.narc(KAIZO_MAP_HEADERS)
+        if len(b) >= HEADER_INIT_SCRIPTS + 2
+    }
+
+    table = command_table(decomp)
+    ops = {table.opcode["SCRCMD_SETFLAG"]: "set", table.opcode["SCRCMD_CLEARFLAG"]: "clear"}
+    scr = rom_files.narc(SCRIPTS_NARC)
+    found: dict[int, set] = {f: set() for f in FLAG_WRITERS}
+    for m in range(len(scr)):
+        try:
+            decoded = _walk(scr[m], table, f"scr {m}")[0]
+        except ScriptDecodeError:
+            assert m in inits or scr[m][0] <= 4, m
+            init_script_ids(scr[m], m)
+            continue
+        for at, (op, values, _) in decoded.items():
+            if op in ops and values[0] in found:
+                found[values[0]].add((m, at, ops[op]))
+    assert found == {f: set(w) for f, w in FLAG_WRITERS.items()}
+
+
+@pytest.mark.slow
+def test_rom_hidden_objects_per_group(rom_files):
+    # Which objects the flags hide when each group starts (GROUP_FLAGS) and after the Route 213
+    # lobby is entered (ENTER_FLAGS); every flag that matters in the group's headers is cited.
+    from tools.kaizo.gauntlet_map import ENTER_FLAGS, FLAG_WRITERS, GROUP_FLAGS, RomMaps
+
+    maps = RomMaps(rom_files)
+    hidden = {}
+    for name, heads in OWN_HEADERS.items():
+        for h in heads:
+            for o in _flagged(maps, h):
+                assert o.flag in FLAG_WRITERS, (name, h, o.index, o.flag)
+        hidden[name] = sorted(
+            (h, o.index) for h in heads for o in _flagged(maps, h) if o.flag in GROUP_FLAGS[name]
+        )
+    assert hidden == {
+        "Oreburgh Mine": [],
+        "Route 204 North": [],
+        "Route 204 North B2B": [(256, 3)],  # the Galactic works key, until both fights are won
+        "Eterna Gym gym trainers": [],
+        "Team Galactic Eterna Building #1": [],
+        "Team Galactic Eterna Building #2": [],
+        "Team Galactic Eterna Building #3": [],
+        "Route 213": [(373, 28), (373, 31), (376, 2)],  # the grunt, Looker, the lobby's Looker
+        "Wayward Cave": [],
+    }
+    lobby = sorted(o.index for o in _flagged(maps, 373) if o.flag in ENTER_FLAGS[376])
+    assert lobby == [33, 34, 35, 36, 37, 38]  # trainer 696's pair and four spectators
+
+
+def _chain_groups():
+    from tools.kaizo.gauntlet_map import BUILDINGS, OREBURGH, ROUTE_204, ROUTE_213
+
+    return [
+        ("Oreburgh Mine", OREBURGH, OREBURGH.members, {}),
+        ("Route 204 North", ROUTE_204, ROUTE_204.members, {}),
+        *(
+            (f"Team Galactic Eterna Building #{n}", BUILDINGS, g, {})
+            for n, g in enumerate(((421, 831), (410, 423), (412, 422)), 1)
+        ),
+        ("Route 213", ROUTE_213, ROUTE_213.members, {"healers": ((376, 1),)}),
+    ]
+
+
+@pytest.mark.slow
+def test_rom_objects_beyond_the_groups_headers_change_no_fact(rom_files):
+    # The flags of objects outside a group's own headers are not derived: the facts are the
+    # same with every such object standing and with every one hidden, and hiding objects only
+    # widens a walk (no ice or spin tile in these headers), so any mix gives them too.
+    from tools.kaizo.gauntlet_map import (
+        ENTER_FLAGS,
+        FLAG_WRITERS,
+        GROUP_FLAGS,
+        GROUP_SPLITS,
+        FieldMoves,
+        RomMaps,
+        Walker,
+        chain_facts,
+        read_double_trainers,
+        runs,
+    )
+
+    maps = RomMaps(rom_files)
+    doubles = read_double_trainers(rom_files)
+    for name, spec, group, kw in _chain_groups():
+
+        def walker(flags, name=name, spec=spec):
+            return Walker(
+                maps,
+                spec.members,
+                moves=FieldMoves.for_split(GROUP_SPLITS[name]),
+                strict=spec.headers,
+                doubles=doubles,
+                flags=flags,
+                on_enter=ENTER_FLAGS,
+            )
+
+        start = GROUP_FLAGS[name]
+        heads = {h for r in runs(walker(start), spec) for w in r.states for h in w.headers()}
+        # a flag an own-header object carries too (509: the Eterna City grunts) is cited
+        beyond = {
+            o.flag
+            for h in heads - set(OWN_HEADERS[name])
+            for o in _flagged(maps, h)
+            if o.flag not in FLAG_WRITERS
+        }
+        base = chain_facts(maps, walker(start), spec, group, **kw)
+        assert chain_facts(maps, walker(start | beyond), spec, group, **kw) == base, name
+
+
+@pytest.mark.slow
+def test_rom_building_1f_first_visit_placement_changes_nothing(rom_files):
+    # On the first 1F visit scr 79 entry 5 moves the grunt-Looker (local 4) to (12,15)
+    # (SetObjectEventPos @210, AddObject @230) and removes Looker (local 5, @234); later loads
+    # place both at their event tile (14,15). The building facts are the same with neither tile
+    # blocked and with both blocked, so with either placement.
+    from tools.kaizo.gauntlet_map import BUILDINGS, FieldMoves, RomMaps, Walker, chain_facts
+
+    base = RomMaps(rom_files)
+
+    class Both:
+        def __init__(self):
+            a = base.area(72)
+            (o,) = [o for o in a.objects if o.index == 2]
+            moved = o._replace(index=99, x=12, z=15, flag=0)
+            self._a = Area(
+                72, a.tiles, (*a.objects, moved), a.warps, a.coords, a.map_type,
+                a.escape_bit, a.heights,
+            )  # fmt: skip
+
+        def area(self, h, masked=True):
+            return self._a if h == 72 else base.area(h, masked)
+
+        def header(self, h):
+            return base.header(h)
+
+    def facts(maps, flags):
+        out = []
+        for g in ((421, 831), (410, 423), (412, 422)):
+            w = Walker(
+                maps, BUILDINGS.members, moves=FieldMoves.for_split("Fantina"),
+                strict=BUILDINGS.headers, flags=flags,
+            )  # fmt: skip
+            out.append(chain_facts(maps, w, BUILDINGS, g))
+        return out
+
+    neither = facts(base, {443, 450})
+    assert facts(base, ()) == neither == facts(Both(), ())
+
+
+@pytest.mark.slow
+def test_rom_b2b_battle_operands_are_literal_trainer_ids(rom_files, decomp):
+    # Ruling (5): header 256's coord script, scr 277 entry 2, StartTrainerBattle (opcode 0xE5,
+    # include/data/scripts/scrcmd.h:237; two u16 operands, asm/macros/scrcmd.inc:1427-1431) at
+    # @44 (296, 0) and @73 (297, 0): ScriptContext_GetVar (src/scrcmd_trainer.c:129-130) reads a
+    # number below VARS_START as itself, so both are literal single battles.
+    from tools.kaizo.gauntlet_map import B2B_HEADER, RomMaps, ScriptReader, b2b_facts
+
+    maps = RomMaps(rom_files)
+    scripts = ScriptReader(rom_files, decomp)
+    assert maps.header(B2B_HEADER).scripts == 277
+    battles = [(at, v) for at, c, v in scripts.trace(277, 2) if c == "SCRCMD_STARTTRAINERBATTLE"]
+    assert battles == [(44, [296, 0]), (73, [297, 0])]
+    assert b2b_facts(maps, scripts, B2B_HEADER)["orders"] == [[[296], [297]]]
+
+
+@pytest.mark.slow
+def test_rom_route_204_with_one_live_pokemon_skips_the_twins(rom_files, derived):
+    # 15 (Twins Liv & Liz) is a double-battle trainer: with one live Pokemon it is not fought.
+    # No gym trainer is one, and the Wayward pairs fight with the partner, who counts two.
+    from tools.kaizo.gauntlet_map import GYM_FIGHTS, read_double_trainers
+
+    doubles = read_double_trainers(rom_files)
+    assert 15 in doubles and not set(GYM_FIGHTS) & doubles
+    one = derived["Route 204 North"]["one_live"]
+    assert one["orders"] == [[[13], [14]]] and one["leave_gaps"] == [[1]]
+    assert {n for n, d in derived.items() if d["one_live"] is not None} == {"Route 204 North"}

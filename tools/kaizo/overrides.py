@@ -24,7 +24,11 @@ Tables (keys are ROM trainer ids unless said otherwise):
   ``heal_gaps``, ``locked_gaps`` (a list of gaps or ``"all"``) and, optional, ``partner``
   (``trainer``, ``join_before``: the one fight before which the game makes the partner join,
   as a one-item list; ``source``) and ``fight_headers`` (the map header each fight starts on:
-  one integer for every fight, or one list per order; it takes ``orders_source``). Gap k follows
+  one integer for every fight, or one list per order; it takes ``orders_source``) and
+  ``one_live`` (the same ``orders``, ``leave_gaps``, ``fight_headers``, ``pc_gaps``,
+  ``heal_gaps`` and ``locked_gaps`` for a party with one live Pokemon: a double-battle trainer
+  is not fought, so an order covers the group's trainers less those; absent: the same facts;
+  ``GauntletFacts.one_live``). Gap k follows
   the k-th fight of an order. Each fact has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
   read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
@@ -61,7 +65,7 @@ import tomllib
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from collections.abc import Mapping as MappingABC
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import permutations
 from pathlib import Path
 
@@ -241,8 +245,10 @@ def _fight(entry: str, value: object) -> tuple[int, ...]:
 
 
 def _orders(
-    entry: str, raw: object, trainers: list[int]
+    entry: str, raw: object, trainers: list[int], subset: bool = False
 ) -> tuple[tuple[tuple[int, ...], ...], ...]:
+    """The orders; each covers ``trainers`` exactly once (``subset``: the same part of them,
+    every trainer at most once)."""
     if isinstance(raw, dict):
         if set(raw) != {"permutations"} or not isinstance(raw["permutations"], list):
             raise OverridesError(f"{entry}: orders table is {{ permutations = [<fights>] }}")
@@ -253,7 +259,12 @@ def _orders(
     else:
         raise OverridesError(f"{entry}: orders must be a non-empty list of orders")
     for o in orders:
-        if sorted(i for f in o for i in f) != sorted(trainers):
+        ids = sorted(i for f in o for i in f)
+        if subset and len(set(ids)) == len(ids) and set(ids) <= set(trainers):
+            if ids != sorted(i for f in orders[0] for i in f):
+                raise OverridesError(f"{entry}: the orders cover different trainers")
+            continue
+        if ids != sorted(trainers):
             raise OverridesError(
                 f"{entry}: order {[list(f) for f in o]} does not cover the group's trainers "
                 "exactly once"
@@ -321,7 +332,7 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
     def source(key: str) -> str:
         return _fact_source(entry, t, f"{key}_source", orders_source)
 
-    return GauntletFacts(
+    facts = GauntletFacts(
         name=name,
         source=src,
         orders=orders,
@@ -339,6 +350,44 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
         partner=None if p is None else _partner(entry, p, n, orders_source),
         fight_headers=heads,
     )
+    if "one_live" not in t:
+        return facts
+    return replace(facts, one_live=replace(facts, **_one_live(entry, t["one_live"], trainers)))
+
+
+ONE_LIVE_KEYS = ("orders", "leave_gaps", "fight_headers", "pc_gaps", "heal_gaps", "locked_gaps")
+
+
+def _one_live(entry: str, raw: object, trainers: list[int]) -> dict:
+    """``one_live``: the live-count facts (``ONE_LIVE_KEYS``, all required), read as the
+    group's own (``GauntletFacts`` field -> value)."""
+    entry = f"{entry} one_live"
+    if not isinstance(raw, dict):
+        raise OverridesError(f"{entry}: must be a table")
+    _keys(entry, raw, ONE_LIVE_KEYS)
+    missing = [k for k in ONE_LIVE_KEYS if k not in raw]
+    if missing:
+        raise OverridesError(f"{entry}: missing {', '.join(missing)}")
+    orders = _orders(entry, raw["orders"], trainers, subset=True)
+    sizes = [len(o) for o in orders]
+    n = min(sizes)
+    leave = raw["leave_gaps"]
+    if leave == "all":
+        gaps = tuple(tuple(range(1, s)) for s in sizes)
+    elif isinstance(leave, list) and leave and all(isinstance(g, list) for g in leave):
+        if len(leave) != len(orders):
+            raise OverridesError(f"{entry}: leave_gaps needs one list per order")
+        gaps = tuple(_gaps(entry, "leave_gaps", g, s) for g, s in zip(leave, sizes, strict=True))
+    else:
+        gaps = (_gaps(entry, "leave_gaps", leave, n),) * len(orders)
+    return {
+        "orders": orders,
+        "leave_gaps": gaps,
+        "fight_headers": _fight_headers(entry, raw["fight_headers"], sizes),
+        "pc_gaps": _gaps(entry, "pc_gaps", raw["pc_gaps"], n),
+        "heal_gaps": _gaps(entry, "heal_gaps", raw["heal_gaps"], n),
+        "locked_gaps": _gaps(entry, "locked_gaps", raw["locked_gaps"], n),
+    }
 
 
 def _fight_headers(entry: str, raw: object, sizes: list[int]) -> tuple[tuple[int, ...], ...]:
@@ -362,7 +411,11 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
         if isinstance(t, dict) and isinstance(t.get("name"), str):
             entry = f"gauntlet {t['name']!r}"
         src = _source(entry, t)
-        _keys(entry, t, ("name", "trainers", "partner", "fight_headers", *FACT_KEYS, *FACT_SOURCES))
+        _keys(
+            entry,
+            t,
+            ("name", "trainers", "partner", "fight_headers", "one_live", *FACT_KEYS, *FACT_SOURCES),
+        )
         if not isinstance(t.get("name"), str) or not t["name"]:
             raise OverridesError(f"{entry}: name must be a non-empty string")
         trainers = _ints(entry, "trainers", t.get("trainers"))
