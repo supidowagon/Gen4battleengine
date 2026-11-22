@@ -558,6 +558,276 @@ def test_a_locked_pursuer_pursues_with_its_carried_move_in_both_engines(tables, 
     assert int(out.selected_temp[1]) == 2
 
 
+def _struggling_pursuer_board(tables, names):
+    """E2-ML-8, review 5 #2: the foe's only move, Pursuit, is disabled, so its FIGHT Struggles
+    (STRUGGLING_ALL, bcp.c:433-434) and keeps the TEMP_VALUE 1 of its last Pursuit; TryPursuit has
+    no Disable or Struggle test (battle_script.c:6899-6916), so it chases the player's switch."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 35), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Pursuit"], 35)],
+    )
+    s = s._replace(
+        disabled_move=s.disabled_move.at[1].set(n.move("Pursuit")),
+        disable_turns=s.disable_turns.at[1].set(3),
+        selected_temp=s.selected_temp.at[1].set(1),
+    )
+    return s, jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
+
+
+def test_a_carried_pursuit_draws_its_pursuit_in_the_laws(tables, names):
+    """Review 5 #2: on the locked (``_carried_board``, Rollout) and the Struggling pursuer, step
+    hits with the carried Pursuit (``step._pursuer_move``); ``outcome.pursuit_chase`` gives the
+    laws that move, so their damage table is Pursuit's, not the lock's or Struggle's."""
+    from nuzline.engine.damage import hit_damage_table
+    from nuzline.engine.outcome import pursuit_chase
+
+    pursuit = names.move("Pursuit")
+    for board, old in (
+        (_carried_board, "Rollout"),
+        (_struggling_pursuer_board, "Struggle"),
+    ):
+        s, acts = board(tables, names)
+        fires, pursues, move = (np.asarray(x) for x in pursuit_chase(tables, s, acts))
+        assert fires.tolist() == [False, True] and pursues.tolist() == [False, True]
+        assert int(move[1]) == pursuit
+        laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+        assert bool(laws.relevant.crit[1, 0]) and bool(laws.relevant.roll[1, 0])
+        want = np.asarray(hit_damage_table(tables, s, 1, pursuit))
+        stale = np.asarray(hit_damage_table(tables, s, 1, names.move(old)))
+        assert not np.array_equal(want, stale)  # the board tells the two moves apart
+        np.testing.assert_array_equal(laws.damage[1, 0], want, err_msg=old)
+
+
+@pytest.mark.slow  # two mask-sound steps (one compiled step program)
+def test_a_carried_pursuit_is_mask_sound(tables, names):
+    """Review 5 #2: the locked and the Struggling carried-Pursuit boards are mask-sound."""
+    from tests.engine.test_enumerate import _assert_mask_sound
+
+    arbitrary = O._replace(
+        crit=jnp.ones((2, MAX_HITS), jnp.int8), roll=jnp.zeros((2, MAX_HITS), jnp.int8)
+    )
+    for board in (_carried_board, _struggling_pursuer_board):
+        s, acts = board(tables, names)
+        _assert_mask_sound(tables, s, np.asarray(acts), arbitrary, 0)
+
+
+@pytest.mark.slow  # compiles the action phase (one engine)
+def test_turn_muls_read_this_turns_selection(tables, names):
+    """Review 5 #1: the search's turn powerMul (``playout.turn_muls``, through
+    ``step.replacement_power_mul``) reads this turn's TEMP_VALUE, as step does (``ts_power_mul``):
+    the foe picks Pursuit while its last selection was Tackle (20), and Tackle after a Pursuit
+    selection (10)."""
+    from nuzline.engine.step import NORMAL_POWER_MUL, PURSUIT_POWER_MUL, _action_phase
+    from nuzline.search.playout import turn_muls
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 35), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Tackle", "Pursuit"], 35)],
+    )
+    phase = jax.jit(_action_phase)
+    for last_temp, foe_action, want in ((1, 1, PURSUIT_POWER_MUL), (2, 0, NORMAL_POWER_MUL)):
+        board = s._replace(selected_temp=s.selected_temp.at[1].set(last_temp))
+        acts = jnp.asarray([MOVE_ACTIONS + 1, foe_action], jnp.int32)
+        stepped = int(phase(tables, board, acts, O)[0].ts_power_mul)
+        assert stepped == want
+        assert int(turn_muls(tables, board, acts)[0]) == stepped
+
+
+def test_selection_temps_of_items_switches_and_struggle(tables, names):
+    """E2-ML-8 (review 5): ``selection_temps`` per command. A switch writes its party slot,
+    0, 1 or 5 (bcp.c:595); a bag item writes 0 (its BattleItemUse, :565: the stated assumption);
+    a FIGHT 1 + its slot (:525), under an Encore 0 (:447); a Struggling FIGHT keeps the carried
+    value (:433-434)."""
+    from nuzline.engine.order import selection_temps
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 30 + k) for k in range(6)],
+        [_mon(n, "Houndour", ["Tackle", "Pursuit", "Leer"], 35)],
+    )
+    s = s._replace(
+        active=s.active.at[0].set(2),
+        selected_temp=jnp.asarray([3, 3], s.selected_temp.dtype),
+        trainer_items=s.trainer_items.at[1, 0].set(n.item("Potion")),
+        trainer_item_count=s.trainer_item_count.at[1].set(1),
+    )
+
+    def temps(board, a0, a1):
+        return [int(x) for x in selection_temps(tables, board, jnp.asarray([a0, a1], jnp.int32))]
+
+    assert temps(s, MOVE_ACTIONS + 0, 2) == [0, 3]
+    assert temps(s, MOVE_ACTIONS + 1, FIRST_ITEM_ACTION) == [1, 0]
+    assert temps(s, MOVE_ACTIONS + 5, 0) == [5, 1]
+    encored = s._replace(
+        encore_move=s.encore_move.at[1].set(n.move("Leer")),
+        encore_slot=s.encore_slot.at[1].set(2),
+        encore_turns=s.encore_turns.at[1].set(2),
+    )
+    assert temps(encored, 0, 2)[1] == 0
+    struggling = s._replace(pp=s.pp.at[1, 0].set(0))  # no usable move: Struggle
+    assert temps(struggling, 0, 0) == [1, 3]
+
+
+def test_a_slot_five_switch_carries_the_iv_word(tables, names):
+    """E2-ML-8 (review 5): TEMP_VALUE 5 (a switch to party slot 5) makes Battler_SelectedMove read
+    ``moves[4]``, the low 16 bits of the IV bitfield after the four move slots (battle_mon.h:64-72):
+    HP IV 4, Attack IV 7, Defense IV 0 and an even Speed IV give 4 | 7 << 5 = 228, Pursuit; an odd
+    Speed IV sets bit 15, an id past the move table: MOVE_NONE (the stated assumption). Both
+    engines read it alike."""
+    from nuzline.engine.order import past_moves_word, selection_temps
+    from nuzline.reference.engine import _selected_move
+
+    n = names
+    pursuit = n.move("Pursuit")
+    assert pursuit == 228  # the decomp's MOVE_PURSUIT
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 30 + k) for k in range(6)],
+        [_mon(n, "Houndour", ["Tackle"], 35)],
+    )
+    switch = jnp.asarray([MOVE_ACTIONS + 5, 0], jnp.int32)
+    assert int(selection_temps(tables, s, switch)[0]) == 5
+    ivs = [0] * 6
+    ivs[Stat.HP], ivs[Stat.ATK], ivs[Stat.DEF], ivs[Stat.SPE] = 4, 7, 0, 30
+    board = s._replace(
+        active=s.active.at[0].set(5),
+        ivs=s.ivs.at[0, 5].set(jnp.asarray(ivs, s.ivs.dtype)),
+        selected_temp=s.selected_temp.at[0].set(5),
+    )
+    assert int(past_moves_word(board, 0)) == pursuit
+    assert int(battler_selected_move(board, 0, True)) == pursuit
+    assert _selected_move(to_ref(board), 0) == pursuit
+    ivs[Stat.SPE] = 31
+    odd = board._replace(ivs=board.ivs.at[0, 5].set(jnp.asarray(ivs, s.ivs.dtype)))
+    assert int(battler_selected_move(odd, 0, True)) == 0
+    assert _selected_move(to_ref(odd), 0) == 0
+
+
+def test_a_locked_battler_orders_by_its_move_slot_in_the_laws(tables, names):
+    """E2-ML-5 (review 5): the laws' loose branch reads CalcTurnOrder's priority through
+    ``order_moves`` (moves[moveSlot], battle_lib.c:1375-1397): at equal speed the locked player's
+    slot 0, Quick Attack (+1), against the foe's Tackle reads no speed tie; slot 1, Rollout (0),
+    does."""
+    s, acts = _locked_order_board(tables, names)
+    s = s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(int(s.stats[0, 0, Stat.SPE - 1])))
+    loose = jax.jit(outcome_laws, static_argnames=("loose",))
+
+    def tie(board):
+        return bool(np.asarray(loose(tables, board, acts, loose=True).relevant.speed_tie))
+
+    assert not tie(s)
+    assert tie(s._replace(move_slot=s.move_slot.at[0].set(1)))
+
+
+def test_a_four_battler_berry_out_of_range_needs_another_move(tables, names):
+    """E2-ML-7 (review 5): at B = 4 a Wiki Berry holder above half HP comes into range before an
+    earlier MoveEnd only through another battler's move: with the other three switching, its
+    turn-start berry check is not read; with them using Tackle, it is."""
+    from nuzline.engine.format import DOUBLES
+    from tests.engine.d2_states import four, party_of
+
+    s = four(tables, names, DOUBLES)
+    p, slot = party_of(s, 0), int(s.active[0])
+    s = s._replace(
+        item=s.item.at[p, slot].set(names.item("Wiki Berry")),
+        nature=s.nature.at[p, slot].set(ADAMANT),
+        stats=s.stats.at[p, slot, Stat.SPE - 1].set(1),  # it acts last
+    )
+    moves = jnp.asarray([1, 0, 0, 0], jnp.int32)  # Swords Dance; the others Tackle
+    switches = jnp.asarray([1, MOVE_ACTIONS + 2, MOVE_ACTIONS + 2, MOVE_ACTIONS + 3], jnp.int32)
+    read = [
+        bool(np.any(np.asarray(_laws(tables, s, a).reads.berry_start)[:, 0]))
+        for a in (moves, switches)
+    ]
+    assert read == [True, False]
+
+
+@pytest.mark.slow  # a step against the reference
+def test_a_takeover_trump_card_reads_its_move_slot_pp(tables, names):
+    """Review 5 #3: the faster foe encores the player into its last move, Trump Card, over its
+    chosen Tackle (slot 1): FightCommand changes moveTemp, not moveSlot (bcp.c:1869-1873), so
+    CalcTrumpCardPower reads ppCur[ATTACKER_MOVE_SLOT] (battle_script.c:7237), Tackle's 1 PP:
+    80, not Trump Card's 4 after its decrement (40); in both engines."""
+    from tests.engine.test_batch13 import _dfr, _loss
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Eevee", ["Trump Card", "Tackle"], 30)],
+        [_mon(n, "Bulbasaur", ["Tackle", "Encore"], 30)],
+    )
+    s = s.with_pp(0, 0, [5, 1, 0, 0])
+    s = s._replace(
+        last_move=s.last_move.at[0].set(n.move("Trump Card")),
+        stats=s.stats.at[1, 0, Stat.SPE - 1].set(200),
+    )
+    m = n.move("Trump Card")
+    assert _dfr(tables, s, m, 80) != _dfr(tables, s, m, 40)
+    out = assert_matches_reference(tables, s, (1, 1), O)
+    assert int(out.encore_move[0]) == m
+    assert int(out.pp[0, 0, 0]) == 4 and int(out.pp[0, 0, 1]) == 1
+    assert _loss(s, out) == _dfr(tables, s, m, 80)
+
+
+@pytest.mark.slow  # a step against the reference
+def test_an_unheld_encore_counter_drains_its_move_slot(tables, names):
+    """Review 5 #3: the player locked into Bide (moveSlot 2, Growl's, from its last selection) and
+    encored into Tackle, whose encored slot 1 now holds Counter: FightCommand runs Counter and ends
+    the Encore (bcp.c:1874-1883). The faster Pressure foe's Tackle lets it pass, and
+    BattleSystem_DecPPForPressure (battle_script.c:4646; battle_lib.c:7390-7395) takes one more
+    PP from ppCur[moveSlot]: Growl's, in both engines (the action's slot 0 and the Encore slot 1
+    keep theirs from it)."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Eevee", ["Supersonic", "Counter", "Growl"], 30)],
+        [_mon(n, "Bulbasaur", ["Tackle"], 30)],
+    )
+    s = _pressure(s, 1)._replace(
+        locked_move=s.locked_move.at[0].set(n.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(2),
+        encore_move=s.encore_move.at[0].set(n.move("Tackle")),
+        encore_slot=s.encore_slot.at[0].set(1),
+        encore_turns=s.encore_turns.at[0].set(2),
+        move_slot=s.move_slot.at[0].set(2),
+        stats=s.stats.at[1, 0, Stat.SPE - 1].set(200),
+    )
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # Counter hit back
+    assert int(out.pp[0, 0, 2]) == int(s.pp[0, 0, 2]) - 1  # Growl: the Pressure drain
+    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0])
+
+
+@pytest.mark.slow  # a pause and its resume against the reference
+def test_a_takeover_u_turn_leaves_a_choice_newcomer_unlocked(tables, names):
+    """E2-ML-4 (review 5): the mid-turn takeover of ``test_a_mid_turn_encore_takeover_of_u_turn_
+    resumes_with_it`` with a Choice Band newcomer: the resumed tail's UpdateMoveBuffers reads
+    moveTemp, U-turn, whose SYSCTL_UTURN_ACTIVE exempts the Choice lock (bcp.c:3923-3929), not
+    the chosen Tackle, which would lock the newcomer into it."""
+    n = names
+    s = make_state(
+        tables,
+        [
+            _mon(n, "Scyther", ["U-turn", "Tackle"], 30),
+            _mon(n, "Geodude", ["Tackle"], 30, "Choice Band"),
+        ],
+        [_mon(n, "Bulbasaur", ["Tackle", "Encore"], 30)],
+    )
+    s = s._replace(
+        last_move=s.last_move.at[0].set(n.move("U-turn")),
+        stats=s.stats.at[1, 0, Stat.SPE - 1].set(200),
+    )
+    paused = assert_matches_reference(tables, s, (1, 1), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_move_temp) == n.move("U-turn")
+    after = _resume_after(tables, paused, 1)
+    assert int(after.active[0]) == 1 and int(after.choice_lock[0]) == 0
+
+
 def test_a_klutz_lansat_at_its_pinch_reads_its_crit_after_a_gastro_acid(tables, names):
     """E2-ML-7 (manager CLASS 7): a Klutz Lopunny holding a Lansat Berry at a quarter of its HP;
     the faster foe's Gastro Acid takes the Klutz, and that action's MoveEnd pass eats the berry
