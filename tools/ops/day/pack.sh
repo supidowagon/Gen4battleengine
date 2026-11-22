@@ -7,13 +7,16 @@
 # tables.tar.xz travels only when the tables key of <new-sha> differs from <old-sha>'s (key read
 # as snap.sh's table_key16 does: <archive>.key beside it, the tables_k<key16> name, index.txt for
 # the old one); then --tables is required. Without --tables the new key is read from
-# $RENT/tables_<short new>.tar.xz. Everything below holds for both modes except where it says delta.
+# $RENT/tables_<short new>.tar.xz. A key no archive or index.txt line gives comes from an earlier
+# send of that commit (pack_lib.sh pack_sent_key: its kept meta.env), so the old commit's key is
+# known whenever the marker's commit was sent from this PC. Everything below holds for both modes except where it says delta.
 # Bundles the git archive of <commit> + built tables + the test list + the pod scripts of
 # tools/ops/day/pod (*.sh, weights.py, weights.txt; from git at HEAD of the checkout that runs
 # pack.sh, LF, not from <commit>) into $RENT/out/<run>/payload.tar,
 # lists it, refuses forbidden files, starts a detached send and prints the exec-pod body that
 # receives the payload into /work/<run>, starts bin/notify.sh, then bin/setup.sh there; a failed
-# receive or unpack ends setup.log with RECEIVE_FAILED or UNPACK_FAILED. <run>: [a-z0-9_-], used once.
+# receive or unpack ends setup.log (--delta: receive.log, the receive's own log; quick.log starts at
+# QUICK_START) with RECEIVE_FAILED or UNPACK_FAILED. <run>: [a-z0-9_-], used once.
 # Refuses: uncommitted changes under tools/ops/day/pod; pod scripts at HEAD that differ from local
 # main's (common.sh pod_main_check: run pack.sh from a checkout at main, the main checkout;
 # PACK_OFF_MAIN_POD=1 overrides, for a road test of an ops branch only); a files.txt line outside the list format
@@ -21,7 +24,10 @@
 # or a leading '/' or './'; table entries outside TABLE_ALLOW or in TABLE_DENY; a grep error in
 # any check (the checks fail closed). Any failure after $RENT/out/<run> is created removes it.
 # Env: MARK (pytest -m for lines without A; default "not slow and not fullset": the per-tip run;
-# MARK=fullset for the merge-candidate run, DAYBOX.md "Merge candidate"), runner knobs go in the exec body.
+# MARK=fullset for the merge-candidate run, DAYBOX.md "Merge candidate"); GATE_GB, KILL_GB, MAXP
+# (the pod shape's values): each one set goes into the printed body's env (pack_body_env), in both
+# modes; unset, a normal run's runner uses its defaults and quick.sh finds them on the pod. Other
+# runner knobs go in the exec body by hand.
 # meta.env also gets GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
 # pod_sum: the packed *.sh and weights.py) and POD_WEIGHTS (pod_wsum: weights.txt); setup.sh copies
 # them to gate.env for podcheck.sh, which podcheck_body.sh runs before every pack,
@@ -41,6 +47,7 @@ else
   C="$1"; TB="$2"; RUN="$3"; LIST="$4"
 fi
 check_run_name "$RUN"
+BENV=$(pack_body_env) || { echo "$BENV"; exit 3; }   # GATE_GB, KILL_GB, MAXP set on the PC, for the body's env
 P="$RENT/out/$RUN"; [ -e "$P" ] && { echo "REFUSED: $P exists; run names are used once"; exit 3; }
 
 FORBID='\.(nds|sav|dsv|ds[0-9]|zip|xlsx|ods)$|(^|/)\.cache/|(^|/)backups?/|desktop|local\.toml'
@@ -64,11 +71,11 @@ if [ "$DELTA" = 1 ]; then
   NEW=$(git -C "$REPO" rev-parse --verify "$C^{commit}") || refuse "no such commit" "$C"
   OLD_TREE=$(git -C "$REPO" rev-parse "$OLD^{tree}"); NEW_TREE=$(git -C "$REPO" rev-parse "$NEW^{tree}")
   # Tables key: the old one from its archive or index.txt, the new one from --tables or the standard archive.
-  OKEY=$(table_key16 compare "$OLD" "$RENT/tables_${OLD:0:8}.tar.xz")
+  OKEY=$(table_key16 compare "$OLD" "$RENT/tables_${OLD:0:8}.tar.xz"); [ -n "$OKEY" ] || OKEY=$(pack_sent_key "$OLD")
   if [ -n "$TBS" ]; then [ -f "$TBS" ] || refuse "no such tables archive" "$TBS"
     NKEY=$(table_key16 capture "$NEW" "$TBS"); [ -n "$NKEY" ] || refuse "no table key for the archive (no .key file beside it, no tables_k<key16> name, or it differs from that build)" "$TBS"
-  else NKEY=$(table_key16 compare "$NEW" "$RENT/tables_${NEW:0:8}.tar.xz")
-    [ -n "$NKEY" ] || refuse "no table key for ${NEW:0:8} (no $RENT/tables_${NEW:0:8}.tar.xz or index.txt line); pass --tables <archive>" ""; fi
+  else NKEY=$(table_key16 compare "$NEW" "$RENT/tables_${NEW:0:8}.tar.xz"); [ -n "$NKEY" ] || NKEY=$(pack_sent_key "$NEW")
+    [ -n "$NKEY" ] || refuse "no table key for ${NEW:0:8} (no $RENT/tables_${NEW:0:8}.tar.xz, index.txt line or earlier send); pass --tables <archive>" ""; fi
   SHIP=0; if [ -z "$OKEY" ] || [ "$OKEY" != "$NKEY" ]; then SHIP=1
     [ -n "$TBS" ] || refuse "the tables key changed (old ${OKEY:-unknown}, new $NKEY) and no --tables was given: the delta must carry the new tables" ""; fi
 fi
@@ -91,7 +98,7 @@ if [ "$DELTA" = 0 ]; then
   deny "files.txt lines outside the format '<tests path or id> <ids per chunk> [A] [<GB>G]'" "$(cat "$P/files.txt")" -vE "$LINE"
   COMMIT=$(git -C "$REPO" rev-parse --verify "$C^{commit}")
   TREE=$(git -C "$REPO" rev-parse "$COMMIT^{tree}"); TKEY=$(table_key16 capture "$COMMIT" "$TB")   # TKEY: empty without a key
-  git -C "$REPO" -c core.autocrlf=false archive --format=tar -o "$P/code.tar" "$COMMIT"
+  pack_code_tar "$REPO" "$COMMIT" "$P/code.tar"
   cp "$TB" "$P/tables.tar.xz"
 else
   printf '%s\n' "$IDS" | sed '/^$/d' > "$P/ids.txt"   # at most 5, checked above
@@ -126,8 +133,8 @@ echo "$T" | sed 's/^/  /'; grep -v '^WATCH_' "$P/meta.env"
 pack_send   # CODE
 echo "== exec-pod body:"
 if [ "$DELTA" = 0 ]; then
-echo "{\"command\":[\"sh\",\"-c\",\"mkdir -p /work/$RUN && cd /work/$RUN && nohup sh -c 'echo \$\$ > setup.pid; /work/_bin/runpodctl receive $CODE || { echo RECEIVE_FAILED; exit 1; }; tar --no-same-owner -xf payload.tar || { echo UNPACK_FAILED; exit 1; }; setsid nohup bash bin/notify.sh > notify.log 2>&1 < /dev/null & bash bin/setup.sh' > setup.log 2>&1 < /dev/null & sleep 15; tail -3 /work/$RUN/setup.log\"],\"timeoutSeconds\":25}"
+echo "{\"command\":[\"sh\",\"-c\",\"mkdir -p /work/$RUN && cd /work/$RUN && nohup sh -c 'echo \$\$ > setup.pid; /work/_bin/runpodctl receive $CODE || { echo RECEIVE_FAILED; exit 1; }; tar --no-same-owner -xf payload.tar || { echo UNPACK_FAILED; exit 1; }; setsid nohup bash bin/notify.sh > notify.log 2>&1 < /dev/null & bash bin/setup.sh' > setup.log 2>&1 < /dev/null & sleep 15; tail -3 /work/$RUN/setup.log\"]$BENV,\"timeoutSeconds\":25}"
 else
-echo "{\"command\":[\"sh\",\"-c\",\"mkdir -p /work/$RUN && cd /work/$RUN && nohup sh -c 'echo \$\$ > quick.pid; /work/_bin/runpodctl receive $CODE || { echo RECEIVE_FAILED; exit 1; }; tar --no-same-owner -xf payload.tar || { echo UNPACK_FAILED; exit 1; }; setsid nohup bash bin/notify.sh > notify.log 2>&1 < /dev/null & bash bin/quick.sh' > quick.log 2>&1 < /dev/null & sleep 10; tail -3 /work/$RUN/quick.log\"],\"timeoutSeconds\":25}"
+echo "{\"command\":[\"sh\",\"-c\",\"mkdir -p /work/$RUN && cd /work/$RUN && nohup sh -c 'echo \$\$ > quick.pid; /work/_bin/runpodctl receive $CODE || { echo RECEIVE_FAILED; exit 1; }; tar --no-same-owner -xf payload.tar || { echo UNPACK_FAILED; exit 1; }; setsid nohup bash bin/notify.sh > notify.log 2>&1 < /dev/null & bash bin/quick.sh' > receive.log 2>&1 < /dev/null & sleep 10; tail -3 /work/$RUN/quick.log 2>/dev/null || tail -3 /work/$RUN/receive.log\"]$BENV,\"timeoutSeconds\":25}"
 fi
 echo "== then, as one background Bash call: bash tools/ops/day/wait.sh $RUN [--until done|first-failure] [--timeout <hours>]"

@@ -719,10 +719,40 @@ def test_a_lane_repo_that_differs_from_old_tree_falls_back_without_changes(src, 
         == 0
     )
     lane = tmp_path / "work/_lane/e4/repo"
-    _w(lane / "stray.txt", "someone edited the lane\n")
+    _w(lane / "stray.txt", "someone committed in the lane\n")
+    _git(lane, "add", "stray.txt")
+    _git(lane, "commit", "-qm", "a commit made in the lane repo")
     run = _make_run(tmp_path, src, "q-e4-ccccccc", src["c2"], src["c3"])
     assert _quick(tmp_path, run, cg).returncode == 3 and "FALLBACK_FULL lane tree" in _log(run)
     assert (lane / "stray.txt").exists() and not (lane / "g").exists()
+
+
+@needs_setsid
+def test_a_lane_repo_left_dirty_by_a_stopped_run_is_reset_and_the_next_delta_applies(src, tmp_path):
+    _setup_lane(tmp_path, src)
+    cg = _cgroup(tmp_path)
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
+    assert _quick(tmp_path, run, cg).returncode == 0, _log(run)
+    lane = tmp_path / "work/_lane/e4/repo"
+    # what a quick run stopped mid-pytest leaves: edits, a deleted file, untracked files, an edited
+    # tracked-but-ignored file, and test output under an ignored path
+    _w(lane / "a.txt", "edited by a test\n")
+    (lane / "f.txt").unlink()
+    _w(lane / "stray.txt", "untracked\n")
+    _w(lane / "newdir/x.txt", "untracked\n")
+    _w(lane / "ign/old.md", "edited\n")
+    _w(lane / "data/test_output.bin", "ignored\n")
+    run2 = _make_run(tmp_path, src, "q-e4-ccccccc", src["c2"], src["c3"])
+    r = _quick(tmp_path, run2, cg)
+    log = _log(run2)
+    assert r.returncode == 0 and "QUICK_APPLIED" in log and "FALLBACK" not in log, log
+    assert (lane / "a.txt").read_text(encoding="utf-8") == "a3\n" and (lane / "f.txt").exists()
+    assert (lane / "ign/old.md").read_text(encoding="utf-8") == "old2\n"
+    assert (lane / "g/h.txt").exists()
+    assert not (lane / "stray.txt").exists() and not (lane / "newdir").exists()
+    assert (lane / "data/test_output.bin").exists(), "clean without -x: ignored files stay"
+    assert _kv(tmp_path / "work/_lane/e4.sha")["COMMIT"] == src["c3"]
+    assert _git(lane, "rev-parse", "HEAD^{tree}") == _tree(tmp_path, src, src["c3"])
 
 
 @needs_setsid
@@ -984,6 +1014,35 @@ def test_pytest_over_quick_max_s_is_killed_with_its_process_group(src, tmp_path)
 
 
 @linux
+def test_memory_at_kill_gb_kills_the_quick_units_group_with_rc_98(src, tmp_path):
+    _setup_lane(tmp_path, src)
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
+    cg = _cgroup(tmp_path)
+    hold = tmp_path / "never"
+    p = _popen_quick(run, _qenv(tmp_path, cg, FAKE_PYTEST_HOLD=_p(hold)))
+    try:
+        assert _until(lambda: Path(f"{hold}.pid").exists() and (run / "out/run/q").exists()), _log(
+            run
+        )
+        pid = int(Path(f"{hold}.pid").read_text(encoding="utf-8"))
+        _w(cg / "memory.current", "100000000000\n")  # 100 GB: climbing, under KILL_GB 118
+        time.sleep(3)
+        assert p.poll() is None and _alive(pid) and "QUICK_KILLED_MEM" not in _log(run)
+        _w(cg / "memory.current", "120000000000\n")  # 120 GB: at KILL_GB or over
+        assert p.wait(timeout=60) == 98, _log(run)
+    finally:
+        hold.write_text("go", encoding="utf-8")
+        if p.poll() is None:
+            p.kill()
+    log = _log(run)
+    assert re.search(r"^QUICK_KILLED_MEM \d+ mem 120$", log, re.MULTILINE), log
+    assert "reached KILL_GB 118" in log and log.rstrip().endswith("QUICK_DONE rc=98")
+    assert not _alive(pid), "the unit's process group is killed"
+    assert not (run / "out/run/q").exists()
+    assert (run / "quick.rc").read_text(encoding="utf-8").strip() == "98"
+
+
+@linux
 def test_real_flock_the_stream_lock_and_the_gate_lock(src, tmp_path):
     repo = _setup_lane(tmp_path, src)
     cg = _cgroup(tmp_path)
@@ -1085,3 +1144,135 @@ def test_notify_offers_the_quick_results_once_quick_rc_is_written(src, tmp_path)
         assert b"WATCH_" not in t.extractfile("meta.env").read()
     log = (run / "notify.log").read_text(encoding="utf-8")
     assert "quick run over" in log and "secret" not in log
+
+
+# --- the shape knobs (GATE_GB, KILL_GB, MAXP) ---------------------------------------------------------
+
+
+def _knobs_line(run: Path) -> str:
+    m = re.search(r"^QUICK_KNOBS .*$", _log(run), re.MULTILINE)
+    assert m, _log(run)
+    return m.group(0)
+
+
+@needs_setsid
+@pytest.mark.parametrize(
+    ("env", "want"),
+    [
+        (
+            {"GATE_GB": "50", "KILL_GB": "60", "MAXP": "3"},
+            "QUICK_KNOBS body GATE_GB=50 KILL_GB=60 MAXP=3",
+        ),
+        ({"MAXP": "5"}, "QUICK_KNOBS body+limit:256GB GATE_GB=200 KILL_GB=236 MAXP=5"),
+    ],
+)
+def test_knobs_from_the_body(src, tmp_path, env, want):
+    _setup_lane(tmp_path, src)
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
+    r = _quick(tmp_path, run, _cgroup(tmp_path, limit=256_000_000_000), **env)
+    assert r.returncode == 0 and _knobs_line(run) == want
+
+
+@needs_setsid
+@pytest.mark.parametrize(
+    ("limit", "want"),
+    [
+        ("256000000000", "limit:256GB GATE_GB=200 KILL_GB=236 MAXP=18"),
+        ("128000000000", "limit:128GB GATE_GB=88 KILL_GB=118 MAXP=10"),
+        ("max", "limit:max GATE_GB=88 KILL_GB=118 MAXP=10"),
+    ],
+)
+def test_knobs_from_the_container_limit_without_a_live_run(src, tmp_path, limit, want):
+    _setup_lane(tmp_path, src)
+    # a run whose runner is dead (the stub ps lists no process) does not count
+    _w(tmp_path / "work/e1-x-1234567/run.env", "export GATE_GB='10'\n")
+    _w(tmp_path / "work/e1-x-1234567/runner.pid", "4242\n")
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
+    cg = _cgroup(tmp_path)
+    _w(cg / "memory.max", f"{limit}\n")
+    assert _quick(tmp_path, run, cg).returncode == 0, _log(run)
+    assert _knobs_line(run) == f"QUICK_KNOBS {want}"
+
+
+@needs_setsid
+def test_knobs_from_the_newest_live_runs_run_env(src, tmp_path):
+    _setup_lane(tmp_path, src)
+    work = tmp_path / "work"
+    # live (pid 4242 in the stub ps); its run.env sets no MAXP: the runner's default 10
+    _w(work / "e1-x-1234567/run.env", "export GATE_GB='200'\nexport KILL_GB='236'\n")
+    _w(work / "e1-x-1234567/runner.pid", "4242\n")
+    # a live setup, older
+    _w(work / "e3-z-1111111/run.env", "export GATE_GB='77'\n")
+    _w(work / "e3-z-1111111/setup.pid", "4242\n")
+    # the newest, but its runner is dead
+    _w(work / "e2-y-7654321/run.env", "export GATE_GB='11'\n")
+    _w(work / "e2-y-7654321/runner.pid", "4243\n")
+    t = time.time()
+    os.utime(work / "e3-z-1111111/run.env", (t - 300, t - 300))
+    os.utime(work / "e1-x-1234567/run.env", (t - 200, t - 200))
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
+    env = _qenv(tmp_path, _cgroup(tmp_path, limit=256_000_000_000))
+    ps = tmp_path / "stubs/ps"  # one live process, pid 4242 (pid, pgid, stat, rss)
+    _w(ps, "#!/bin/sh\necho '4242 4242 S 100'\n")
+    os.chmod(ps, 0o755)
+    r = _bash(f"bash '{_p(run / 'bin/quick.sh')}'", env, check=False)
+    assert r.returncode == 0, _log(run)
+    assert _knobs_line(run) == "QUICK_KNOBS run:e1-x-1234567 GATE_GB=200 KILL_GB=236 MAXP=10"
+
+
+# --- pack.sh: the body's env, the old tables key, what a send holds -----------------------------------
+
+
+def _lib(call: str) -> str:
+    return f"set -euo pipefail; HERE='{_p(DAY)}'; . \"$HERE/pack_lib.sh\"; {call}"
+
+
+def test_the_body_env_holds_only_the_shape_knobs_set_on_the_pc():
+    assert _bash(_lib("pack_body_env")).stdout == ""
+    knobs = {"GATE_GB": "200", "KILL_GB": "236", "MAXP": "18"}
+    assert (
+        _bash(_lib("pack_body_env"), knobs).stdout
+        == ',"env":{"GATE_GB":"200","KILL_GB":"236","MAXP":"18"}'
+    )
+    assert _bash(_lib("pack_body_env"), {"MAXP": "5"}).stdout == ',"env":{"MAXP":"5"}'
+    r = _bash(_lib("pack_body_env"), {"KILL_GB": "2x"}, check=False)
+    assert r.returncode == 3 and "KILL_GB '2x' is not a whole number" in r.stdout
+    # both printed bodies (normal and --delta) carry it after the command
+    text = (DAY / "pack.sh").read_text(encoding="utf-8")
+    assert text.count('\\"]$BENV,\\"timeoutSeconds') == 2
+
+
+def test_the_old_tables_key_comes_from_an_earlier_send_of_that_commit(src, tmp_path):
+    rent = tmp_path / "scratch" / "rent"
+    _w(rent / "tables/index.txt", f"{src['c3']} {'a' * 64}\n")  # the new tip's key only
+    ids = _p(tmp_path / "ids.txt")
+    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-aaaaaaa", ids)
+    assert r.returncode == 3 and "tables key changed (old unknown" in r.stdout, r.stdout
+    # an earlier send of c1 kept its meta.env (COMMIT, TABLES_KEY): the same key, no tables
+    _w(rent / "out/e4-a0m-1111111/meta.env", f"COMMIT={src['c1']}\nTABLES_KEY={'a' * 16}\n")
+    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-bbbbbbb", ids)
+    assert "tables key" not in r.stdout, r.stdout
+    # a newer send of c1 with another key wins: the key changed, the tables must travel
+    _w(rent / "out/q-e4-2222222/meta.env", f"COMMIT={src['c1']}\nTABLES_KEY={'b' * 16}\n")
+    t = time.time()
+    os.utime(rent / "out/e4-a0m-1111111/meta.env", (t - 100, t - 100))
+    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-ccccccc", ids)
+    assert r.returncode == 3 and f"(old {'b' * 16}, new {'a' * 16})" in r.stdout, r.stdout
+
+
+def test_no_untracked_or_ignored_file_gets_into_a_send(src, tmp_path):
+    r = src["repo"]
+    _w(r / "data/local.toml", "secret = 1\n")  # git-ignored (data/)
+    _w(r / ".cache/x.nds", "rom\n")  # untracked
+    _w(r / "a.txt", "an uncommitted edit\n")
+    out = tmp_path / "o"
+    assert _build_delta(r, src["c1"], src["c3"], out).returncode == 0
+    code = tmp_path / "code.tar"
+    _bash(_lib(f"pack_code_tar '{_p(r)}' {src['c3']} '{_p(code)}'"))
+    for tar in (out / "delta.tar", code):
+        names = _tar_names(tar)
+        assert names and not any(
+            n.startswith(("data/", ".cache/")) or n.endswith(".nds") for n in names
+        ), names
+        with tarfile.open(tar) as t:
+            assert t.extractfile("a.txt").read() == b"a3\n"

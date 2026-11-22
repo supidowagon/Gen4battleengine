@@ -88,3 +88,26 @@ $(printf '%s\n' "${dels[@]+"${dels[@]}"}")" -E "$BADPATH"
   [ "${#batch[@]}" = 0 ] || pack_delta_batch "$repo" "$new" "$out" "${batch[@]}"
   printf '%s\n' "${dels[@]+"${dels[@]}"}" | sed '/^$/d' > "$out/deletions.txt"
   DELTA_ADD=${#paths[@]}; DELTA_DEL=${#dels[@]}; }
+
+# pack_code_tar <repo> <commit> <out tar>: a full send's code.tar, the git archive of <commit>
+# (git objects only: no untracked or ignored file of the working tree can get in).
+pack_code_tar() { git -C "$1" -c core.autocrlf=false archive --format=tar -o "$3" "$2"; }
+
+# pack_sent_key <full sha>: the table key16 an earlier send of that commit recorded: TABLES_KEY of
+# the newest $RENT/out/<run>/meta.env whose COMMIT is <sha> (normal and delta sends write both;
+# NEW is a delta's COMMIT). The quick lane's marker on the pod holds that same key. Prints
+# nothing when no kept meta.env has one.
+pack_sent_key() { local f k
+  for f in $(ls -t "$RENT"/out/*/meta.env 2>/dev/null); do
+    grep -qx "COMMIT=$1" "$f" || continue
+    k=$(sed -n 's/^TABLES_KEY=//p' "$f" | tail -1 | tr -d '\r')
+    echo "$k" | grep -qE '^[0-9a-f]{16}$' && { echo "$k"; return 0; }; done; return 0; }
+
+# pack_body_env: the exec-pod body's env field (',"env":{...}') holding GATE_GB, KILL_GB and MAXP
+# as set on the PC for pack.sh (the shape's values, docs/process.md section 5), only those set;
+# nothing when none is. Refuses a value that is not a whole number.
+pack_body_env() { local n v out=""
+  for n in GATE_GB KILL_GB MAXP; do v=${!n-}; [ -n "$v" ] || continue
+    case "$v" in *[!0-9]*) refuse "$n '$v' is not a whole number" "";; esac
+    out="$out${out:+,}\"$n\":\"$v\""; done
+  [ -z "$out" ] || printf ',"env":{%s}' "$out"; }

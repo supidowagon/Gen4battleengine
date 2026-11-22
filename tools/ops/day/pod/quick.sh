@@ -17,12 +17,19 @@
 # 5 broken pod state; 6 pytest passed no test (all skipped or deselected); 11-15 pytest's exit
 # code 1-5 plus 10 (11: a test failed; 12 also when uv fails before pytest, uv exits 2); 20 any
 # other exit (a signal);
-# 124 pytest ran over QUICK_MAX_S (its process group was killed). quick.rc holds the rc, agg.txt
+# 98 container memory reached KILL_GB while pytest ran (its process group was killed, as runner.sh
+# kills a unit at KILL_GB: QUICK_KILLED_MEM); 124 pytest ran over QUICK_MAX_S (its process group was killed). quick.rc holds the rc, agg.txt
 # "RESULT: PASS|FAIL (...)" plus the log (wait.sh and collect.sh read agg.txt; bin/notify.sh sees
 # quick.rc and offers results.tgz like the end of a normal run). Writes gate.env (podcheck.sh).
 # One quick run per stream at a time: the stream's flock (QUICK_LOCK_S, default 600 s, else
 # FALLBACK_FULL lane busy) is held from before step (a) to the end, pytest included.
-# Env: QUICK_MAX_S (pytest time limit, default 1800), QUICK_WAIT_S (gate wait, default 900),
+# Shape knobs GATE_GB, KILL_GB, MAXP: the body's env; each one it leaves unset comes from the
+# newest live run's run.env (runner.pid or setup.pid alive; the runner's default where that run.env
+# sets none, as that runner uses it), else from the container limit (cgmem max) as docs/process.md
+# section 5 maps it: 200 GB or more 200 / 236 / 18, else (or no limit) 88 / 118 / 10. Logged as
+# QUICK_KNOBS <body|run:<name>|limit:<GB|max|none>> GATE_GB=.. KILL_GB=.. MAXP=.. ("body+" when the
+# body set only some).
+# Env: QUICK_MAX_S (pytest time limit, default 1800), QUICK_KILL_POLL_S (the KILL_GB watch, 1), QUICK_WAIT_S (gate wait, default 900),
 # QUICK_POLL_S (10), QUICK_LOCK_S, LANE_ROOT (/work/_lane), WORK (/work), CGROOT, and the runner's
 # knobs with its defaults: GATE_GB, KILL_GB, MAXP, IDLE_WAIT_S, DEFAULT_WEIGHT_GB, RUNNER_LOCK,
 # CLAIMS, CLAIM_S, CLAIM_MAX_S, RESERVE_TOP, RESERVE_FULL_GB, RESERVE_PCT; NUZLINE_TEST_COMPILE_CACHE
@@ -38,11 +45,29 @@ printf 'GATE_VERSION=%s\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\n' "${GATE_VERSION:-}" "
 . "$D/bin/gate.sh"; . "$D/bin/lane.sh"
 WORK="${WORK:-/work}"; O="$D/out"
 # runner.sh's knobs and defaults: the quick unit passes the same gate as a runner's unit.
-GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; KILL_GB="${KILL_GB:-118}"; NO_W_FILE_GB="${DEFAULT_WEIGHT_GB:-12}"
+NO_W_FILE_GB="${DEFAULT_WEIGHT_GB:-12}"
 IDLE_WAIT_S="${IDLE_WAIT_S:-300}"; LOCK="${RUNNER_LOCK:-/work/.runner.lock}"; CLAIMS="${CLAIMS:-/work/.claims}"
 CLAIM_S="${CLAIM_S:-120}"; CLAIM_MAX_S="${CLAIM_MAX_S:-3600}"
 RESERVE_TOP="${RESERVE_TOP:-2}"; RESERVE_FULL_GB="${RESERVE_FULL_GB:-40}"; RESERVE_PCT="${RESERVE_PCT:-75}"
 RUN=$(basename "$D"); ENDED=0; LR=""; L=""
+
+# quick_knobs: sets GATE_GB, KILL_GB, MAXP and KN_SRC (header: Shape knobs).
+quick_knobs() { local f r best="" g k m b lim
+  if [ -n "${GATE_GB:-}" ] && [ -n "${KILL_GB:-}" ] && [ -n "${MAXP:-}" ]; then KN_SRC=body; return 0; fi
+  while IFS= read -r f; do r=${f%/run.env}
+    case "${r#"$WORK"/}" in _*|*/_*) continue;; esac; [ "$r" = "$D" ] && continue
+    if pidlive "$(cat "$r/runner.pid" 2>/dev/null)" || pidlive "$(cat "$r/setup.pid" 2>/dev/null)"; then best=$r; break; fi
+  done < <(ls -t "$WORK"/*/run.env "$WORK"/*/*/run.env 2>/dev/null)
+  if [ -n "$best" ]; then KN_SRC="run:${best#"$WORK"/}"
+    read -r g k m <<< "$(unset GATE_GB KILL_GB MAXP; . "$best/run.env" > /dev/null 2>&1; echo "${GATE_GB:-88} ${KILL_GB:-118} ${MAXP:-10}")"
+  else b=$(cgmem max) || b=none; g=88; k=118; m=10
+    case "$b" in none|max) lim=$b;; ''|*[!0-9]*) lim="?";;
+      *) if [ "${#b}" -ge 19 ] || [ "$b" -ge 1152921504606846976 ]; then lim=max
+         else lim="$(( b / 1000000000 ))GB"; [ "$b" -lt 200000000000 ] || { g=200; k=236; m=18; }; fi;; esac
+    KN_SRC="limit:$lim"; fi
+  case "$g$k$m" in ''|*[!0-9]*) g=88; k=118; m=10;; esac
+  [ -z "${GATE_GB:-}${KILL_GB:-}${MAXP:-}" ] || KN_SRC="body+$KN_SRC"
+  GATE_GB="${GATE_GB:-$g}"; KILL_GB="${KILL_GB:-$k}"; MAXP="${MAXP:-$m}"; }
 
 # end <rc> <result text>: the last lines, quick.rc, agg.txt; exits.
 end() { local rc="$1" res="$2"; ENDED=1
@@ -64,6 +89,8 @@ mapfile -t IDS < <(tr -d '\r' < ids.txt | sed -E '/^[[:space:]]*(#|$)/d')
 [ "${#IDS[@]}" -ge 1 ] && [ "${#IDS[@]}" -le 5 ] || fallback "ids.txt holds ${#IDS[@]} ids (1 to 5 allowed)"
 reserve_knobs || failq 5 "bad RESERVE_ knob"
 echo "QUICK_START $(date +%s) run $RUN stream $STREAM ${OLD:0:8}..${NEW:0:8} ids ${#IDS[@]}"
+quick_knobs; echo "QUICK_KNOBS $KN_SRC GATE_GB=$GATE_GB KILL_GB=$KILL_GB MAXP=$MAXP"
+case "$GATE_GB$KILL_GB$MAXP" in *[!0-9]*) failq 5 "GATE_GB, KILL_GB and MAXP must be whole numbers";; esac
 
 L="$LANE_ROOT/$STREAM"; LR="$L/repo"; MK="$LANE_ROOT/$STREAM.sha"
 mkdir -p "$LANE_ROOT" || fallback "cannot create the lane folder"
@@ -104,7 +131,13 @@ mkdir -p "$LR/external" && ln -sfn "$WORK/_decomp/$DECOMP" "$LR/external/pokepla
 # The tables: a delta without tables.tar.xz needs the marker's key to be OLD_TABLES_KEY (both known).
 if [ ! -f tables.tar.xz ] && { [ -z "${OLD_TABLES_KEY:-}" ] || [ "$M_KEY" != "$OLD_TABLES_KEY" ]; }; then
   fallback "tables key of the lane (${M_KEY:-unknown}) is not the delta's OLD key (${OLD_TABLES_KEY:-unknown}) and no tables travel"; fi
-T=$(lane_tree "$LR") || fallback "git failed in the lane repo"
+# A quick run stopped mid-pytest (stop.sh, a pod restart) leaves the tests' edits and untracked
+# files: they go first (reset to the snapshot commit; clean without -x, so git-ignored files, the
+# built tables, the venv and what tests write under ignored paths, stay). Then the tracked files
+# are exactly HEAD's, so HEAD^{tree} is the repo's tree (the tracked-but-ignored files included:
+# every snapshot commit force-adds them) and must be OLD_TREE: a commit made in the lane repo fails it.
+( cd "$LR" && git reset -q --hard HEAD && git clean -fdq ) > /dev/null 2>&1 || fallback "git reset or clean failed in the lane repo"
+T=$(git -C "$LR" rev-parse 'HEAD^{tree}' 2> /dev/null) || fallback "git failed in the lane repo"
 [ "$T" = "$OLD_TREE" ] || fallback "lane tree ${T:0:8} is not OLD_TREE ${OLD_TREE:0:8}"
 
 # (c) apply. Every path is checked first, so a refused delta changes nothing in the lane repo.
@@ -186,17 +219,27 @@ while :; do
   sleep "${QUICK_POLL_S:-10}"
 done
 echo "QUICK_RUN $now ($a) mem ${mem} GB, reserve ${pres} GB, weight ${W} GB, pod units $(( plive + 1 ))"
-# Time limit: past QUICK_MAX_S the watcher writes out/q.timeout and kills the unit's process group
-# (TERM, 5 s, KILL), as runner.sh kills a unit over UNIT_MAX_S.
-rm -f "$O/q.timeout"
+# The watcher, every QUICK_KILL_POLL_S (1) s: container memory (cgmem, in GB as runner.sh reads
+# it) at KILL_GB or over writes out/q.memkill, logs QUICK_KILLED_MEM <epoch> mem <GB> and kills
+# the unit's process group (TERM, 5 s, KILL). A runner at KILL_GB kills the newest unit of its own
+# run (its run/ folder), never this one, and checks once per loop (10 s or more): the quick unit,
+# polled every second, goes first, so a misweighted quick id does not get other runs' chunks
+# killed. Past QUICK_MAX_S it writes out/q.timeout and kills the group the same way, as runner.sh
+# kills a unit over UNIT_MAX_S.
+rm -f "$O/q.timeout" "$O/q.memkill"
 ( e=$(( $(date +%s) + ${QUICK_MAX_S:-1800} ))
-  while [ "$(date +%s)" -lt "$e" ]; do sleep 1; kill -0 "$QPG" 2> /dev/null || exit 0; done
-  date +%s > "$O/q.timeout"; kill -TERM -- "-$QPG" 2> /dev/null; sleep 5; kill -KILL -- "-$QPG" 2> /dev/null; exit 0 ) 8>&- 9>&- &
+  kpg() { kill -TERM -- "-$QPG" 2> /dev/null; sleep 5; kill -KILL -- "-$QPG" 2> /dev/null; }
+  while kill -0 "$QPG" 2> /dev/null; do
+    if b=$(cgmem current) && [ $(( b / 1000000000 )) -ge "$KILL_GB" ]; then
+      echo "$(date +%s) $(( b / 1000000000 ))" > "$O/q.memkill"; echo "QUICK_KILLED_MEM $(date +%s) mem $(( b / 1000000000 ))"; kpg; exit 0; fi
+    [ "$(date +%s)" -lt "$e" ] || { date +%s > "$O/q.timeout"; kpg; exit 0; }
+    sleep "${QUICK_KILL_POLL_S:-1}"; done; exit 0 ) 8>&- 9>&- &
 WPID=$!
 wait "$QPG"; PRC=$?
-if [ -f "$O/q.timeout" ]; then wait "$WPID"; else kill "$WPID" 2> /dev/null; wait "$WPID" 2> /dev/null; fi
+if [ -f "$O/q.timeout" ] || [ -f "$O/q.memkill" ]; then wait "$WPID"; else kill "$WPID" 2> /dev/null; wait "$WPID" 2> /dev/null; fi
 rm -f "$O/run/q"
-# The tests' leftovers (non-ignored files, edits) go, so the next delta's OLD_TREE check holds.
+# The tests' leftovers (non-ignored files, edits) go now; the next quick run resets again before
+# its OLD_TREE check, for a run that never got here.
 ( cd "$LR" && git reset -q --hard HEAD && git clean -fdq ) > /dev/null 2>&1
 # (f) result.
 SUM=$(grep -v '^[[:space:]]*$' "$D/quick.pytest.log" | tail -1)
@@ -205,6 +248,10 @@ SUM=$(grep -v '^[[:space:]]*$' "$D/quick.pytest.log" | tail -1)
 # is mawk, which reads _{3,} as a literal.
 BLK=$(awk '/^___+ |^(FAILED|ERROR) /{f=1} f{print; if(++n>=30) exit}' "$D/quick.pytest.log")
 SKP=$(grep -E '^SKIPPED ' "$D/quick.pytest.log" | head -10)
+if [ -f "$O/q.memkill" ]; then read -r _ KM < "$O/q.memkill"
+  echo "QUICK_FAIL container memory ${KM} GB reached KILL_GB ${KILL_GB}: unit killed (pytest rc $PRC) $SUM"; [ -z "$BLK" ] || printf '%s
+' "$BLK"
+  end 98 "FAIL (killed at KILL_GB ${KILL_GB}: memory ${KM} GB)"; fi
 if [ -f "$O/q.timeout" ]; then echo "QUICK_FAIL timeout after ${QUICK_MAX_S:-1800} s (pytest rc $PRC) $SUM"; [ -z "$BLK" ] || printf '%s\n' "$BLK"
   end 124 "FAIL (timeout after ${QUICK_MAX_S:-1800} s)"; fi
 if [ "$PRC" = 0 ]; then
