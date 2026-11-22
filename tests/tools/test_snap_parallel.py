@@ -486,7 +486,7 @@ def snap_dry(tmp_path):
         pytest.skip("no POSIX bash")
     repo, scratch = tmp_path / "repo", tmp_path / "scratch"
     for rel in ("tools/ops/common.sh", "tools/ops/day/snap.sh", "tools/ops/day/send_body.sh",
-                "tools/ops/day/pod/gate.sh", "tools/ops/day/pod/cache_sync.sh"):  # fmt: skip
+                "tools/ops/day/table_key16.sh", "tools/ops/day/pod/gate.sh", "tools/ops/day/pod/cache_sync.sh"):  # fmt: skip
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         (repo / rel).write_bytes((ROOT / rel).read_bytes().replace(b"\r", b""))
     (repo / ".gitignore").write_text("external/\n", encoding="utf-8", newline="\n")

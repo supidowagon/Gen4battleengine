@@ -958,7 +958,7 @@ three structs has a row.
 | `BattleContext.moveCopiedHit` | `move_copied_hit` | mapped |
 | `BattleContext.moveSketched` | — | later (M6) |
 | `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.moveSlot` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.moveSlot` | — | not mapped (open, candidate B; e2-mechanics-ledger.md): NOT reset each turn. Written only at selection (bcp.c:445, :526), zeroed once at BattleContext_New (bcp.c:182), kept by BattleContext_Init (battle_lib.c:1974-2017); a locked battler skips selection (bcp.c:333-337) and keeps its last selection's slot, which CalcTurnOrder's priority reads (battle_lib.c:1375-1398). `step` takes the chosen action's slot (TryGrudge, PP) and the lock's move for the order |
 | `BattleContext.conversion2Move` | `conv2_move` | mapped |
 | `BattleContext.conversion2Battler` | `conv2_battler` | mapped |
 | `BattleContext.conversion2Type` | `conv2_type` | mapped |
