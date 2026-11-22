@@ -137,11 +137,11 @@ per day is the rate used for estimates.
   deleting the file frees nothing.
   `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
-  weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured
-  ROM-only item waits for more than 20 GB free. Local measuring pass:
+  weighs 20), else 6 GB (the pod weight when the item has a higher key), so an unmeasured
+  ROM-only item waits for more than 12 GB free (the PC idles at 16-18 GB free; engine ids that stay ROM-only keep an explicit 14 line, tag `engine-test-pod`). Local measuring pass:
   `python tools/ops/ramgate_measure.py IDS_FILE OUT_JSON [--skip SLOW_IDS_FILE]` (its header
   has the details): it holds the machine lock as kind `measure` for the whole pass, runs one
-  file's ROM-only ids per process, strictly serial, each started when free RAM is above 20 GB;
+  file's ROM-only ids per process, strictly serial, each started when free RAM is above 12 GB;
   it polls every 0.5 s and kills that pytest tree when free RAM drops below 4 GB (the file is
   then marked `pod-measure needed`, weight 20); figure = ceil(max(1.25 m, m + 2)) GB of the
   peak summed RSS m of the tree, tag `local-measure-<sha7>-<yyyymmdd>`. Every gated run (and

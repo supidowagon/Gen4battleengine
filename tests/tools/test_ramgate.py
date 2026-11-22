@@ -236,19 +236,19 @@ def test_an_engine_free_item_without_a_key_weighs_six():
     assert gate([new_tool_test], free=11.9, modules=NO_ENGINE, env=env)[0] == "TIMEOUT"
 
 
-def test_rom_only_items_weigh_fourteen_until_measured():
+def test_rom_only_items_weigh_six_until_measured():
     light = item("tests/b/test_y.py::t[x]", "kaizo_inputs")  # pod table says 4
-    assert rg.ROM_UNMEASURED_GB == 14.0
-    assert rg.item_weight(light, TABLE, {}) == 14.0
-    assert rg.item_weight(item("tests/zzz.py::t", "docs"), TABLE, {}) == 14.0  # no pod key
+    assert rg.ROM_UNMEASURED_GB == 6.0
+    assert rg.item_weight(light, TABLE, {}) == 6.0
+    assert rg.item_weight(item("tests/zzz.py::t", "docs"), TABLE, {}) == 6.0  # no pod key
     assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}) == 30.0
     assert rg.item_weight(item("tests/b/test_y.py::t", "tmp_path"), TABLE, {}) == 4.0
     measured = {"tests/b/test_y.py": 7.0, "tests/b/test_y.py::t": 9.0}
     assert rg.item_weight(light, TABLE, measured) == 9.0  # longest prefix wins
     assert rg.item_weight(item("tests/b/test_y.py::u", "docs"), TABLE, measured) == 7.0
     env = {rg.ENV_TIMEOUT: "0"}
-    assert gate([light], free=20.1, rom_table={}, env=env)[0] == "GO"  # needs > 20
-    assert gate([light], free=19.9, rom_table={}, env=env)[0] == "TIMEOUT"
+    assert gate([light], free=12.1, rom_table={}, env=env)[0] == "GO"  # needs > 12
+    assert gate([light], free=11.9, rom_table={}, env=env)[0] == "TIMEOUT"
     assert gate([light], free=13.1, rom_table={"tests/b/test_y.py": 7.0}, env=env)[0] == "GO"
 
 
@@ -1079,7 +1079,7 @@ def test_the_measuring_harness_figures_and_reads_rss():
     assert harness.figure(2.0) == 4 and harness.figure(10.0) == 13 and harness.figure(0.5) == 3
     assert harness.rss_bytes(os.getpid()) > 10_000_000  # this pytest process
     assert harness.tree_pids(os.getpid())[0] == os.getpid()
-    assert harness.START_FREE_GB - rg.RESERVE_GB == 14.0
+    assert harness.START_FREE_GB - rg.RESERVE_GB == rg.ROM_UNMEASURED_GB == 6.0
     text = (ROOT / "tools/ops/ramgate_measure.py").read_text(encoding="utf-8")
     assert 'kind="measure"' in text and "rg.ENV_NO_WAIT" in text
 
