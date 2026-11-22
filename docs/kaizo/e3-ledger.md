@@ -1853,3 +1853,16 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   +4. docs/kaizo/pipeline.md rule 10 updated. Owed lines closed: none. Owed lines added: 9 (walking-partner heal,
   encounter.c:197-199) and 10 (sight-pair setting). Not built: the heal's consumer (E4-P). Doubles (section 5, item 3):
   the ids, not a yes/no. The table key changes (data tables rebuilt).
+- E3-B2-35 `expand.laws_rows` OOM (test_cli solve_small, solve_deaths, prep_small, prep_resume on train 38099359: XLA
+  OOM 68,786,382,864 B in `expand_laws`). Cause: `laws_rows` ran every call at CHUNK = 16384 rows (padding = copies of
+  row 0, so a small solve paid for 16384 rows too), and `_laws` needs 4,198,547 B of temporaries per row, which XLA CPU
+  allocates as one arena per call: 16384 x 4.198 MB = 68.8 GB. 96.8% of a row (4,064,256 B) is one pred[2016, 2016],
+  the end-of-turn speed-tie test `pair_tie` in `enumerate.outcome_laws` (2016 = `_end_speeds`' grid per side). Not a
+  train regression: main 5a964f14 compiles to the same bytes (`_scratch/e3/laws_oom.md`). Fix, part 2 (this entry):
+  `laws_rows` calls have `min(LAWS_CHUNK, bucket_rows(N))` rows, LAWS_CHUNK = 4096 (expand.py), as `ai_rows`' buckets
+  (256 .. 4096: at most 5 compiled shapes per device count). Measured on 395916d1 + the cap, 1 device,
+  `compile().memory_analysis()` at 4096 rows: temp 17,196,603,408 B, output 493,122,616 B (17.69 GB; bound 18.0e9 in
+  tests/search/test_expand_laws.py). The laws are int32 and bool, so a row's laws do not depend on the call size
+  (tested field by field). Part 1, owned by E2 on e2-d67 (`pair_ties`, which runs the same outer test per battler
+  pair: 6 x 4.06 MB per row at 4 battlers): the exact sorted-membership tie test, O(G log G), which lowers a row to
+  ~2.17 MB (4096 rows ~8.9 GB temp); lower the test's bound then. Results unchanged; no table change.

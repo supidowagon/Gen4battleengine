@@ -1317,9 +1317,14 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       a walking-partner map).
     * ``start_condition`` comes from the weather of the maps where the trainer is
       fought (``_trainer_maps``, ``_weather_conditions``), assuming the player has
-      not cleared fog with Defog (``src/field_map_change.c``). ``fog_headers`` lists a
-      fog fight's map header ids whose weather is ``OVERWORLD_WEATHER_FOG``: there field
-      Defog can clear it (``AreaCondition.fog_headers``, ledger G-15). A trainer the decomp
+      not cleared fog with Defog. ``fog_headers`` is the fog that field Defog can clear: a
+      fog fight's map header ids whose weather is ``OVERWORLD_WEATHER_FOG`` (14), the one
+      weather FLAG_DEFOG_ACTIVE turns clear (``src/field_map_change.c:273-277``). Deep fog
+      (15) starts a battle in fog too (``src/battle/battle_lib.c:3684-3685``) but is never
+      cleared, so it is left out, as the ROM reader does (``maps.trainer_fog_headers``); a
+      seasonal weather never becomes 14 (``FieldSystem_GetWeather``,
+      ``src/field_overworld_weather.c:399-422``: ``sYearlyWeather`` holds no fog)
+      (``AreaCondition.fog_headers``, ledger G-15). A trainer the decomp
       places on no map (unused and dummy entries, or trainers set up by a shared
       script) gets "none". A trainer whose maps or dates give more than one
       condition must be listed in ``tools/start_conditions.json``
