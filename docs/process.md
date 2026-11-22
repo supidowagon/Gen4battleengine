@@ -114,8 +114,12 @@ per day is the rate used for estimates.
   `nuzline.engine` was not imported by the collected modules (a tool test). Any other run exits
   at once, naming the first disallowed ids: send them to the quick lane below. An allowed run
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
-  6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, giving up after `NUZLINE_RAMGATE_TIMEOUT` minutes (default 30).
-  `--collect-only` is allowed without a wait. A ROM-only item weighs its figure in
+  6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, then takes the machine lock
+  `<main checkout>/_scratch/ramgate.lock` (created exclusively, holding `<pid> <kind>`; stale
+  and removed once that pid is gone; a child process of the holder runs under its hold) and
+  keeps it until the run ends, so one local run goes at a time. Waiting on the lock (polled
+  every 10 s) counts toward the same `NUZLINE_RAMGATE_TIMEOUT` minutes (default 30).
+  `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
   weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured
   ROM-only item waits for more than 20 GB free. Local measuring pass: one file's ROM-only ids
@@ -131,11 +135,11 @@ per day is the rate used for estimates.
   stays. A wait that times out exits 4. `NUZLINE_RAMGATE_NO_WAIT=1` turns the RAM wait off (the
   refusal stays): for the measuring harness only, which checks free RAM and runs the watchdog
   itself. The pod sets
-  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`), which skips the gate. `tools.kaizo.*` runs:
-  `python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]` first (weight 8 or more prints
-  POD, exit 3). Table builds: `python tools/ops/ramgate.py --build [--weight GB]` (default: the `tools/build_tables.py` line of
-  `weights.txt`, else 14, so it waits for more than 20 GB free)
-  only waits for RAM and never prints POD.
+  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`), which skips the gate. Local jobs that are not
+  pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
+  waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
+  more than 20 GB free) and the machine lock, runs the command under the lock and exits with
+  its code; it never prints POD.
 - **Quick lane (engine tests, a few ids):** send the managing session a request of at most 5
   test ids at your tip; run name `q-<stream>-<sha7>`. It starts at once on any pod with memory
   room, ahead of in-work lists, behind push gates only when memory is short. The result you

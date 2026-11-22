@@ -1,7 +1,8 @@
 """Root conftest: the local test gate (docs/process.md section 5, tools/ops/ramgate.py).
 
 No engine tests on the PC: after collection a run is allowed only when every test is ROM-only or
-`nuzline.engine` was never imported; it then waits for free RAM > 6 GB + weight. The pod sets
+`nuzline.engine` was never imported; it then waits for free RAM > 6 GB + weight and takes the
+machine lock (one local run at a time), held until pytest_unconfigure. The pod sets
 NUZLINE_ON_POD=1 (tools/ops/day/pod/unit.sh, setup.sh), which skips the gate.
 """
 
@@ -20,12 +21,16 @@ _spec.loader.exec_module(ramgate)
 
 
 _BLOCKER = pytest.StashKey()
+_LOCK = pytest.StashKey()
 
 
 def pytest_unconfigure(config):
     blocker = config.stash.get(_BLOCKER, None)
     if blocker is not None:
         ramgate.remove_blocker(blocker)
+    lock = config.stash.get(_LOCK, None)
+    if lock is not None:
+        lock.release()
 
 
 # trylast: -m and -k have deselected by then, so the gate sees exactly what will run.
@@ -33,9 +38,12 @@ def pytest_unconfigure(config):
 def pytest_collection_modifyitems(config, items):
     if hasattr(config, "workerinput"):  # an xdist worker: the controller gated the run
         return
+    lock = ramgate.MachineLock()
+    config.stash[_LOCK] = lock  # released at unconfigure, whatever the verdict
     verdict, msg = ramgate.pytest_gate(
         items,
         collect_only=bool(getattr(config.option, "collectonly", False)),
+        lock=lock,
         say=lambda m: print(m, file=sys.stderr, flush=True),
     )
     if verdict == "REFUSE":

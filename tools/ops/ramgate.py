@@ -7,12 +7,19 @@ dispatcher's quick lane. An allowed run waits for free RAM > 6 GB + its weight (
 longest key matching an id; no key = 6 GB in an engine-free run, else 20 GB). The root conftest.py
 applies it at collection.
 
-CLI, for `tools.kaizo.*` runs and table builds:
-    python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate | --build]
+One local run at a time on the PC: after the RAM check a gated run takes the machine lock
+(`<main checkout>/_scratch/ramgate.lock`, MachineLock) and holds it until it ends; waiting on it
+counts toward the same timeout.
+
+CLI:
+    python tools/ops/ramgate.py --build [--weight GB] -- <command ...>
+        a local job that is not pytest (table builds, `tools.kaizo.*` runs): waits for free RAM >
+        6 GB + weight (--weight, else the weights.txt line `tools/build_tables.py`, else 14), takes
+        the machine lock, runs the command as its child under the lock and exits with its code.
+    python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]
+        a check only (no lock): `GO <w>` (exit 0) after any wait, `POD <w>` (weight >= 8).
     python tools/ops/ramgate.py --rom-ids [file ...]   (collect only; one ready command per file)
-prints `GO <w>` (exit 0) after any wait, `POD <w>` (exit 3, weight >= 8), or `TIMEOUT <w>`
-(exit 4, after NUZLINE_RAMGATE_TIMEOUT minutes, default 30). --build (table
-builds: weight --weight, else the weights.txt line `tools/build_tables.py`, else 14) never prints POD: it only waits for RAM.
+`POD` exits 3, `TIMEOUT <w>` (after NUZLINE_RAMGATE_TIMEOUT minutes, default 30) exits 4.
 """
 
 import ast
@@ -20,6 +27,7 @@ import importlib.abc
 import inspect
 import os
 import shlex
+import subprocess
 import sys
 import textwrap
 import time
@@ -36,6 +44,9 @@ RESERVE_GB = 6.0
 BUILD_KEY = "tools/build_tables.py"  # the weights.txt line a table build waits for
 BUILD_DEFAULT_WEIGHT = 14.0  # without that line: a build waits for > 6 + 14 = 20 GB free
 POLL_S = 60.0
+LOCK_POLL_S = 10.0  # free RAM is enough but another local run holds the machine lock
+LOCK_NAME = "ramgate.lock"  # under the main checkout's _scratch/: one local run on the PC at a time
+LOCK_EMPTY_STALE_S = 10.0  # a lock file without a pid (its writer died between create and write)
 DEFAULT_TIMEOUT_MIN = 30.0
 
 # Fixtures that need a local input the pod never gets (ROM, patch, linker map, saves, docs sheet,
@@ -159,22 +170,201 @@ def _flag(env: Mapping[str, str], name: str) -> bool:
     return env.get(name, "") not in ("", "0")
 
 
+def process_table() -> dict[int, int]:
+    """pid -> parent pid of every live process (Windows: a Toolhelp32 snapshot; else /proc)."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class _Entry(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", ctypes.c_char * 260),
+            ]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        k32.Process32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Entry)]
+        k32.Process32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Entry)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+        if snap in (None, wintypes.HANDLE(-1).value):
+            raise OSError("CreateToolhelp32Snapshot failed")
+        out: dict[int, int] = {}
+        try:
+            entry = _Entry()
+            entry.dwSize = ctypes.sizeof(_Entry)
+            ok = k32.Process32First(snap, ctypes.byref(entry))
+            while ok:
+                out[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                ok = k32.Process32Next(snap, ctypes.byref(entry))
+        finally:
+            k32.CloseHandle(snap)
+        return out
+    out = {}
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            try:
+                stat = Path("/proc", name, "stat").read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            out[int(name)] = int(stat.rsplit(")", 1)[1].split()[1])
+    return out
+
+
+def lineage(pid: int, procs: Mapping[int, int]) -> list[int]:
+    """The pid and its live ancestors, nearest first (a pid cycle or a dead parent ends it)."""
+    out: list[int] = []
+    while pid in procs and pid not in out and pid > 0:
+        out.append(pid)
+        pid = procs[pid]
+    return out
+
+
+def main_checkout(root: Path = ROOT) -> Path:
+    """The main checkout of a git worktree (its .git file -> gitdir -> commondir), else root."""
+    try:
+        dot = root / ".git"
+        if dot.is_file():
+            text = dot.read_text(encoding="utf-8").strip()
+            if text.startswith("gitdir:"):
+                gitdir = Path(text[len("gitdir:") :].strip())
+                gitdir = gitdir if gitdir.is_absolute() else root / gitdir
+                common = (gitdir / "commondir").read_text(encoding="utf-8").strip()
+                common_dir = Path(common) if Path(common).is_absolute() else gitdir / common
+                return common_dir.resolve().parent
+    except OSError:
+        pass
+    return root
+
+
+def lock_path(root: Path = ROOT) -> Path:
+    return main_checkout(root) / "_scratch" / LOCK_NAME
+
+
+class MachineLock:
+    """One local gated run on the PC at a time: `<main checkout>/_scratch/ramgate.lock`, created
+    with O_EXCL, holding `<pid> <kind>`. Stale (removed, then retried) when that pid is gone.
+    A process whose ancestor (or itself) holds it runs under that hold: `inherited`, no file."""
+
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        procs: Callable[[], Mapping[int, int]] = process_table,
+        me: int | None = None,
+        now: Callable[[], float] = time.time,
+    ):
+        self.path = Path(path) if path is not None else lock_path()
+        self._procs = procs
+        self.me = os.getpid() if me is None else me
+        self._now = now
+        self.owned = False
+        self.inherited = False
+
+    @property
+    def held(self) -> bool:
+        return self.owned or self.inherited
+
+    def holder(self) -> tuple[int | None, str]:
+        """(pid, kind) written in the file; (None, "") when absent, empty or unreadable."""
+        try:
+            parts = self.path.read_text(encoding="utf-8").split()
+            return int(parts[0]), (parts[1] if len(parts) > 1 else "")
+        except (OSError, ValueError, IndexError):
+            return None, ""
+
+    def held_by_lineage(self, kind: str | None = None) -> bool:
+        """This process or a live ancestor holds the file (of that kind, when given)."""
+        pid, k = self.holder()
+        if pid is None or (kind is not None and k != kind):
+            return False
+        return pid in lineage(self.me, self._procs())
+
+    def acquire(self, kind: str = "pytest") -> bool:
+        """Take the lock once (no waiting). True when it is now held by this process or its line."""
+        if self.held:
+            return True
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(3):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                pass
+            else:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(f"{self.me} {kind}\n")
+                self.owned = True
+                return True
+            pid, _ = self.holder()
+            procs = self._procs()
+            if pid is not None and pid in lineage(self.me, procs):
+                self.inherited = True
+                return True
+            if pid is None:
+                try:
+                    age = self._now() - self.path.stat().st_mtime
+                except OSError:
+                    continue  # removed meanwhile: try again
+                if age < LOCK_EMPTY_STALE_S:
+                    return False  # being written right now
+            elif pid in procs:
+                return False
+            self._remove_if_holder(pid)
+        return False
+
+    def _remove_if_holder(self, pid: int | None) -> None:
+        if self.holder()[0] == pid:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+
+    def release(self) -> None:
+        if self.owned:
+            self._remove_if_holder(self.me)
+        self.owned = self.inherited = False
+
+
 def wait_for_ram(
     weight_gb: float,
     *,
     timeout_min: float,
+    lock: MachineLock | None = None,
+    kind: str = "pytest",
     free: Callable[[], float] = free_gb,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     say: Callable[[str], None] = print,
 ) -> bool:
-    """Poll every 60 s until free RAM > 6 + weight; False after timeout_min minutes."""
+    """Poll every 60 s until free RAM > 6 + weight, then take the machine lock (polled every 10 s
+    while another run holds it, RAM re-read each time). The lock wait counts toward the same
+    timeout: False after timeout_min minutes."""
     need = RESERVE_GB + weight_gb
     deadline = clock() + timeout_min * 60
+    told = None
     while True:
         f = free()
         if f > need:
-            return True
+            if lock is None or lock.acquire(kind):
+                return True
+            if clock() >= deadline:
+                return False
+            pid, _ = lock.holder()
+            if pid != told:
+                say(f"ramgate: another local run (pid {pid}) holds {lock.path}; waiting")
+                told = pid
+            sleep(LOCK_POLL_S)
+            continue
         if clock() >= deadline:
             return False
         say(f"ramgate: {f:.1f} GB free, need > {need:g} GB (weight {weight_gb:g}); waiting")
@@ -295,12 +485,14 @@ def pytest_gate(
     env: Mapping[str, str] | None = None,
     table: Mapping[str, float] | None = None,
     rom_table: Mapping[str, float] | None = None,
+    lock: "MachineLock | None" = None,
     free: Callable[[], float] = free_gb,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     say: Callable[[str], None] = print,
 ) -> tuple[str, str]:
-    """The root conftest's decision after collection: (SKIP | GO | REFUSE | TIMEOUT, message)."""
+    """The root conftest's decision after collection: (SKIP | GO | REFUSE | TIMEOUT, message).
+    GO after the wait holds `lock` (default: the machine lock); the caller releases it."""
     env = os.environ if env is None else env
     if _flag(env, ENV_ON_POD):
         return "SKIP", "on the pod"
@@ -330,11 +522,14 @@ def pytest_gate(
         timeout = float(env.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
     except ValueError:
         timeout = DEFAULT_TIMEOUT_MIN
-    if not wait_for_ram(w, timeout_min=timeout, free=free, sleep=sleep, clock=clock, say=say):
+    lock = MachineLock() if lock is None else lock
+    if not wait_for_ram(
+        w, timeout_min=timeout, lock=lock, free=free, sleep=sleep, clock=clock, say=say
+    ):
         return "TIMEOUT", (
-            f"ramgate: free RAM stayed <= {RESERVE_GB + w:g} GB for {timeout:g} min "
-            f"(weight {w:g} GB; {ENV_TIMEOUT} sets the minutes, weights in "
-            "tools/ops/day/pod/weights.txt and tools/ops/day/rom_weights.txt). Run again later."
+            f"ramgate: for {timeout:g} min free RAM stayed <= {RESERVE_GB + w:g} GB or another "
+            f"local run held {lock.path} (weight {w:g} GB; {ENV_TIMEOUT} sets the minutes, weights "
+            "in tools/ops/day/pod/weights.txt and tools/ops/day/rom_weights.txt). Run again later."
         )
     return "GO", f"ramgate: GO weight {w:g} GB"
 
@@ -387,22 +582,30 @@ def main(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     say: Callable[[str], None] = lambda m: print(m, flush=True),
+    lock: MachineLock | None = None,
 ) -> int:
-    """CLI. `--build`: a table build cannot go to the pod, so it only waits for RAM."""
+    """CLI. `--build ... -- <command>`: a local job that cannot go to the pod: it waits for RAM
+    and the machine lock, then runs the command as its child under the lock."""
     if "--rom-ids" in argv:
         return rom_ids([a for a in argv if a != "--rom-ids"], say)
+    command: list[str] = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, command = argv[:i], argv[i + 1 :]
     rom_gate = "--rom-gate" in argv or _flag(os.environ, ENV_ROM_GATE)
     build = "--build" in argv
     argv = [a for a in argv if a not in ("--rom-gate", "--build")]
+    usage = "usage: ramgate.py --build [--weight GB] -- <command> | <ids> [--weight GB] [--rom-gate]"
+    if build != bool(command):
+        say(usage + "; --build needs a command after --, and only --build takes one")
+        return 2
     w = None
     if "--weight" in argv:
         i = argv.index("--weight")
         try:
             w = float(argv[i + 1])
         except (IndexError, ValueError):
-            say(
-                "usage: ramgate.py <ids> [--weight GB] [--rom-gate | --build]; --weight needs a number"
-            )
+            say(usage + "; --weight needs a number")
             return 2
         argv = argv[:i] + argv[i + 2 :]
     if w is None:
@@ -419,11 +622,22 @@ def main(
         timeout = float(os.environ.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
     except ValueError:
         timeout = DEFAULT_TIMEOUT_MIN
-    if not wait_for_ram(w, timeout_min=timeout, free=free, sleep=sleep, clock=clock, say=say):
+    if build:
+        lock = MachineLock() if lock is None else lock
+    ok = wait_for_ram(
+        w, timeout_min=timeout, lock=lock if build else None, kind="build",
+        free=free, sleep=sleep, clock=clock, say=say,
+    )  # fmt: skip
+    if not ok:
         say(f"TIMEOUT {w:g}")
         return 4
     say(f"GO {w:g}")
-    return 0
+    if not build:
+        return 0
+    try:
+        return subprocess.call(command)
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

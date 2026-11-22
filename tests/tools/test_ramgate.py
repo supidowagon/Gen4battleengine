@@ -74,6 +74,23 @@ PLAIN = item("tests/a/test_x.py::test_b", "tmp_path")  # weight 5
 ENG = item("tests/a/test_e.py::test_c")  # weight 3
 
 
+class FreeLock:
+    """A machine lock nobody else holds."""
+
+    path = "fake.lock"
+    held = False
+
+    def acquire(self, kind="pytest"):
+        self.held = True
+        return True
+
+    def holder(self):
+        return None, ""
+
+    def held_by_lineage(self, kind=None):
+        return False
+
+
 def gate(items, free=100.0, modules=NO_ENGINE, env=None, rom_table=None, **kw):
     clock = kw.pop("clock", None) or Clock()
     lines = kw.pop("lines", [])
@@ -83,6 +100,7 @@ def gate(items, free=100.0, modules=NO_ENGINE, env=None, rom_table=None, **kw):
         env={} if env is None else env,
         table=TABLE,
         rom_table={} if rom_table is None else rom_table,
+        lock=kw.pop("lock", None) or FreeLock(),
         free=free if callable(free) else (lambda: free),
         sleep=clock.sleep,
         clock=clock.now,
@@ -281,24 +299,29 @@ def test_gate_wait_timeout_exits():
     assert "3 min" in msg
 
 
-def test_cli_pod_rom_gate_and_build(monkeypatch):
+OK_CHILD = [sys.executable, "-c", "pass"]
+
+
+def test_cli_pod_rom_gate_and_build(monkeypatch, tmp_path):
     monkeypatch.delenv(rg.ENV_ROM_GATE, raising=False)
     monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
     out = []
 
     def run(argv, free=100.0):
-        return rg.main(argv, free=lambda: free, sleep=lambda s: None, say=out.append)
+        lock = rg.MachineLock(tmp_path / "ramgate.lock")
+        return rg.main(argv, free=lambda: free, sleep=lambda s: None, say=out.append, lock=lock)
 
     assert run(["tests/a/test_x.py"]) == 0 and out[-1] == "GO 5"
     assert run(["tests/heavy.py"]) == 3 and out[-1] == "POD 30"
     assert run(["tests/heavy.py", "--rom-gate"]) == 0 and out[-1] == "GO 30"
     assert run(["tools.kaizo.x", "--weight", "9"]) == 3 and out[-1] == "POD 9"
     # a build never goes to the pod: 14 without a tools/build_tables.py line, only the RAM wait applies
-    assert run(["--build"]) == 0 and out[-1] == "GO 14"
-    assert run(["--build", "--weight", "12"]) == 0 and out[-1] == "GO 12"
+    assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 14"
+    assert run(["--build", "--weight", "12", "--", *OK_CHILD]) == 0 and out[-1] == "GO 12"
     monkeypatch.setattr(rg, "load_weights", lambda: {**TABLE, "tools/build_tables.py": 11.0})
-    assert run(["--build"]) == 0 and out[-1] == "GO 11"  # the measured weights.txt line
-    assert run(["--build", "--weight", "12"]) == 0 and out[-1] == "GO 12"
+    assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 11"  # the measured line
+    assert run(["--build", "--weight", "12", "--", *OK_CHILD]) == 0 and out[-1] == "GO 12"
+    assert not (tmp_path / "ramgate.lock").exists()  # released after each build
 
 
 def test_cli_weight_without_a_value_is_a_usage_error():
@@ -308,25 +331,73 @@ def test_cli_weight_without_a_value_is_a_usage_error():
     assert "usage" in out[0]
 
 
-def test_cli_honours_the_timeout_env(monkeypatch):
+def test_cli_build_needs_a_command_and_only_build_takes_one():
+    out = []
+    assert rg.main(["--build"], say=out.append) == 2 and "needs a command" in out[-1]
+    assert rg.main(["tests/a.py", "--", "x"], say=out.append) == 2
+
+
+def test_cli_honours_the_timeout_env(monkeypatch, tmp_path):
     monkeypatch.setenv(rg.ENV_TIMEOUT, "2")
     monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
     clock = Clock()
     out = []
     code = rg.main(
-        ["--build"], free=lambda: 1.0, sleep=clock.sleep, clock=clock.now, say=out.append
-    )
+        ["--build", "--", *OK_CHILD], free=lambda: 1.0, sleep=clock.sleep, clock=clock.now,
+        say=out.append, lock=rg.MachineLock(tmp_path / "l"),
+    )  # fmt: skip
     assert code == 4 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 14"
 
 
-def test_cli_build_waits_for_ram(monkeypatch):
+def test_cli_build_waits_for_ram(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
     seq = iter([10.0, 19.0, 20.5])
     sleeps = []
     out = []
-    code = rg.main(["--build"], free=lambda: next(seq), sleep=sleeps.append, say=out.append)
+    code = rg.main(
+        ["--build", "--", *OK_CHILD], free=lambda: next(seq), sleep=sleeps.append,
+        say=out.append, lock=rg.MachineLock(tmp_path / "l"),
+    )  # fmt: skip
     assert code == 0 and sleeps == [60.0, 60.0] and out[-1] == "GO 14"
     assert not any(m.startswith("POD") for m in out)
+
+
+def test_cli_build_runs_the_command_as_its_child_under_the_lock(monkeypatch, tmp_path):
+    monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
+    lock_file = tmp_path / "ramgate.lock"
+    seen = tmp_path / "seen.txt"
+    child = [
+        sys.executable, "-c",
+        "import sys; open(sys.argv[1], 'w').write(open(sys.argv[2]).read()); sys.exit(7)",
+        str(seen), str(lock_file),
+    ]  # fmt: skip
+    code = rg.main(
+        ["--build", "--", *child], free=lambda: 100.0, say=lambda m: None,
+        lock=rg.MachineLock(lock_file),
+    )  # fmt: skip
+    assert code == 7  # the child's exit code
+    import os
+
+    assert seen.read_text().split() == [str(os.getpid()), "build"]  # it ran under my lock
+    assert not lock_file.exists()
+
+
+def test_cli_build_waits_for_the_lock_within_the_timeout(monkeypatch, tmp_path):
+    monkeypatch.setenv(rg.ENV_TIMEOUT, "1")
+    monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
+    lock_file = tmp_path / "ramgate.lock"
+    lock_file.write_text("4242 pytest\n", encoding="utf-8")
+    procs = {1: 0, 4242: 1, 100: 1}  # 4242 is alive and not an ancestor of 100
+    clock = Clock()
+    out = []
+    code = rg.main(
+        ["--build", "--", *OK_CHILD], free=lambda: 100.0, sleep=clock.sleep, clock=clock.now,
+        say=out.append, lock=rg.MachineLock(lock_file, procs=lambda: procs, me=100),
+    )  # fmt: skip
+    assert code == 4 and out[-1] == "TIMEOUT 14"
+    assert clock.sleeps == [10.0] * 6  # 10 s polls, up to the 1 minute timeout
+    assert sum("holds" in m and "4242" in m for m in out) == 1  # told once per holder
+    assert lock_file.read_text(encoding="utf-8") == "4242 pytest\n"  # never touched
 
 
 @pytest.mark.parametrize("name", ["unit.sh", "setup.sh", "quick.sh"])
@@ -528,3 +599,109 @@ def test_the_committed_rom_weights_file_parses():
     table = rg.load_rom_weights()
     assert len(table) == len(lines) and all(k.startswith("tests/") for k in table)
     assert rg.lookup("tests/tools/rom/test_text.py::test_x[1]", table) == 3.0
+
+
+PROCS = {1: 0, 10: 1, 11: 10, 12: 11, 20: 1, 30: 1}  # 12 -> 11 -> 10 -> 1; 20 and 30 unrelated
+
+
+def _lock(tmp_path, me, procs=PROCS, **kw):
+    return rg.MachineLock(tmp_path / "_scratch" / "ramgate.lock", procs=lambda: procs, me=me, **kw)
+
+
+def test_lock_is_exclusive_and_released(tmp_path):
+    a, b = _lock(tmp_path, 10), _lock(tmp_path, 20)
+    assert a.acquire() and a.owned
+    assert a.path.read_text(encoding="utf-8") == "10 pytest\n"
+    assert not b.acquire() and not b.held  # 10 is alive
+    a.release()
+    assert not a.path.exists()
+    assert b.acquire("build") and b.holder() == (20, "build")
+    b.release()
+
+
+def test_lock_is_stale_when_its_pid_is_gone(tmp_path):
+    a = _lock(tmp_path, 10)
+    a.path.parent.mkdir(parents=True)
+    a.path.write_text("999 pytest\n", encoding="utf-8")  # 999 is not running
+    assert a.acquire() and a.holder() == (10, "pytest")
+
+
+def test_lock_held_by_an_ancestor_is_inherited_and_left_alone(tmp_path):
+    parent, child = _lock(tmp_path, 10), _lock(tmp_path, 12)
+    assert parent.acquire()
+    assert child.acquire() and child.inherited and not child.owned
+    assert child.held_by_lineage() and child.held_by_lineage("pytest")
+    assert not child.held_by_lineage("measure")
+    child.release()
+    assert parent.path.exists()  # the child never removes its ancestor's lock
+    assert not _lock(tmp_path, 30).held_by_lineage()
+    parent.release()
+
+
+def test_an_empty_lock_file_waits_then_goes_stale(tmp_path):
+    now = [0.0]
+    a = _lock(tmp_path, 10, now=lambda: now[0])
+    a.path.parent.mkdir(parents=True)
+    a.path.write_text("", encoding="utf-8")
+    mtime = a.path.stat().st_mtime
+    now[0] = mtime + 1
+    assert not a.acquire()  # its writer may be between create and write
+    now[0] = mtime + rg.LOCK_EMPTY_STALE_S + 1
+    assert a.acquire() and a.owned
+
+
+def test_a_lock_of_another_pid_is_never_released_by_me(tmp_path):
+    a = _lock(tmp_path, 10)
+    assert a.acquire()
+    a.path.write_text("20 pytest\n", encoding="utf-8")  # someone replaced it
+    a.release()
+    assert a.path.read_text(encoding="utf-8") == "20 pytest\n"
+
+
+def test_gate_waits_for_the_lock_then_goes_and_holds_it(tmp_path):
+    lock = _lock(tmp_path, 12, procs=dict(PROCS))
+    lock.path.parent.mkdir(parents=True)
+    lock.path.write_text("20 pytest\n", encoding="utf-8")
+    procs = lock._procs()
+    clock = Clock()
+
+    def sleep(s):
+        clock.sleep(s)
+        procs.pop(20, None)  # the other run ends during the first wait
+
+    lines = []
+    verdict, _ = rg.pytest_gate(
+        [PLAIN], modules=NO_ENGINE, env={}, table=TABLE, rom_table={}, lock=lock,
+        free=lambda: 100.0, sleep=sleep, clock=clock.now, say=lines.append,
+    )  # fmt: skip
+    assert verdict == "GO" and lock.owned and lock.holder() == (12, "pytest")
+    assert clock.sleeps == [10.0] and "holds" in lines[0]
+    lock.release()
+
+
+def test_gate_lock_wait_times_out_with_a_message_naming_the_lock(tmp_path):
+    lock = _lock(tmp_path, 12)
+    lock.path.parent.mkdir(parents=True)
+    lock.path.write_text("20 pytest\n", encoding="utf-8")
+    verdict, msg = gate([PLAIN], env={rg.ENV_TIMEOUT: "0"}, lock=lock)
+    assert verdict == "TIMEOUT" and "ramgate.lock" in msg and not lock.held
+
+
+def test_process_table_and_lineage_of_this_process():
+    import os
+
+    procs = rg.process_table()
+    me = rg.lineage(os.getpid(), procs)
+    assert me[0] == os.getpid() and len(me) >= 2  # at least the process that started pytest
+    assert rg.lineage(1, {1: 2, 2: 1}) == [1, 2]  # a pid cycle ends
+
+
+def test_the_machine_lock_lives_in_the_main_checkout(tmp_path):
+    main = tmp_path / "main"
+    (main / ".git" / "worktrees" / "wt").mkdir(parents=True)
+    (main / ".git" / "worktrees" / "wt" / "commondir").write_text("../..\n", encoding="utf-8")
+    wt = tmp_path / "main" / "_scratch" / "wt"
+    wt.mkdir(parents=True)
+    (wt / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'wt'}\n", encoding="utf-8")
+    assert rg.lock_path(wt) == (main / "_scratch" / "ramgate.lock").resolve()
+    assert rg.lock_path(tmp_path / "plain") == tmp_path / "plain" / "_scratch" / "ramgate.lock"
