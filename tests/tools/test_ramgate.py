@@ -380,22 +380,64 @@ def test_blocker_sets_the_child_env_and_removal_unsets_it(monkeypatch):
     assert rg.ENV_ENGINE_BLOCKED not in rg.os.environ
 
 
-def test_engine_package_refuses_a_child_process_under_the_env():
+def _child_env(**extra):
+    """The environment of a child process with none of the gate's own variables inherited."""
     import os
+
+    drop = (rg.ENV_ENGINE_BLOCKED, rg.ENV_ON_POD, rg.ENV_DONE, "PYTEST_CURRENT_TEST", "PYTEST_ADDOPTS")
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    return {**env, "PYTHONPATH": str(ROOT / "src"), **extra}
+
+
+def test_engine_package_refuses_a_child_process_under_the_env():
     import subprocess
 
-    env = {**os.environ, rg.ENV_ENGINE_BLOCKED: "1", "PYTHONPATH": str(ROOT / "src")}
-    bad = subprocess.run(
-        [sys.executable, "-c", "import nuzline.engine"],
-        env=env, capture_output=True, text=True, check=False,
+    def child(value):
+        env = _child_env() if value is None else _child_env(**{rg.ENV_ENGINE_BLOCKED: value})
+        return subprocess.run(
+            [sys.executable, "-c", "import nuzline.engine"],
+            env=env, capture_output=True, text=True, check=False,
+        )  # fmt: skip
+
+    bad = child("1")
+    assert bad.returncode != 0 and "ImportError" in bad.stderr
+    assert "NUZLINE_ENGINE_BLOCKED is set" in bad.stderr and "quick lane" in bad.stderr
+    assert "unset it" in bad.stderr
+    for value in (None, "", "0"):  # unset, empty and "0" are unset, as ramgate._flag reads them
+        ok = child(value)
+        assert ok.returncode == 0, (value, ok.stderr)
+
+
+_ENGINE_FILE = "tests/engine/test_field_pass.py"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the check guards the PC; the pods are Linux")
+@pytest.mark.parametrize(
+    "args, addopts",
+    [
+        (["--noconftest"], None),
+        (["--confcutdir", "tests"], None),
+        (["-p", "no:" + str(ROOT / "conftest.py")], None),
+        ([], "--confcutdir tests"),
+    ],
+    ids=["noconftest", "confcutdir", "p-no-root-conftest", "pytest-addopts"],
+)
+def test_a_pytest_without_the_gate_cannot_import_the_engine(args, addopts):
+    """Each flag keeps the root conftest (the gate) from loading; the engine package then refuses.
+    Collect-only: if the check were missing this only imports the engine, it runs no test."""
+    import subprocess
+
+    env = _child_env(**({"PYTEST_ADDOPTS": addopts} if addopts else {}))
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *args,
+         _ENGINE_FILE],
+        cwd=ROOT, env=env, capture_output=True, text=True, check=False,
     )  # fmt: skip
-    assert bad.returncode != 0 and "quick lane" in bad.stderr and "ImportError" in bad.stderr
-    env.pop(rg.ENV_ENGINE_BLOCKED)
-    ok = subprocess.run(
-        [sys.executable, "-c", "import nuzline.engine"],
-        env=env, capture_output=True, text=True, check=False,
-    )  # fmt: skip
-    assert ok.returncode == 0, ok.stderr
+    out = run.stdout + run.stderr
+    assert run.returncode != 0, out[-2000:]
+    # pytest 9.2 itself refuses `-p no:<conftest path>` as a usage error; either way nothing runs
+    refused = ("pytest runs without the local test gate", "Blocking conftest files using -p")
+    assert any(r in out for r in refused), out[-2000:]
 
 
 def _body_fetching_a_rom_fixture(request):
