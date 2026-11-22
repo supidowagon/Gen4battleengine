@@ -139,7 +139,9 @@ per day is the rate used for estimates.
   pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
   waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
   more than 20 GB free) and the machine lock, runs the command under the lock and exits with
-  its code; it never prints POD.
+  its code; it never prints POD. `tools/ops/build_tables.sh` wraps its build steps in it itself.
+  A `tools.kaizo.*` run (it needs the ROM or the docs sheet, so it cannot go to the pod):
+  `python tools/ops/ramgate.py --build [--weight GB] -- python -m tools.kaizo.<module> ...`.
 - **Quick lane (engine tests, a few ids):** send the managing session a request of at most 5
   test ids at your tip; run name `q-<stream>-<sha7>`. It starts at once on any pod with memory
   room, ahead of in-work lists, behind push gates only when memory is short. The result you
