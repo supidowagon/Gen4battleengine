@@ -113,7 +113,6 @@ def test_drawn_states_b2(tables, names, data):
     _same(tables, s, data.draw(legal_action_pair(tables, s)))
 
 
-@pytest.mark.slow
 @settings(SEEDED, max_examples=12)
 @given(data=st.data())
 def test_drawn_states_b4(tables, names, data):
