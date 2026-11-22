@@ -324,9 +324,9 @@ def test_cli_pod_rom_gate_and_build(monkeypatch, tmp_path):
         return rg.main(argv, free=lambda: free, sleep=lambda s: None, say=out.append, lock=lock)
 
     assert run(["tests/a/test_x.py"]) == 0 and out[-1] == "GO 5"
-    assert run(["tests/heavy.py"]) == 3 and out[-1] == "POD 30"
+    assert run(["tests/heavy.py"]) == 13 and out[-1] == "POD 30"
     assert run(["tests/heavy.py", "--rom-gate"]) == 0 and out[-1] == "GO 30"
-    assert run(["tools.kaizo.x", "--weight", "9"]) == 3 and out[-1] == "POD 9"
+    assert run(["tools.kaizo.x", "--weight", "9"]) == 13 and out[-1] == "POD 9"
     # a build never goes to the pod: 14 without a tools/build_tables.py line, only the RAM wait applies
     assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 14"
     assert run(["--build", "--weight", "12", "--", *OK_CHILD]) == 0 and out[-1] == "GO 12"
@@ -358,7 +358,7 @@ def test_cli_honours_the_timeout_env(monkeypatch, tmp_path):
         ["--build", "--", *OK_CHILD], free=lambda: 1.0, sleep=clock.sleep, clock=clock.now,
         say=out.append, lock=rg.MachineLock(tmp_path / "l"),
     )  # fmt: skip
-    assert code == 4 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 14"
+    assert code == 14 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 14"
 
 
 def test_cli_build_waits_for_ram(monkeypatch, tmp_path):
@@ -406,7 +406,7 @@ def test_cli_build_waits_for_the_lock_within_the_timeout(monkeypatch, tmp_path):
         ["--build", "--", *OK_CHILD], free=lambda: 100.0, sleep=clock.sleep, clock=clock.now,
         say=out.append, lock=rg.MachineLock(lock_file, procs=lambda: procs, me=100),
     )  # fmt: skip
-    assert code == 4 and out[-1] == "TIMEOUT 14"
+    assert code == 14 and out[-1] == "TIMEOUT 14"
     assert clock.sleeps == [10.0] * 6  # 10 s polls, up to the 1 minute timeout
     assert sum("holds" in m and "4242" in m for m in out) == 1  # told once per holder
     assert lock_file.read_text(encoding="utf-8") == "4242 pytest\n"  # never touched
@@ -761,3 +761,35 @@ def test_the_committed_pod_only_list():
     assert {"tests/test_spike_step.py", "tests/test_jaxcache.py"} <= keys
     assert "tests/tools/test_ramgate_collect.py" in keys
     assert all((ROOT / k.split("::")[0]).exists() for k in keys)
+
+
+def test_exit_codes_are_apart_from_pytests_own():
+    import pytest as _pytest
+
+    ours = {rg.EXIT_REFUSE, rg.EXIT_TIMEOUT, rg.EXIT_NO_RAM_READ}
+    assert len(ours) == 3 and not ours & {int(c) for c in _pytest.ExitCode}
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "-1", "x", ""])
+def test_a_timeout_that_is_not_a_finite_count_of_minutes_is_the_default(value):
+    assert rg.timeout_minutes({rg.ENV_TIMEOUT: value}) == rg.DEFAULT_TIMEOUT_MIN
+    assert rg.timeout_minutes({rg.ENV_TIMEOUT: "2.5"}) == 2.5
+    assert rg.timeout_minutes({}) == rg.DEFAULT_TIMEOUT_MIN
+    clock = Clock()
+    verdict, msg = gate([PLAIN], free=1.0, env={rg.ENV_TIMEOUT: value}, clock=clock)
+    assert verdict == "TIMEOUT" and len(clock.sleeps) == 30  # 30 min, not endless
+
+
+def test_an_unreadable_free_ram_figure_is_an_error_not_a_crash(monkeypatch, tmp_path):
+    def broken():
+        raise OSError("GlobalMemoryStatusEx failed")
+
+    verdict, msg = gate([PLAIN], free=broken)
+    assert verdict == "ERROR" and "cannot read free RAM" in msg
+    monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
+    out = []
+    code = rg.main(
+        ["--build", "--", *OK_CHILD], free=broken, say=out.append,
+        lock=rg.MachineLock(tmp_path / "l"),
+    )  # fmt: skip
+    assert code == rg.EXIT_NO_RAM_READ and out[-1].startswith("ERROR")

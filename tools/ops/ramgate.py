@@ -19,12 +19,15 @@ CLI:
     python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]
         a check only (no lock): `GO <w>` (exit 0) after any wait, `POD <w>` (weight >= 8).
     python tools/ops/ramgate.py --rom-ids [file ...]   (collect only; one ready command per file)
-`POD` exits 3, `TIMEOUT <w>` (after NUZLINE_RAMGATE_TIMEOUT minutes, default 30) exits 4.
+`POD` exits 13, `TIMEOUT <w>` (after NUZLINE_RAMGATE_TIMEOUT minutes, default 30) exits 14, an
+unreadable free-RAM figure exits 16. The pytest gate exits 13 (refused), 14 (timeout) and 16 too:
+codes apart from pytest's own 0-5.
 """
 
 import ast
 import importlib.abc
 import inspect
+import math
 import os
 import shlex
 import subprocess
@@ -44,6 +47,9 @@ RESERVE_GB = 6.0
 BUILD_KEY = "tools/build_tables.py"  # the weights.txt line a table build waits for
 BUILD_DEFAULT_WEIGHT = 14.0  # without that line: a build waits for > 6 + 14 = 20 GB free
 POLL_S = 60.0
+EXIT_REFUSE = 13  # refused (pytest) or POD (CLI)
+EXIT_TIMEOUT = 14
+EXIT_NO_RAM_READ = 16  # free_gb raised OSError
 LOCK_POLL_S = 10.0  # free RAM is enough but another local run holds the machine lock
 LOCK_NAME = "ramgate.lock"  # under the main checkout's _scratch/: one local run on the PC at a time
 LOCK_EMPTY_STALE_S = 10.0  # a lock file without a pid (its writer died between create and write)
@@ -185,6 +191,15 @@ def free_gb() -> float:
 
 def _flag(env: Mapping[str, str], name: str) -> bool:
     return env.get(name, "") not in ("", "0")
+
+
+def timeout_minutes(env: Mapping[str, str]) -> float:
+    """NUZLINE_RAMGATE_TIMEOUT minutes; unreadable, nan, infinite or negative = the default 30."""
+    try:
+        minutes = float(env.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
+    except ValueError:
+        return DEFAULT_TIMEOUT_MIN
+    return minutes if math.isfinite(minutes) and minutes >= 0 else DEFAULT_TIMEOUT_MIN
 
 
 def on_pod(env: Mapping[str, str], platform: str = sys.platform) -> bool:
@@ -519,7 +534,8 @@ def pytest_gate(
     clock: Callable[[], float] = time.monotonic,
     say: Callable[[str], None] = print,
 ) -> tuple[str, str]:
-    """The root conftest's decision after collection: (SKIP | GO | REFUSE | TIMEOUT, message).
+    """The root conftest's decision after collection: (SKIP | GO | REFUSE | TIMEOUT | ERROR,
+    message); ERROR = free RAM could not be read.
     GO after the wait holds `lock` (default: the machine lock); the caller releases it."""
     env = os.environ if env is None else env
     if on_pod(env, platform):
@@ -557,13 +573,14 @@ def pytest_gate(
     table = load_weights() if table is None else table
     rom_table = load_rom_weights() if rom_table is None else rom_table
     w = max((item_weight(i, table, rom_table, engine_free) for i in items), default=0.0)
+    timeout = timeout_minutes(env)
     try:
-        timeout = float(env.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
-    except ValueError:
-        timeout = DEFAULT_TIMEOUT_MIN
-    if not wait_for_ram(
-        w, timeout_min=timeout, lock=lock, free=free, sleep=sleep, clock=clock, say=say
-    ):
+        ok = wait_for_ram(
+            w, timeout_min=timeout, lock=lock, free=free, sleep=sleep, clock=clock, say=say
+        )
+    except OSError as e:
+        return "ERROR", f"ramgate: cannot read free RAM ({e}); not starting. Run again later."
+    if not ok:
         return "TIMEOUT", (
             f"ramgate: for {timeout:g} min free RAM stayed <= {RESERVE_GB + w:g} GB or another "
             f"local run held {lock.path} (weight {w:g} GB; {ENV_TIMEOUT} sets the minutes, weights "
@@ -680,20 +697,21 @@ def main(
             w = max((weight(a, table) for a in argv), default=DEFAULT_WEIGHT)
     if not build and decide(w, 0.0, rom_gate) == "POD":
         say(f"POD {w:g}")
-        return 3
-    try:
-        timeout = float(os.environ.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
-    except ValueError:
-        timeout = DEFAULT_TIMEOUT_MIN
+        return EXIT_REFUSE
+    timeout = timeout_minutes(os.environ)
     if build:
         lock = MachineLock() if lock is None else lock
-    ok = wait_for_ram(
-        w, timeout_min=timeout, lock=lock if build else None, kind="build",
-        free=free, sleep=sleep, clock=clock, say=say,
-    )  # fmt: skip
+    try:
+        ok = wait_for_ram(
+            w, timeout_min=timeout, lock=lock if build else None, kind="build",
+            free=free, sleep=sleep, clock=clock, say=say,
+        )  # fmt: skip
+    except OSError as e:
+        say(f"ERROR cannot read free RAM ({e})")
+        return EXIT_NO_RAM_READ
     if not ok:
         say(f"TIMEOUT {w:g}")
-        return 4
+        return EXIT_TIMEOUT
     say(f"GO {w:g}")
     if not build:
         return 0

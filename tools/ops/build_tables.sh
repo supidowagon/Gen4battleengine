@@ -16,7 +16,7 @@
 # Python: $NUZLINE_PY (an existing venv's python, run with PYTHONPATH) or else `uv run --group rom python`.
 # RAM: the build steps run as the child of `tools/ops/ramgate.py --build` (docs/process.md section 5):
 # they start once free RAM > 6 GB + the build weight and the machine lock is free, and hold the lock
-# until they end. A reuse needs neither. A wait that times out exits 4.
+# until they end. A reuse needs neither. A wait that times out exits 14.
 set -euo pipefail
 OPS_DIR=$(cd "$(dirname "$0")" && pwd); . "$OPS_DIR/common.sh"
 ARG="${1:?usage: build_tables.sh --here | <commit>}"
