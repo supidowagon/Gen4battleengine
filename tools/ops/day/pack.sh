@@ -71,10 +71,12 @@ if [ "$DELTA" = 1 ]; then
   NEW=$(git -C "$REPO" rev-parse --verify "$C^{commit}") || refuse "no such commit" "$C"
   OLD_TREE=$(git -C "$REPO" rev-parse "$OLD^{tree}"); NEW_TREE=$(git -C "$REPO" rev-parse "$NEW^{tree}")
   # Tables key: the old one from its archive or index.txt, the new one from --tables or the standard archive.
-  OKEY=$(table_key16 compare "$OLD" "$RENT/tables_${OLD:0:8}.tar.xz"); [ -n "$OKEY" ] || OKEY=$(pack_sent_key "$OLD")
+  OKEY=$(table_key16 compare "$OLD" "$RENT/tables_${OLD:0:8}.tar.xz"); OSRC="archive or index.txt"
+  [ -n "$OKEY" ] || { OKEY=$(pack_sent_key "$OLD"); OSRC="an earlier send's meta.env"; }; [ -n "$OKEY" ] || OSRC="unknown"
   if [ -n "$TBS" ]; then [ -f "$TBS" ] || refuse "no such tables archive" "$TBS"
-    NKEY=$(table_key16 capture "$NEW" "$TBS"); [ -n "$NKEY" ] || refuse "no table key for the archive (no .key file beside it, no tables_k<key16> name, or it differs from that build)" "$TBS"
-  else NKEY=$(table_key16 compare "$NEW" "$RENT/tables_${NEW:0:8}.tar.xz"); [ -n "$NKEY" ] || NKEY=$(pack_sent_key "$NEW")
+    NSRC="--tables"; NKEY=$(table_key16 capture "$NEW" "$TBS"); [ -n "$NKEY" ] || refuse "no table key for the archive (no .key file beside it, no tables_k<key16> name, or it differs from that build)" "$TBS"
+  else NKEY=$(table_key16 compare "$NEW" "$RENT/tables_${NEW:0:8}.tar.xz"); NSRC="archive or index.txt"
+    [ -n "$NKEY" ] || { NKEY=$(pack_sent_key "$NEW"); NSRC="an earlier send's meta.env"; }
     [ -n "$NKEY" ] || refuse "no table key for ${NEW:0:8} (no $RENT/tables_${NEW:0:8}.tar.xz, index.txt line or earlier send); pass --tables <archive>" ""; fi
   SHIP=0; if [ -z "$OKEY" ] || [ "$OKEY" != "$NKEY" ]; then SHIP=1
     [ -n "$TBS" ] || refuse "the tables key changed (old ${OKEY:-unknown}, new $NKEY) and no --tables was given: the delta must carry the new tables" ""; fi
@@ -128,7 +130,7 @@ if [ "$DELTA" = 0 ]; then tar -cf "$P/payload.tar" -C "$P" code.tar tables.tar.x
 else tar -cf "$P/payload.tar" -C "$P" delta.tar deletions.txt $([ "$SHIP" = 1 ] && echo tables.tar.xz) meta.env ids.txt bin; fi
 echo "== payload.tar"; tar -tvf "$P/payload.tar"
 if [ "$DELTA" = 0 ]; then echo "== code.tar $(echo "$CT" | wc -l) entries; tables $(echo "$T" | wc -l) files:"
-else echo "== delta ${OLD:0:8}..${NEW:0:8}: $DELTA_ADD files changed, $DELTA_DEL deleted; tables $([ "$SHIP" = 1 ] && echo "sent ($(echo "$T" | wc -l) files, key $NKEY)" || echo "kept (key $NKEY)"):"; fi
+else echo "== delta ${OLD:0:8}..${NEW:0:8}: $DELTA_ADD files changed, $DELTA_DEL deleted; tables $([ "$SHIP" = 1 ] && echo "sent ($(echo "$T" | wc -l) files, key $NKEY)" || echo "kept (key $NKEY; old key from $OSRC, new from $NSRC)"):"; fi
 echo "$T" | sed 's/^/  /'; grep -v '^WATCH_' "$P/meta.env"
 pack_send   # CODE
 echo "== exec-pod body:"
