@@ -664,7 +664,11 @@ def future_thresholds(
         | (effect == EffectId.PSYCH_UP)
         | (effect == EffectId.ACUPRESSURE)
     )
-    free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
+    # A trainer bag item's X Accuracy raises its user's accuracy stage (BattleSystem_UseBagItem,
+    # battle_system.c:610-615), which the hit reads for an attacker that stays: free for any item
+    # action (over-approximate).
+    bag = jnp.any(live & is_item(actions))
+    free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs | bag
     # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
     # As weather bits (field.weather_bits): none, a sandstorm, a hail, each with the start's fog.
@@ -1179,8 +1183,13 @@ def _threshold_grid(
             tables, state, foe, target_mon, state.item[party(fmt, side), state.active[side]]
         )
         confuseds = jnp.stack([confused0, ~confused0])
+        # The foe's trainer bag item acts before every move (bcp.c:753-769) and can end its own
+        # confusion (BattleSystem_UseBagItem's HEAL_CONFUSION, battle_system.c:543-551; Full
+        # Restore's clear, subscript_use_full_restore.s:8): Tangled Feet (bcp.c:2944-2946) then
+        # no longer halves the side's rate. Over-approximate: any item action.
+        bag_cure = live & is_item(actions[foe])
         confused_ok = jnp.stack(
-            [jnp.asarray(True), jnp.where(confused0, changes[foe], live & berry)]
+            [jnp.asarray(True), jnp.where(confused0, changes[foe] | bag_cure, live & berry)]
         )
         # Grid order: moved (2) x weather (2) x confusion (2) x accuracy (4) x evasion (4).
         acc_grid = jnp.tile(jnp.repeat(accs, _STAGE_VARIANTS), 8)

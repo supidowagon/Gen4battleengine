@@ -2263,6 +2263,11 @@ def outcome_laws(
     # Berry, a White Herb, a Lum or Cheri Berry): free like a held one.
     recycles = uses_move & (effect == _E.RECYCLE)
     plucks = plucks | recycles
+    # A trainer bag item acts before every move (bcp.c:753-769) on its user's own battler
+    # (bag.use_bag_item): an X Speed raises its Speed stage (BattleSystem_UseBagItem,
+    # battle_system.c:603-608) and the status cures (:458-541) and Full Restore's clear
+    # (subscript_use_full_restore.s:7) end its paralysis (or, for Quick Feet, any status) before
+    # the end-of-turn sort. Over-approximate: any item action frees both.
     stage_free = (
         (uses_move & own_speed)
         | (foe_moves & foes(foe_speed))
@@ -2270,6 +2275,7 @@ def outcome_laws(
         | herb
         | pinch_held
         | plucks
+        | item
     )
     static = _holds(tables, state, actions, (AbilityId.STATIC,))
     sync_foe = foes(_holds(tables, state, actions, (AbilityId.SYNCHRONIZE,)))
@@ -2308,6 +2314,8 @@ def outcome_laws(
         # side's move gave it, or passes the paralysis the side's Static gave it.
         | (uses_move & _inflicts(tables, state, moves, Status.PARALYSIS) & sync_foe)
         | (foe_moves & foes(damaging) & foes(contact) & sync_foe & static)
+        # The side's trainer bag item: a paralysis cure or Full Restore (see ``stage_free``).
+        | item
     )
     # Roar / Whirlwind (step._use_move): BtlCmd_TryWhirlwind draws nothing with no eligible
     # bench Pokemon, BattleSystem_CanWhirlwind nothing for a user of at least the target's
