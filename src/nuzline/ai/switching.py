@@ -651,15 +651,15 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     # AI_CannotDamageWonderGuard reads battleMons[].ability (trainer_ai.c:3298).
     ability = decomp_abilities(tables, state)
     d_ability = ability[0, d]
+    # The trap gate reads ``CountAbility`` -> ``Battler_Ability`` (battle_lib.c:2896-2903,
+    # :2933-2940; :3088-3106), not the raw field: Gastro Acid (ability suppressed) on the
+    # player's active empties it, except Multitype (:3090-3093), so no trap ability gates.
+    d_trap = battler_decomp_ability(tables, state, 0)
     present = species > 0
 
     # Step 1 (:3906-3913) and step 2 (:3915-3940). VOLATILE_CONDITION_TRAPPED is Bind's
     # ``trapped`` and Mean Look's ``mean_look`` (condition.h:77-78); :3907 MOVE_EFFECT_INGRAIN.
     steel = jnp.any(state.types[1, a] == _TYPE_STEEL)
-    # The trap gate reads ``CountAbility`` -> ``Battler_Ability`` (battle_lib.c:2896-2903,
-    # :2933-2940; :3088-3106), not the raw field: Gastro Acid (ability suppressed) on the
-    # player's active empties it, except Multitype (:3090-3093), so no trap ability gates.
-    d_trap = battler_decomp_ability(tables, state, 0)
     gate = (
         (state.trapped[1] > 0)
         | (state.mean_look[1] != 0)

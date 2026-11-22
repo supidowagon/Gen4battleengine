@@ -489,6 +489,8 @@ def _switch_states(draw, t, n, party):
         mean_look=s.mean_look.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
         ingrain=s.ingrain.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
         stages=s.stages.at[1, 1].set(draw(st.sampled_from((0, 0, 0, 2, 4)))),
+        # I-2: Gastro Acid on the player's active (Battler_Ability reads none, lib.c:3088-3106).
+        ability_suppressed=s.ability_suppressed.at[0].set(draw(st.sampled_from((0, 0, 1)))),
     )
     return with_gravity(s, gravity)
 
@@ -515,8 +517,6 @@ def test_roark_switch_distribution_matches_loose(
     t, n = kaizo_tables, kaizo_names
     s = data.draw(_switch_states(t, n, kaizo_roark_party))
     assume(not switching_refusals(t, s, KAIZO.switch_sites))
-        # I-2: Gastro Acid on the player's active (Battler_Ability reads none, lib.c:3088-3106).
-        ability_suppressed=s.ability_suppressed.at[0].set(draw(st.sampled_from((0, 0, 1)))),
     assume(not policy.ai_refusals(t, s, n))
     reads = _loose_reads(t, s)
     assume(len(reads) <= 12)
@@ -618,6 +618,27 @@ def test_absorb_bench_matches_loose(
     _assert_switch_equals_loose(t, s)
 
 
+@pytest.mark.parametrize("suppressed", [False, True])
+def test_gastro_acid_trap_gate_matches_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, suppressed
+):
+    """I-2: a Wobbuffet (Shadow Tag) player active gates the switch (trainer_ai.c:3908), unless
+    Gastro Acid hid its ability from ``CountAbility`` (``Battler_Ability``, battle_lib.c:2896-2903,
+    :3088-3106). The loose reference applies ``Battler_Ability`` too."""
+    t, n = kaizo_tables, kaizo_names
+    s = _six_bench(t, n, kaizo_roark_party)
+    slot = n.species_abilities(n.species("Wobbuffet")).index(n.ability("Shadow Tag"))
+    types = s.types[0, 0]
+    s = as_species(t, s, 0, 0, n.species("Wobbuffet"), slot)
+    s = s._replace(types=s.types.at[0, 0].set(types))
+    if suppressed:
+        s = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+    gated = not suppressed
+    assert (_loose_reads(t, s) == []) == gated
+    assert (set(switch_sites(t, s, KAIZO.switch_sites).tolist()) == {K.NONE}) == gated
+    _assert_switch_equals_loose(t, s)
+
+
 # --- Replacement ----------------------------------------------------------------------------
 
 
@@ -644,27 +665,6 @@ def test_roark_replacement_each_faint_order(
     effective against the player (checked), so every state reaches stage 2 (:8034-8088);
     against Normal/Normal only Bonsly's Brick Break is, so stage 2 runs once Bonsly is gone."""
     t, n = kaizo_tables, kaizo_names
-@pytest.mark.parametrize("suppressed", [False, True])
-def test_gastro_acid_trap_gate_matches_loose(
-    kaizo_tables, kaizo_names, kaizo_roark_party, suppressed
-):
-    """I-2: a Wobbuffet (Shadow Tag) player active gates the switch (trainer_ai.c:3908), unless
-    Gastro Acid hid its ability from ``CountAbility`` (``Battler_Ability``, battle_lib.c:2896-2903,
-    :3088-3106). The loose reference applies ``Battler_Ability`` too."""
-    t, n = kaizo_tables, kaizo_names
-    s = _six_bench(t, n, kaizo_roark_party)
-    slot = n.species_abilities(n.species("Wobbuffet")).index(n.ability("Shadow Tag"))
-    types = s.types[0, 0]
-    s = as_species(t, s, 0, 0, n.species("Wobbuffet"), slot)
-    s = s._replace(types=s.types.at[0, 0].set(types))
-    if suppressed:
-        s = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
-    gated = not suppressed
-    assert (_loose_reads(t, s) == []) == gated
-    assert (set(switch_sites(t, s, KAIZO.switch_sites).tolist()) == {K.NONE}) == gated
-    _assert_switch_equals_loose(t, s)
-
-
     party = kaizo_roark_party
     s = make_state(t, [party[2]], list(party))
     if player != "Gible":
