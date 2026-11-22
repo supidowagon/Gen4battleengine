@@ -1,6 +1,7 @@
 """tools/ops/ramgate.py: weight lookup, id selection, the decision, the pytest gate. No real RAM
 read, no real waiting: free RAM, the clock and the sleep are injected."""
 
+import importlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -250,3 +251,38 @@ def test_cli_build_waits_for_ram():
 def test_pod_entry_points_export_the_pod_marker(name):
     text = (ROOT / "tools/ops/day/pod" / name).read_text(encoding="utf-8")
     assert rg.ENV_ON_POD + "=1" in text
+
+
+def test_blocker_blocks_engine_imports_only():
+    b = rg.EngineBlocker()
+    for name in ("nuzline.engine", "nuzline.engine.x", "nuzline.engine.step.y"):
+        with pytest.raises(ImportError, match="quick lane"):
+            b.find_spec(name)
+    for name in ("nuzline.engineering", "nuzline.data.tables", "jax", "os"):
+        assert b.find_spec(name) is None
+
+
+def test_blocker_in_a_fake_run_stops_the_import_and_is_removed():
+    path = []
+    b = rg.install_blocker(path)
+    assert path == [b]
+    # the real import machinery, with the finder first on a copy of the path
+    saved = sys.meta_path
+    sys.meta_path = [b, *saved]
+    try:
+        with pytest.raises(ImportError, match="quick lane"):
+            importlib.import_module("nuzline.engine.fake_ramgate_probe")
+        assert "nuzline.engine.fake_ramgate_probe" not in sys.modules
+        assert importlib.import_module("json")
+    finally:
+        sys.meta_path = saved
+    rg.remove_blocker(b, path)
+    assert path == []
+    rg.remove_blocker(b, path)  # twice is harmless
+
+
+def test_blocker_wanted_only_for_engine_free_runs_without_override():
+    assert rg.blocker_wanted([PLAIN, ROM], {})
+    assert rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "0"})
+    assert not rg.blocker_wanted([ROM, ROM], {})
+    assert not rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "1"})

@@ -19,6 +19,15 @@ sys.modules["nuzline_ramgate"] = ramgate
 _spec.loader.exec_module(ramgate)
 
 
+_BLOCKER = pytest.StashKey()
+
+
+def pytest_unconfigure(config):
+    blocker = config.stash.get(_BLOCKER, None)
+    if blocker is not None:
+        ramgate.remove_blocker(blocker)
+
+
 # trylast: -m and -k have deselected by then, so the gate sees exactly what will run.
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
@@ -35,5 +44,8 @@ def pytest_collection_modifyitems(config, items):
     if verdict in ("REFUSE", "TIMEOUT"):
         pytest.exit(msg, returncode=3)
     if verdict == "GO":
+        # Engine-free run: an import of nuzline.engine at run time fails loudly (until unconfigure).
+        if not config.option.collectonly and ramgate.blocker_wanted(items, os.environ):
+            config.stash[_BLOCKER] = ramgate.install_blocker()
         # Child pytest processes of a test (pytester subprocesses) inherit this and skip the gate.
         os.environ[ramgate.ENV_DONE] = "1"

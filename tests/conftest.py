@@ -540,7 +540,11 @@ def kaizo_roark_party(kaizo_roark):
 @pytest.fixture(scope="session", autouse=True)
 def ai_legality_invariant():
     """Every concrete AI pick is a legal opponent action (tests/ai_legality.py): installed once
-    the test modules are collected, so their own imported names are wrapped too."""
+    the test modules are collected, so their own imported names are wrapped too. Not installed
+    while the root conftest's engine blocker (tools/ops/ramgate.py) is on: it needs the engine."""
+    if any(type(f).__name__ == "EngineBlocker" for f in sys.meta_path):
+        yield
+        return
     from tests import ai_legality
 
     patched = ai_legality.install()

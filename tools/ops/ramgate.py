@@ -12,6 +12,7 @@ prints `GO <w>` (exit 0) after any wait, or `POD <w>` (exit 3, weight >= 8). --b
 builds, weight 20 unless --weight) never prints POD: it only waits for RAM.
 """
 
+import importlib.abc
 import os
 import sys
 import time
@@ -219,6 +220,39 @@ def disallowed(items: Iterable, modules: Iterable[str]) -> list[str]:
     return [i.nodeid for i in items if not is_rom_only(i)]
 
 
+QUICK_LANE_HINT = (
+    "send at most 5 ids to the dispatcher's quick lane, run name q-<stream>-<sha7> "
+    "(docs/process.md section 5)"
+)
+
+
+class EngineBlocker(importlib.abc.MetaPathFinder):
+    """Refuses every import of `nuzline.engine` or a submodule, so a test that imports the engine
+    at run time (in its body, a fixture or a lazy CLI path) fails loudly and loads nothing."""
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == ENGINE_PREFIX or fullname.startswith(ENGINE_PREFIX + "."):
+            raise ImportError(f"ramgate: no engine tests on the PC: {fullname}: {QUICK_LANE_HINT}")
+
+
+def blocker_wanted(items: Iterable, env: Mapping[str, str]) -> bool:
+    """An engine-free run (not all ROM-only, no override) gets the finder."""
+    return not _flag(env, ENV_ROM_GATE) and not all(is_rom_only(i) for i in items)
+
+
+def install_blocker(meta_path: list | None = None) -> EngineBlocker:
+    meta_path = sys.meta_path if meta_path is None else meta_path
+    blocker = EngineBlocker()
+    meta_path.insert(0, blocker)
+    return blocker
+
+
+def remove_blocker(blocker, meta_path: list | None = None) -> None:
+    meta_path = sys.meta_path if meta_path is None else meta_path
+    if blocker in meta_path:
+        meta_path.remove(blocker)
+
+
 def pytest_gate(
     items: Iterable,
     args: Iterable[str],
@@ -251,8 +285,8 @@ def pytest_gate(
         more = f" and {len(bad) - MAX_LISTED} more" if len(bad) > MAX_LISTED else ""
         return "REFUSE", (
             f"ramgate: no engine tests on the PC: {len(bad)} selected test(s) are neither ROM-only "
-            f"nor engine-free, first: {', '.join(bad[:MAX_LISTED])}{more}. Send at most 5 ids to the "
-            "dispatcher's quick lane, run name q-<stream>-<sha7> (docs/process.md section 5). "
+            f"nor engine-free, first: {', '.join(bad[:MAX_LISTED])}{more}. "
+            f"{QUICK_LANE_HINT[0].upper() + QUICK_LANE_HINT[1:]}. "
             f"{ENV_ROM_GATE}=1 is for the merge gate's ROM-only run only."
         )
     ids = selected_ids(args, rootdir, invocation_dir)
