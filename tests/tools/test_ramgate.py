@@ -545,7 +545,9 @@ _ENGINE_FILE = "tests/engine/test_field_pass.py"
 )
 def test_a_pytest_without_the_gate_cannot_import_the_engine(args, addopts):
     """Each flag keeps the root conftest (the gate) from loading; the engine package then refuses.
-    Collect-only: if the check were missing this only imports the engine, it runs no test."""
+    Collect-only: if the check were missing this only imports the engine, it runs no test.
+    win32-only, so no pod run covers it: run this file locally once per change to
+    src/nuzline/engine/__init__.py or the root conftest.py (docs/process.md section 5)."""
     import subprocess
 
     env = _child_env(**({"PYTEST_ADDOPTS": addopts} if addopts else {}))

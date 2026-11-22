@@ -115,17 +115,26 @@ per day is the rate used for estimates.
   at once, naming the first disallowed ids: send them to the quick lane below. The tests listed
   in `tools/ops/day/pod_only.txt` (JAX compiles without the engine: `tests/test_spike_step.py`,
   `tests/test_jaxcache.py`; manager ruling 22 Nov 2026) are refused on the PC the same way,
-  whatever they import and even with `NUZLINE_RAMGATE_ROM_GATE=1`. `-n` / `--dist`
+  whatever they import. `-n` / `--dist`
   (pytest-xdist) is refused on the PC at configure time. A pytest on the PC that never loaded
   the gate (`--noconftest`, `--confcutdir tests`, also through `PYTEST_ADDOPTS`) cannot import
   the engine: `src/nuzline/engine/__init__.py` raises ImportError when `_pytest` is loaded on
-  Windows and the gate module is not. An allowed run
+  Windows and the gate module is not. Its four subprocess tests in `tests/tools/test_ramgate.py`
+  (`test_a_pytest_without_the_gate_cannot_import_the_engine`) are win32-only, so no pod run
+  covers them: run `tests/tools/test_ramgate.py` locally once per change to
+  `src/nuzline/engine/__init__.py` or the root `conftest.py`. An allowed run
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
   6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, then takes the machine lock
-  `<main checkout>/_scratch/ramgate.lock` (created exclusively, holding `<pid> <kind>`; stale
-  and removed once that pid is gone; a child process of the holder runs under its hold) and
-  keeps it until the run ends, so one local run goes at a time. Waiting on the lock (polled
-  every 10 s) counts toward the same `NUZLINE_RAMGATE_TIMEOUT` minutes (default 30).
+  `<main checkout>/_scratch/ramgate.lock`: an OS lock on that file (`msvcrt.locking` on
+  Windows, `fcntl.flock` elsewhere) held until the run ends, so one local run goes at a time.
+  The kernel frees it the moment its holder ends, however it ends (a killed tool, the watchdog's
+  hard exit, a power cut): there is no stale lock. The file stays; its line `<pid> <kind>
+  <start time>` only names the holder, and a child process of the holder (pid and start time
+  of the ancestor both matching, every parent link start-time checked, so a reused pid never
+  counts) runs under its hold. Waiting on the lock (polled every 10 s, the message names the
+  holder pid and the path) counts toward the same `NUZLINE_RAMGATE_TIMEOUT` minutes (default
+  30). To clear a stuck lock, end the named process if it is no pytest or build of yours;
+  deleting the file frees nothing.
   `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
   weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured
@@ -141,22 +150,25 @@ per day is the rate used for estimates.
   The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
   never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
   engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a
-  wait and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` is a last
-  resort: it lets a refused run through, so engine tests run on the PC too; the RAM wait
-  stays. A refused run exits 13, a wait that times out 14, an unreadable free-RAM figure 16
+  wait and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` (or
+  `--rom-gate`) concerns ROM-only ids only: it lifts the POD cut-off (weight 8 or more) of the
+  `ramgate.py <ids>` check; the pytest gate ignores it, so it lets no refused run through.
+  A refused run exits 13, a wait that times out 14, an unreadable free-RAM figure 16
   (apart from pytest's own codes 0-5); a `NUZLINE_RAMGATE_TIMEOUT` that is not a finite number
   of 0 or more counts as 30. `NUZLINE_RAMGATE_NO_WAIT=1` turns the RAM wait off (the
   refusal stays) only while a live ancestor holds the machine lock as the measuring harness
   (kind `measure`), which checks free RAM and runs the watchdog itself; otherwise it is ignored
   with a note. A pytest started by a test of a gated run is part of that run: the gate sets
-  `NUZLINE_RAMGATE_DONE=<its pid>` and skips a run whose live ancestor (or itself) has that pid;
-  any other value is ignored. The pod sets
+  `NUZLINE_RAMGATE_DONE=<its pid>` and skips a run whose live ancestor (or itself, links
+  start-time checked) has that pid; any other value is ignored. The pod sets
   `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`, `quick.sh`), which skips the gate on Linux only (on the
   Windows PC it is ignored). Local jobs that are not
   pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
   waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
   more than 20 GB free) and the machine lock, runs the command under the lock and exits with
-  its code; it never prints POD. `tools/ops/build_tables.sh` wraps its build steps in it itself.
+  its code; it never prints POD. On the pod (`NUZLINE_ON_POD=1`) or off Windows it runs the
+  command directly: no wait, no lock, no watchdog. `tools/ops/build_tables.sh` wraps its build
+  steps in it itself.
   A `tools.kaizo.*` run (it needs the ROM or the docs sheet, so it cannot go to the pod):
   `python tools/ops/ramgate.py --build [--weight GB] -- python -m tools.kaizo.<module> ...`.
 - **Quick lane (engine tests, a few ids):** send the managing session a request of at most 5
