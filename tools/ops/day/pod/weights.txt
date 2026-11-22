@@ -446,11 +446,8 @@ tests/tools/test_pod_gate.py::test_a_heavy_head_lets_a_later_unit_that_fits_star
 tests/tools/test_pod_gate.py::test_agg_prints_the_runs_peak_from_mem_mb_txt[-n/a] 6 ops-merged-27db518
 tests/tools/test_pod_gate.py::test_agg_prints_the_runs_peak_from_mem_mb_txt[None-n/a] 6 ops-merged-27db518
 tests/tools/test_pod_gate.py::test_claim_hand_over_between_two_runners 6 ops-merged-27db518
-tests/tools/test_pod_gate.py::test_exec_body_script_writes_the_files_byte_for_byte 6 ops-merged-27db518
-tests/tools/test_pod_gate.py::test_exec_body_writes_a_multi_chunk_file_and_an_empty_file_byte_for_byte 6 ops-merged-27db518
 tests/tools/test_pod_gate.py::test_only_a_reused_pids_claim_expires_by_time_a_live_runners_never 6 ops-merged-27db518
 tests/tools/test_pod_gate.py::test_pack_refuses_pod_scripts_that_differ_from_main 6 ops-merged-27db518
-tests/tools/test_pod_gate.py::test_podcheck_body_carries_heads_gate_and_podcheck_and_their_sum 6 ops-merged-27db518
 tests/tools/test_pod_gate.py::test_podcheck_fails_on_an_active_old_script_or_other_script_run 6 ops-merged-27db518
 tests/tools/test_pod_gate.py::test_podcheck_lists_runs_gate_versions_memory_and_claims 6 ops-merged-27db518
 tests/tools/test_pod_gate.py::test_podcheck_reads_cgroup_v1_and_an_unlimited_limit 6 ops-merged-27db518

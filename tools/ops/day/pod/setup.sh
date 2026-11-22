@@ -90,7 +90,8 @@ for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
     # -m filter alone ("N deselected", no SKIPPED line) stays "<line> 0 collect_rc=5".
     out = (D / "col" / f"{k}.out").read_text(errors="replace")
     mods = list(dict.fromkeys(m.replace("\\", "/") for m in re.findall(r"(?m)^SKIPPED \[[0-9]+\] (.+?):[0-9]+: ", out)))
-    summ += [f"{m} 0 collect_rc={rc} module_skipped" for m in mods]
+    for m in mods:   # once per module, though several lines (a file and its folder) collect it
+        if m not in seen: seen.add(m); summ.append(f"{m} 0 collect_rc={rc} module_skipped")
     if not by and not mods: summ.append(f"{f} 0 collect_rc={rc}")
     for tf, ids in by.items():
         summ.append(f"{tf} {len(ids)} collect_rc={rc}")
