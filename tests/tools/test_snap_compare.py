@@ -1180,7 +1180,7 @@ def test_selection_rows_build_the_inputs_only(monkeypatch):
     ((_, got),) = sc.upgrade_inputs([("k", {"in_state": s})], None)
     assert got["in_state"]["move_slot"].tolist() == [0, 2]
     assert got["in_state"]["selected_temp"].tolist() == [0, 3]
-    assert got["in_state"]["ts_move_temp"].tolist() == [0, 0]
+    assert got["in_state"]["ts_move_temp"].tolist() == 0  # a 0-d field (state.py: _FIELD)
     rows = {u.name: u for u in sc.UPGRADES if not u.outputs}
     assert sorted(w for u in rows.values() for w in u.writes) == [
         "move_slot",
