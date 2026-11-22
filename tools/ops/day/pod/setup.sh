@@ -12,6 +12,8 @@
 # files.txt lines: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]"; A = no -m filter;
 # <GB>G = a floor on the expected peak of every unit cut from that line. Each unit's expected peak
 # goes to out/<unit>.w: max(<GB>, bin/weights.py over bin/weights.txt); runner.sh gates on it.
+# The snapshot commit holds every file of code.tar, git-ignored ones too (bin/lane.sh lane_snapshot).
+# Writes the quick lane marker /work/_lane/<stream>.sha just before SETUP_END (bin/lane.sh).
 # Writes gate.env (GATE_VERSION, POD_SCRIPTS, POD_WEIGHTS for podcheck.sh) and run.env (the
 # knobs the exec-pod body's env set, for a runner restart) first.
 set -euxo pipefail
@@ -27,6 +29,7 @@ RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_
 for n in $RUN_ENV_NAMES; do if [ -n "${!n+x}" ]; then
   printf "export %s='%s'\n" "$n" "$(printf '%s' "${!n}" | sed "s/'/'\\\\''/g")"; fi; done > "$D/run.env"
 . "$D/bin/gate.sh"   # cgmem: container memory, cgroup v2 or v1
+. "$D/bin/lane.sh"   # lane_snapshot, lane_stream, lane_write_marker (DAYBOX.md "Quick lane")
 MARK="${MARK:-not slow and not fullset}"   # pack.sh writes MARK into meta.env; this default is the same
 echo $$ > "$D/setup.pid"; SETUP_DONE=0
 trap 'rc=$?; [ "$SETUP_DONE" = 1 ] || echo "SETUP_FAILED rc=$rc $(date +%s)"' EXIT
@@ -42,7 +45,7 @@ cgmem current > /dev/null || { echo "ERROR: no cgroup memory file (v2 memory.cur
   fi
 ) 9> /work/_decomp/.lock
 R="$D/repo"; rm -rf "$R"; mkdir "$R"; tar --no-same-owner -xf code.tar -C "$R"
-( cd "$R" && git init -q && git add -A && git -c user.name=ci -c user.email=ci@localhost commit -qm "snapshot $COMMIT" )
+lane_snapshot "$R" "$COMMIT"
 tar --no-same-owner -xJf tables.tar.xz -C "$R"; [ -f "$R/data/gen4_platinum_kaizo/manifest.json" ]
 mkdir -p "$R/external"; ln -sfn "/work/_decomp/$DECOMP" "$R/external/pokeplatinum"
 ( cd "$R" && uv sync --frozen -q --group rom )   # rom: ndspy, capstone, openpyxl (tests/tools/rom import them)
@@ -106,6 +109,10 @@ for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
 print("units", n, "ids", len(seen))
 PY
 cat collected.txt
+# Quick lane marker (DAYBOX.md "Quick lane"): this run's repo is now the stream's last synced state.
+RUNNAME=$(basename "$D")
+if STREAM=$(lane_stream "$RUNNAME"); then lane_write_marker "$STREAM" "$COMMIT" "$R" "${TABLES_KEY:-}" "${TREE:-}" || echo "WARNING: lane marker of stream $STREAM not written"
+else echo "WARNING: no stream in the run name $RUNNAME; no lane marker"; fi
 echo "SETUP_END $(date +%s)"
 nohup bash "$D/bin/runner.sh" > "$D/runner.log" 2>&1 < /dev/null &
 echo $! > "$D/runner.pid"; SETUP_DONE=1
