@@ -79,10 +79,12 @@
 #   CACHE_KEEP_DAYS (7) days old, then the oldest entries (by mtime) until jax/ is under
 #   CACHE_CAP_BYTES (20 GiB, the cap tests/conftest.py keeps locally), and every capture but the
 #   CACHE_SNAP_KEEP (10) newest. It warns when the volume has under CACHE_FREE_WARN_GB (3) GB
-#   left: left = CACHE_VOL_QUOTA_GB (30, the volume's size; the pod cannot read it, and df of the
-#   mount shows the whole storage cluster) minus du -sk of <vol> (GiB, rounded up), du under
-#   timeout -k 5 CACHE_DU_TIMEOUT (60 s); a timed-out or failed du prints "volume used ?" and no
-#   warning. Grow the volume only with the owner.
+#   left (GB = 10^9 bytes, the unit of the volume's size; the pod check, podcheck.sh, uses the
+#   same knob and unit): left = CACHE_VOL_QUOTA_GB (30, the volume's size; the pod cannot read it,
+#   and df of the mount shows the whole storage cluster) x 10^9 minus du -sk of <vol> in bytes;
+#   "used" is shown rounded up, "left" rounded down. du runs under timeout -k 5
+#   CACHE_PRUNE_DU_TIMEOUT (60 s); a timed-out or failed du prints "volume used ?" and no warning.
+#   Grow the volume only with the owner.
 # Knobs (env): CACHE_VOL (/vol), NUZLINE_TEST_COMPILE_CACHE (/work/_jaxcache/jax-tests, the
 #   folder holding the <ver> folders, as unit.sh), CACHE_PY (python3; setup.sh and runner.sh pass
 #   the run's repo/.venv/bin/python), CACHE_JAXVER (seed: the <ver> to seed; setup.sh passes
@@ -401,13 +403,14 @@ prune() {
     [ "$n" -gt "$SNAP_KEEP" ] && { rm -rf "${d%/}"; say "prune: capture ${d%/} deleted (keep $SNAP_KEEP)"; }
   done < <(ls -dt "$S"/*/ 2>/dev/null)
   # 5. space left: the quota minus du (df of the mount shows the whole storage cluster)
-  local q="${CACHE_VOL_QUOTA_GB:-30}" dt="${CACHE_DU_TIMEOUT:-60}" k used
+  local q="${CACHE_VOL_QUOTA_GB:-30}" dt="${CACHE_PRUNE_DU_TIMEOUT:-60}" k ub G=1000000000 fw="$FREE_WARN_GB"
   [[ "$q" =~ ^[1-9][0-9]*$ ]] || { say "prune: CACHE_VOL_QUOTA_GB '$q' is not a whole number: 30 used"; q=30; }
+  [[ "$fw" =~ ^[0-9]+$ ]] || { say "prune: CACHE_FREE_WARN_GB '$fw' is not a whole number: 3 used"; fw=3; }
   [[ "$dt" =~ ^[1-9][0-9]*$ ]] || dt=60
   k=$(timeout -k 5 "$dt" du -sk "$VOL" 2>/dev/null | awk 'NR == 1 {print $1}')
-  if [[ "$k" =~ ^[0-9]+$ ]]; then used=$(( (k + 1048575) / 1048576 )); free=$(( q - used ))
-    say "prune: volume used $used GB of $q GB"
-    [ "$free" -lt "$FREE_WARN_GB" ] && say "WARNING: volume $VOL has $free GB left of $q GB (under $FREE_WARN_GB GB): grow it (owner approval)"
+  if [[ "$k" =~ ^[0-9]+$ ]]; then ub=$(( k * 1024 )); free=$(( q * G - ub ))
+    say "prune: volume used $(( (ub + G - 1) / G )) GB of $q GB"
+    [ "$free" -lt $(( fw * G )) ] && say "WARNING: volume $VOL has $(( free / G )) GB left of $q GB (under $fw GB): grow it (owner approval)"
   else say "prune: volume used ? (du failed or took over $dt s)"; fi
   lock_release
   say "prune done"

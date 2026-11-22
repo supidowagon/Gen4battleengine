@@ -177,7 +177,8 @@ per day is the rate used for estimates.
   host's target features and LLVM's host CPU name, which LLVM derives from those fields; the
   LLVM side is not re-checked in this repo, `tools/ops/day/pod/cache_sync.sh` header), so a pod
   seeds only programs compiled on a CPU of its tag. The low-space warning compares `du` of the
-  volume with its size (30 GB; `df` of the mount shows the whole storage cluster). Every volume call
+  volume in bytes with its size (30 GB of 10^9 bytes; `df` of the mount shows the whole storage
+  cluster) and fires under 3 GB left. Every volume call
   runs under a timeout (900 s until the road test measures them; then at least three times the
   measured wall, DAYBOX.md "Network volume"), so a volume that does not answer never holds a run
   or a snapshot job; a seed or publish stopped by it keeps what it renamed. Pruning on every publish: unused jax versions after 7 days, the cache
