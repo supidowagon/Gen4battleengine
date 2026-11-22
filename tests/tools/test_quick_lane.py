@@ -260,8 +260,10 @@ def test_delta_refuses_a_forbidden_file(src, tmp_path):
 # --- pack.sh --delta refusals (before any pod script is read) ----------------------------------------
 
 
-def _pack(src, tmp_path, *args: str, ids: str = "tests/a.py\n") -> subprocess.CompletedProcess:
-    scratch = tmp_path / "scratch"
+def _pack(
+    src, tmp_path, *args: str, ids: str = "tests/a.py\n", scratch_dir: str = "scratch"
+) -> subprocess.CompletedProcess:
+    scratch = tmp_path / scratch_dir
     (scratch / "rent" / "tables").mkdir(parents=True, exist_ok=True)
     _w(tmp_path / "ids.txt", ids)
     env = {"NUZLINE_REPO": _p(src["repo"]), "NUZLINE_SCRATCH": _p(scratch)}
@@ -1243,24 +1245,26 @@ def test_the_body_env_holds_only_the_shape_knobs_set_on_the_pc():
 
 
 def test_the_old_tables_key_comes_from_an_earlier_send_of_that_commit(src, tmp_path):
-    rent = tmp_path / "scratch" / "rent"
+    # The scratch path has a space, as the real one on the PC does.
+    rent = tmp_path / "scr atch" / "rent"
     _w(rent / "tables/index.txt", f"{src['c3']} {'a' * 64}\n")  # the new tip's key only
     ids = _p(tmp_path / "ids.txt")
-    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-aaaaaaa", ids)
+    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-aaaaaaa", ids, scratch_dir="scr atch")
     assert r.returncode == 3 and "tables key changed (old unknown" in r.stdout, r.stdout
     # an earlier send of c1 kept its meta.env (COMMIT, TABLES_KEY): the same key, no tables
     _w(rent / "out/e4-a0m-1111111/meta.env", f"COMMIT={src['c1']}\nTABLES_KEY={'a' * 16}\n")
-    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-bbbbbbb", ids)
+    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-bbbbbbb", ids, scratch_dir="scr atch")
     assert "tables key" not in r.stdout, r.stdout
     # a newer send of c1 with another key wins: the key changed, the tables must travel
     _w(rent / "out/q-e4-2222222/meta.env", f"COMMIT={src['c1']}\nTABLES_KEY={'b' * 16}\n")
     t = time.time()
     os.utime(rent / "out/e4-a0m-1111111/meta.env", (t - 100, t - 100))
-    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-ccccccc", ids)
+    r = _pack(src, tmp_path, src["c1"], src["c3"], "q-e4-ccccccc", ids, scratch_dir="scr atch")
     assert r.returncode == 3 and f"(old {'b' * 16}, new {'a' * 16})" in r.stdout, r.stdout
 
 
-def test_no_untracked_or_ignored_file_gets_into_a_send(src, tmp_path):
+def test_only_committed_content_gets_into_a_send(src, tmp_path):
+    # The real check is the uncommitted a.txt edit; ignored and untracked files are a backstop.
     r = src["repo"]
     _w(r / "data/local.toml", "secret = 1\n")  # git-ignored (data/)
     _w(r / ".cache/x.nds", "rom\n")  # untracked

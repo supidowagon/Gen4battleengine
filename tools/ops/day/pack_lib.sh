@@ -98,10 +98,11 @@ pack_code_tar() { git -C "$1" -c core.autocrlf=false archive --format=tar -o "$3
 # NEW is a delta's COMMIT). The quick lane's marker on the pod holds that same key. Prints
 # nothing when no kept meta.env has one.
 pack_sent_key() { local f k
-  for f in $(ls -t "$RENT"/out/*/meta.env 2>/dev/null); do
+  while IFS= read -r f; do
     grep -qx "COMMIT=$1" "$f" || continue
     k=$(sed -n 's/^TABLES_KEY=//p' "$f" | tail -1 | tr -d '\r')
-    echo "$k" | grep -qE '^[0-9a-f]{16}$' && { echo "$k"; return 0; }; done; return 0; }
+    echo "$k" | grep -qE '^[0-9a-f]{16}$' && { echo "$k"; return 0; };
+  done < <(ls -t "$RENT"/out/*/meta.env 2>/dev/null); return 0; }
 
 # pack_body_env: the exec-pod body's env field (',"env":{...}') holding GATE_GB, KILL_GB and MAXP
 # as set on the PC for pack.sh (the shape's values, docs/process.md section 5), only those set;

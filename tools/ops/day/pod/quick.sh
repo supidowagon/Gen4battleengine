@@ -125,12 +125,6 @@ else
       && { cd "$LR" && uv sync --frozen -q --group rom; }; }; then cd "$D" || true; rm -rf "${LR:?}"; fallback "lane repo creation failed"; fi
   cd "$D" || exit 1
 fi
-# The decomp: the worktree of this run's DECOMP commit, as setup.sh links it.
-[ -d "$WORK/_decomp/$DECOMP" ] || fallback "decomp ${DECOMP:0:8} is not on the pod"
-mkdir -p "$LR/external" && ln -sfn "$WORK/_decomp/$DECOMP" "$LR/external/pokeplatinum" || fallback "cannot link the decomp"
-# The tables: a delta without tables.tar.xz needs the marker's key to be OLD_TABLES_KEY (both known).
-if [ ! -f tables.tar.xz ] && { [ -z "${OLD_TABLES_KEY:-}" ] || [ "$M_KEY" != "$OLD_TABLES_KEY" ]; }; then
-  fallback "tables key of the lane (${M_KEY:-unknown}) is not the delta's OLD key (${OLD_TABLES_KEY:-unknown}) and no tables travel"; fi
 # A quick run stopped mid-pytest (stop.sh, a pod restart) leaves the tests' edits and untracked
 # files: they go first (reset to the snapshot commit; clean without -x, so git-ignored files, the
 # built tables, the venv and what tests write under ignored paths, stay). Then the tracked files
@@ -139,6 +133,12 @@ if [ ! -f tables.tar.xz ] && { [ -z "${OLD_TABLES_KEY:-}" ] || [ "$M_KEY" != "$O
 ( cd "$LR" && git reset -q --hard HEAD && git clean -fdq ) > /dev/null 2>&1 || fallback "git reset or clean failed in the lane repo"
 T=$(git -C "$LR" rev-parse 'HEAD^{tree}' 2> /dev/null) || fallback "git failed in the lane repo"
 [ "$T" = "$OLD_TREE" ] || fallback "lane tree ${T:0:8} is not OLD_TREE ${OLD_TREE:0:8}"
+# The decomp: the worktree of this run's DECOMP commit, as setup.sh links it.
+[ -d "$WORK/_decomp/$DECOMP" ] || fallback "decomp ${DECOMP:0:8} is not on the pod"
+mkdir -p "$LR/external" && ln -sfn "$WORK/_decomp/$DECOMP" "$LR/external/pokeplatinum" || fallback "cannot link the decomp"
+# The tables: a delta without tables.tar.xz needs the marker's key to be OLD_TABLES_KEY (both known).
+if [ ! -f tables.tar.xz ] && { [ -z "${OLD_TABLES_KEY:-}" ] || [ "$M_KEY" != "$OLD_TABLES_KEY" ]; }; then
+  fallback "tables key of the lane (${M_KEY:-unknown}) is not the delta's OLD key (${OLD_TABLES_KEY:-unknown}) and no tables travel"; fi
 
 # (c) apply. Every path is checked first, so a refused delta changes nothing in the lane repo.
 # The listing: names literal (delta.names), types from the long listing in the same order;
@@ -249,8 +249,7 @@ SUM=$(grep -v '^[[:space:]]*$' "$D/quick.pytest.log" | tail -1)
 BLK=$(awk '/^___+ |^(FAILED|ERROR) /{f=1} f{print; if(++n>=30) exit}' "$D/quick.pytest.log")
 SKP=$(grep -E '^SKIPPED ' "$D/quick.pytest.log" | head -10)
 if [ -f "$O/q.memkill" ]; then read -r _ KM < "$O/q.memkill"
-  echo "QUICK_FAIL container memory ${KM} GB reached KILL_GB ${KILL_GB}: unit killed (pytest rc $PRC) $SUM"; [ -z "$BLK" ] || printf '%s
-' "$BLK"
+  echo "QUICK_FAIL container memory ${KM} GB reached KILL_GB ${KILL_GB}: unit killed (pytest rc $PRC) $SUM"; [ -z "$BLK" ] || printf '%s\n' "$BLK"
   end 98 "FAIL (killed at KILL_GB ${KILL_GB}: memory ${KM} GB)"; fi
 if [ -f "$O/q.timeout" ]; then echo "QUICK_FAIL timeout after ${QUICK_MAX_S:-1800} s (pytest rc $PRC) $SUM"; [ -z "$BLK" ] || printf '%s\n' "$BLK"
   end 124 "FAIL (timeout after ${QUICK_MAX_S:-1800} s)"; fi
