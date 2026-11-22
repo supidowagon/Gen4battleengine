@@ -696,12 +696,16 @@ def _leech_seed_recipient(a, lead, tables):
 # --- D45-1-R begin: the AI record per battler (sheet D45-1) -------------------------------------
 def _ai_record_by_battler(a, lead, tables):
     """D45-1: the AI record per player party slot (int16[6, 4] / [6]) -> per battler ([2, 4] / [2]):
-    row 0 = the old row of active[0] where that Pokemon has HP (CleanupFaintedMon clears it,
-    battle_lib.c:2223-2225), row 1 = 0 (never kept at B = 2, sheet D45-1 rule 6). B = 2 only: no
-    capture holds a B = 4 state; any other battler count raises."""
+    row 0 = the old row of active[0] unless that Pokemon's CleanupFaintedMon has run (it clears the
+    row, battle_lib.c:2223-2225): kept while it has HP, and at a pivot pause while its faint is
+    still pending (0 HP with its ``ts_alive`` bit set: an enemy U-turn's hit fainted it, and its
+    PlayFaintAnimation, battle_script.c:1803, comes at the action's faint check after the switch,
+    subscript_attack_then_switch_out.s:15-71); row 1 = 0 (never kept at B = 2, sheet D45-1 rule
+    6). B = 2 only: no capture holds a B = 4 state; any other battler count raises."""
     import numpy as np
 
     active, hp = np.asarray(a["active"]), np.asarray(a["hp"])
+    alive = np.asarray(a["ts_alive"])
     if active.shape[len(lead) :] != (2,):
         raise ValueError("ai record relayout: only a B = 2 state is re-keyed (sheet D45-1)")
     out = {}
@@ -710,7 +714,8 @@ def _ai_record_by_battler(a, lead, tables):
         new = np.zeros((*lead, 2, *old.shape[len(lead) + 1 :]), old.dtype)
         for i in np.ndindex(*lead):
             slot = int(active[(*i, 0)])
-            if hp[(*i, 0, slot)] > 0:
+            pending = (int(alive[(*i, 0)]) >> slot) & 1
+            if hp[(*i, 0, slot)] > 0 or pending:
                 new[(*i, 0)] = old[(*i, slot)]
         out[f] = new
     return out
@@ -745,7 +750,7 @@ UPGRADES = (
     dropped("state", "exp_refused", _I1, (), "E3-B2-21", "main's sticky window (c) refusal code; the payout's prompt now pauses the turn, so learn work never refuses (review b2 #6)"),
     derive("state", (("leech_seed", _I1, ("B",)),), ("leech_seed_recipient",), _leech_seed_recipient, "D3-11b", "older Leech Seeds were set by the opposite battler: 1 + (b ^ 1) where seeded", ("leech_seed",)),
     # D45-1-R: the literal 6 never matches a new state ((2, 4) / (4, 4)), so the row runs on old captures only
-    derive("state", (("ai_seen_moves", _I2, (6, 4)), ("ai_item_known", _I2, (6,)), ("ai_ability_known", _I2, (6,)), ("active", _I1, ("B",)), ("hp", _I2, ("P", 6))), ("ai_seen_moves", "ai_item_known", "ai_ability_known"), _ai_record_by_battler, "D45-1", "the record per battler (ai_context.h:27-29): row 0 = the old row of active[0] while it has HP, row 1 never kept at B = 2", ("active", "hp")),
+    derive("state", (("ai_seen_moves", _I2, (6, 4)), ("ai_item_known", _I2, (6,)), ("ai_ability_known", _I2, (6,)), ("active", _I1, ("B",)), ("hp", _I2, ("P", 6)), ("ts_alive", _I1, ("P",))), ("ai_seen_moves", "ai_item_known", "ai_ability_known"), _ai_record_by_battler, "D45-1", "the record per battler (ai_context.h:27-29): row 0 = the old row of active[0] while it has HP or its faint is pending at a pivot pause (ts_alive), row 1 never kept at B = 2", ("active", "hp", "ts_alive")),
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}
