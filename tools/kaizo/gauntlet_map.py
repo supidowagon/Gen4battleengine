@@ -735,8 +735,10 @@ class Walker:
     known values of coord variables. ``coord_rule(header, coord, matches)``: ``"pass"``,
     ``"block"`` (the script takes the player: the tile is not entered) or None for the default: in
     a ``strict`` header (every header when None) a matching coord raises and one on an unknown var
-    passes; in another header a matching or unknown-var coord blocks, so the walk beyond the
-    group's own headers grants nothing a coord script could take away.
+    blocks (its script may start a battle or move the player: Route 213's coords on 0x40FA,
+    header 373 scripts 9, 10, 13 start battles 692+693, 694+695, 491; Building 75's on 0x407A
+    starts 406), except ``UNKNOWN_COORDS_PASSED`` (open); in another header a matching or
+    unknown-var coord blocks too, so the walk grants nothing a coord script could take away.
     ``doubles``: the double-battle trainers (``read_double_trainers``). ``two_alive``: the party
     has two live Pokemon (``Party_HasTwoAliveMons``); ``partner``: the partner flag is set. Sight
     takes two when either holds (``field_control.c:182-186``); a talk reads the party only
@@ -996,7 +998,7 @@ class Walker:
         The game runs only the first coord of the tile, in event order, whose var matches
         (``sub_0203CC14``, ``src/unk_0203C954.c:217-221``; one script, ``field_control.c:769-773``):
         a known match ends the loop. A coord whose var is unknown may or may not be that one,
-        so its action applies and the later coords are applied too."""
+        so its action applies (by default it blocks) and the later coords are applied too."""
         area = self.maps.area(pos.header)
         for c in area.coords:
             if not c.covers(pos.x, pos.z):
@@ -1006,7 +1008,10 @@ class Walker:
                 continue
             action = self.coord_rule(pos.header, c, matches) if self.coord_rule else None
             if action is None:
-                if self.strict is not None and pos.header not in self.strict:
+                foreign = self.strict is not None and pos.header not in self.strict
+                if foreign or (
+                    matches is None and (pos.header, c.script) not in UNKNOWN_COORDS_PASSED
+                ):
                     action = "block"
                 elif matches:
                     raise MapReadError(
@@ -2157,6 +2162,13 @@ ROUTE_204 = ChainSpec(members=(15, 13, 14), headers=(346,), entries=(Pos(346, 18
 # The lobby healer of Route 213: header 376 object 1 at (11, 4), talked to across the table tile
 # (11, 5); scr 462 entry 2 runs HealParty (@74).
 ROUTE_213_HEALERS = ((376, 1),)
+# Open (needs a manager ruling): Route 213's coords on 0x40FA (header 373, scr 459 entries 9-13:
+# value 3 battle 692+693 sets 4, value 4 battle 694+695 sets 5, value 5 a party check, value 7 a
+# cutscene that moves the player and sets 8, value 8 battle 491 sets 9) lie on the chain's path:
+# blocked, the chain has no full sequence. The var's value at the group's start is not read, so
+# these pass as before (unsafe: the walk may skip a scripted battle or a forced move). Every other
+# unknown-var coord in a strict header blocks; a ROM test pins the list.
+UNKNOWN_COORDS_PASSED = frozenset({(373, 9), (373, 10), (373, 11), (373, 12), (373, 13)})
 B2B_HEADER = 256
 
 # The split of each group: the sheet section that lists it (the [[gauntlet]] ``source`` of

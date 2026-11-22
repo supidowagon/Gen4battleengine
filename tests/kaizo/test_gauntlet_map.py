@@ -252,8 +252,11 @@ def test_only_the_first_matching_coord_of_a_tile_runs():
 
 def test_a_coord_by_a_known_or_unknown_var():
     a = area(1, ["......"], coords=[Coord(7, 3, 0, 1, 1, 1, 0x4091)])
-    unknown = Walker(StaticMaps([a])).walk(Pos(1, 0, 0))  # var not known: recorded only
-    assert Pos(1, 5, 0) in unknown.seen and len(unknown.crossed) == 1
+    # var not known: the script may run (a battle, a move of the player), so the tile blocks
+    unknown = Walker(StaticMaps([a])).walk(Pos(1, 0, 0))
+    assert Pos(1, 3, 0) not in unknown.seen and Pos(1, 5, 0) not in unknown.seen
+    passed = Walker(StaticMaps([a]), coord_rule=lambda h, c, m: "pass").walk(Pos(1, 0, 0))
+    assert Pos(1, 5, 0) in passed.seen and len(passed.crossed) == 1
     off = Walker(StaticMaps([a]), vars={0x4091: 0}).walk(Pos(1, 0, 0))
     assert Pos(1, 5, 0) in off.seen
     with pytest.raises(MapReadError):
@@ -831,6 +834,131 @@ def test_no_header_a_walk_reaches_sets_a_persisted_map_feature(
     assert found == {}
 
 
+def _common_ranges(decomp) -> list[tuple[int, str]]:
+    """``SCRIPT_RANGE_TABLE`` (``src/script_manager.c:32-62``) as (first id, file), highest
+    first, the order ``ScriptContext_LoadAndOffsetID`` tests them (:228-254); the offsets from
+    ``include/script_manager.h:90-119``."""
+    src = (decomp / "src" / "script_manager.c").read_text(encoding="utf-8")
+    rows = re.findall(r"Entry\((SCRIPT_ID_OFFSET_\w+),\s*(\w+),", src)
+    head = (decomp / "include" / "script_manager.h").read_text(encoding="utf-8")
+    offsets = {k: int(v) for k, v in re.findall(r"#define (SCRIPT_ID_OFFSET_\w+)\s+(\d+)", head)}
+    assert len(rows) == 30 and all(k in offsets for k, _ in rows)
+    return [(offsets[k], f) for k, f in rows]
+
+
+def _common_file(ranges, script_id: int) -> str | None:
+    """The common file a script id runs, or None for 1..1999 (the current map's own file,
+    script_manager.c:243-246); id 0 runs ``scripts_unk_0402`` (:247-251)."""
+    for first, name in ranges:
+        if script_id >= first:
+            return name
+    return None if script_id >= 1 else "scripts_unk_0402"
+
+
+@pytest.mark.slow
+def test_no_common_script_a_reached_header_starts_sets_a_persisted_map_feature(
+    rom_files, decomp, derived_and_reached
+):
+    # A reached header can start a common script by id: its bg, object and coord events
+    # (map_script_ids' fields, any id), its init scripts (init_script_ids) and the commands
+    # that start a script by id in its own file and in each common file so reached
+    # (CallCommonScript, src/scrcmd.c:973-985; Unused_013, :960-971). Each common file is
+    # walked whole (every entry): scripts_safari_game holds InitGreatMarshTram (scrcmd.c:5325).
+    # A common file is a scr_seq member by its scr_seq.naix index, the scripts.order line.
+    import struct as st
+
+    from tools.kaizo.gauntlet_map import RomMaps
+    from tools.rom.readers.maps import (
+        CALLS_COMMON_SCRIPT,
+        EVENTS_NARC,
+        HEADER_INIT_SCRIPTS,
+        KAIZO_MAP_HEADERS,
+        SCRIPTS_NARC,
+        STARTS_SCRIPT_BY_ID,
+        _event_records,
+        _walk,
+        command_table,
+        init_script_ids,
+    )
+
+    ten = _persisted_feature_commands(decomp)
+    ranges = _common_ranges(decomp)
+    order_file = decomp / "res" / "field" / "scripts" / "scripts.order"
+    order = [s.strip() for s in order_file.read_text(encoding="utf-8").splitlines() if s.strip()]
+    _, reached = derived_and_reached
+    headers = set().union(*reached.values())
+    maps = RomMaps(rom_files)
+    scripts = rom_files.narc(SCRIPTS_NARC)
+    events = rom_files.narc(EVENTS_NARC)
+    raw = rom_files.narc(KAIZO_MAP_HEADERS)
+    table = command_table(decomp)
+    starts = {table.opcode[CALLS_COMMON_SCRIPT], table.opcode[STARTS_SCRIPT_BY_ID]}
+    scanned: dict[str, tuple[set, set]] = {}
+
+    def scan(member: int, name: str) -> tuple[set, set]:
+        decoded, _, _ = _walk(scripts[member], table, name)
+        used = {table.constants[op] for op, _, _ in decoded.values()} & ten
+        return used, {v[0] for op, v, _ in decoded.values() if op in starts}
+
+    found = {}
+    reached_files = set()
+    for h in sorted(headers):
+        head = maps.header(h)
+        ids = set(_event_records(events[head.events], head.events)[2])
+        init = st.unpack_from("<H", raw[h], HEADER_INIT_SCRIPTS)[0]
+        ids |= set(init_script_ids(scripts[init], init))
+        ids |= scan(head.scripts, f"scr_seq {head.scripts}")[1]
+        todo = {f for f in (_common_file(ranges, i) for i in ids) if f is not None}
+        done = set()
+        while todo:
+            name = todo.pop()
+            if name in done:
+                continue
+            done.add(name)
+            if name not in scanned:
+                scanned[name] = scan(order.index(name), name)
+            used, more = scanned[name]
+            if used:
+                found[(h, name)] = sorted(used)
+            todo |= {f for f in (_common_file(ranges, i) for i in more) if f is not None}
+        reached_files |= done
+    assert "scripts_battles" in reached_files  # the trainers' own scripts are reached
+    assert found == {}
+
+
+@pytest.mark.slow
+def test_the_unknown_var_coords_of_the_strict_headers_are_the_listed_ones(
+    rom_files, derived_and_reached
+):
+    # In a group's strict headers (its own and the healer's) a coord on a var the walk does not
+    # know blocks, except UNKNOWN_COORDS_PASSED (Route 213's 0x40FA story coords, open). The
+    # list of such coords in the headers the walks reach is pinned: a new one fails here.
+    from tools.kaizo.gauntlet_map import (
+        BUILDINGS,
+        OREBURGH,
+        ROUTE_204,
+        ROUTE_213,
+        ROUTE_213_HEALERS,
+        UNKNOWN_COORDS_PASSED,
+        RomMaps,
+        literal_coord,
+    )
+
+    _, reached = derived_and_reached
+    maps = RomMaps(rom_files)
+    groups = {
+        "Oreburgh Mine": OREBURGH.headers,
+        "Route 204 North": ROUTE_204.headers,
+        "Team Galactic Eterna Building #1": BUILDINGS.headers,
+        "Route 213": (*ROUTE_213.headers, *(h for h, _ in ROUTE_213_HEALERS)),
+    }
+    found = set()
+    for name, strict in groups.items():
+        for h in sorted(set(strict) & reached[name]):
+            found |= {(h, c.script, c.var) for c in maps.area(h).coords if literal_coord(c) is None}
+    assert found == {(75, 2, 0x407A)} | {(h, s, 0x40FA) for h, s in UNKNOWN_COORDS_PASSED}
+
+
 def _committed():
     from tools.kaizo.overrides import load_overrides
 
@@ -1120,9 +1248,12 @@ def test_a_foreign_coord_on_an_unknown_var_blocks_the_healers_talk_tile():
     maps = _healer_maps([Coord(7, 2, 0, 1, 1, 1, 0x4100)])
     w = Walker(maps, strict=[1]).walk(Pos(1, 0, 0))
     assert (2, 5) not in w.talk and Pos(2, 3, 0) not in w.seen
-    # in a strict header (the healer's header is strict in derive_groups) it passes
+    # in a strict header (the healer's header is strict in derive_groups) it blocks too: its
+    # script may start a battle or move the player
     strict = Walker(maps, strict=[1, 2]).walk(Pos(1, 0, 0))
-    assert strict.talk == {(2, 5): Pos(2, 3, 0)}
+    assert strict.talk == {} and Pos(2, 3, 0) not in strict.seen
+    known = Walker(maps, strict=[1, 2], vars={0x4100: 0}).walk(Pos(1, 0, 0))
+    assert known.talk == {(2, 5): Pos(2, 3, 0)}
 
 
 def test_a_foreign_coord_with_a_non_matching_var_does_not_block():

@@ -56,7 +56,7 @@ from nuzline.engine.state import SLOTS
 from nuzline.engine.step import WINNER_PLAYER
 from nuzline.jaxcache import code_version
 from nuzline.search.stage_b import PlanNode, SolveResult, learn_label
-from nuzline.text import tenths
+from nuzline.text import decimals, tenths
 
 __all__ = ["distribution_line", "label", "render", "to_json"]
 
@@ -589,7 +589,9 @@ def _interval(low: float, high: float) -> str:
 
 def distribution_line(dist, label: str = "deaths under the leader") -> str:
     """``<label>: 0: a %  1: b % ...`` from a ``DeathDistribution`` (3 and 4+ deaths
-    folded into ``3+``); Stage A/B keep the default label."""
+    folded into ``3+``); Stage A/B keep the default label. The no-death share rounds down,
+    every other share (deaths, whiteout, unfinished, protected lost) up
+    (``nuzline.text.tenths``)."""
     p = dist.probs
     cells = (
         ("0", p[0]),
@@ -600,18 +602,19 @@ def distribution_line(dist, label: str = "deaths under the leader") -> str:
         ("unfinished", p[7]),
         ("protected lost", p[5]),
     )
-    return f"{label}: " + "  ".join(f"{n}: {100 * v:.1f} %" for n, v in cells)
+    return f"{label}: " + "  ".join(f"{n}: {tenths(v, up=n != '0')} %" for n, v in cells)
 
 
 def _precision_line(result: SolveResult) -> str:
     """The precision target of the final pass: met or not, the half-A leader's half-width
-    and the top-up rounds run."""
+    and the top-up rounds run. The half-width, the interval's spread, rounds up
+    (``nuzline.text.decimals``)."""
     head = f"precision target {100 * result.settings.precision:g} pp"
     rounds = f"after {result.rounds} top-up round{'' if result.rounds == 1 else 's'}"
     if result.half_width_a is None:
         return f"{head}: no ranked action to measure, {rounds}"
     verdict = "met" if result.precision_met else "not met"
-    width = f"{100 * result.half_width_a:.2f} pp"
+    width = f"{decimals(100 * result.half_width_a, 2, up=True)} pp"
     return f"{head}: {verdict} (leader's half-A half-width {width}) {rounds}"
 
 
