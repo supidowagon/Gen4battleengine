@@ -15,7 +15,9 @@
 # Both write $RENT/out/<name>/{code.tar,tables.tar.xz,payload.tar,run.sh,body.json,send.log},
 #   refuse forbidden files (FORBID and TABLE_DENY in the code archive; table entries with '..', a
 #   leading '/' or './', outside TABLE_ALLOW or in TABLE_DENY), start a detached send whose
-#   send.log ends with SEND_RC=<n>, and print the exec-pod body. --dry-run runs every check and
+#   send.log ends with SEND_RC=<n>, and print the exec-pod body (run.sh in argv chunks of at most
+#   4000 characters, checked by sha256 on the pod before it runs: see "The body" below; a body
+#   over exec-pod's limits, 4096 characters an item and 256 items, is refused). --dry-run runs every check and
 #   writes run.sh and body.json (receive code "<code>") but sends nothing.
 #   run.sh first writes /work/<name>/reads (the capture dir a compare reads; empty for a
 #   capture), then /work/<name>/times.txt: START, SYNC_RC=<n> (a failed uv sync stops here,
@@ -74,6 +76,7 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
 . "$HERE/pod/gate.sh"   # podgate and reserve_knobs, copied into run.sh
+. "$HERE/snap_body.sh"  # body_chunks, body_json: the exec-pod body
 # table_key16 capture|compare <full sha> <tables archive>: the first 16 hex of a build's table
 # key (tools/ops/build_tables.sh, tools/ops/table_key.py), or nothing.
 #   capture (the key a capture is stored under): only from the archive itself, the
@@ -382,6 +385,11 @@ echo ALL_DONE >> "\$W/times.txt"
 EOS
 tr -d '\r' < "$O/run.sh" > "$O/run.tmp" && mv "$O/run.tmp" "$O/run.sh"
 bash -n "$O/run.sh" || refuse "generated run.sh does not parse" "$O/run.sh"
+# The body (snap_body.sh): run.sh in argv chunks of at most 4000 characters after the script; the
+# script joins them (printf %s "$@"), decodes run.sh and runs it only when its sha256 is run.sh's
+# on the PC (else RUNSH_SHA_MISMATCH <sha>, exit 1, nothing started). Refused (exit 3) before the
+# send when the body would have over 256 items; after it when the script is over 4000 characters.
+body_chunks "$O/run.sh" || exit 3
 
 echo "== payload.tar"; tar -tvf "$O/payload.tar"
 echo "== code.tar $(printf '%s\n' "$CT" | wc -l) entries; tables $(printf '%s\n' "$T" | wc -l) files"
@@ -396,13 +404,12 @@ else
   [ -n "$CODE" ] || { echo "no code; send.log:"; cat send.log; kill "$SPID" 2>/dev/null || true; exit 4; }
 fi
 
-RB=$(base64 -w0 "$O/run.sh")
 UNTOOL=""; [ -z "$TSHA" ] || UNTOOL=" && mkdir tool && tar --no-same-owner -xf tool.tar -C tool"
 DM="/work/_decomp/$DECOMP"
 PREP="/work/_bin/runpodctl receive $CODE || { echo RECEIVE_FAILED; exit 1; }; [ -d $DM ] || { echo \"DECOMP_MISSING: $DM is not on this pod; send any pack.sh run first (its setup.sh creates it), then send this body again under a new name\"; exit 1; }; { tar --no-same-owner -xf payload.tar && mkdir repo && tar --no-same-owner -xf code.tar -C repo && tar --no-same-owner -xJf tables.tar.xz -C repo$UNTOOL && mkdir -p repo/external && ln -sfn $DM repo/external/pokeplatinum; } || { echo UNPACK_FAILED; exit 1; }; echo PREP_OK; setsid nohup bash $W/run.sh > run.out 2>&1 < /dev/null &"
-SHC="mkdir -p $W && cd $W && echo $RB | base64 -d > run.sh && chmod +x run.sh && nohup sh -c '$PREP' > prep.log 2>&1 < /dev/null & sleep 20; tail -c 300 $W/prep.log"
-python_json() { local s="$1"; s=${s//\\/\\\\}; s=${s//\"/\\\"}; printf '"%s"' "$s"; }
-printf '{"command": ["sh", "-c", %s], "timeoutSeconds": 25}\n' "$(python_json "$SHC")" > "$O/body.json"
+SHC="mkdir -p $W && cd $W || exit 1; printf %s \"\$@\" | base64 -d > run.sh || { echo RUNSH_DECODE_FAILED; exit 1; }; s=\$(sha256sum run.sh | cut -c1-64); [ \"\$s\" = $RSUM ] || { echo RUNSH_SHA_MISMATCH \$s; rm -f run.sh; exit 1; }; chmod +x run.sh && nohup sh -c '$PREP' > prep.log 2>&1 < /dev/null & sleep 20; tail -c 300 $W/prep.log"
+BJ=$(body_json "$SHC") || { [ -z "$SPID" ] || kill "$SPID" 2>/dev/null; echo "$BJ"; exit 3; }
+printf '%s\n' "$BJ" > "$O/body.json"
 echo "== exec-pod body ($O/body.json):"; cat "$O/body.json"
 [ "$DRY" = 1 ] && echo "DRY RUN: nothing sent; delete $O before reusing the name" && exit 0
 echo "== finished when exec 'tail -3 $W/times.txt' shows ${JOB}_RC=<n> then ALL_DONE"

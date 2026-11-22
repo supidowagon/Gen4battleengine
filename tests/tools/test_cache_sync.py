@@ -22,17 +22,28 @@ SYNC = ROOT / "tools" / "ops" / "day" / "pod" / "cache_sync.sh"
 SNAP = ROOT / "tools" / "ops" / "day" / "snap.sh"
 PY = Path(sys.executable).as_posix()
 VER = "0123456789abcdef"
-CPUINFO = ("processor\t: 0\nmodel name\t: Test CPU 9000\nflags\t\t: sse2 avx2  fpu\n\n"
-           "processor\t: 1\nmodel name\t: Test CPU 9000\nflags\t\t: sse2 avx2 fpu\n")
 
 
-def _tag(model: str, flags: str) -> str:
-    """cache_sync.sh host_tag: 12 hex of sha256 over the model name and the sorted flags."""
+def _cpuinfo(name: str = "Test CPU 9000", vendor: str = "TestVendor", family: str = "26", model: str = "2",
+             flags: str = "sse2 avx2  fpu", stepping: str = "1") -> str:
+    """A two-processor /proc/cpuinfo; the host tag reads the first processor only."""
+    one = (f"vendor_id\t: {vendor}\ncpu family\t: {family}\nmodel\t\t: {model}\nmodel name\t: {name}\n"
+           f"stepping\t: {stepping}\nflags\t\t: {flags}\n")
+    return f"processor\t: 0\n{one}\nprocessor\t: 1\n{one}"
+
+
+CPUINFO = _cpuinfo()
+
+
+def _tag(flags: str = "sse2 avx2 fpu", vendor: str = "TestVendor", family: str = "26", model: str = "2") -> str:
+    """cache_sync.sh host_tag: 16 hex of sha256 over vendor_id, cpu family, model and the sorted
+    flags (not the model name, not the stepping)."""
     import hashlib
-    return hashlib.sha256(f"{model}\n{' '.join(sorted(set(flags.split())))} \n".encode()).hexdigest()[:12]
+    fl = " ".join(sorted(set(flags.split()))) + " "
+    return hashlib.sha256(f"vendor_id={vendor}\ncpu family={family}\nmodel={model}\nflags={fl}\n".encode()).hexdigest()[:16]
 
 
-HOST = _tag("Test CPU 9000", "sse2 avx2 fpu")
+HOST = _tag()
 VT = f"{VER}-{HOST}"   # the volume folder of VER compiled on this (fake) host
 KEY = "a" * 40 + "-" + "b" * 16
 
@@ -56,14 +67,25 @@ def _env(tmp: Path, **kw: str) -> dict[str, str]:
     return env
 
 
+def _argv(args: tuple[str, ...], kw: dict[str, str]) -> list[str]:
+    """cache_sync.sh <args>. With a PATH (a _shim PATH) the script runs under a bash that sets it
+    itself: Git for Windows' bin/bash.exe puts /mingw64/bin:/usr/bin before the PATH it is given,
+    so a shim in it would never run there; the bash it execs (usr/bin's) keeps PATH as set."""
+    if "PATH" not in kw:
+        return [BASH, SYNC.as_posix(), *args]
+    kw["SHIM_PATH"] = kw["PATH"]
+    return [BASH, "-c", 'PATH=$SHIM_PATH; exec bash "$0" "$@"', SYNC.as_posix(), *args]
+
+
 def _sync(tmp: Path, *args: str, **kw: str) -> tuple[int, str]:
-    r = subprocess.run([BASH, SYNC.as_posix(), *args], env=_env(tmp, **kw), capture_output=True, text=True, check=False)
+    argv = _argv(args, kw)
+    r = subprocess.run(argv, env=_env(tmp, **kw), capture_output=True, text=True, check=False)
     return r.returncode, r.stdout + r.stderr
 
 
 def _popen(tmp: Path, *args: str, **kw: str) -> subprocess.Popen:
-    return subprocess.Popen([BASH, SYNC.as_posix(), *args], env=_env(tmp, **kw), stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True)
+    argv = _argv(args, kw)
+    return subprocess.Popen(argv, env=_env(tmp, **kw), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
 def _blob(seed: int, n: int = 20000) -> bytes:
@@ -338,7 +360,7 @@ def test_two_pods_storing_one_capture_key_at_once_store_it_once(tmp_path):
 # Host tag (the cache holds compiled XLA CPU programs; JAX's key does not hold the CPU)
 
 def test_seed_and_publish_use_only_the_folder_of_this_hosts_cpu(tmp_path):
-    other = tmp_path / "vol" / "jax" / f"{VER}-{_tag('Other CPU', 'sse2')}"
+    other = tmp_path / "vol" / "jax" / f"{VER}-{_tag('sse2')}"
     _entry(other, "o-cache", _blob(1))                                 # compiled on another CPU
     _entry(tmp_path / "local" / VER, "mine-cache", _blob(2))
     rc, out = _sync(tmp_path, "publish")
@@ -349,13 +371,42 @@ def test_seed_and_publish_use_only_the_folder_of_this_hosts_cpu(tmp_path):
         assert rc == 0 and f"seed: host tag {HOST}" in out, out
         assert sorted(p.name for p in (tmp_path / "fresh" / VER).iterdir()) == ["mine-cache"]   # not o-cache
     # flags in another order, doubled spaces, CRLF: the same CPU, the same tag
-    (tmp_path / "cpuinfo").write_text("model name : Test CPU 9000\r\nflags : fpu  sse2 avx2\r\n", encoding="utf-8", newline="")
+    (tmp_path / "cpuinfo").write_text("vendor_id : TestVendor\r\ncpu family : 26\r\nmodel : 2\r\nmodel name : Test CPU 9000\r\n"
+                                      "flags : fpu  sse2 avx2\r\n", encoding="utf-8", newline="")
     _entry(tmp_path / "local" / VER, "mine2-cache", _blob(3))
     assert _sync(tmp_path, "publish")[0] == 0 and (tmp_path / "vol" / "jax" / VT / "mine2-cache").is_file()
 
 
-def test_without_a_cpu_model_or_flags_seed_and_publish_skip(tmp_path):
-    (tmp_path / "cpuinfo").write_text("processor : 0\nFeatures : neon\n", encoding="utf-8")
+def _host_tag(tmp: Path, cpuinfo: str) -> str:
+    """The folder publish writes for this cpuinfo: <ver>-<host tag>."""
+    t = tmp / f"t{abs(hash(cpuinfo))}"
+    t.mkdir()
+    (t / "cpuinfo").write_text(cpuinfo, encoding="utf-8", newline="\n")
+    _entry(t / "local" / VER, "e-cache", _blob(1))
+    rc, out = _sync(t, "publish")
+    assert rc == 0, out
+    (d,) = (t / "vol" / "jax").glob(f"{VER}-*")
+    return d.name.split("-", 1)[1]
+
+
+def test_host_tag_ignores_the_model_name_and_stepping_but_not_family_model_or_flags(tmp_path):
+    """Road test: "AMD EPYC 9655" and "AMD EPYC 9655P" (one microarchitecture) got two tags."""
+    base = _host_tag(tmp_path, _cpuinfo())
+    assert base == HOST and len(base) == 16
+    assert _host_tag(tmp_path, _cpuinfo(name="AMD EPYC 9655P 96-Core Processor")) == base
+    assert _host_tag(tmp_path, _cpuinfo(stepping="7")) == base
+    for other in (_cpuinfo(family="25"), _cpuinfo(model="17"), _cpuinfo(flags="sse2 avx2 fpu avx512f"),
+                  _cpuinfo(vendor="OtherVendor")):
+        assert _host_tag(tmp_path, other) != base
+
+
+@pytest.mark.parametrize("cpuinfo", [
+    "processor : 0\nFeatures : neon\n",
+    _cpuinfo(vendor=""), _cpuinfo(family="x"), _cpuinfo(model=""), _cpuinfo(flags=""),
+    "processor : 0\nmodel name : Test CPU 9000\nflags : sse2\n",   # the earlier tag's fields only
+])
+def test_without_a_cpu_field_seed_and_publish_skip(tmp_path, cpuinfo):
+    (tmp_path / "cpuinfo").write_text(cpuinfo, encoding="utf-8")
     _entry(tmp_path / "local" / VER, "e-cache", _blob(1))
     rc, out = _sync(tmp_path, "publish")
     assert rc == 0 and "no host tag, nothing published" in out and out.rstrip().endswith("publish done"), out
@@ -364,9 +415,54 @@ def test_without_a_cpu_model_or_flags_seed_and_publish_skip(tmp_path):
     assert rc == 0 and "no host tag, seed skipped" in out, out
 
 
+def test_prune_drops_folders_of_the_earlier_12_hex_tag(tmp_path):
+    jax = tmp_path / "vol" / "jax"
+    old = jax / f"{VER}-{'c' * 12}"   # model name + flags tag: no pod seeds it any more
+    _entry(old, "x-cache", _blob(1))
+    (old / f"used-{_today()}").touch()
+    _entry(jax / VT, "y-cache", _blob(2))
+    rc, out = _sync(tmp_path, "prune")
+    assert rc == 0, out
+    assert not old.exists() and (jax / VT / "y-cache").is_file()
+    assert f"jax folder {VER}-{'c' * 12} has a 12-hex host tag" in out
+
+
+def test_prune_warns_from_used_space_against_the_quota_not_df(tmp_path):
+    """df of the network mount shows the whole storage cluster; prune reads du against the quota."""
+    _entry(tmp_path / "vol" / "jax" / VT, "x-cache", _blob(1))
+    rc, out = _sync(tmp_path, "prune")
+    assert rc == 0 and "prune: volume used 1 GB of 30 GB" in out and "WARNING" not in out, out
+    rc, out = _sync(tmp_path, "prune", CACHE_VOL_QUOTA_GB="3")
+    assert rc == 0 and "WARNING: volume" in out and "has 2 GB left of 3 GB" in out, out
+
+
+def test_prune_counts_volume_bytes_in_decimal_gb(tmp_path):
+    """GB is 10^9 bytes (the unit of the volume's size): 26 GiB (27.9 GB) of 30 GB leaves 2.1 GB,
+    under 3 (GiB against the quota's number would read 4 left and warn late)."""
+    _entry(tmp_path / "vol" / "jax" / VT, "x-cache", _blob(1))
+    path = _shim(tmp_path, "du", 'echo "27262976\t$2"\n')
+    rc, out = _sync(tmp_path, "prune", PATH=path)
+    assert rc == 0 and "prune: volume used 28 GB of 30 GB" in out, out
+    assert "WARNING: volume" in out and "has 2 GB left of 30 GB (under 3 GB)" in out, out
+    rc, out = _sync(tmp_path, "prune", PATH=path, CACHE_FREE_WARN_GB="2")
+    assert rc == 0 and "WARNING" not in out, out
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="timeout signals a bash shim's process group: Linux only (WSL runner, the pod)")
+def test_prune_with_a_du_that_hangs_reports_used_unknown_and_goes_on(tmp_path):
+    _entry(tmp_path / "vol" / "jax" / VT, "x-cache", _blob(1))
+    path = _shim(tmp_path, "du", "exec sleep 30\n")
+    t0 = time.monotonic()
+    rc, out = _sync(tmp_path, "prune", CACHE_PRUNE_DU_TIMEOUT="1", CACHE_VOL_QUOTA_GB="3", PATH=path)
+    assert time.monotonic() - t0 < 20
+    assert rc == 0 and "prune: volume used ? (du failed or took over 1 s)" in out and "WARNING" not in out, out
+    assert out.rstrip().endswith("prune done"), out
+
+
 def test_prune_keeps_the_newest_version_per_host_tag_and_drops_untagged_folders(tmp_path):
     jax = tmp_path / "vol" / "jax"
-    h2 = _tag("Other CPU", "sse2")
+    h2 = _tag("sse2")
     keep_a, old_a = jax / VT, jax / f"{'1' * 16}-{HOST}"
     keep_b, untagged = jax / f"{'2' * 16}-{h2}", jax / ("3" * 16)
     for d, used in ((keep_a, _today()), (old_a, _days_ago(10)), (keep_b, _days_ago(30)), (untagged, _today())):
