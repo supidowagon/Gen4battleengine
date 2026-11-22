@@ -635,8 +635,11 @@ def test_mask_sound_on_a_sourceless_uproar_lock(tables):
     stored board (its ``arbitrary`` outcome, seed 0) nor on its reachable selections."""
     arbitrary = stored("u027_arbitrary.txt")
     acts = np.zeros(2, np.int32)
-    for _label, s in _sourceless_uproar_boards():
-        _assert_mask_sound(tables, s, acts, arbitrary, 0)
+    for label, s in _sourceless_uproar_boards():
+        try:
+            _assert_mask_sound(tables, s, acts, arbitrary, 0)
+        except pytest.fail.Exception as failure:
+            pytest.fail(f"board {label}: {failure}")
 
 
 # Every bag item whose BattleSystem_UseBagItem branch (battle_system.c:435-758) the engine
@@ -721,7 +724,7 @@ def _assert_mask_sound(tables, s, acts, arbitrary, seed):
     both = Outcome(*(np.concatenate([a, b]) for a, b in zip(picked, changed)))
     stepped = step_bytes(tables, s, acts, both)
     if stepped[:n] != stepped[n:]:
-        holes = _mask_holes(tables, s, acts, picked, changed, stepped[:n])
+        holes = _mask_holes(tables, s, acts, picked, kept, changed, stepped[:n])
         pytest.fail(f"undrawn Outcome elements change the step: {holes}")
 
 
@@ -737,10 +740,14 @@ def _step_states(tables, state, actions, outcomes: Outcome) -> list[BattleState]
     return out
 
 
-def _mask_holes(tables, s, acts, picked, changed, base) -> dict[str, tuple[int, list[str]]]:
+_CONTEXT = ("speed_tie", "hit", "crit", "roll", "quick_claw", "full_para", "call", "protect")
+
+
+def _mask_holes(tables, s, acts, picked, kept, changed, base) -> dict[str, dict]:
     """The failure's diagnosis: each Outcome field whose undrawn elements alone change the
-    stepped state (``changed``'s value in that field only, over ``picked``), with the state
-    fields it changes in the first row it changes: ``{field: (row, state fields)}``."""
+    stepped state (``changed``'s value in that field only, over ``picked``), at the first row it
+    changes: the row, the elements that differ, each changed state field (``picked``'s step,
+    the changed one's), and the row's values and drawn masks of the ``_CONTEXT`` fields."""
     holes = {}
     for name in Outcome._fields:
         one = picked._replace(**{name: getattr(changed, name)})
@@ -751,8 +758,18 @@ def _mask_holes(tables, s, acts, picked, changed, base) -> dict[str, tuple[int, 
             row = moved[0]
             a = _step_states(tables, s, acts, rows(picked, [row]))[0]
             b = _step_states(tables, s, acts, rows(one, [row]))[0]
-            fields = [f for f, x, y in zip(BattleState._fields, a, b) if not np.array_equal(x, y)]
-            holes[name] = (row, fields)
+            diff = getattr(one, name)[row] != getattr(picked, name)[row]
+            holes[name] = {
+                "row": row,
+                "elements": np.argwhere(diff).tolist(),
+                "state": {
+                    f: (np.asarray(x).tolist(), np.asarray(y).tolist())
+                    for f, x, y in zip(BattleState._fields, a, b)
+                    if not np.array_equal(x, y)
+                },
+                "values": {f: np.asarray(getattr(picked, f)[row]).tolist() for f in _CONTEXT},
+                "drawn": {f: np.asarray(getattr(kept, f)[row]).tolist() for f in _CONTEXT},
+            }
     return holes
 
 
