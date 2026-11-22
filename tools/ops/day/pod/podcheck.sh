@@ -13,6 +13,9 @@
 # then:
 #   memory <GB> GB limit <GB GB|max|none>   gate.sh cgmem (cgroup v2, else v1); "none" when no file
 #                                           is readable; limit "max": no limit (v2 "max", or v1 at 2^60 or more)
+#   volume /vol free <GB> GB entries <n> captures <m> | volume none
+#        the network volume when /vol (CACHE_VOL) is a mountpoint (cache_sync.sh): free space,
+#        compile cache entries (jax/*/*-cache) and stored captures (snap/*); none: no volume
 #   claim <run>.<unit> age <s> s weight <GB> GB runner <alive|not-runner|dead>   for each file in
 #        <root>/.claims (not-runner: the pid is alive but runs no runner*.sh, a reused pid)
 # and the last line: PODCHECK OK (exit 0: no active old-script run and, when <POD_SCRIPTS> is
@@ -40,6 +43,13 @@ cur=none; b=$(cgmem current) && cur="$(( b / 1000000000 )) GB"
 lim=none; b=$(cgmem max) && case "$b" in max) lim=max;; ''|*[!0-9]*) lim="?";;
   *) if [ "${#b}" -ge 19 ] || [ "$b" -ge 1152921504606846976 ]; then lim=max; else lim="$(( b / 1000000000 )) GB"; fi;; esac
 echo "memory $cur limit $lim"
+V="${CACHE_VOL:-/vol}"   # the network volume (cache_sync.sh)
+if [ -d "$V" ] && { [ "${CACHE_VOL_MOUNTCHECK:-1}" = 0 ] || mountpoint -q "$V" 2>/dev/null; }; then
+  fr=$(df -Pk "$V" 2>/dev/null | awk 'NR == 2 {printf "%d", $4 / 1048576}')
+  ne=$(find "$V/jax" -mindepth 2 -maxdepth 2 -type f -name '*-cache' ! -name '.*' 2>/dev/null | wc -l)
+  nc=$(find "$V/snap" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | wc -l)
+  echo "volume $V free ${fr:-?} GB entries $ne captures $nc"
+else echo "volume none"; fi
 now=$(date +%s)
 for c in "$R"/.claims/*; do [ -f "$c" ] || continue; read -r e w p < "$c"
   case "$e" in ''|*[!0-9]*) echo "claim ${c##*/} malformed"; continue;; esac
