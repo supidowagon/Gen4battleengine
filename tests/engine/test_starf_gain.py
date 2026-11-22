@@ -100,6 +100,7 @@ def _laws(tables, s, acts):
     return jax.tree.map(np.asarray, jax.jit(outcome_laws)(tables, s, acts))
 
 
+@pytest.mark.slow  # peaks near 10 GB, over the fast-tier memory limit
 def test_the_fling_x_speed_speed_boost_board_eats_at_four_stats(tables, names):
     """Both engines: the berry is eaten at Speed +6, so draw 4 is rank 0 of the four (Attack) and
     draw 3 rank 3 (Sp. Def), where a count of 5 would give Sp. Def and Sp. Atk."""
