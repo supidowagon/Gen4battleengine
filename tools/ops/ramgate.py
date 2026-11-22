@@ -75,6 +75,7 @@ ENV_ON_POD = "NUZLINE_ON_POD"
 ENV_TIMEOUT = "NUZLINE_RAMGATE_TIMEOUT"
 ENV_ROM_GATE = "NUZLINE_RAMGATE_ROM_GATE"
 ENV_ENGINE_BLOCKED = "NUZLINE_ENGINE_BLOCKED"  # src/nuzline/engine/__init__.py refuses on it
+ENV_NO_WAIT = "NUZLINE_RAMGATE_NO_WAIT"  # measuring harness only: it checks RAM and runs a watchdog
 ENV_DONE = "NUZLINE_RAMGATE_DONE"
 ENV_NESTED = "PYTEST_CURRENT_TEST"  # set while a test runs: a pytest inside it is not gated
 
@@ -375,6 +376,8 @@ def pytest_gate(
             "Pass ROM-only node ids, never a file path (python tools/ops/ramgate.py --rom-ids <file>). "
             f"{ENV_ROM_GATE}=1 is a last resort: it also lets engine tests run on the PC."
         )
+    if _flag(env, ENV_NO_WAIT):
+        return "GO", "ramgate: GO (no wait)"
     table = load_weights() if table is None else table
     rom_table = load_rom_weights() if rom_table is None else rom_table
     w = max((item_weight(i, table, rom_table) for i in items), default=0.0)

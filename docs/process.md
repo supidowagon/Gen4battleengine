@@ -128,7 +128,9 @@ per day is the rate used for estimates.
   engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a
   wait and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` is a last
   resort: it lets a refused run through, so engine tests run on the PC too; the RAM wait
-  stays. A wait that times out exits 4. The pod sets
+  stays. A wait that times out exits 4. `NUZLINE_RAMGATE_NO_WAIT=1` turns the RAM wait off (the
+  refusal stays): for the measuring harness only, which checks free RAM and runs the watchdog
+  itself. The pod sets
   `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`), which skips the gate. `tools.kaizo.*` runs:
   `python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]` first (weight 8 or more prints
   POD, exit 3). Table builds: `python tools/ops/ramgate.py --build [--weight GB]` (default 20)

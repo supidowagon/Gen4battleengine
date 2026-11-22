@@ -458,3 +458,12 @@ def test_rom_ids_group_by_file_and_print_ready_commands():
         "python -m pytest -p no:cacheprovider -q 'tests/test_cli.py::test_a[x y]' tests/test_cli.py::test_b"
     )
     assert len(lines) == 2 and "test_engine" not in lines[0]
+
+
+def test_no_wait_env_skips_the_ram_wait_but_not_the_refusal():
+    clock = Clock()
+    env = {rg.ENV_NO_WAIT: "1"}
+    assert gate([PLAIN], free=0.0, env=env, clock=clock)[0] == "GO"
+    assert clock.sleeps == []
+    assert gate([ENG], free=0.0, modules=ENGINE, env=env)[0] == "REFUSE"
+    assert gate([PLAIN], free=0.0, env={rg.ENV_NO_WAIT: "0", rg.ENV_TIMEOUT: "0"})[0] == "TIMEOUT"
