@@ -13,6 +13,19 @@ ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "tools" / "ops" / "day" / "pod" / "gate.sh"
 
 
+def _pod_bin(dst: Path) -> None:
+    """The payload's bin/ as pack.sh builds it (common.sh pod_bin): every tools/ops/day/pod/*.sh,
+    weights.py and weights.txt, LF. A fixture copies the whole set, so a script that sources a new
+    one (setup.sh sourcing lane.sh) finds it as on the pod; a test then overrides single files."""
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in [
+        *sorted(GATE.parent.glob("*.sh")),
+        GATE.parent / "weights.py",
+        GATE.parent / "weights.txt",
+    ]:
+        (dst / f.name).write_bytes(f.read_bytes().replace(b"\r", b""))
+
+
 def _bash() -> str | None:
     """A POSIX bash with awk: on Windows Git's bash (System32's bash.exe is WSL, which cannot see
     these paths), elsewhere the bash on PATH."""
@@ -784,8 +797,7 @@ def test_pack_refuses_pod_scripts_that_differ_from_main(tmp_path):
 def test_setup_writes_gate_env_without_the_beacon_codes(tmp_path):
     d = tmp_path / "run1"
     (d / "bin").mkdir(parents=True)
-    for n in ("setup.sh", "gate.sh"):
-        (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
+    _pod_bin(d / "bin")
     (d / "meta.env").write_text("COMMIT=x\nGATE_VERSION=2\nPOD_SCRIPTS=abc\nPOD_WEIGHTS=def\nWATCH_F=secretf\nWATCH_D=secretd\n",
                                 encoding="utf-8", newline="\n")
     # no cgroup memory file: setup stops right after writing gate.env
@@ -822,8 +834,7 @@ def test_runner_kills_a_unit_over_unit_max_s_with_rc_96(tmp_path):
     d = work / "run-t"
     (d / "bin").mkdir(parents=True)
     (d / "out").mkdir()
-    for n in ("runner.sh", "gate.sh"):
-        (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
+    _pod_bin(d / "bin")
     # a unit that never ends: it writes its start time like unit.sh and sleeps
     (d / "bin" / "unit.sh").write_text('u="$1"; O="$(cd "$(dirname "$0")/.." && pwd)/out"\n'
                                        'date +%s > "$O/$u.start"; exec sleep 300\n', encoding="utf-8", newline="\n")
@@ -970,8 +981,7 @@ def _agg_peak_line(tmp_path: Path, mem: str | None) -> str:
     d = tmp_path / "run1"
     (d / "bin").mkdir(parents=True)
     (d / "out").mkdir()
-    for n in ("agg.sh", "gate.sh"):
-        (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
+    _pod_bin(d / "bin")
     (d / "out" / "queue.txt").write_text("", encoding="utf-8", newline="\n")
     if mem is not None:
         (d / "out" / "mem_mb.txt").write_text(mem, encoding="utf-8", newline="\n")
@@ -1001,8 +1011,7 @@ def test_a_module_that_skips_itself_at_collection_fails_the_run(tmp_path):
     d = tmp_path / "run"
     for sub in ("col", "out", "bin"):
         (d / sub).mkdir(parents=True)
-    for n in ("weights.py", "weights.txt", "agg.sh", "gate.sh"):
-        (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
+    _pod_bin(d / "bin")
     # Real collect output: setup.sh's collect_one command on a throwaway project (its own
     # pytest.ini, so no project conftest), with the -m filter of an in-work run.
     proj = tmp_path / "proj"

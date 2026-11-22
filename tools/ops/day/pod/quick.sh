@@ -199,7 +199,10 @@ rm -f "$O/run/q"
 ( cd "$LR" && git reset -q --hard HEAD && git clean -fdq ) > /dev/null 2>&1
 # (f) result.
 SUM=$(grep -v '^[[:space:]]*$' "$D/quick.pytest.log" | tail -1)
-BLK=$(awk '/^_{3,} |^(FAILED|ERROR) /{f=1} f{print; if(++n>=30) exit}' "$D/quick.pytest.log")
+# The first failure block: from pytest's first "____ test_a ____" header (or "____ ERROR at setup of
+# test_a ____"), else its first FAILED/ERROR summary line. No interval expressions: the pod's awk
+# is mawk, which reads _{3,} as a literal.
+BLK=$(awk '/^___+ |^(FAILED|ERROR) /{f=1} f{print; if(++n>=30) exit}' "$D/quick.pytest.log")
 SKP=$(grep -E '^SKIPPED ' "$D/quick.pytest.log" | head -10)
 if [ -f "$O/q.timeout" ]; then echo "QUICK_FAIL timeout after ${QUICK_MAX_S:-1800} s (pytest rc $PRC) $SUM"; [ -z "$BLK" ] || printf '%s\n' "$BLK"
   end 124 "FAIL (timeout after ${QUICK_MAX_S:-1800} s)"; fi

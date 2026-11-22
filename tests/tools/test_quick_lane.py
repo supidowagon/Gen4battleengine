@@ -64,16 +64,43 @@ STUBS = {
     "uv": '#!/bin/bash\ncase "$1" in sync) exit 0;; run) shift; [ "$1" = --frozen ] && shift\n'
     '  case "$1" in python) shift; exec "$PYEXE" "$@";; pytest) shift; exec bash "$FAKE_PYTEST" "$@";; esac;; esac\nexit 9\n',
 }
+# What a real `pytest -q -rfEs` prints at 80 columns: the progress line; on a failure the FAILURES
+# section with one "____ <test> ____" block per test; the short test summary (-rfEs); the counts.
+_SUMMARY_BAR = "=" * 27 + " short test summary info " + "=" * 28
+FAIL_BLOCK_HEAD = "_" * 36 + " test_a " + "_" * 36
+PYTEST_PASS_OUT = "." + " " * 72 + "[100%]\n1 passed in 0.01s\n"
+PYTEST_SKIP_OUT = (
+    "s"
+    + " " * 72
+    + "[100%]\n"
+    + _SUMMARY_BAR
+    + "\nSKIPPED [1] tests/x.py:1: no rom\n1 skipped in 0.01s\n"
+)
+PYTEST_FAIL_OUT = (
+    "F" + " " * 72 + "[100%]\n" + "=" * 35 + " FAILURES " + "=" * 35 + "\n" + FAIL_BLOCK_HEAD + "\n"
+    "\n"
+    "    def test_a():\n"
+    ">       assert 1 == 2\n"
+    "E       assert 1 == 2\n"
+    "\n"
+    "tests/x.py:2: AssertionError\n" + _SUMMARY_BAR + "\n"
+    "FAILED tests/x.py::test_a - assert 1 == 2\n"
+    "1 failed in 0.02s\n"
+)
 # FAKE_PYTEST_HOLD=<file>: writes <file>.pid, then waits until <file> exists (a running unit).
 # FAKE_PYTEST_SKIP=1: every test skipped, rc 0. FAKE_PYTEST_RC=<n>: one failure, rc n.
 FAKE_PYTEST = (
     'echo "$@" > "$(dirname "$0")/pytest.args"\n'
     'if [ -n "${FAKE_PYTEST_HOLD:-}" ]; then echo $$ > "$FAKE_PYTEST_HOLD.pid"\n'
     '  while [ ! -f "$FAKE_PYTEST_HOLD" ]; do sleep 0.2; done; fi\n'
-    '[ "${FAKE_PYTEST_SKIP:-}" = 1 ] && { echo "SKIPPED [1] tests/x.py:1: no rom"; echo "1 skipped in 0.01s"; exit 0; }\n'
-    '[ "${FAKE_PYTEST_RC:-0}" = 0 ] && { echo "1 passed in 0.01s"; exit 0; }\n'
-    'echo "_____ test_a _____"; echo "E   assert 1 == 2"; echo "FAILED tests/x.py::test_a - assert 1 == 2"\n'
-    'echo "1 failed in 0.02s"; exit "$FAKE_PYTEST_RC"\n'
+    "if [ \"${FAKE_PYTEST_SKIP:-}\" = 1 ]; then cat <<'EOF'\n"
+    + PYTEST_SKIP_OUT
+    + "EOF\nexit 0; fi\n"
+    "if [ \"${FAKE_PYTEST_RC:-0}\" = 0 ]; then cat <<'EOF'\n"
+    + PYTEST_PASS_OUT
+    + "EOF\nexit 0; fi\n"
+    "cat <<'EOF'\n" + PYTEST_FAIL_OUT + "EOF\n"
+    'exit "$FAKE_PYTEST_RC"\n'
 )
 
 
@@ -620,10 +647,11 @@ def test_a_failing_test_prints_the_summary_and_the_first_failure_block(src, tmp_
     run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
     assert _quick(tmp_path, run, _cgroup(tmp_path), FAKE_PYTEST_RC="1").returncode == 11
     log = _log(run)
+    # the block starts at pytest's own block header, right under the QUICK_FAIL line
     assert (
-        "QUICK_FAIL rc=11 (pytest rc 1) 1 failed in 0.02s" in log
-        and "_____ test_a _____" in log
-        and "FAILED tests/x.py::test_a" in log
+        "QUICK_FAIL rc=11 (pytest rc 1) 1 failed in 0.02s\n" + FAIL_BLOCK_HEAD + "\n" in log
+        and "E       assert 1 == 2\n" in log
+        and "FAILED tests/x.py::test_a - assert 1 == 2" in log
     )
     assert log.rstrip().endswith("QUICK_DONE rc=11") and (run / "agg.txt").read_text(
         encoding="utf-8"
@@ -964,7 +992,11 @@ def test_real_flock_the_stream_lock_and_the_gate_lock(src, tmp_path):
     gate_lock = tmp_path / "work/.runner.lock"
 
     def holder(lock: Path) -> subprocess.Popen:
-        h = subprocess.Popen([BASH, "-c", f"exec flock '{_p(lock)}' sleep 60"], env=_clean_env())
+        # One process holds the lock and dies with h.kill(): `flock <file> sleep 60` leaves its
+        # sleep child holding the inherited lock fd for the full 60 s (flock(1) without -o).
+        h = subprocess.Popen(
+            [BASH, "-c", f"exec 9> '{_p(lock)}' && flock 9 && exec sleep 60"], env=_clean_env()
+        )
         assert _until(lambda: _bash(f"flock -n '{_p(lock)}' true", check=False).returncode == 1, 10)
         return h
 
