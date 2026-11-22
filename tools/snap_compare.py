@@ -700,7 +700,8 @@ def _ai_record_by_battler(a, lead, tables):
     row, battle_lib.c:2223-2225): kept while it has HP, and at a pivot pause while its faint is
     still pending (0 HP with its ``ts_alive`` bit set: an enemy U-turn's hit fainted it, and its
     PlayFaintAnimation, battle_script.c:1803, comes at the action's faint check after the switch,
-    subscript_attack_then_switch_out.s:15-71); row 1 = 0 (never kept at B = 2, sheet D45-1 rule
+    subscript_attack_then_switch_out.s:71 -> subscript_show_party_list.s:9 SwitchAndUpdateMon,
+    then :23-24 FAINT_MON); row 1 = 0 (never kept at B = 2, sheet D45-1 rule
     6). B = 2 only: no capture holds a B = 4 state; any other battler count raises."""
     import numpy as np
 
