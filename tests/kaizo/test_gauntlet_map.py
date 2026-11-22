@@ -14,6 +14,7 @@ from tools.kaizo.gauntlet_map import (
     CLOCK_STATES,
     FOUNTAIN_WIDTH,
     SPLIT_BADGES,
+    STRENGTH_ACTIVE,
     SURFABLE,
     WAYWARD_HEADER,
     WAYWARD_PARTNER_VAR,
@@ -75,6 +76,11 @@ def trainer(tid, x, z, facing, sight, movement=0, trainer_type=1):
 
 def npc(local_id, x, z, script=100):
     return MapObject(local_id, local_id, 0, 0, script, 0, 0, x, z)
+
+
+def boulder(local_id, x, z):
+    """A Strength boulder: script 10002, graphics 0x54 (as header 284's objects 19 and 26)."""
+    return MapObject(local_id, local_id, 0, 0, 10002, 0, 0, x, z, gfx=0x54)
 
 
 def test_sight_stops_at_a_wall():
@@ -139,18 +145,84 @@ def test_a_self_loop_warp_is_a_step_not_a_loop():
 
 
 def test_field_move_objects_block_until_the_badge_and_move_remove_them():
-    rock, boulder = npc(5, 3, 0, script=10001), npc(6, 3, 0, script=10002)
+    rock, stone = npc(5, 3, 0, script=10001), boulder(6, 3, 0)
     tree = npc(7, 3, 0, script=10000)
     far = Pos(1, 6, 0)
-    a, b = area(1, ["......."], [rock]), area(1, ["......."], [boulder])
+    a, b = area(1, ["......."], [rock]), area(1, ["......."], [stone])
     c = area(1, ["......."], [tree])
     smash = FieldMoves(rock_smash=True)
     assert far in Walker(StaticMaps([a]), moves=smash).walk(Pos(1, 0, 0)).seen
     assert far not in Walker(StaticMaps([a]), moves=smash).walk(Pos(1, 0, 0), removable=False).seen
     assert far not in Walker(StaticMaps([b]), moves=smash).walk(Pos(1, 0, 0)).seen
-    assert far in Walker(StaticMaps([b]), moves=FieldMoves(strength=True)).walk(Pos(1, 0, 0)).seen
+    # Strength pushes the boulder, never removes it: it ends on the last tile, (6, 0)
+    pushed = Walker(StaticMaps([b]), moves=FieldMoves(strength=True)).walk(Pos(1, 0, 0)).seen
+    assert Pos(1, 5, 0) in pushed and far not in pushed
     assert far not in Walker(StaticMaps([c]), moves=smash).walk(Pos(1, 0, 0)).seen
     assert far in Walker(StaticMaps([c]), moves=FieldMoves(cut=True)).walk(Pos(1, 0, 0)).seen
+
+
+STRONG = FieldMoves(strength=True)
+
+
+def test_strength_pushes_a_boulder_into_a_free_tile():
+    # facing the boulder turns Strength on (scripts_field_moves.s:183-208); each step into it
+    # then pushes it one tile while the player walks on the spot (ov5_021DFB54.c:500-540, :572-578)
+    a = area(1, ["......"], [boulder(6, 2, 0)])
+    w = Walker(StaticMaps([a]), moves=STRONG).walk(Pos(1, 0, 0))
+    on = frozenset({STRENGTH_ACTIVE})
+    assert (Pos(1, 1, 0), on, ((1, 6, 3, 0, 0),)) in {(s.pos, s.flags, s.moved) for s in w.states}
+    assert {p.x for p in w.seen} == {0, 1, 2, 3, 4}  # it stops against the map's end at (5, 0)
+    assert max(s.moved for s in w.states if s.moved) == ((1, 6, 5, 0, 0),)
+    # without the move the script does not turn Strength on and the boulder blocks
+    plain = Walker(StaticMaps([a])).walk(Pos(1, 0, 0))
+    assert {p.x for p in plain.seen} == {0, 1} and all(not s.moved for s in plain.states)
+    # Strength on (a fight's start state) without the move still pushes: the flag decides
+    held = Walker(StaticMaps([a])).walk(Pos(1, 1, 0), flags=on)
+    assert Pos(1, 4, 0) in held.seen
+
+
+def test_no_push_into_a_wall_or_an_object():
+    on = frozenset({STRENGTH_ACTIVE})
+    wall = area(1, ["...#."], [boulder(6, 2, 0)])
+    w = Walker(StaticMaps([wall]), moves=STRONG).walk(Pos(1, 1, 0), flags=on)
+    assert {p.x for p in w.seen} == {0, 1} and all(not s.moved for s in w.states)
+    other = area(1, ["....."], [boulder(6, 2, 0), npc(7, 3, 0)])
+    w = Walker(StaticMaps([other]), moves=STRONG).walk(Pos(1, 1, 0), flags=on)
+    assert {p.x for p in w.seen} == {0, 1} and all(not s.moved for s in w.states)
+    two = area(1, ["....."], [boulder(6, 2, 0), boulder(7, 3, 0)])  # a boulder is an object too
+    w = Walker(StaticMaps([two]), moves=STRONG).walk(Pos(1, 1, 0), flags=on)
+    assert {p.x for p in w.seen} == {0, 1} and all(not s.moved for s in w.states)
+
+
+def test_a_pushed_boulder_blocks_a_corridor_and_a_sight_line():
+    # the boulder pushed from (1, 1) to (2, 1) sits in the corridor: it frees its event tile and
+    # blocks the player and trainer 9's line (an object, sub_02063F00 / IsPathInterrupted)
+    rows = ["##.##", "....."]
+    a = area(1, rows, [boulder(6, 1, 1)])
+    moved = ((1, 6, 2, 1, 0),)
+    w = Walker(StaticMaps([a])).walk(Pos(1, 0, 1), moved=moved)
+    assert set(w.seen) == {Pos(1, 0, 1), Pos(1, 1, 1)}
+    line = area(1, ["......"], [boulder(6, 1, 0), trainer(9, 5, 0, WEST, 5)])
+    walker = Walker(StaticMaps([line]))
+    assert [t[0] for t in walker.sight_tiles(1, line.objects[1])] == [4, 3, 2]
+    blocked = walker.sight_tiles(1, line.objects[1], moved=((1, 6, 3, 0, 0),))
+    assert [t[0] for t in blocked] == [4]
+
+
+def test_re_entry_resets_the_boulders_and_strength():
+    # a warp re-creates the objects at their event tiles (field_map_change.c:341-360) and clears
+    # FLAG_STRENGTH_ACTIVE (field_map_change_flags.c:68): after the round trip the boulder is back
+    # on (3, 0) and, without the move, no longer moves
+    here = area(1, ["......"], [boulder(6, 3, 0)], [Warp(0, 0, 0, 2, 0)])
+    there = area(2, ["..."], warps=[Warp(0, 0, 0, 1, 0)])
+    on = frozenset({STRENGTH_ACTIVE})
+    w = Walker(StaticMaps([here, there])).walk(Pos(1, 2, 0), flags=on)
+    assert any(s.moved == ((1, 6, 4, 0, 0),) for s in w.states)
+    assert all(s.moved == () and not s.flags for s in w.states if s.pos.header == 2)
+    back = [s for s in w.states if s.pos == Pos(1, 0, 0)]
+    assert any(s.moved == () and not s.flags for s in back)
+    after = Walker(StaticMaps([here, there])).walk(Pos(1, 0, 0), flags=frozenset())
+    assert {p.x for p in after.seen if p.header == 1} == {0, 1, 2}
 
 
 def test_a_rock_before_the_coal_badge_blocks():

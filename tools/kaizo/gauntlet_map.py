@@ -48,9 +48,20 @@ Method (every rule cited to the decomp; paths relative to ``external/pokeplatinu
   header holds a bike tile (ROM test).
 - Field-move objects (``res/field/scripts/scripts_field_moves.s``): a Cut tree (script 10000)
   needs the Forest Badge (:29), a Rock Smash rock (10001) the Coal Badge (:134;
-  ``FieldMoves_CheckRockSmash``, ``src/field_move_tasks.c:545``), a Strength boulder (10002) the
-  Mine Badge (:191; ``src/field_move_tasks.c:463``); without it the object blocks. The badges held
-  at a group are those of the splits before the group's split (``FieldMoves.for_split``).
+  ``FieldMoves_CheckRockSmash``, ``src/field_move_tasks.c:545``); without it the object blocks.
+  The badges held at a group are those of the splits before the group's split
+  (``FieldMoves.for_split``). A Strength boulder is never removed. Facing it (the boulder script
+  10002, :183-198, or the party menu facing graphics 0x54, ``src/field_move_tasks.c:249-256``)
+  with the Mine Badge and the move (:189-191; ``field_move_tasks.c:457-469``) turns Strength on
+  (``FLAG_STRENGTH_ACTIVE``, :207-208, :230-234; ``src/system_flags.c:438-441``). A warp or a
+  header change clears it (``src/field_map_change_flags.c:41``, ``:68``, from
+  ``FieldMapChange_UpdateGameData``, ``src/field_map_change.c:256-260``). Its only other clear is
+  ``DoStrengthFunc FIELD_MOVE_FUNC_CLEAR_ACTIVE`` (``src/scrcmd_system_flags.c:171-173``), which no
+  decomp script uses, so a battle keeps it. With it on, a step into a boulder (graphics 0x54) pushes the boulder one tile when the boulder's own
+  step does not collide, and the player walks on the spot (``Walker._push``;
+  ``src/overlay005/field_control.c:210-211``, ``src/overlay005/ov5_021DFB54.c:466-470``,
+  ``:500-540``, ``:572-578``). The walk carries the boulder's tile and height in ``_State.moved``
+  and the flag in ``_State.flags``; a boulder blocks steps and sight lines like any object.
 - Sight (``src/trainer_encounter.c:166-181``, ``:182-229``, ``:240-306``, ``:310-344``): a NORMAL
   trainer (FACE_* and SPIN_* count as NORMAL) looks along its current facing, a
   VIEW_ALL_DIRECTIONS trainer along all four. The player is spotted at distance <= range when no
@@ -212,6 +223,12 @@ CAVE_MAP_TYPE = 3  # MapHeader_IsCave: rom header 199 / 284 map type 3 (facts-fi
 CUT_SCRIPT = 10000  # field-move scripts start at 10000, include/script_manager.h:112
 ROCK_SMASH_SCRIPT = 10001
 STRENGTH_SCRIPT = 10002
+# OBJ_EVENT_GFX_STRENGTH_BOULDER (generated/object_events_gfx.txt:85, 0-based): the graphics id
+# the push tests (src/overlay005/ov5_021DFB54.c:516).
+BOULDER_GFX = 0x54
+# FLAG_STRENGTH_ACTIVE (generated/vars_flags.txt:2409, counted as C enum values: the names
+# FLAG_UNK_0x095F, FLAG_BAG_ACQUIRED, FLAG_HAS_PARTNER before it give 0x962).
+STRENGTH_ACTIVE = 0x962
 VARS_START = 0x4000  # generated/vars_flags.txt:4107
 
 DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))  # N S W E, MapObject_GetDxFromDir order
@@ -341,7 +358,8 @@ NO_FIELD_MOVES = FieldMoves()
 
 class MapObject(NamedTuple):
     """One object event (``tools/jsoncnv/event.py:51-69``; ``y`` the fx32 event height;
-    ``flag`` the hidden flag, ``ObjectEvent.hiddenFlag``, ``include/map_header_data.h:20-33``)."""
+    ``flag`` the hidden flag, ``ObjectEvent.hiddenFlag``, ``include/map_header_data.h:20-33``;
+    ``gfx`` the graphics id, ``event.py:60``)."""
 
     index: int
     local_id: int
@@ -354,6 +372,7 @@ class MapObject(NamedTuple):
     z: int
     y: int = 0
     flag: int = 0
+    gfx: int = 0
 
     @property
     def trainer(self) -> int | None:
@@ -364,14 +383,26 @@ class MapObject(NamedTuple):
         return None
 
     def cleared(self, moves: FieldMoves) -> bool:
-        """An item ball (picked up) or a field-move object the player can remove."""
+        """An item ball (picked up) or a field-move object the player can remove. A Strength
+        boulder is never removed: it is pushed (``Walker._push``)."""
         if VISIBLE_ITEM_SCRIPTS <= self.script < VISIBLE_ITEM_SCRIPTS + 1000:
             return True
-        return (
-            (self.script == CUT_SCRIPT and moves.cut)
-            or (self.script == ROCK_SMASH_SCRIPT and moves.rock_smash)
-            or (self.script == STRENGTH_SCRIPT and moves.strength)
+        return (self.script == CUT_SCRIPT and moves.cut) or (
+            self.script == ROCK_SMASH_SCRIPT and moves.rock_smash
         )
+
+    @property
+    def boulder(self) -> bool:
+        """An object the Strength push moves (graphics 0x54, ``ov5_021DFB54.c:514-518``)."""
+        return self.gfx == BOULDER_GFX
+
+    @property
+    def strength_target(self) -> bool:
+        """An object facing which the player turns Strength on: the boulder script
+        (``FieldMoves_Boulder``, script 10002, ``scripts_field_moves.s:183-198``, ``:207-208``)
+        or, from the party menu, a boulder's graphics (``src/field_move_tasks.c:249-256``,
+        ``:457-469``; ``FieldMoves_UseStrengthFromMenu``, ``scripts_field_moves.s:230-234``)."""
+        return self.script == STRENGTH_SCRIPT or self.boulder
 
 
 class Warp(NamedTuple):
@@ -495,7 +526,7 @@ def parse_events(
         v = struct.unpack_from("<8H", r)  # id gfx movement trainer-type flag script dir data0
         x, z = struct.unpack_from("<2H", r, 24)
         (y,) = struct.unpack_from("<i", r, 28)
-        objects.append(MapObject(i, v[0], v[2], v[3], v[5], v[6], v[7], x, z, y, v[4]))
+        objects.append(MapObject(i, v[0], v[2], v[3], v[5], v[6], v[7], x, z, y, v[4], v[1]))
     warps = [Warp(i, *struct.unpack_from("<4H", r)) for i, r in enumerate(records[2])]
     coords = []
     for r in records[3]:
@@ -741,10 +772,12 @@ CoordRule = Callable[[int, Coord, "bool | None"], "str | None"]
 
 
 class _State(NamedTuple):
-    """A player state of the walk. ``moved``: the objects standing off their event tiles, as
-    sorted ``(header, object index, x, z)``: trainers who walked up to the player before a sight
-    fight (``Sighting.moved``). A warp re-creates every object at its event tile
-    (``src/field_map_change.c:341-360``), so a warp landing has none."""
+    """A player state of the walk. ``moved``: the objects standing off their event tiles,
+    sorted: ``(header, object index, x, z)`` for a trainer who walked up to the player before a
+    sight fight (``Sighting.moved``), ``(header, object index, x, z, y)`` for a pushed Strength
+    boulder (``y`` its fx32 height there: the push path, not a straight line, decides it). A warp
+    re-creates every object at its event tile (``src/field_map_change.c:341-360``), so a warp
+    landing has none. ``flags`` holds ``STRENGTH_ACTIVE`` once the player turned Strength on."""
 
     pos: Pos
     y: int
@@ -829,8 +862,14 @@ class Walker:
         """The object of a ``moved`` entry ``(header, index, x, z)`` on its new tile, at the
         height it reaches walking there tile by tile from its event tile in a straight line
         (each step on the plate nearest its height, ``MapObject_RecalculatePositionHeight``,
-        ``src/map_object_move.c:1036-1047``)."""
+        ``src/map_object_move.c:1036-1047``); a boulder entry carries its height."""
         o = self._relocated.get(entry)
+        if o is None and len(entry) == 5:
+            _, index, x, z, y = entry
+            obj = next((c for c in area.objects if c.index == index), None)
+            if obj is None or not obj.boulder:
+                raise MapReadError(f"header {area.header}: object {index} is no boulder")
+            o = self._relocated[entry] = obj._replace(x=x, z=z, y=y)
         if o is None:
             _, index, x, z = entry
             obj = next((c for c in area.objects if c.index == index), None)
@@ -969,11 +1008,13 @@ class Walker:
         moved: tuple = (),
     ):
         moved = tuple(e for e in moved if e[0] == header)
+        area = self.maps.area(header)
+        if STRENGTH_ACTIVE in flags and all(o.flag != STRENGTH_ACTIVE for o in area.objects):
+            flags = flags - {STRENGTH_ACTIVE}  # it hides no object here: the same table
         key = (header, defeated, removable, flags, moved)
         table = self._sight.get(key)
         if table is None:
             table = {}
-            area = self.maps.area(header)
             for o in area.objects:
                 t = o.trainer
                 if t is None or t in defeated or self._ignored(header, o, flags):
@@ -1227,6 +1268,40 @@ class Walker:
             return self._traverse(area, s, d, {ROCK_CLIMB[d]})
         return None
 
+    def _push(self, area: Area, s: _State, d: int, removable: bool) -> tuple | None:
+        """``moved`` after the player on ``s`` pushes a boulder in ``d``, or None when no push
+        happens. With Strength on (``FLAG_STRENGTH_ACTIVE``, ``field_control.c:210-211``) a
+        walking or surfing step (``AVATAR_MOVE_STATE_MOVING``, ``ov5_021DFB54.c:500-504``) whose
+        first object on the tile in front, at any height (``ov5_021E10D4`` :1760-1768,
+        ``sub_0206326C``, ``src/map_object.c:2401-2422``), has graphics 0x54 (:514-518) pushes it
+        one tile when its own step does not collide (``sub_02063EBC``,
+        ``src/map_object_move.c:614-621``: terrain, height, a directional tile or an object
+        within 2 height units of it; the out-of-range bit 0 is ignored, :522-534); the player
+        walks on the spot (``ov5_021DFB54.c:572-578``). The boulder lands on the plate nearest
+        its height."""
+        if STRENGTH_ACTIVE not in s.flags:
+            return None
+        dx, dz = DIRS[d]
+        tx, tz = s.pos.x + dx, s.pos.z + dz
+        front = [
+            o
+            for o in self.objects_on(area, tx, tz, s.moved)
+            if not self._ignored(area.header, o, s.flags)
+            and not (removable and o.cleared(self.moves))
+        ]
+        if not front or not front[0].boulder:
+            return None
+        b = front[0]
+        by = area.object_height(b)
+        nx, nz = tx + dx, tz + dz
+        if self._collides_from(area, (tx, tz), (nx, nz), by, d):
+            return None
+        if self._object_at(area, nx, nz, by, removable, s.flags, s.moved) is not None:
+            return None
+        h = area.plate(nx, nz, by)
+        rest = [e for e in s.moved if (e[0], e[1]) != (area.header, b.index)]
+        return tuple(sorted((*rest, (area.header, b.index, nx, nz, by if h is None else h))))
+
     def _at(self, area: Area, s: _State, x: int, z: int) -> _State:
         y, bridge = self._land(area, x, z, s.y, s.bridge)
         return _State(Pos(area.header, x, z), y, bridge, s.flags, s.moved)
@@ -1352,6 +1427,11 @@ class Walker:
             area = self.maps.area(s.pos.header)
             for d, (dx, dz) in enumerate(DIRS):
                 nx, nz = s.pos.x + dx, s.pos.z + dz
+                pushed = self._push(area, s, d, removable)
+                if pushed is not None:
+                    # the player stays: no coord runs, the sight check sees the new layout
+                    self._stay(walk, queue, s._replace(moved=pushed), defeated, removable)
+                    continue
                 warp = area.warp_at(nx, nz)
                 attr = area.tiles.get((nx, nz))
                 door = (
@@ -1362,7 +1442,15 @@ class Walker:
                 )
                 path = [self._at(area, s, nx, nz)] if door else self._step(area, s, d, removable)
                 if path is None:
-                    self._talk(area, s, dx, dz, defeated, walk)
+                    o = self._talk(area, s, dx, dz, defeated, walk)
+                    if (
+                        o is not None
+                        and o.strength_target
+                        and self.moves.strength
+                        and STRENGTH_ACTIVE not in s.flags
+                    ):
+                        on = s._replace(flags=s.flags | {STRENGTH_ACTIVE})
+                        self._stay(walk, queue, on, defeated, removable)
                     continue
                 here = path[-1]
                 if not door and self._spotted(
@@ -1388,7 +1476,11 @@ class Walker:
                     landing = self._arrival(warp)
                     if landing is not None:
                         ly = self.arrival_height(landing)
-                        lf = here.flags | self.on_enter.get(landing.header, frozenset())
+                        # a warp clears Strength (FieldSystem_InitFlagsWarp,
+                        # field_map_change_flags.c:68, from field_map_change.c:257)
+                        lf = (here.flags - {STRENGTH_ACTIVE}) | self.on_enter.get(
+                            landing.header, frozenset()
+                        )
                         la = self.maps.area(landing.header)
                         lb = la.behaviour(landing.x, landing.z) == BRIDGE_START
                         # the warp re-creates every object at its event tile: moved is empty
@@ -1406,6 +1498,26 @@ class Walker:
                     walk.seen.setdefault(here.pos, s.pos)
         return walk
 
+    def _stay(
+        self,
+        walk: Walk,
+        queue: deque[_State],
+        t: _State,
+        defeated: frozenset[int],
+        removable: bool,
+    ) -> None:
+        """Queue ``t``, a state on the player's own tile (a push or Strength turned on), unless
+        it is known or the sight check on the tile spots him (it runs on every field-input
+        frame, ``field_control.c:181-196``)."""
+        if t in walk.states:
+            return
+        if self._spotted(
+            walk, t.pos, t.y, "sight", defeated, removable, t.flags, t.bridge, t.moved
+        ):
+            return
+        walk.states.add(t)
+        queue.append(t)
+
     def _arrival(self, warp: Warp) -> Pos | None:
         """The tile a warp lands on, or None when its destination is not a readable map."""
         try:
@@ -1419,9 +1531,9 @@ class Walker:
 
     def _talk(
         self, area: Area, s: _State, dx: int, dz: int, defeated: frozenset[int], walk: Walk
-    ) -> None:
+    ) -> MapObject | None:
         """The player on ``s`` faces ``(dx, dz)``: the object in front, or across a table tile
-        the one behind it, at the player's height unit, can be talked to."""
+        the one behind it, at the player's height unit, can be talked to (returned)."""
         pos = s.pos
         tx, tz = pos.x + dx, pos.z + dz
         if area.behaviour(tx, tz) == TABLE:
@@ -1439,7 +1551,8 @@ class Walker:
             if t is not None and t not in defeated and not self._inert(o) and not lone:
                 # a talk starts no approach: no one moves (scripts_battles.s:8-24)
                 walk.sighted((t,), Sighting(pos, "talk", s.y, s.flags, s.bridge, s.moved))
-            return
+            return o
+        return None
 
     def talk_tiles(
         self,
