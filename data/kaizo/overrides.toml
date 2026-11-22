@@ -717,8 +717,10 @@ name = "Wayward Cave"
 trainers = [443, 383, 380, 458, 459, 460, 450, 496, 454, 455, 749, 750]
 source = "Galactic Split:105"
 orders = [
-  [[443, 383], [380, 458], [450, 496], [459, 460], [454, 455], [749, 750]],
-  [[443, 383], [380, 458], [450, 496], [459], [460], [454, 455], [749, 750]],
+  [[383, 443], [380, 458], [450, 496], [459, 460], [454, 455], [749, 750]],
+  [[383, 443], [380, 458], [450, 496], [459], [460], [454, 455], [749, 750]],
+  [[383, 443], [380, 458], [450, 496], [459, 460], [454], [455], [749, 750]],
+  [[383, 443], [380, 458], [450, 496], [459], [460], [454], [455], [749, 750]],
 ]
 leave_gaps = []
 escape = true
@@ -727,9 +729,37 @@ heal_gaps = []
 locked_gaps = []
 fight_headers = 284
 partner = { trainer = 612, join_before = [1], source = "rom:scr 318 entry 2 @152 0x4091 = 1, @171 SetHasPartner; coord script 6 (85,8)-(85,10) var 0x4091 value 0 closes the start pocket" }
-orders_source = "rom:header 284 events 273; scr 318 entries 2, 4, 5, 6; split: obj 459 talk tiles (34,28), (35,27)"
+orders_source = "rom:header 284 events 273; scr 318 entries 2, 4, 5, 6; split: obj 459 talk tiles (34,28), (35,27); 454, 455 in turn when a moved trainer or a pushed boulder cuts 455's line"
 leave_gaps_source = "rom:scr 318 entry 6 @271-311, @399 Warp 350 (310,608); coord (85,8)-(85,10) runs only while 0x4091 == 0, i.e. before fight 1"
 escape_source = "rom:header 284 map type 3 escape bit 1"
+field_moves = ["rock_smash", "strength"]
+field_moves_source = "rom:header 284: boulders objs 19 (26,16), 26 (28,16) (gfx 0x54, scr 10002) before 459+460; Rock Smash rocks (scr 10001) objs 15-18, 20-25; held cut, rock_smash, strength (Galactic split badges); without either no order reaches the exit (gauntlet_map.wayward_group_facts, changing_moves)"
+skips_source = "rom:header 284 obj 14 = trainer 455 at (42,42), movement 16 MOVEMENT_TYPE_LOOK_WEST (fixed facing: src/unk_020EDBAC.c:167-173, src/unk_0206450C.c:454-466, :478-481), sight 2, line (41,42), (40,42); a boulder on a tile between interrupts the sight (src/trainer_encounter.c:310-344, src/map_object_move.c:599-601, :623-665, MapObject_GetDistanceToPlayer :230-243); gauntlet_map.wayward_skip; ruling 22 Nov (455 optional, the planner chooses)"
+[[gauntlet.skips]]
+order = [[383, 443], [380, 458], [450, 496], [459], [460], [454], [749, 750]]
+skipped = [455]
+header = 284
+boulder = 26
+boulder_from = [28, 16]
+boulder_to = [41, 42]
+hold = [[40, 42]]
+[[gauntlet.skips]]
+order = [[383, 443], [380, 458], [450, 496], [459, 460], [454], [749, 750]]
+skipped = [455]
+header = 284
+boulder = 26
+boulder_from = [28, 16]
+boulder_to = [41, 42]
+hold = [[40, 42]]
+[[gauntlet.case]]
+moves = []
+orders = []
+[[gauntlet.case]]
+moves = ["rock_smash"]
+orders = []
+[[gauntlet.case]]
+moves = ["strength"]
+orders = []
 
 # Elite Four + Champion: moved to batch 4 (B4-19; facts in docs/gauntlet-design.md).
 

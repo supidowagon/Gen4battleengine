@@ -28,7 +28,10 @@ Tables (keys are ROM trainer ids unless said otherwise):
   ``live_next`` (the next-fight table by the live count, a list of rows ``{ fought, live,
   next, headers }`` plus ``gap`` on a plain row after a fight and ``to``, ``at`` on a change
   row: ``nuzline.data.gauntlet.LiveRow``; absent: the walk does not depend on the count and
-  the table is the orders' prefixes; ``GauntletFacts.live_next``). With ``live_next``,
+  the table is the orders' prefixes; ``GauntletFacts.live_next``) and ``skips`` (orders that
+  leave trainers out behind a pushed Strength boulder, each ``{ order, skipped, header,
+  boulder, boulder_from, boulder_to, hold }``: ``nuzline.data.gauntlet.Skip``; with
+  ``skips_source``). With ``live_next``,
   ``leave_gaps``, ``heal_gaps`` and ``pc_gaps`` are present exactly when the table's gap
   facts give one list for every order and live count (that list), and absent when they
   depend on the order or the count (``nuzline.data.gauntlet.flat_gaps``); either way
@@ -79,7 +82,7 @@ from dataclasses import dataclass, field
 from itertools import permutations
 from pathlib import Path
 
-from nuzline.data.gauntlet import FLAT_GAP_FIELDS, GauntletFacts, LiveRow, MoveCase, Partner
+from nuzline.data.gauntlet import FLAT_GAP_FIELDS, GauntletFacts, LiveRow, MoveCase, Partner, Skip
 from tools.kaizo.trainer_map import (
     Mapping,
     MappingError,
@@ -367,6 +370,8 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
             field_moves=tuple(field_moves),
             field_moves_source=moves_source,
             cases=cases,
+            skips=_skips(entry, t["skips"]) if "skips" in t else (),
+            skips_source=_fact_source(entry, t, "skips_source", "") if "skips" in t else "",
         )
     except ValueError as e:
         if isinstance(e, OverridesError):
@@ -453,6 +458,50 @@ def _cases(entry: str, raw: object, trainers: list[int]) -> tuple[MoveCase, ...]
     return tuple(out)
 
 
+SKIP_KEYS = ("order", "skipped", "header", "boulder", "boulder_from", "boulder_to", "hold")
+
+
+def _skips(entry: str, raw: object) -> tuple[Skip, ...]:
+    """``skips``: a non-empty list of tables (``SKIP_KEYS``, all required), each an order that
+    leaves trainers out behind a pushed boulder (``nuzline.data.gauntlet.Skip``); checked
+    against the orders by ``GauntletFacts``."""
+    entry = f"{entry} skips"
+    if not isinstance(raw, list) or not raw:
+        raise OverridesError(f"{entry}: must be a non-empty list of tables")
+    out = []
+    for i, r in enumerate(raw):
+        where = f"{entry}[{i}]"
+        if not isinstance(r, dict):
+            raise OverridesError(f"{where}: must be a table")
+        _keys(where, r, SKIP_KEYS)
+        missing = [k for k in SKIP_KEYS if k not in r]
+        if missing:
+            raise OverridesError(f"{where}: missing {', '.join(missing)}")
+        if not isinstance(r["order"], list) or not r["order"]:
+            raise OverridesError(f"{where}: order must be a non-empty list of fights")
+        if not isinstance(r["hold"], list) or not r["hold"]:
+            raise OverridesError(f"{where}: hold must be a non-empty list of tiles")
+        out.append(
+            Skip(
+                order=tuple(_fight(where, f) for f in r["order"]),
+                skipped=tuple(_ints(where, "skipped", r["skipped"])),
+                header=_ints(where, "header", [r["header"]])[0],
+                boulder=_ints(where, "boulder", [r["boulder"]])[0],
+                boulder_from=_skip_tile(where, r["boulder_from"]),
+                boulder_to=_skip_tile(where, r["boulder_to"]),
+                hold=tuple(_skip_tile(where, t) for t in r["hold"]),
+            )
+        )
+    return tuple(out)
+
+
+def _skip_tile(where: str, v: object) -> tuple[int, int]:
+    t = _ints(where, "a tile", v)
+    if len(t) != 2:
+        raise OverridesError(f"{where}: a tile is [x, z], not {t}")
+    return (t[0], t[1])
+
+
 LIVE_ROW_KEYS = ("fought", "live", "next", "headers", "to", "at", "gap")
 
 
@@ -534,6 +583,8 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
                 "field_moves",
                 "field_moves_source",
                 "case",
+                "skips",
+                "skips_source",
                 *FACT_KEYS,
                 *FACT_SOURCES,
             ),

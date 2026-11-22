@@ -2628,7 +2628,11 @@ WAYWARD_SPLIT = "Galactic"  # Galactic Split:105
 
 
 def _wayward_walker(
-    maps, joined: bool, doubles: Collection[int] = (), two_alive: bool = True
+    maps,
+    joined: bool,
+    doubles: Collection[int] = (),
+    two_alive: bool = True,
+    moves: Collection[str] | None = None,
 ) -> Walker:
     """The walk with the partner following (she neither blocks nor sees; 0x4091 = 1; the field
     then counts two live Pokemon, ``field_control.c:183-185``, and refuses Surf and Rock Climb)
@@ -2636,7 +2640,9 @@ def _wayward_walker(
     condition, as the field does (``coord_matches``): a running coord of ``WAYWARD_TAKES`` takes
     the player, so its tiles are not walked through; a coord whose var does not match is walked
     over; any other running coord raises (not modelled). ``two_alive``: the party's live count;
-    once she joins, sight counts two (``Walker.partner``), a talk still reads the party."""
+    once she joins, sight counts two (``Walker.partner``), a talk still reads the party.
+    ``moves``: the field moves of the case (``FieldMoves.restrict``; default: every move the
+    split's badges allow)."""
 
     def ignore(header: int, obj: MapObject) -> bool:
         return joined and header == WAYWARD_HEADER and obj.local_id == WAYWARD_MIRA
@@ -2653,7 +2659,11 @@ def _wayward_walker(
     return Walker(
         maps,
         members={t for pair in WAYWARD_PAIRS for t in pair},
-        moves=FieldMoves.for_split(WAYWARD_SPLIT, partner=joined),
+        moves=(
+            FieldMoves.for_split(WAYWARD_SPLIT, partner=joined)
+            if moves is None
+            else FieldMoves.for_split(WAYWARD_SPLIT, partner=joined).restrict(moves)
+        ),
         ignore=ignore,
         vars={WAYWARD_PARTNER_VAR: 1 if joined else 0},
         strict={WAYWARD_HEADER},
@@ -2716,16 +2726,22 @@ def wayward_facts(
     doubles: Collection[int] = (),
     two_alive: bool = True,
     headers: set[int] | None = None,
+    moves: Collection[str] | None = None,
 ) -> dict:
     """Wayward Cave: every fight sequence the walk with the partner allows up to the exit, the
-    partner's join points and the partner's trainer id. ``headers`` (when given) gains every
-    header the walks reach."""
+    partner's join points and the partner's trainer id, under the field moves ``moves`` (a
+    case; default: the split's). ``headers`` (when given) gains every header the walks reach.
+
+    A sequence that reaches the exit without every member is a skip (``wayward_skip``): kept
+    only when a pushed Strength boulder cuts the skipped trainer's line at every tile of it the
+    player stands on, else it raises. ``used``: the field moves the walks used
+    (``relevant_moves``)."""
     area = maps.area(WAYWARD_HEADER)
     mira = next((o for o in area.objects if o.local_id == WAYWARD_MIRA), None)
     if mira is None:
         raise MapReadError("Wayward Cave has no partner object")
-    joined = _wayward_walker(maps, True, doubles, two_alive)
-    alone = _wayward_walker(maps, False, doubles, two_alive)
+    joined = _wayward_walker(maps, True, doubles, two_alive, moves)
+    alone = _wayward_walker(maps, False, doubles, two_alive, moves)
     rows = [c for c in area.coords if c.script == WAYWARD_EXIT_ROW]
     if len(rows) != 1:
         raise MapReadError("Wayward Cave: expected one exit coord row")
@@ -2734,6 +2750,7 @@ def wayward_facts(
     members = frozenset(t for pair in WAYWARD_PAIRS for t in pair)
 
     sequences: dict[tuple[Fight, ...], frozenset[int]] = {}
+    last_starts: dict[tuple[Fight, ...], set] = {}
 
     def by_level(walker: Walker, visit, union: bool) -> None:
         # a DP over (prefix, start state): the starts of p + f are every start of f in every
@@ -2756,23 +2773,28 @@ def wayward_facts(
                 else:
                     walks = [_wayward_next(walker, start, done) for start in starts]
                 for w, fights in walks:
-                    visit(w, seq, done)
+                    visit(w, seq, done, starts)
                     for f, sights in fights.items():
                         nxt.setdefault((*seq, f), set()).update(sights)
             level = nxt
 
-    def with_partner(w: Walk, seq: tuple[Fight, ...], done: frozenset[int]) -> None:
+    def with_partner(w: Walk, seq: tuple[Fight, ...], done: frozenset[int], starts) -> None:
         if any(Pos(WAYWARD_HEADER, x, z) in w.seen for x, z in exits):
             sequences[seq] = done
+            last_starts.setdefault(seq, set()).update(starts)
 
     by_level(joined, with_partner, union=True)
-    short = {seq for seq, done in sequences.items() if done != members}
-    if not sequences or short:
-        raise MapReadError(f"Wayward Cave: the exit is reachable after {sorted(short)}")
+    if not sequences:
+        raise NoFullSequence("Wayward Cave: no fight sequence reaches the exit")
+    short = sorted(seq for seq, done in sequences.items() if done != members)
+    skips = [
+        wayward_skip(joined, seq, members - sequences[seq], last_starts[seq], exits)
+        for seq in short
+    ]
 
     reached: dict[int, bool] = {}
 
-    def without_partner(w: Walk, seq: tuple[Fight, ...], done: frozenset[int]) -> None:
+    def without_partner(w: Walk, seq: tuple[Fight, ...], done: frozenset[int], starts) -> None:
         near = [(mira.x + dx, mira.z + dz) for dx, dz in DIRS]
         ok = any(Pos(WAYWARD_HEADER, x, z) in w.seen for x, z in near)
         reached[len(seq) + 1] = reached.get(len(seq) + 1, True) and ok
@@ -2787,8 +2809,13 @@ def wayward_facts(
     if headers is not None:
         headers |= joined.reached_headers() | alone.reached_headers()
 
-    keys = sorted(sequences, key=lambda s: (len(s), s))  # the all-pairs order first
+    full = [seq for seq in sequences if sequences[seq] == members]
+    if not full:
+        raise NoFullSequence(f"Wayward Cave: only the skips {short} reach the exit")
+    keys = sorted(full, key=lambda s: (len(s), s))  # the all-pairs order first
     orders = [[*(list(f) for f in seq), list(WAYWARD_LAST)] for seq in keys]
+    for sk in skips:
+        sk["order"].append(list(WAYWARD_LAST))
     trace = scripts.trace(maps.header(WAYWARD_HEADER).scripts, 2)
     partner = [
         v for _, c, v in trace if c == "SCRCMD_SETVARFROMVALUE" and v[0] == WAYWARD_PARTNER_ID_VAR
@@ -2800,6 +2827,84 @@ def wayward_facts(
         "leave_gaps": [[] for _ in orders],
         "fight_headers": [[WAYWARD_HEADER] * len(o) for o in orders],
         "partner": {"trainer": partner[0][1], "join_before": join_before},
+        "skips": skips,
+        "used": sorted(joined.used | alone.used),
+    }
+
+
+def wayward_skip(
+    walker: Walker,
+    seq: tuple[Fight, ...],
+    skipped: frozenset[int],
+    starts: Collection[Sighting | Pos],
+    exits: Collection[tuple[int, int]],
+) -> dict:
+    """The skip of ``skipped`` by the sequence ``seq`` that reaches the exit without them
+    (``Skip``): the walk after ``seq``'s last fight, from all its ``starts``, holds the player
+    on a tile of a skipped trainer's line only where a pushed Strength boulder stands on a tile
+    between them (``IsPathInterrupted``, ``src/trainer_encounter.c:310-344``; an object on the
+    tile interrupts, ``src/map_object_move.c:599-601``, ``:623-665``), and with that boulder back
+    on its event tile the trainer sees him there (``sight_at``). Raises ``MapReadError`` when a
+    skipped trainer turns (every facing would need the cut), when the line is cut otherwise
+    (a trainer, the height), when the boulders or their tiles differ between those states, or
+    when the walk never stands on the line (nothing held: the skip is not a push)."""
+    area = walker.maps.area(WAYWARD_HEADER)
+    done = frozenset(t for f in seq for t in f)
+    lines: dict[tuple[int, int], list] = {}
+    for t in sorted(skipped):
+        objs = [o for o in area.objects if o.trainer == t]
+        if len(objs) != 1:
+            raise MapReadError(f"Wayward Cave: skipped trainer {t} is not one object")
+        o = objs[0]
+        look = walker.facing(o)
+        if look is None or look[1]:
+            raise MapReadError(
+                f"Wayward Cave: skipped trainer {t} (movement type {o.movement}) does not face "
+                "one fixed direction"
+            )
+        for x, z, d, k in walker.sight_tiles(WAYWARD_HEADER, o, moved=()):
+            between = [(o.x + DIRS[d][0] * i, o.z + DIRS[d][1] * i) for i in range(1, k)]
+            lines.setdefault((x, z), []).append((t, between))
+    w = walker.walk_from({_seed(walker, s) for s in starts}, done, keep=False)
+    if not any(Pos(WAYWARD_HEADER, x, z) in w.seen for x, z in exits):
+        raise MapReadError(f"Wayward Cave: the walk after {seq} misses the exit")
+    pushes = set()
+    hold = set()
+    for st in w.states:
+        tile = (st.pos.x, st.pos.z)
+        if st.pos.header != WAYWARD_HEADER or tile not in lines:
+            continue
+        for t, between in lines[tile]:
+            cut = [
+                e
+                for e in st.moved
+                if len(e) == 5 and e[0] == WAYWARD_HEADER and (e[2], e[3]) in between
+            ]
+            if len(cut) != 1:
+                raise MapReadError(
+                    f"Wayward Cave: on {tile} after {seq} trainer {t}'s line is not cut by one "
+                    f"pushed boulder (moved {st.moved})"
+                )
+            back = tuple(e for e in st.moved if e != cut[0])
+            seers = walker.sight_at(WAYWARD_HEADER, *tile, done, y=st.y, flags=st.flags, moved=back)
+            if t not in {s.trainer for s in seers}:
+                raise MapReadError(
+                    f"Wayward Cave: trainer {t} would not see {tile} with the boulder back"
+                )
+            e = cut[0]
+            pushes.add((e[1], walker._event_tile(area, e), (e[2], e[3])))
+            hold.add(tile)
+    if len(pushes) != 1:
+        raise MapReadError(f"Wayward Cave: the skip after {seq} has the pushes {sorted(pushes)}")
+    ((boulder, frm, to),) = pushes
+    return {
+        "order": [list(f) for f in seq],
+        "skipped": sorted(skipped),
+        "header": WAYWARD_HEADER,
+        "boulder": boulder,
+        "boulder_from": list(frm),
+        "boulder_to": list(to),
+        "hold": [list(t) for t in sorted(hold)],
     }
 
 
@@ -3282,21 +3387,85 @@ def derive_groups(
         )
     if not wanted("Wayward Cave"):
         return out
-    # Wayward Cave: the partner joins before fight 1 and counts two at every fight; the walk
-    # under either party count must give the same facts. Its field-move cases are not derived
-    # here yet: its walk holds every move of the split (Strength among them).
+    out["Wayward Cave"] = wayward_group_facts(maps, scripts, doubles, seen)
+    return out
+
+
+def wayward_group_facts(
+    maps, scripts: ScriptReader, doubles: Collection[int], seen: dict[str, set[int]]
+) -> dict:
+    """Wayward Cave's group facts per field-move case (``chain_group_facts``'s shape): the walk
+    with the split's moves gives the relevant moves R (``used``); every other subset of R is
+    walked as its own case (no full sequence: empty orders); R is then narrowed to the moves
+    that change some subset's facts (``changing_moves``). The partner joins before fight 1
+    and counts two at every fight; the walk under either party count must give the same facts.
+    The skips (``wayward_skip``) are kept at the top only: a case below R that has its own
+    skips raises (not stored)."""
     way_headers = seen.setdefault("Wayward Cave", set())
-    way = wayward_facts(maps, scripts, doubles, True, way_headers)
-    if wayward_facts(maps, scripts, doubles, False, way_headers) != way:
-        raise MapReadError("Wayward Cave: the facts depend on the party's live count")
-    out["Wayward Cave"] = _facts(
+
+    def derive(moves: tuple[str, ...] | None) -> dict | None:
+        try:
+            one = wayward_facts(maps, scripts, doubles, True, way_headers, moves)
+        except NoFullSequence:
+            one = None
+        try:
+            two = wayward_facts(maps, scripts, doubles, False, way_headers, moves)
+        except NoFullSequence:
+            two = None
+        if one != two:
+            raise MapReadError(f"Wayward Cave {moves}: the facts depend on the party's live count")
+        return one
+
+    way = derive(None)
+    if way is None:
+        raise NoFullSequence("Wayward Cave: no full sequence")
+
+    def strip(f: dict | None) -> dict | None:
+        return None if f is None else {**f, "used": ()}
+
+    used = tuple(m for m in FIELD_MOVES if m in way["used"])
+    held = FieldMoves.for_split(WAYWARD_SPLIT, partner=True).names
+    by = {n: strip(way if n == held else derive(n)) for n in move_subsets(used)}
+    if by[used] != strip(way):
+        # a move never consulted changes no walk; checked, as ``chain_group_facts`` does
+        raise MapReadError(f"Wayward Cave: field moves outside {used} change the walk")
+    relevant = changing_moves(by, used)
+    for names, f in by.items():
+        if f != by[tuple(m for m in names if m in relevant)]:
+            raise MapReadError(
+                f"Wayward Cave: field moves {names} change the walk outside {relevant}"
+            )
+    cases = []
+    for names in move_subsets(relevant):
+        if names == relevant:
+            continue
+        f = by[names]
+        if f is not None and f["skips"]:
+            raise MapReadError(f"Wayward Cave: the case {names} has skips")
+        if f is not None and f["partner"] != way["partner"]:
+            raise MapReadError(f"Wayward Cave: the case {names} changes the partner facts")
+        cases.append(
+            {
+                "moves": list(names),
+                "orders": [] if f is None else f["orders"],
+                "leave_gaps": [] if f is None else f["leave_gaps"],
+                "fight_headers": [] if f is None else f["fight_headers"],
+                "pc_gaps": [],
+                "heal_gaps": [],
+                "locked_gaps": [],
+                "live_next": None,
+            }
+        )
+    return _facts(
         way["orders"],
         way["leave_gaps"],
         way["fight_headers"],
         group_escape(maps, way["fight_headers"]),
         partner=way["partner"],
+        field_moves=list(relevant),
+        cases=cases,
+        skips=way["skips"],
     )
-    return out
 
 
 def main(argv: list[str] | None = None) -> int:

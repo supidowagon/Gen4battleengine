@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from nuzline.data.gauntlet import MoveCase
+from nuzline.data.gauntlet import MoveCase, Skip
 from tools.kaizo.gauntlet_map import (
     CLOCK_SIDE,
     CLOCK_STATES,
@@ -1443,6 +1443,8 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
     # the field-move cases (chain_group_facts): the relevant moves and every other subset's facts
     assert d["field_moves"] == list(f.field_moves)
     assert [MoveCase.from_dict(c) for c in d["cases"]] == list(f.cases)
+    # the skips behind a pushed boulder (wayward_skip)
+    assert [Skip.from_dict(k) for k in d.get("skips", [])] == list(f.skips)
     if f.partner is None:
         assert d["partner"] is None
     else:
@@ -1518,9 +1520,26 @@ def test_wayward_order_join_points_and_the_459_talk_tiles(rom_files, derived):
     from tools.kaizo.gauntlet_map import RomMaps
 
     d = derived["Wayward Cave"]
-    assert [len(o) for o in d["orders"]] == [6, 7]
+    # 459+460 and 454+455 each as one VS2 fight or in turn (a moved trainer or the pushed
+    # boulder can cut the second one's line)
+    assert [len(o) for o in d["orders"]] == [6, 7, 7, 8]
     assert d["partner"] == {"trainer": 612, "join_before": [1]}
-    assert d["leave_gaps"] == [[], []] and d["escape"] is True
+    assert d["leave_gaps"] == [[]] * 4 and d["escape"] is True
+    # Strength (the boulders before 459+460) and Rock Smash both needed: every smaller case
+    # has no full sequence
+    assert d["field_moves"] == ["rock_smash", "strength"]
+    assert [(c["moves"], c["orders"]) for c in d["cases"]] == [
+        ([], []),
+        (["rock_smash"], []),
+        (["strength"], []),
+    ]
+    # 455 (obj 14 at (42,42), LOOK_WEST, sight 2: line (41,42), (40,42)) is skipped only with
+    # boulder 26 pushed from (28,16) onto (41,42) while the player passes (40,42)
+    assert [
+        (k["skipped"], k["boulder"], k["boulder_from"], k["boulder_to"], k["hold"])
+        for k in d["skips"]
+    ] == [([455], 26, [28, 16], [41, 42], [[40, 42]])] * 2
+    assert sorted(len(k["order"]) for k in d["skips"]) == [6, 7]
     maps = RomMaps(rom_files)
     joined = _wayward_walker(maps, True)
     starts, done = {WAYWARD_START}, frozenset()

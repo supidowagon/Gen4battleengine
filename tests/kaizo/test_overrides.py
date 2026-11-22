@@ -916,7 +916,11 @@ def test_committed_facts_recorded():
     o = load_overrides()
     assert all(g.facts is not None for g in o.gauntlets)
     wayward = next(g for g in o.gauntlets if g.name == "Wayward Cave")
-    assert len(wayward.facts.orders) == 2 and wayward.facts.partner.trainer == 612
+    assert (
+        len(wayward.facts.orders) == 4
+        and len(wayward.facts.skips) == 2
+        and wayward.facts.partner.trainer == 612
+    )
     route = next(g for g in o.gauntlets if g.name == "Route 213")
     assert len(route.facts.orders) == 2  # no Surf before the Fen Badge (walk-fix round)
     assert all(len(g.facts.fight_headers) == len(g.facts.orders) for g in o.gauntlets)
@@ -1116,3 +1120,45 @@ def test_gauntlet_cases_refused(tmp_path, old, new, match):
     assert old in CASE_FACTS
     with pytest.raises(OverridesError, match=match):
         load_overrides(write(tmp_path, gauntlet_text(facts=CASE_FACTS.replace(old, new, 1))))
+
+
+# --- skips behind a pushed boulder (B3 fix 3 C5c) ---------------------------------------------
+
+SKIP_FACTS = (
+    "orders = [[[1], [2], [3]]]\nleave_gaps = []\nescape = false\npc_gaps = []\nheal_gaps = []\n"
+    'locked_gaps = []\norders_source = "rom:header 1 events 2"\n'
+    'skips_source = "rom:header 1 obj 2 fixed facing"\n'
+    "[[gauntlet.skips]]\norder = [[1], [3]]\nskipped = [2]\nheader = 1\nboulder = 5\n"
+    "boulder_from = [4, 4]\nboulder_to = [6, 7]\nhold = [[5, 7]]\n"
+)
+
+
+def test_gauntlet_skips_load(tmp_path):
+    text = gauntlet_text("[1, 2, 3]", SKIP_FACTS)
+    f = load_overrides(write(tmp_path, text)).gauntlets[0].facts
+    (s,) = f.skips
+    assert (s.order, s.skipped, s.header, s.boulder) == (((1,), (3,)), (2,), 1, 5)
+    assert (s.boulder_from, s.boulder_to, s.hold) == ((4, 4), (6, 7), ((5, 7),))
+    assert f.skips_source == "rom:header 1 obj 2 fixed facing"
+    assert f.orders == (((1,), (2,), (3,)),)  # the skipped trainer stays fightable
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+
+
+@pytest.mark.parametrize(
+    "old, new, match",
+    [
+        ('skips_source = "rom:header 1 obj 2 fixed facing"\n', "", "skips_source: source"),
+        ("order = [[1], [3]]", "order = [[3], [1]]", "not an order of the group"),
+        ("order = [[1], [3]]", "order = [[1], [2], [3]]", "not an order of the group"),
+        ("skipped = [2]", "skipped = []", "skips no one"),
+        ("hold = [[5, 7]]", "hold = []", "hold must be"),
+        ("hold = [[5, 7]]", "hold = [[5, 7, 1]]", "a tile is"),
+        ("header = 1\n", "", "missing header"),
+        ("header = 1\n", "header = 1\nflag = 3\n", "unknown key 'flag'"),
+    ],
+)
+def test_gauntlet_skips_refused(tmp_path, old, new, match):
+    assert old in SKIP_FACTS
+    text = gauntlet_text("[1, 2, 3]", SKIP_FACTS.replace(old, new, 1))
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, text))

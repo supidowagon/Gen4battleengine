@@ -234,6 +234,93 @@ class Partner:
         return self.join_before[0]
 
 
+@dataclass(frozen=True)
+class Skip:
+    """An order that leaves trainers of the group unfought because a pushed Strength boulder
+    cuts their line of sight (``IsPathInterrupted``, ``src/trainer_encounter.c:310-344``: an
+    object on a tile between trainer and player interrupts, ``src/map_object_move.c:599-601``,
+    ``:623-665``). ``order`` is the group's order without ``skipped``; the skip holds only with
+    the push: the boulder that starts on ``boulder_from`` (map object ``boulder`` of
+    ``header``) pushed onto ``boulder_to`` and left there while the player stands on ``hold``,
+    the tiles of the skipped trainers' lines he passes. Without the push the order meets them.
+    The skipped trainers stay fightable: the group's ``orders`` keep them, and the planner picks
+    the skip only where it raises the win chance."""
+
+    order: Order
+    skipped: tuple[int, ...]
+    header: int
+    boulder: int
+    boulder_from: tuple[int, int]
+    boulder_to: tuple[int, int]
+    hold: tuple[tuple[int, int], ...]
+
+    def describe(self) -> str:
+        """The push in plain words, for the plan output."""
+        who = ", ".join(str(t) for t in self.skipped)
+        held = ", ".join(str(t) for t in self.hold)
+        return (
+            f"to skip trainer {who}: push the Strength boulder that starts at "
+            f"{self.boulder_from} onto {self.boulder_to} and leave it there while you walk "
+            f"over {held}; it blocks the line of sight. Without the push you fight {who}."
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "order": [list(f) for f in self.order],
+            "skipped": list(self.skipped),
+            "header": self.header,
+            "boulder": self.boulder,
+            "boulder_from": list(self.boulder_from),
+            "boulder_to": list(self.boulder_to),
+            "hold": [list(t) for t in self.hold],
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping) -> Skip:
+        return cls(
+            order=tuple(tuple(f) for f in d["order"]),
+            skipped=tuple(d["skipped"]),
+            header=d["header"],
+            boulder=d["boulder"],
+            boulder_from=_tile(d["boulder_from"]),
+            boulder_to=_tile(d["boulder_to"]),
+            hold=tuple(_tile(t) for t in d["hold"]),
+        )
+
+
+def _tile(v) -> tuple[int, int]:
+    if (
+        not isinstance(v, (list, tuple))
+        or len(v) != 2
+        or not all(isinstance(i, int) and not isinstance(i, bool) for i in v)
+    ):
+        raise ValueError(f"{v!r} is not a tile [x, z]")
+    return (v[0], v[1])
+
+
+def check_skips(name: str, skips: Sequence[Skip], orders: Sequence[Order]) -> None:
+    """Each skip's order is one of ``orders`` with the skipped trainers taken out (a fight of
+    two that loses one is a fight of one), it skips someone, it holds a tile, and no skip is
+    listed twice."""
+    seen = set()
+    for s in skips:
+        if not s.skipped or not s.hold:
+            raise ValueError(f"{name}: skip {s.to_dict()} skips no one or holds no tile")
+        if s.order in seen:
+            raise ValueError(f"{name}: skip order {s.order} is listed twice")
+        seen.add(s.order)
+        cut = {
+            tuple(f for f in (tuple(t for t in g if t not in s.skipped) for g in o) if f)
+            for o in orders
+            if set(s.skipped) <= {t for g in o for t in g}
+        }
+        if s.order not in cut or s.order in orders:
+            raise ValueError(
+                f"{name}: skip order {s.order} is not an order of the group without "
+                f"{list(s.skipped)}"
+            )
+
+
 # The live count (``Party_HasTwoAliveMons``, ``src/unk_02054884.c:157-160``; the partner flag
 # makes it two, ``src/overlay005/field_control.c:182-186``) decides which fight the walk starts:
 # two singles trainers who see the player at once fight one VS2 battle only with two
@@ -609,6 +696,11 @@ class GauntletFacts:
     field_moves_source: str = ""
     cases: tuple[MoveCase, ...] = ()
 
+    # The orders that leave trainers out behind a pushed boulder (``Skip``; optional for the
+    # player, the planner's choice); empty: none.
+    skips: tuple[Skip, ...] = ()
+    skips_source: str = ""
+
     def __post_init__(self):
         _check_gap_facts(
             self.name,
@@ -617,6 +709,9 @@ class GauntletFacts:
             {"heal_gaps": self.heal_gaps, "pc_gaps": self.pc_gaps},
             self.live_next,
         )
+        check_skips(self.name, self.skips, self.orders)
+        if self.skips and not self.skips_source:
+            raise ValueError(f"{self.name}: skips need skips_source")
         where = f"{self.name}: field_moves {list(self.field_moves)}"
         if self.field_moves != tuple(m for m in FIELD_MOVES if m in self.field_moves):
             raise ValueError(f"{where}: distinct names of {FIELD_MOVES}, in that order")
@@ -661,6 +756,8 @@ class GauntletFacts:
             field_moves=tuple(d.get("field_moves", ())),
             field_moves_source=d.get("field_moves_source", ""),
             cases=tuple(MoveCase.from_dict(c) for c in d.get("cases", ())),
+            skips=tuple(Skip.from_dict(s) for s in d.get("skips") or ()),
+            skips_source=d.get("skips_source", ""),
         )
 
     def to_dict(self) -> dict:
@@ -701,6 +798,9 @@ class GauntletFacts:
             out["field_moves_source"] = self.field_moves_source
         if self.cases:
             out["cases"] = [c.to_dict() for c in self.cases]
+        if self.skips:
+            out["skips"] = [s.to_dict() for s in self.skips]
+            out["skips_source"] = self.skips_source
         return out
 
     def case(self, moves: Collection[str]) -> MoveCase:

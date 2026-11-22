@@ -667,3 +667,56 @@ def test_a_case_with_no_full_sequence_is_refused_by_name():
 def test_field_move_cases_refused(over, match):
     with pytest.raises(ValueError, match=match):
         GauntletFacts.from_dict(case_facts(**over))
+
+
+# --- skips behind a pushed boulder (B3 fix 3 C5c) ---------------------------------------------
+
+
+def _skip(**over) -> dict:
+    d = {
+        "order": [[10], [13]],
+        "skipped": [11, 12],
+        "header": 284,
+        "boulder": 26,
+        "boulder_from": [28, 16],
+        "boulder_to": [41, 42],
+        "hold": [[40, 42]],
+    }
+    return {**d, **over}
+
+
+def test_a_skip_round_trips_and_names_the_push():
+    f = GauntletFacts.from_dict(facts_dict(skips=[_skip()], skips_source="rom:test skip"))
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+    (s,) = f.skips
+    assert s.order == ((10,), (13,)) and s.skipped == (11, 12)
+    text = s.describe()
+    assert "(28, 16)" in text and "(41, 42)" in text and "(40, 42)" in text
+    assert "Without the push you fight 11, 12" in text
+    assert "skips" not in GauntletFacts.from_dict(facts_dict()).to_dict()
+
+
+@pytest.mark.parametrize(
+    "skips, match",
+    [
+        ([_skip(order=[[13], [10]])], "not an order of the group"),
+        ([_skip(order=[[10], [11, 12], [13]])], "not an order of the group"),
+        ([_skip(skipped=[11], order=[[10], [12], [13]])], None),
+        ([_skip(skipped=[])], "skips no one"),
+        ([_skip(hold=[])], "holds no tile"),
+        ([_skip(), _skip()], "listed twice"),
+        ([_skip(hold=[[40]])], "is not a tile"),
+    ],
+)
+def test_skips_refused(skips, match):
+    d = facts_dict(skips=skips, skips_source="rom:test skip")
+    if match is None:  # a fight of two that loses one is a fight of one
+        assert GauntletFacts.from_dict(d).skips[0].order == ((10,), (12,), (13,))
+        return
+    with pytest.raises(ValueError, match=match):
+        GauntletFacts.from_dict(d)
+
+
+def test_skips_need_their_source():
+    with pytest.raises(ValueError, match="need skips_source"):
+        GauntletFacts.from_dict(facts_dict(skips=[_skip()]))
