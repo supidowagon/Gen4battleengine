@@ -4726,7 +4726,7 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
     ctx, second = _split(c.if_loaded_equal_to(ctx, 1))
     ctx, third = _split(c.if_loaded_equal_to(ctx, 2))
     ctx, last = _split(c.if_loaded_equal_to(ctx, 3))  # GoTo _End for the rest
-    ctx = c.load_battler_speed_rank(_at(ctx, first), _AP)  # _SelfMovesFirst (:6998)
+    ctx = c.load_battler_speed_rank(_at(ctx, first), _AP)  # _SelfMovesFirst (:6993)
     ctx, t = _split(c.if_loaded_equal_to(ctx, 1))
     ctx = _score(ctx, t, -30)
     ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
@@ -4810,7 +4810,7 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
     ctx, check = _split(c.if_move_known(ctx, _AP, _MOVE["Future Sight"]))
     ctx, t = _split(c.if_move_known(ctx, _AP, _MOVE["Doom Desire"]))
     check = check | t  # GoTo _End for the rest
-    ctx = c.load_battler_speed_rank(_at(ctx, check), _A)  # _CheckSelfSpeed (:7160)
+    ctx = c.load_battler_speed_rank(_at(ctx, check), _A)  # _CheckSelfSpeed (:7161)
     ctx, t = _split(c.if_loaded_equal_to(ctx, 3))
     ctx = _score(ctx, t, -3)
     ctx, third = _split(c.if_loaded_equal_to(ctx, 2))
@@ -4832,7 +4832,7 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
     ctx = c.load_battler_speed_rank(ctx, _AP)
     ctx, t = _split(c.if_loaded_equal_to(ctx, 1))
     ctx = _add_end(ctx, t, -3)
-    ctx, _ = _split(c.if_random_less_than(_at(ctx, first), 128, 7187))  # _SelfMovesFirst (:7185)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, first), 128, 7187))  # _SelfMovesFirst (:7186)
     ctx = c.load_battler_speed_rank(ctx, _AP)
     ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
     ctx = _add_end(ctx, t, -3)

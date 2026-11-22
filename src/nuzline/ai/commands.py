@@ -3288,7 +3288,8 @@ def _sort_four(tables: Tables, state: BattleState, bit_of):
     result other than FASTER) with ``bit_of(pair, reads)`` the pair's ``RandNext() & 1`` (``reads``:
     the compare's result depends on it). ``written``: the battlers some compare of the sort stored
     to ``monSpeedValues`` (both alive or both dead, :1204-1211, :1372-1373); it does not depend on
-    the bits (test_speed_rank_written_is_bit_independent)."""
+    the bits (tests/ai/test_commands_four.py::
+    test_sort_four_matches_the_engine_sort_and_the_decomp)."""
     qc = state.qc_roll
     alive = jnp.stack([_alive(state, b) for b in range(4)])
     ids = jnp.arange(4)
