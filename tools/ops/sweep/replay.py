@@ -4,9 +4,13 @@ repo, with a per-Outcome-field split and the facts needed to group them into cla
 Usage (on the pod; loads the engine):
     python replay.py <repo root> <example dir | folder of example dirs> [...]
 An example dir is what extract.py writes (node.txt names the test). Tables: <repo root>/data/
-gen4_platinum (built). Per example it prints the setup facts, PASS/FAIL of the test body, on
-FAIL every Outcome field whose swap alone changes the stepped state (mask, one bad row, the
-changed state fields), and a one-line CLASS KEY; a CLASS KEY summary with counts closes the run.
+gen4_platinum (built). Per example it prints the setup facts, PASS/FAIL of the test body (the
+test's own tests.engine.test_enumerate._assert_mask_sound on the drawn inputs), on FAIL every
+Outcome field whose swap alone changes the stepped state (mask, one bad row, the changed state
+fields; this split re-runs the body's row choice locally), and a one-line CLASS KEY; a CLASS KEY
+summary with counts closes the run. When the local rows disagree with the test's verdict (the test
+body changed and this split did not follow) the key's field part is DRIFT-<verdict>, so the
+mismatch shows instead of a wrong split.
 """
 
 import sys
@@ -174,6 +178,12 @@ def run(here: Path):
     node, s, acts, arbitrary, seed, item = setup(here)
     print("  node", node, "seed", seed)
     key_facts = facts(s, acts, item)
+    try:
+        T._assert_mask_sound(tables, s, acts, arbitrary, seed)
+        verdict = "PASS"
+    except AssertionError:
+        verdict = "FAIL"
+    print("  TEST BODY", verdict, flush=True)
     laws = T.laws_of(tables, s, acts)
     try:
         outcomes, _, drawn = enumerate_drawn(laws)
@@ -268,6 +278,14 @@ def run(here: Path):
     if whole.any() and not fields:
         fields = ["JOINT-ONLY"]  # no single field's swap breaks it; only several together
     field_key = "+".join(fields) if fields else "PASS"
+    if ("FAIL" if whole.any() else "PASS") != verdict:
+        print(
+            "  DRIFT: the local rows say",
+            "FAIL" if whole.any() else "PASS",
+            "the test body",
+            verdict,
+        )
+        field_key = f"DRIFT-{verdict}"
     bag_item, abilities, effects = key_facts
     key = f"({field_key}, {bag_item}, {'/'.join(abilities)}, {'/'.join(effects)})"
     print("  CHANGED STATE FIELDS", sorted(state_fields))

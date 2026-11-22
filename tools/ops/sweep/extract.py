@@ -2,7 +2,8 @@
 
 Plain Python (no nuzline / jax import). Usage:
     python extract.py <log dir> <out dir>
-Every log named <node>_<seed>.log in <log dir> that holds a "Failing test case" gives
+Every log named <node>_<seed>.log in <log dir> that holds a falsifier (one of MARKERS: Hypothesis
+prints "Failing test case" in newer versions, "Falsifying example" in older ones) gives
 <out dir>/<node>_<seed>/ (a second falsifying example in the same log gets the suffix _b, _c, ...):
   node.txt       test_mask_sound | test_mask_sound_with_a_trainer_item
   state.txt      Draw 1 (BattleState repr; for the trainer-item node the state BEFORE the item)
@@ -27,10 +28,17 @@ LAYOUT = {
     "test_mask_sound": ("state", "acts", "outcome", "seed"),
     "test_mask_sound_with_a_trainer_item": ("state", "item", "choice", "outcome", "seed"),
 }
+# The falsifier markers: collect.py imports them and pod/sweep.sh's MARKS is the same set
+# (tests/tools/test_sweep.py checks both).
+MARKERS = ("Failing test case", "Falsifying example")
 DRAW = re.compile(r"^E?\s*(\| )?\s*Draw (\d+): (.*)$")
 END = re.compile(r"^E?\s*(?:\| )?\s*(You can reproduce|Explanation:|Draw \d+:|\+-)")
 NOT_LITERAL = (ValueError, TypeError, SyntaxError, MemoryError, RecursionError)
 PIPE = re.compile(r"^\s*\|(?: |$)")
+
+
+def has_falsifier(text: str) -> bool:
+    return any(m in text for m in MARKERS)
 
 
 def strip_e(line: str, pipe: bool = False) -> str:
@@ -84,7 +92,7 @@ def main() -> None:
             continue
         node, layout = m.group(1), LAYOUT[m.group(1)]
         text = log.read_text(errors="replace")
-        if "Failing test case" not in text and "Falsifying example" not in text:
+        if not has_falsifier(text):
             print("PASS/no falsifier:", log.name)
             continue
         lines = text.splitlines()
