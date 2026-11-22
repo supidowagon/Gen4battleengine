@@ -39,19 +39,25 @@ class Clock:
         self.t += s
 
 
-def item(nodeid, *fixtures, direct=(), indirect=()):
-    """A fake item. `direct`/`indirect`: parametrize argnames (pytest gives a direct one a pseudo
-    fixture def named get_direct_param_fixture_func, an indirect one its real fixture def)."""
-
-    def get_direct_param_fixture_func():
+def _fixture_from(module):
+    def fixture():
         pass
 
-    def real_fixture():
-        pass
+    fixture.__module__ = module
+    return fixture
 
-    names = [*fixtures, *direct, *indirect]
-    defs = {n: [SimpleNamespace(func=get_direct_param_fixture_func)] for n in direct}
-    defs.update({n: [SimpleNamespace(func=real_fixture)] for n in indirect})
+
+ROM_DEF = SimpleNamespace(func=_fixture_from("tests.conftest"))  # a ROM fixture of tests/conftest.py
+
+
+def item(nodeid, *fixtures, direct=(), indirect=(), local=()):
+    """A fake item. Fixtures come from tests/conftest.py. `direct`/`indirect`: parametrize argnames
+    (pytest gives a direct one a pseudo fixture def from _pytest.python, an indirect one keeps its
+    real fixture def); `local`: a fixture defined in the test module itself."""
+    names = [*fixtures, *direct, *indirect, *local]
+    defs = {n: [ROM_DEF] for n in (*fixtures, *indirect)}
+    defs.update({n: [SimpleNamespace(func=_fixture_from("_pytest.python"))] for n in direct})
+    defs.update({n: [ROM_DEF, SimpleNamespace(func=_fixture_from(nodeid.split("::")[0]))] for n in local})
     params = {n: 1 for n in (*direct, *indirect)}
     return SimpleNamespace(
         nodeid=nodeid,
@@ -233,6 +239,22 @@ def test_species_as_a_parametrize_name_is_not_the_fixture():
     assert rg.is_rom_only(indirect)
     assert rg.is_rom_only(plain_fixture)
     assert rg.is_rom_only(item("tests/x.py::t[a]", "tmp_path", "species", direct=("which",)))
+
+
+def test_a_rom_fixture_counts_only_from_the_three_conftests():
+    assert rg.ROM_FIXTURE_MODULES == {
+        "tests.conftest", "tests.tools.rom.conftest", "tests.kaizo.conftest"
+    }  # fmt: skip
+    # a test module's own fixture named like a ROM fixture overrides it: not ROM-only
+    assert not rg.is_rom_only(item("tests/engine/test_x.py::t", "tmp_path", local=("docs",)))
+    no_defs = item("tests/x.py::t", "tmp_path")
+    no_defs.fixturenames.append("symbols")  # a name with no fixturedef at all
+    assert not rg.is_rom_only(no_defs)
+    for module in sorted(rg.ROM_FIXTURE_MODULES):
+        it = item("tests/x.py::t", "tmp_path")
+        it.fixturenames.append("pkcalc")
+        it._fixtureinfo.name2fixturedefs["pkcalc"] = [SimpleNamespace(func=_fixture_from(module))]
+        assert rg.is_rom_only(it)
 
 
 def test_getfixturevalue_save_export_ids_are_rom_only_for_every_param():

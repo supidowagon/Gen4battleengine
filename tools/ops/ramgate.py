@@ -39,8 +39,9 @@ POLL_S = 60.0
 DEFAULT_TIMEOUT_MIN = 30.0
 
 # Fixtures that need a local input the pod never gets (ROM, patch, linker map, saves, docs sheet,
-# PKCalc archive). A test whose fixture closure (`item.fixturenames`) holds one is ROM-only. List
-# from the e3 ROM-only test inventory of 21 Nov 2026 (collected with a plugin flagging exactly this).
+# PKCalc archive). A test whose fixture closure (`item.fixturenames`) holds one, defined in one of
+# ROM_FIXTURE_MODULES, is ROM-only. List from the e3 ROM-only test inventory of 21 Nov 2026
+# (collected with a plugin flagging exactly this).
 ROM_FIXTURES = frozenset(
     {
         *("rom_inputs", "vanilla_bytes", "vanilla_files", "kaizo_inputs", "kaizo_bytes"),
@@ -49,6 +50,7 @@ ROM_FIXTURES = frozenset(
         *("docs", "pkcalc_zip", "pkcalc"),
     }
 )
+ROM_FIXTURE_MODULES = frozenset({"tests.conftest", "tests.tools.rom.conftest", "tests.kaizo.conftest"})
 # ROM-only tests the fixture closure cannot show (every param of a parametrized id counts):
 # two skip on a missing docs extraction by path, and the test_cli save export gets its save
 # through `request.getfixturevalue(which)`, so no fixture name in `item.fixturenames` shows it.
@@ -179,22 +181,19 @@ def wait_for_ram(
         sleep(POLL_S)
 
 
-def _direct_params(item) -> set[str]:
-    """Argnames the item gets from a direct (non-indirect) parametrize: pytest gives them a
-    pseudo fixture, so they are in `fixturenames` but are not the fixture of the same name."""
-    spec = getattr(item, "callspec", None)
+def _rom_fixtures(item) -> set[str]:
+    """ROM fixture names in the item's closure whose active definition (the last fixturedef of the
+    name) comes from one of ROM_FIXTURE_MODULES. A direct parametrize argname (pytest's own pseudo
+    fixture) or a test module's local fixture of the same name is not one."""
     info = getattr(item, "_fixtureinfo", None)
-    if spec is None or info is None:
-        return set()
-    defs = info.name2fixturedefs
-    return {
-        n
-        for n in spec.params
-        if all(
-            getattr(d.func, "__name__", "") == "get_direct_param_fixture_func"
-            for d in defs.get(n, ())
-        )
-    }
+    defs = getattr(info, "name2fixturedefs", None) or {}
+    out = set()
+    for name in ROM_FIXTURES & set(item.fixturenames):
+        chain = defs.get(name) or ()
+        func = getattr(chain[-1], "func", None) if chain else None
+        if getattr(func, "__module__", None) in ROM_FIXTURE_MODULES:
+            out.add(name)
+    return out
 
 
 def _fetches_rom_fixture(item) -> bool:
@@ -219,9 +218,8 @@ def _fetches_rom_fixture(item) -> bool:
 def is_rom_only(item) -> bool:
     """A test whose fixture closure holds a local-input fixture, or one of the path/id tests."""
     node = item.nodeid.replace("\\", "/")
-    fixtures = set(item.fixturenames) - _direct_params(item)
     return (
-        bool(ROM_FIXTURES & fixtures)
+        bool(_rom_fixtures(item))
         or node.split("[")[0] in ROM_ONLY_IDS
         or _fetches_rom_fixture(item)
     )
