@@ -421,13 +421,16 @@ def A(player, opp, state: BattleState, names: Names) -> jnp.ndarray:
 
 
 def assert_matches_reference(
-    tables: Tables, state: BattleState, actions, outcome: Outcome
+    tables: Tables, state: BattleState, actions, outcome: Outcome, out: BattleState | None = None
 ) -> BattleState:
     """Step ``state`` with the JAX engine (``jit_step``) and the plain-Python
     reference engine (``ref_step`` through ``to_ref`` / ``from_ref``), assert every
-    field equal (the field name is in the message), and return the JAX state."""
+    field equal (the field name is in the message), and return the JAX state. ``out``: the
+    JAX state already played by the caller's own compiled program (a jitted ``step_events``),
+    so a test that also reads the events compiles one program, not two."""
     acts = jnp.asarray(actions, jnp.int32)
-    out = jit_step(tables, state, acts, outcome)
+    if out is None:
+        out = jit_step(tables, state, acts, outcome)
     ref = from_ref(
         ref_step(
             to_numpy(tables),

@@ -2538,6 +2538,7 @@ RARE_EFFECTS = (
     EffectId.PSYCHO_SHIFT,
     EffectId.MIST,  # B12-23
     EffectId.MIMIC,  # G-68
+    EffectId.SKETCH,  # I-3
     EffectId.TRANSFORM,  # G-69
     EffectId.CHATTER,  # G-70
     EffectId.TRIPLE_KICK,  # B13-5

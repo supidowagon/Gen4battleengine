@@ -119,6 +119,7 @@ from nuzline.engine.order import (
     pinch_limit,
     sealed_state,
     selected_move,
+    sketched_state,
     takeover_possible,
     used_move,
     used_moves,
@@ -705,6 +706,23 @@ def _future_fields(
 
 
 def future_thresholds(
+    tables: Tables, state: BattleState, actions, moves=None, *grid, **kw
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(bool[B, 101], bool[B])``: per defender battler ``d``, ``values[d, t]`` holds when ``t``
+    (0-100) is a threshold ``_future_grid`` finds possible for its Future Sight hit (the grid's
+    thresholds clipped to 0-100, as ``hit_class`` clips them), and ``loose`` as there. Only this
+    set is read (``enumerate._future_hit``, the sampler's ``hit_class_mask``), so the grid, K
+    values per row, is reduced here inside the jit and never leaves it (the laws output keeps
+    101 bools per defender, not K int32 and K bools). ``grid`` and ``kw`` are ``_future_grid``'s
+    other arguments, by position or keyword (the B = 4 ``dsets`` / ``targets`` of e2-d67
+    8fa1a6a2 go through them)."""
+    thresholds, possible, loose = _future_grid(tables, state, actions, moves, *grid, **kw)
+    clipped = jnp.clip(thresholds, 0, 100)
+    reduce = jax.vmap(lambda t, p: jnp.zeros(101, _I32).at[t].max(p.astype(_I32)))
+    return reduce(clipped, possible) > 0, loose
+
+
+def _future_grid(
     tables: Tables, state: BattleState, actions, moves=None
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """``(int32[B, K], bool[B, K], bool[B])``: per defender side ``d``, every threshold its
@@ -1723,6 +1741,12 @@ def hit_class(u, thresholds, possible) -> jnp.ndarray:
     return jnp.where(misses_all, 0, low)
 
 
+def hit_class_mask(u, values) -> jnp.ndarray:
+    """``hit_class`` over the thresholds ``t`` in 0-100 with ``values[..., t]`` set: the same
+    class value (the smallest roll of its interval, 0 where ``u`` misses at all of them)."""
+    return hit_class(u, jnp.arange(101, dtype=_I32), values)
+
+
 def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
     """``int32``: ``side``'s ``move`` crits 1 in N with ``state`` as it is when the move runs
     (``BattleSystem_CalcCriticalMulti``, battle_lib.c:7105-7133, reads the attacker's held item,
@@ -2706,7 +2730,7 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=N
         """``RandNext() % n`` for each element."""
         return jax.random.randint(k[i], shape, 0, n, dtype=_I32)
 
-    future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
+    future_values, future_loose = future_thresholds(tables, state, actions, moves)
     future_roll = jax.random.randint(jax.random.fold_in(key, 28), (fmt.B,), 1, 101, dtype=_I32)
     # The roll u = RandNext() % 100 + 1 (battle_controller_player.c:2976), as its class.
     # A Triple Kick hit after the first rolls its own check without the overrides (B13-6):
@@ -2783,9 +2807,9 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=N
         ),
         "duration": duration,
         # The Future Sight hit's CheckMoveHit roll at the turn's end (bcp.c:2976, RandNext() % 100
-        # + 1), as its class over future_thresholds (the raw roll where loose).
+        # + 1), as its class over future_thresholds' values (the raw roll where loose).
         "future_hit": jnp.where(
-            future_loose, future_roll, hit_class(future_roll, future_thr, future_ok)
+            future_loose, future_roll, hit_class_mask(future_roll, future_values)
         ),
     }
 
@@ -2831,8 +2855,12 @@ def replacement_known(tables: Tables, state: BattleState) -> bool:
     and a ``can_call_encore`` caller; Metronome, Assist and Copycat, ``can_call_encore``'s
     other callers). False means ``replacement_possible`` is false at ``state`` and at every
     state a turn or a playout reaches from it, so ``sample_outcome``'s static ``replacement``
-    may be False there. A move that changes a battler's set mid-battle (Mimic, Sketch,
-    Transform: unsupported, ``coverage.RELOAD_STATE_EFFECTS``) joins Encore when supported.
+    may be False there. The moves that change a battler's set mid-battle copy only a move some
+    Pokemon of the fight knows: Transform its target's slots (battle_script.c:5346-5348), Mimic
+    its target's ``movePrevByBattler`` (:4481), a used slot move or a locked move (bcp.c:
+    3945-3946, :1885-1888), and Sketch its target's ``moveSketched`` (:4839-4884, the same
+    ``moveTemp``, bcp.c:3952-3954). A locked move is never Encore or an invoker
+    (``coverage.LOCK_EFFECTS``), so a copied Encore or invoker is a known one, already counted.
     The guard: tests/engine/test_batch11.py, on generated states."""
     species = np.asarray(state.species).astype(np.int64)
     learnt = np.asarray(tables.learnset_move)[species]
@@ -2857,7 +2885,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     events are played on A (``step.turn_events``, only where ``replacement_possible``) and a side
     whose event fired (``enumerate._split_events``, ``enumerate.taken_events``) takes outcome B's
     move-dependent fields (``MOVE_FIELDS``), redrawn for the move it then runs: from the Sleep
-    Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``),
+    Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``)
+    or an imprisoning foe's Sketch left (``order.sketched_state``, ``enumerate.sketched_events``),
     the encored move a faster Encore forced (``order.encored_state``) or, for a Sleep Talk,
     Metronome or Assist user, the set a faster Gravity left (``order.gravity_state``, its call
     redrawn from that set's law, G-67). Exact: the event is
@@ -2868,7 +2897,12 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     ``replacement_known`` is False (where the predicate is always false)."""
     fmt = format_of(state)
     # importers of this module
-    from nuzline.engine.enumerate import _split_events, gravity_events, taken_events
+    from nuzline.engine.enumerate import (
+        _split_events,
+        gravity_events,
+        sketched_events,
+        taken_events,
+    )
     from nuzline.engine.step import turn_events
 
     state_in, actions_in = state, jnp.asarray(actions, _I32)
@@ -3062,7 +3096,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         kinds = call_kind(tables, chosen)
         listing = (kinds == CALL_SLEEP_TALK) | (kinds == CALL_METRONOME) | (kinds == CALL_ASSIST)
         landed = gravity_events(state_in, events) & listing
-        which = jnp.stack([disabled, sealed, taken_events(state_in, events), landed])
+        sketched = sketched_events(state_in, events)
+        which = jnp.stack([disabled, sealed, taken_events(state_in, events), landed, sketched])
         sides = jnp.arange(fmt.B)
         taken = which[2]
         # The moveTemp each side runs: the encored move where taken. The invokers' draws do not
@@ -3085,6 +3120,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                 sealed_state(state, mine),
                 encored_state(tables, state, mine),
                 heavy,
+                # TODO(D2): at B = 4 the Sketch may target the sleeper's partner (see
+                # ``enumerate.sketched_events``): the hypothesis needs the chosen target (D11).
+                sketched_state(state, _foe(side), side),
             )
             options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
             alt_moves.append(
@@ -3094,7 +3132,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                     jnp.where(
                         which[2, side],
                         options[2],
-                        jnp.where(which[1, side], options[1], options[0]),
+                        jnp.where(
+                            which[1, side],
+                            options[1],
+                            jnp.where(which[4, side], options[4], options[0]),
+                        ),
                     ),
                 )
             )

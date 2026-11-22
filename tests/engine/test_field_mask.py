@@ -548,8 +548,6 @@ def test_future_sight_law_covers_a_corrupted_mask_that_loses_a_group(tables, nam
     Sandshrew then reads fog without sand (bcp.c:2927, :2934): its threshold is in the law
     (``outcome.future_thresholds``' none / sand / hail grid, each with and without the start's
     fog), and the step hits at it and misses above it."""
-    import numpy as np
-
     from nuzline.engine.enumerate import outcome_laws
     from nuzline.engine.outcome import future_threshold
 
@@ -567,8 +565,7 @@ def test_future_sight_law_covers_a_corrupted_mask_that_loses_a_group(tables, nam
     live = int(future_threshold(tables, _masked(s, 0x8040, -1), 1))
     assert live != int(future_threshold(tables, s, 1))  # the start's (sand and fog) differs
     laws = outcome_laws(tables, s, jnp.asarray([0, 0]))
-    ts = np.asarray(laws.future_thresholds[1])[np.asarray(laws.future_possible[1], bool)]
-    assert live in {int(t) for t in ts}
+    assert bool(laws.future_values[1][min(live, 100)])
     left = []
     for roll in (live, live + 1):
         o = _hits()._replace(future_hit=jnp.asarray([1, roll], jnp.int8))

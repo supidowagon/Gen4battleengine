@@ -63,10 +63,12 @@ from nuzline.engine.ids import (
     ME_FIRST_BANNED_MOVES,
     METRONOME_DRAW,
     METRONOME_HEAVY,
+    MOVE_SKETCH,
     MOVE_STRUGGLE,
     NATURE_DISLIKED_FLAVOR,
     PRIORITY_DOWN_ITEMS,
     SECRET_POWER_EFFECTS,
+    SKETCH_FORBIDDEN,
     SPECIES_DITTO,
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
@@ -611,6 +613,43 @@ def sealed_state(state: BattleState, sides) -> BattleState:
     )
     value = jnp.where(foe_of, 1, state.imprison)
     return state._replace(imprison=value.astype(state.imprison.dtype))
+
+
+def sketch_copy(
+    state: BattleState, side, target_side
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(cond, j, move)``: what ``BtlCmd_TrySketch`` (battle_script.c:4839-4884) writes when
+    ``side``'s active battler Sketches ``target_side``'s: ``move``, the defender's
+    ``moveSketched`` (``state.sketch_move``), goes into slot ``j``, the first Sketch slot
+    (:4862-4865, :4868), where ``cond``: the user knows Sketch, is not Transformed (:4847), the
+    move is neither MOVE_NONE nor ``SKETCH_FORBIDDEN`` (:4848-4851) and the user does not know it
+    already in another slot (:4855-4860). The hit's own tests (the defender's Substitute,
+    subscript_sketch.s:5) are the caller's."""
+    fmt = format_of(state)
+    moves = state.moves[party(fmt, side), state.active[side]].astype(_I32)
+    move = state.sketch_move[target_side].astype(_I32)
+    j = jnp.argmax(moves == MOVE_SKETCH)
+    cond = (
+        jnp.any(moves == MOVE_SKETCH)
+        & (state.transformed[side] == 0)
+        & (move != 0)
+        & ~jnp.any(move == jnp.asarray(SKETCH_FORBIDDEN, _I32))
+        & ~jnp.any(moves == move)
+    )
+    return cond, j, move
+
+
+def sketched_state(state: BattleState, imprisoner, target) -> BattleState:
+    """``state`` after battler ``imprisoner`` Sketches battler ``target`` (``sketch_copy``; only
+    ``moves``: the seal reads ``moves`` and ``imprison``, battle_lib.c:3316-3338). An imprisoning
+    Sketch user that moves before a Sleep Talk user seals its copy too: Sleep Talk reads the
+    imprisoner's live moves when its script runs (battle_script.c:4927; ``sleep_talk_slots``).
+    The copy is the target's turn-start ``moveSketched`` while the target has not acted."""
+    fmt = format_of(state)
+    cond, j, move = sketch_copy(state, imprisoner, target)
+    index = (party(fmt, imprisoner), state.active[imprisoner], j)
+    value = jnp.where(cond, move, state.moves[index]).astype(state.moves.dtype)
+    return state._replace(moves=state.moves.at[index].set(value))
 
 
 def gravity_state(state: BattleState) -> BattleState:

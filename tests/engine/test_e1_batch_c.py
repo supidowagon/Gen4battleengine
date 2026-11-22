@@ -175,14 +175,15 @@ def test_vital_spirit_stops_sleep_and_shows_its_ability(tables, names):
 
 def test_vital_spirit_wakes_its_sleeping_holder(tables, names):
     """BattleSystem_RecoverStatusByAbility (battle_lib.c:4404-4405), at the move end: an asleep
-    Vital Spirit holder is cured (subscript_ability_forbids_status.s tags it)."""
+    Vital Spirit holder is cured; the script's message tags BTLSCR_MSG_TEMP, so the AI learns
+    nothing (subscript_ability_forbids_status.s:6; battle_script.c:11801-11802; I-6)."""
     s = _mankey(tables, names)
     s = s._replace(
         status=s.status.at[0, 0].set(Status.SLEEP),
         status_counter=s.status_counter.at[0, 0].set(3),
     )
     out = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), O)
-    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) != 0
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 0
 
 
 # --- G-48 Speed Boost ---------------------------------------------------------------------

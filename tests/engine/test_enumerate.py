@@ -388,14 +388,15 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         # The Future Sight hit's roll u = RandNext() % 100 + 1 (bcp.c:2976) at the turn's end,
         # grouped as ``hit`` over every threshold it can have (outcome.future_thresholds), each
         # roll alone where the grid is loose.
-        ts, ok, loose = (np.asarray(x)[side] for x in future_thresholds(tables, state, actions))
+        values, loose = (np.asarray(x)[side] for x in future_thresholds(tables, state, actions))
         if bool(loose):
             return {u: Fraction(1, 100) for u in range(1, 101)}
-        if not ok.any():
+        if not values.any():
             return {1: Fraction(1)}
+        ts = np.flatnonzero(values)
         groups = {}
         for u in range(1, 101):
-            groups.setdefault(tuple(u <= t for t in ts[ok]), []).append(u)
+            groups.setdefault(tuple(u <= t for t in ts), []).append(u)
         return {(min(us) if any(key) else 0): Fraction(len(us), 100) for key, us in groups.items()}
     if name == "crit":
         lucky = int(state.lucky_chant[1 - side]) != 0
@@ -1287,4 +1288,4 @@ def test_a_bag_x_accuracy_frees_the_future_sight_stage_sum(tables, names):
     )
     tackle = laws_of(tables, s, np.array([0, 0], np.int32))
     item = laws_of(tables, s, np.array([0, FIRST_ITEM_ACTION], np.int32))
-    assert item.future_possible[0].sum() > tackle.future_possible[0].sum()
+    assert item.future_values[0].sum() > tackle.future_values[0].sum()

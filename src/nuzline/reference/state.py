@@ -79,6 +79,7 @@ class RefBattler:
     flinched: int
     choice_lock: int
     last_move: int
+    sketch_move: int  # BattleContext.moveSketched (I-3)
     protect_count: int
     rollout_count: int
     charge_turn: int
