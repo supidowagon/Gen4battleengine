@@ -747,6 +747,109 @@ def test_a_four_battler_berry_out_of_range_needs_another_move(tables, names):
     assert read == [True, False]
 
 
+def _carrying(state, names, b: int):
+    """Battler ``b`` knows only Pursuit, disabled: its FIGHT Struggles (bcp.c:433-434) and keeps
+    the TEMP_VALUE 1 of its last Pursuit, which TryPursuit reads with no Disable or Struggle test
+    (battle_script.c:6899-6916, battle_lib.c:2858-2868)."""
+    from tests.engine.d2_states import with_moves
+
+    state = with_moves(state, names, b, ["Pursuit"])
+    return state._replace(
+        disabled_move=state.disabled_move.at[b].set(names.move("Pursuit")),
+        disable_turns=state.disable_turns.at[b].set(3),
+        selected_temp=state.selected_temp.at[b].set(1),
+    )
+
+
+def _idle_four(tables, names):
+    """DOUBLES, every battler knows only Swords Dance (no crit, no roll of its own)."""
+    from nuzline.engine.format import DOUBLES
+    from tests.engine.d2_states import four, with_moves
+
+    s = four(tables, names, DOUBLES)
+    for b in range(4):
+        s = with_moves(s, names, b, ["Swords Dance"])
+    return s
+
+
+def _assert_chase_widened(laws, b: int):
+    """Battler ``b``'s laws read its chase beside its own move (``outcome.chase_widening``): the
+    crit at hit 0 and its roll, classed over every stage's odds, no damage classes, no hit gate."""
+    from nuzline.engine.outcome import CRIT_WRITE_VARIANTS
+
+    assert bool(laws.relevant.crit[b, 0]) and bool(laws.relevant.roll[b, 0])
+    assert bool(np.all(laws.crit_possible[b, CRIT_WRITE_VARIANTS:]))
+    assert not bool(np.any(laws.compress[:, b, 0]))
+    assert not bool(laws.reads.hit_gated[b])
+    assert not bool(laws.no_crit[b])
+
+
+def test_b4_a_diagonal_switcher_meets_a_carried_pursuit_in_the_laws(tables, names):
+    """Review 6 #1: at B = 4 TryPursuit scans every battler of the other side (battle_script.c:
+    6899-6904), so battler 0, Struggling with a carried Pursuit, chases battler 3's switch
+    (``_foe(0)`` is 1). It may chase or Struggle at its own turn: both moves' reads are relevant
+    (``chase_widening``'s ``both``); before, the laws read Struggle only."""
+    from nuzline.engine.outcome import chase_widening, pursuit_chase
+
+    s = _carrying(_idle_four(tables, names), names, 0)
+    acts = jnp.asarray([0, 0, 0, MOVE_ACTIONS + 2], jnp.int32)
+    fires, pursues, move = (np.asarray(x) for x in pursuit_chase(tables, s, acts))
+    assert fires.tolist() == [True, False, False, False]
+    assert pursues.tolist() == [False] * 4  # a FIGHT of another move: its own move may run
+    assert int(move[0]) == names.move("Struggle")
+    both, _, chase = (np.asarray(x) for x in chase_widening(tables, s, acts, move, fires))
+    assert both.tolist() == [True, False, False, False]
+    assert int(chase[0]) == names.move("Pursuit")
+    _assert_chase_widened(jax.tree.map(np.asarray, _laws(tables, s, acts)), 0)
+
+
+def test_b4_the_chain_reaches_the_second_pursuer_in_the_laws(tables, names):
+    """Review 6 #1: battler 0 switches; battler 1 (Struggling, carried Pursuit) is the first
+    pursuer and battler 3 the next while the switcher lives (subscript_pursuit.s:79-82 -> :8).
+    Battler 3 is Encored into Pursuit and picks a switch: it chases or runs no move, so its laws
+    are Pursuit's (``pursues``); before, ``fires[3]`` tested battler 2 (``_foe(3)``) and its
+    draws were not read."""
+    from nuzline.engine.outcome import pursuit_chase
+    from tests.engine.d2_states import with_moves
+
+    s = _carrying(_idle_four(tables, names), names, 1)
+    s = with_moves(s, names, 3, ["Pursuit"])
+    s = s._replace(
+        encore_move=s.encore_move.at[3].set(names.move("Pursuit")),
+        encore_slot=s.encore_slot.at[3].set(0),
+        encore_turns=s.encore_turns.at[3].set(3),
+    )
+    acts = jnp.asarray([MOVE_ACTIONS + 2, 0, 0, MOVE_ACTIONS + 2], jnp.int32)
+    fires, pursues, move = (np.asarray(x) for x in pursuit_chase(tables, s, acts))
+    assert fires.tolist() == [False, True, False, True]
+    assert pursues.tolist() == [False, False, False, True]
+    assert int(move[3]) == names.move("Pursuit")
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    _assert_chase_widened(laws, 1)
+    assert bool(laws.relevant.crit[3, 0]) and bool(laws.relevant.roll[3, 0])
+
+
+def test_a_u_turn_meets_a_carried_pursuit_in_the_laws(tables, names):
+    """Review 6 #1: U-turn calls the same TryPursuit (subscript_attack_then_switch_out.s:54). The
+    foe, Struggling with a carried Pursuit, chases the player's U-turn when it has not acted, or
+    Struggles first: both moves' reads are relevant (B = 2)."""
+    from nuzline.engine.outcome import chase_widening, pursuit_chase
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Pursuit"], 30)],
+    )
+    s = _carrying(s, names, 1)
+    acts = jnp.asarray([0, 0], jnp.int32)
+    fires, _, move = pursuit_chase(tables, s, acts)
+    assert not bool(np.any(np.asarray(fires)))  # no switch action
+    both = np.asarray(chase_widening(tables, s, acts, move, fires)[0])
+    assert both.tolist() == [False, True]
+    _assert_chase_widened(jax.tree.map(np.asarray, _laws(tables, s, acts)), 1)
+
+
 @pytest.mark.slow  # a step against the reference
 def test_a_takeover_trump_card_reads_its_move_slot_pp(tables, names):
     """Review 5 #3: the faster foe encores the player into its last move, Trump Card, over its
