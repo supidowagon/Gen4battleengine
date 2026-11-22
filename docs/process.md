@@ -153,6 +153,8 @@ of each other (about 3 hours), the managing session names a train order.
   line, and the files a batch lists with the `A` flag.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
+  At the first split close the managing session also puts the owner question on the five
+  pod-only ROM + engine tests (section 5, ROM + engine tests).
 - **Local runs:** CLAUDE.md, Where tests run.
 
 ## 4. Progress measure
@@ -196,10 +198,16 @@ rate used for estimates.
   `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
   weighs 20), else 6 GB (the pod weight when the item has a higher key), so an unmeasured
-  ROM-only item waits for more than 12 GB free (the PC idles at 16-18 GB free; engine ids that stay ROM-only keep an explicit 14 line, tag `engine-test-pod`). Local measuring pass:
+  ROM-only item waits for more than 12 GB free (the PC idles at 16-18 GB free). The 6 holds only
+  without the engine: a run with an unmeasured ROM-only item gets the engine blocker (an engine
+  import in a test body fails), and when the engine is already loaded at collection the
+  unmeasured item weighs 14 (more than 20 GB free). Only a run where the test passed gives a
+  figure: an id that skipped while measured keeps 14, tag `unmeasured-skipped-<why>`. The five
+  ROM + engine ids are refused through `pod_only.txt` (ROM + engine tests below). Local measuring pass:
   `python tools/ops/ramgate_measure.py IDS_FILE OUT_JSON [--skip SLOW_IDS_FILE]` (its header
   has the details): it holds the machine lock as kind `measure` for the whole pass, runs one
-  file's ROM-only ids per process, strictly serial, each started when free RAM is above 12 GB;
+  file's ROM-only ids per process, strictly serial, each started when free RAM is above 20 GB
+  (fixed, as an unmeasured test may load the engine);
   it polls every 0.5 s and kills that pytest tree when free RAM drops below 4 GB (the file is
   then marked `pod-measure needed`, weight 20); figure = ceil(max(1.25 m, m + 2)) GB of the
   peak summed RSS m of the tree, tag `local-measure-<sha7>-<yyyymmdd>`. Every gated run (and

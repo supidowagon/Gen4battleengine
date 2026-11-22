@@ -239,9 +239,9 @@ def test_an_engine_free_item_without_a_key_weighs_six():
 def test_rom_only_items_weigh_six_until_measured():
     light = item("tests/b/test_y.py::t[x]", "kaizo_inputs")  # pod table says 4
     assert rg.ROM_UNMEASURED_GB == 6.0
-    assert rg.item_weight(light, TABLE, {}) == 6.0
-    assert rg.item_weight(item("tests/zzz.py::t", "docs"), TABLE, {}) == 6.0  # no pod key
-    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}) == 30.0
+    assert rg.item_weight(light, TABLE, {}, engine_free=True) == 6.0
+    assert rg.item_weight(item("tests/zzz.py::t", "docs"), TABLE, {}, engine_free=True) == 6.0  # no pod key
+    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}, engine_free=True) == 30.0
     assert rg.item_weight(item("tests/b/test_y.py::t", "tmp_path"), TABLE, {}) == 4.0
     measured = {"tests/b/test_y.py": 7.0, "tests/b/test_y.py::t": 9.0}
     assert rg.item_weight(light, TABLE, measured) == 9.0  # longest prefix wins
@@ -250,6 +250,17 @@ def test_rom_only_items_weigh_six_until_measured():
     assert gate([light], free=12.1, rom_table={}, env=env)[0] == "GO"  # needs > 12
     assert gate([light], free=11.9, rom_table={}, env=env)[0] == "TIMEOUT"
     assert gate([light], free=13.1, rom_table={"tests/b/test_y.py": 7.0}, env=env)[0] == "GO"
+
+
+def test_an_unmeasured_rom_only_item_weighs_fourteen_once_the_engine_is_loaded():
+    light = item("tests/b/test_y.py::t[x]", "kaizo_inputs")  # pod table says 4
+    assert rg.ROM_ENGINE_UNMEASURED_GB == 14.0
+    assert rg.item_weight(light, TABLE, {}) == 14.0
+    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}) == 30.0  # a higher pod key wins
+    assert rg.item_weight(light, TABLE, {"tests/b/test_y.py": 3.0}) == 3.0  # measured wins
+    env = {rg.ENV_TIMEOUT: "0"}
+    assert gate([light], free=19.9, modules=ENGINE, env=env)[0] == "TIMEOUT"  # needs > 20
+    assert gate([light], free=20.1, modules=ENGINE, env=env)[0] == "GO"
 
 
 def test_load_rom_weights(tmp_path):
@@ -623,10 +634,14 @@ def test_blocker_in_a_fake_run_stops_the_import_and_is_removed(monkeypatch):
     rg.remove_blocker(b, path)  # twice is harmless
 
 
-def test_blocker_wanted_only_for_engine_free_runs():
-    assert rg.blocker_wanted([PLAIN, ROM], {})
-    assert rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "1"})  # no override any more
-    assert not rg.blocker_wanted([ROM, ROM], {})
+def test_blocker_wanted_for_engine_free_runs_and_unmeasured_rom_only_runs():
+    listed = {ROM.nodeid: 3.0}
+    no = lambda: False  # noqa: E731
+    assert rg.blocker_wanted([PLAIN, ROM], {}, listed, no)
+    assert rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "1"}, listed, no)  # no override any more
+    assert not rg.blocker_wanted([ROM, ROM], {}, listed, no)  # measured: the engine may load
+    assert rg.blocker_wanted([ROM], {}, {}, no)  # unmeasured: its 6 GB assumes no engine
+    assert not rg.blocker_wanted([ROM], {}, {}, lambda: True)  # the measuring harness runs it
 
 
 def test_blocker_sets_the_child_env_and_removal_unsets_it(monkeypatch):
@@ -1079,7 +1094,7 @@ def test_the_measuring_harness_figures_and_reads_rss():
     assert harness.figure(2.0) == 4 and harness.figure(10.0) == 13 and harness.figure(0.5) == 3
     assert harness.rss_bytes(os.getpid()) > 10_000_000  # this pytest process
     assert harness.tree_pids(os.getpid())[0] == os.getpid()
-    assert harness.START_FREE_GB - rg.RESERVE_GB == rg.ROM_UNMEASURED_GB == 6.0
+    assert harness.START_FREE_GB == 20.0  # fixed: an unmeasured test may load the engine
     text = (ROOT / "tools/ops/ramgate_measure.py").read_text(encoding="utf-8")
     assert 'kind="measure"' in text and "rg.ENV_NO_WAIT" in text
 
