@@ -106,6 +106,14 @@ def test_b4_a_third_battlers_worry_seed_opens_the_armor_and_the_threshold(tables
     calm = with_moves(s, names, 2, ("Tackle",))
     laws = _laws_of(tables, calm, np.zeros(4, np.int32))
     assert bool(laws.no_crit[0]) and not bool(laws.hit_whole[0])
+    assert not bool(laws.relevant.contact_proc[1, 0])
+    # Battler 2 holds Static and Skill Swaps it to battler 1 (subscript_exchange_abilities.s:
+    # 21-24) before battler 0's contact hit: its roll is read (outcome.doubles_ability_change).
+    p2 = party_of(s, 2)
+    swap = with_moves(calm, names, 2, ("Skill Swap",))
+    swap = swap._replace(ability=swap.ability.at[p2, int(swap.active[2])].set(AbilityId.STATIC))
+    laws = _laws_of(tables, swap, np.zeros(4, np.int32))
+    assert bool(laws.relevant.contact_proc[1, 0]) and not bool(laws.no_crit[0])
 
 
 def test_a_klutz_king_s_rock_rolls_at_its_param_when_a_worry_seed_can_take_the_klutz(tables, names):

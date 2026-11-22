@@ -16,12 +16,13 @@ import numpy as np
 import pytest
 
 from nuzline.engine.actions import FIRST_ITEM_ACTION
+from nuzline.engine.damage import STATUS
 from nuzline.engine.enumerate import outcome_laws
 from nuzline.engine.format import DOUBLES
 from nuzline.engine.ids import AbilityId
-from nuzline.engine.outcome import CRIT_WRITE_VARIANTS, Outcome, empty_outcome
+from nuzline.engine.outcome import CRIT_WRITE_VARIANTS, Outcome, empty_outcome, trace_sources
 from tests.engine.d2_states import four, party_of, with_moves
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import A, roark_state
 from tests.engine.test_enumerate import _assert_mask_sound
 
 _laws = jax.jit(outcome_laws)
@@ -115,3 +116,30 @@ def test_b4_an_armed_trace_reads_the_contact_roll_of_a_static_partner(tables, na
     announced = s._replace(trace_announced=s.trace_announced.at[1].set(1))
     laws = _laws_of(tables, announced, np.zeros(4, np.int32))
     assert not bool(laws.relevant.contact_proc[1, 0])
+
+
+def test_a_role_play_of_a_trace_holder_arms_its_user(tables, names):
+    # Role Play copies the raw ability with no Trace test and leaves traceAnnounced
+    # (subscript_copy_ability.s:5-15); Transform clears it (battle_script.c:5352). The user's
+    # Trace fires at its move's end (bcp.c:3672-3673, :3973): it is armed for the turn.
+    s = roark_state(tables, names, player_moves=("Role Play",), opp_moves=("Leer",))
+    s = s._replace(
+        ability=s.ability.at[1, 0].set(AbilityId.TRACE),
+        trace_announced=s.trace_announced.at[1].set(1),
+    )
+    armed = trace_sources(tables, s, A("Role Play", "Leer", s, names)).armed
+    assert np.asarray(armed).tolist() == [True, False]
+    calm = roark_state(tables, names, player_moves=("Tackle",), opp_moves=("Leer",))
+    calm = calm._replace(ability=s.ability, trace_announced=s.trace_announced)
+    armed = trace_sources(tables, calm, A("Tackle", "Leer", calm, names)).armed
+    assert np.asarray(armed).tolist() == [False, False]
+
+
+def test_no_damaging_move_acts_after_a_roar_drag(tables, kaizo_tables):
+    # A Roar newcomer enters in the Roar script (subscript_force_target_to_switch_or_flee.s:
+    # 20-31), priority -6: no damaging move of either game is at -6 or below, so no hit of the turn
+    # meets what a Trace copies from it (outcome.trace_sources).
+    for t in (tables, kaizo_tables):
+        priority = np.asarray(t.move_priority).astype(int)
+        damaging = (np.asarray(t.move_category) != STATUS) & (np.asarray(t.move_power) != 0)
+        assert not np.any(damaging & (priority <= -6))
