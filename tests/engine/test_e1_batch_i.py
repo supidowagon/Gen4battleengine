@@ -14,7 +14,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import pytest
 
-from nuzline.engine.actions import MOVE_ACTIONS
+from nuzline.engine.actions import MOVE_ACTIONS, usable_moves
 from nuzline.engine.hooks import ALL_SWAPS, REVEALS_ON, STATUS_CURE, order_swaps
 from nuzline.engine.ids import (
     MOVE_SKETCH,
@@ -255,3 +255,75 @@ def test_switch_in_and_faint_clear_sketch_move(tables, names):
     s = s._replace(sketch_move=s.sketch_move.at[1].set(names.move("Rock Throw")))
     out = assert_matches_reference(tables, s, A("Tackle", MOVE_ACTIONS + 1, s, names), _o())
     assert int(out.sketch_move[1]) == 0  # the foe switched out
+
+
+def test_a_faint_clears_sketch_move(tables, names):
+    """``BattleSystem_CleanupFaintedMon`` clears ``moveSketched`` (battle_lib.c:2208): the foe's
+    last Pokemon faints with Rock Throw as its ``moveSketched``, no switch-in follows, and the
+    field is 0 at the battle's end."""
+    s = _sketcher(tables, names, order="player")
+    s = s._replace(
+        sketch_move=s.sketch_move.at[1].set(names.move("Rock Throw")),
+        hp=s.hp.at[1].set(jnp.asarray([1, 0, 0, 0, 0, 0], s.hp.dtype)),
+        species=s.species.at[1, 1:].set(0),
+    )
+    out = assert_matches_reference(tables, s, A("Tackle", "Rock Throw", s, names), _o())
+    assert int(out.over) == 1 and int(out.hp[1, 0]) == 0
+    assert int(out.sketch_move[1]) == 0
+
+
+def test_a_shown_move_that_misses_is_sketched(tables, names):
+    """subscript_missed.s:5 runs PrintAttackMessage, which sets SYSCTL_ATTACK_MESSAGE_SHOWN
+    (battle_script.c:1432): UpdateMoveBuffers writes ``moveSketched`` (bcp.c:3952-3954) for a
+    move that missed. The slower Sketch copies the missed Rock Throw."""
+    s = _sketcher(tables, names)
+    miss = _o()._replace(hit=_o().hit.at[1, 0].set(0))
+    out = assert_matches_reference(tables, s, A("Sketch", "Rock Throw", s, names), miss)
+    rock = names.move("Rock Throw")
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0])  # it missed
+    assert int(out.sketch_move[1]) == rock and int(out.moves[0, 0, 0]) == rock
+
+
+def test_the_choice_lock_on_sketch_is_released_next_turn(tables, names):
+    """UpdateMoveBuffers locks a Choice holder into ``moveTemp`` = Sketch (bcp.c:3921-3930); Sketch
+    then replaces itself, so CHECK_INVALID_CHOICE_ITEM finds no slot for the lock and clears it
+    (battle_lib.c:2307-2309): next turn every slot is usable, and the move used locks anew."""
+    s = _sketcher(tables, names)
+    s = s._replace(
+        item=s.item.at[0, 0].set(names.item("Choice Scarf")),
+        stats=s.stats.at[1, 0, SPE].set(999),  # the foe stays first despite the Scarf
+    )
+    out = assert_matches_reference(tables, s, A("Sketch", "Rock Throw", s, names), _o())
+    rock = names.move("Rock Throw")
+    assert int(out.moves[0, 0, 0]) == rock and int(out.choice_lock[0]) == MOVE_SKETCH
+    assert usable_moves(tables, out, 0).tolist() == [True] * 4
+    nxt = assert_matches_reference(tables, out, A("Tackle", "Rock Throw", out, names), _o())
+    assert int(nxt.choice_lock[0]) == names.move("Tackle")
+
+
+def test_coverage_grades_the_moves_a_sketch_can_copy(tables, names):
+    """``check_coverage`` runs every move of the opposing party a Sketch holder can copy
+    (``sketch_calls``) through ``move_effect_line`` as a "Sketch move effect" line: with Rock
+    Throw unmodelled, the Smeargle's line refuses it; a Pokemon without Sketch gets no such line."""
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import check_coverage, sketch_calls
+    from tests.engine.helpers import roark_party, roark_trainer, sample_party, unmodelled
+
+    opp = roark_party(names)
+    smeargle = replace(
+        sample_party(names)[0],
+        species=names.species("Smeargle"),
+        moves=(MOVE_SKETCH, names.move("Tackle"), 0, 0),
+    )
+    rock = names.move("Rock Throw")
+    calls = sketch_calls(list(smeargle.moves), opp)
+    assert rock in calls and names.move("Tackle") not in calls
+    assert not set(calls) & set(SKETCH_FORBIDDEN)
+    ok = check_coverage(tables, names, [smeargle], roark_trainer(), opp, 0)
+    assert not any("Sketch move effect" in m for m in ok.missing)
+    broken = unmodelled(tables, rock)
+    r = check_coverage(broken, names, [smeargle], roark_trainer(), opp, 0)
+    assert any("Sketch move effect" in m and "SMEARGLE" in m.upper() for m in r.missing)
+    plain = check_coverage(broken, names, sample_party(names)[:1], roark_trainer(), opp, 0)
+    assert not any("Sketch move effect" in m for m in plain.missing)
