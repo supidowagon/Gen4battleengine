@@ -345,7 +345,7 @@ from nuzline.engine.outcome import (
     Outcome,
     ability_whole,
     acid_rain_reachable,
-    armored,
+    chase_widening,
     crit_class,
     crit_variants,
     doubles_ability_change,
@@ -354,7 +354,6 @@ from nuzline.engine.outcome import (
     hit_threshold_pair,
     moved_mask,
     pivot_view,
-    pursuit_armored,
     pursuit_chase,
     read_chance,
     roar_inputs,
@@ -364,6 +363,7 @@ from nuzline.engine.outcome import (
     self_lock,
     trace_copies,
     trace_sources,
+    widen_crit,
 )
 from nuzline.engine.outcome import (
     any_of as _any_of,
@@ -2051,6 +2051,21 @@ def outcome_laws(
     # Night Shade, Bide's unleash, Super Fang, the OHKO moves; damage.fixed_damage)
     rolled = damaging & ~_any_of(effect, UNROLLED_EFFECTS)
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
+    # Review 6: a battler that FIGHTs with another move than its chase move and may chase or run
+    # its own move (``outcome.chase_widening``: B = 4 switch chases, U-turn chases): the chase's
+    # hit (subscript_pursuit.s:8-12, CalcCrit and CalcDamage, a contact hit) is read beside the
+    # own move's, so its flags join the own move's; its crit, damage-class and hit-gate widenings
+    # follow below. ``chase_armor``: the crit cut over every battler it may chase.
+    chase_both, chase_armor, chase_moves = chase_widening(
+        tables, state, actions, moves, chase_fires
+    )
+    chase_damaging = (tables.move_category[chase_moves] != STATUS) & (
+        tables.move_power[chase_moves] != 0
+    )
+    chase_effect = tables.move_effect[chase_moves]
+    damaging = damaging | (chase_both & chase_damaging)
+    rolled = rolled | (chase_both & chase_damaging & ~_any_of(chase_effect, UNROLLED_EFFECTS))
+    contact = contact | (chase_both & ((tables.move_flags[chase_moves] & MoveFlag.CONTACT) != 0))
     # effects.hit_count: MULTI_HIT's count, or two for a HIT_TWICE move (Twineedle, B13-1).
     twice = ((tables.move_flags[moves].astype(_I32) & MoveFlag.HIT_TWICE) != 0) & (
         effect != _E.MULTI_HIT
@@ -2596,7 +2611,9 @@ def outcome_laws(
     # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO of a switcher or a U-turn user
     # subtracts a battler from a nonzero mask before the turn end's sort, which can set the rain
     # and sun bits (FCM 3.1); only where that write can happen (``acid_rain_reachable``).
-    acid = acid_rain_reachable(state, actions, uses_move, effect)
+    acid = acid_rain_reachable(state, actions, uses_move, effect) | acid_rain_reachable(
+        state, actions, uses_move & chase_both, jnp.where(chase_both, chase_effect, effect)
+    )
     weather_free = live & (
         jnp.any((uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter))
         | acid
@@ -2991,7 +3008,8 @@ def outcome_laws(
     off = jnp.zeros((fmt.B,), bool)
     reads = Reads(
         first=firsts,
-        hit_gated=off if loose else uses_move & (effect != _E.PURSUIT),
+        # A chase reads its crit and roll with no accuracy check (``chase_both``, review 6).
+        hit_gated=off if loose else uses_move & (effect != _E.PURSUIT) & ~chase_both,
         proc_gated=off if loose else uses_move & (chance != 0) & _any_of(effect, proc_effects),
         flinch_sure=off if loose else flinch_sure,
         fang=fang,
@@ -3058,6 +3076,7 @@ def outcome_laws(
     # The crit odds at the hit (outcome.crit_variants): a hit whose odds can change before its
     # CalcCrit draws its crit as a class of the CRIT_DRAWS values (_crit), not in damage classes.
     odds_variants, odds_possible = crit_variants(tables, state, actions, moves)
+    odds_possible = widen_crit(odds_possible, chase_both)  # the chase's odds too (review 6)
     if loose:
         # Every write variant; the trace columns (every stage's odds) stay where an armed Trace
         # can copy a crit ability (outcome.crit_variants): the brute force reads the odds the
@@ -3072,6 +3091,7 @@ def outcome_laws(
             & ~damage_inputs_can_change(tables, state, actions, firsts[t] == _foe(sides), moves)
             & ~(m["confusion_hit"][:, None] & (hit_index == 0))
             & ~lock[:, None]  # the table is the foe's; a lock may read the user's own
+            & ~chase_both[:, None]  # the table is the own move's, not the chase's (review 6)
             for t, m in enumerate(branches)
         ]
     )
@@ -3105,11 +3125,7 @@ def outcome_laws(
         # lock aimed at its user, whose step reads both on the hit's defender (effects.crit_blocked).
         no_crit=(
             (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
-            | jnp.where(
-                chase_fires,
-                pursuit_armored(tables, state),
-                armored(tables, state, actions, moves),
-            )
+            | chase_armor  # outcome.chase_widening: armored, or over every chased battler
         )
         & ~lock,
         secondary_chance=secondary_chance(tables, state, moves),
