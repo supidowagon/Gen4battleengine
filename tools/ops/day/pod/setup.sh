@@ -12,6 +12,8 @@
 # files.txt lines: "<test file, folder or node id> <ids per chunk> [A] [<GB>G]"; A = no -m filter;
 # <GB>G = a floor on the expected peak of every unit cut from that line. Each unit's expected peak
 # goes to out/<unit>.w: max(<GB>, bin/weights.py over bin/weights.txt); runner.sh gates on it.
+# The snapshot commit holds every file of code.tar, git-ignored ones too (bin/lane.sh lane_snapshot).
+# Writes the quick lane marker /work/_lane/<stream>.sha just before SETUP_END (bin/lane.sh).
 # Writes gate.env (GATE_VERSION, POD_SCRIPTS, POD_WEIGHTS for podcheck.sh) and run.env (the
 # knobs the exec-pod body's env set, for a runner restart) first.
 set -euxo pipefail
@@ -23,10 +25,11 @@ printf 'GATE_VERSION=%s\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\n' "${GATE_VERSION:-}" "
 # live in meta.env only), as "export NAME=<value>" lines, so a runner restart repeats them
 # (DAYBOX.md, Housekeeping, "Restart a runner"). A knob left unset is not written. Values are in
 # POSIX single quotes (a ' as '\''), so sh (dash, the restart body's shell) and bash read them alike.
-RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_S RUNNER_LOCK CLAIM_S CLAIMS CLAIM_MAX_S UNIT_MAX_S RESERVE_TOP RESERVE_FULL_GB RESERVE_PCT WORK DUR COLLECTP WATCH_HOURS WARMUP WARMUP_S NUZLINE_TEST_COMPILE_CACHE NUZLINE_HYPOTHESIS_PROFILE NUZLINE_REQUIRE_NODE CGROOT"
+RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_S RUNNER_LOCK CLAIM_S CLAIMS CLAIM_MAX_S UNIT_MAX_S RESERVE_TOP RESERVE_FULL_GB RESERVE_PCT WORK DUR COLLECTP WATCH_HOURS WARMUP WARMUP_S NUZLINE_TEST_COMPILE_CACHE NUZLINE_HYPOTHESIS_PROFILE NUZLINE_REQUIRE_NODE CGROOT CACHE_SEED_TIMEOUT CACHE_PUBLISH_TIMEOUT"
 for n in $RUN_ENV_NAMES; do if [ -n "${!n+x}" ]; then
   printf "export %s='%s'\n" "$n" "$(printf '%s' "${!n}" | sed "s/'/'\\\\''/g")"; fi; done > "$D/run.env"
 . "$D/bin/gate.sh"   # cgmem: container memory, cgroup v2 or v1
+. "$D/bin/lane.sh"   # lane_snapshot, lane_stream, lane_write_marker (DAYBOX.md "Quick lane")
 MARK="${MARK:-not slow and not fullset}"   # pack.sh writes MARK into meta.env; this default is the same
 echo $$ > "$D/setup.pid"; SETUP_DONE=0
 trap 'rc=$?; [ "$SETUP_DONE" = 1 ] || echo "SETUP_FAILED rc=$rc $(date +%s)"' EXIT
@@ -42,25 +45,38 @@ cgmem current > /dev/null || { echo "ERROR: no cgroup memory file (v2 memory.cur
   fi
 ) 9> /work/_decomp/.lock
 R="$D/repo"; rm -rf "$R"; mkdir "$R"; tar --no-same-owner -xf code.tar -C "$R"
-( cd "$R" && git init -q && git add -A && git -c user.name=ci -c user.email=ci@localhost commit -qm "snapshot $COMMIT" )
+lane_snapshot "$R" "$COMMIT"
 tar --no-same-owner -xJf tables.tar.xz -C "$R"; [ -f "$R/data/gen4_platinum_kaizo/manifest.json" ]
 mkdir -p "$R/external"; ln -sfn "/work/_decomp/$DECOMP" "$R/external/pokeplatinum"
-( cd "$R" && uv sync --frozen -q )
+( cd "$R" && uv sync --frozen -q --group rom )   # rom: ndspy, capstone, openpyxl (tests/tools/rom import them)
 # The damage oracle needs node + @smogon/calc; node is installed once per pod (DAYBOX.md bring-up
 # step 6). With NUZLINE_REQUIRE_NODE=1 (the nightly) a pod without npm fails the setup.
 if command -v npm >/dev/null && [ -f "$R/tools/smogon_calc/package-lock.json" ]; then ( cd "$R" && npm ci -s --prefix tools/smogon_calc )
 elif [ "${NUZLINE_REQUIRE_NODE:-}" = 1 ]; then echo "ERROR: npm or tools/smogon_calc/package-lock.json missing"; exit 1; fi
+# Compile cache seed from the network volume (bin/cache_sync.sh seed: once per pod and jax version),
+# only when /vol (CACHE_VOL; tests point it elsewhere) is a mountpoint; a pod without the volume runs exactly as before. A failed seed
+# only means cold compiles. The seed runs under timeout -k 30 CACHE_SEED_TIMEOUT (default 900 s;
+# a hung volume never holds the setup; a full seed takes 25-100 s): rc 124 or 137 prints
+# "WARNING: cache seed timed out"; the entries it renamed stay and the next seed goes on from them.
+if mountpoint -q "${CACHE_VOL:-/vol}" 2>/dev/null; then
+  SEED_T="${CACHE_SEED_TIMEOUT:-900}"; [[ "$SEED_T" =~ ^[1-9][0-9]*$ ]] || { echo "WARNING: CACHE_SEED_TIMEOUT '$SEED_T' is not a whole number: 900 used"; SEED_T=900; }
+  src=0; JV=$(cd "$R" && uv run --frozen python -c 'from nuzline.jaxcache import jax_version; print(jax_version())') || src=$?
+  if [ "$src" = 0 ]; then CACHE_JAXVER="$JV" CACHE_PY="$R/.venv/bin/python" timeout -k 30 "$SEED_T" bash "$D/bin/cache_sync.sh" seed || src=$?; fi
+  case "$src" in 0) ;;
+    124|137) echo "WARNING: cache seed timed out after $SEED_T s (rc $src: the volume did not answer); this run compiles what the pod lacks" ;;
+    *) echo "WARNING: cache seed failed (rc $src); this run compiles what the pod lacks" ;; esac
+fi
 rm -rf col out; mkdir -p col out
 grep -vE '^[[:space:]]*(#|$)' files.txt > col/list.txt   # the one list both steps below number
 awk '{print NR "|" $1 "|" ($3 == "A" ? "A" : "N")}' col/list.txt > col/jobs.txt
 collect_one() { IFS='|' read -r n f mk <<< "$1"; cd "$R"; ma=(-m "$MARK"); [ "$mk" = A ] && ma=()
   while b=$(cgmem current) || return 1; [ $(( b / 1000000000 )) -ge "$GATE_GB" ]; do sleep 10; done
-  uv run --frozen pytest --collect-only -q "${ma[@]}" -p no:cacheprovider "$f" > "$D/col/$n.out" 2>&1
+  uv run --frozen pytest --collect-only -q -rs "${ma[@]}" -p no:cacheprovider "$f" > "$D/col/$n.out" 2>&1
   echo $? > "$D/col/$n.rc"; grep '::' "$D/col/$n.out" > "$D/col/$n.ids" || true; }
 export -f collect_one cgmem; export D R MARK GATE_GB="${GATE_GB:-88}"
 xargs -d '\n' -P "${COLLECTP:-4}" -I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt
 (cd "$R" && uv run --frozen python - "$D") <<'PY'
-import sys, pathlib, collections
+import sys, pathlib, collections, re
 D = pathlib.Path(sys.argv[1]); sys.path.insert(0, str(D / "bin")); import weights
 table = weights.load(D / "bin" / "weights.txt"); q = []; summ = []; n = 0; seen = set()
 for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
@@ -69,7 +85,17 @@ for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
     by = collections.OrderedDict()
     for i in (D / "col" / f"{k}.ids").read_text().splitlines():
         if i.strip() and i not in seen: seen.add(i); by.setdefault(i.split("::")[0], []).append(i)
-    if not by: summ.append(f"{f} 0 collect_rc={rc}")
+    # A module that skipped itself at collection (a module-level pytest.importorskip: a package
+    # the pod lacks) collects nothing and is a collection failure, not a pass: one line
+    # "<module> 0 collect_rc=<rc> module_skipped" per such module (a folder line's too), which
+    # fails agg.sh's and status.sh's collect_rc=(0|5)$ check. The skip shows only as a
+    # "SKIPPED [n] <module>:<line>: <reason>" line of -rs. A line that collects nothing under the
+    # -m filter alone ("N deselected", no SKIPPED line) stays "<line> 0 collect_rc=5".
+    out = (D / "col" / f"{k}.out").read_text(errors="replace")
+    mods = list(dict.fromkeys(m.replace("\\", "/") for m in re.findall(r"(?m)^SKIPPED \[[0-9]+\] (.+?):[0-9]+: ", out)))
+    for m in mods:   # once per module, though several lines (a file and its folder) collect it
+        if m not in seen: seen.add(m); summ.append(f"{m} 0 collect_rc={rc} module_skipped")
+    if not by and not mods: summ.append(f"{f} 0 collect_rc={rc}")
     for tf, ids in by.items():
         summ.append(f"{tf} {len(ids)} collect_rc={rc}")
         for s in range(0, len(ids), chunk):
@@ -83,6 +109,10 @@ for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
 print("units", n, "ids", len(seen))
 PY
 cat collected.txt
+# Quick lane marker (DAYBOX.md "Quick lane"): this run's repo is now the stream's last synced state.
+RUNNAME=$(basename "$D")
+if STREAM=$(lane_stream "$RUNNAME"); then lane_write_marker "$STREAM" "$COMMIT" "$R" "${TABLES_KEY:-}" "${TREE:-}" || echo "WARNING: lane marker of stream $STREAM not written"
+else echo "WARNING: no stream in the run name $RUNNAME; no lane marker"; fi
 echo "SETUP_END $(date +%s)"
 nohup bash "$D/bin/runner.sh" > "$D/runner.log" 2>&1 < /dev/null &
 echo $! > "$D/runner.pid"; SETUP_DONE=1

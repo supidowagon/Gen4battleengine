@@ -175,3 +175,14 @@ while :; do
   sleep 10
 done
 date +%s > ALL.end; touch DONE
+# Network volume (only when /vol, or CACHE_VOL, is a mountpoint): publish the pod's new compile cache entries in
+# the background (bin/cache_sync.sh publish, log /work/<run>/cache_sync.log), after DONE so neither
+# DONE nor the beacon waits for it, under timeout -k 30 CACHE_PUBLISH_TIMEOUT (default 900 s): rc
+# 124 or 137 appends "cache_sync: WARNING: publish timed out after <s> s (rc <n>)" to the log (the
+# entries already renamed stay; the next publish copies the rest). Without /vol nothing runs.
+if mountpoint -q "${CACHE_VOL:-/vol}" 2>/dev/null; then
+  PUB_T="${CACHE_PUBLISH_TIMEOUT:-900}"; [[ "$PUB_T" =~ ^[1-9][0-9]*$ ]] || PUB_T=900
+  CACHE_PY="$D/repo/.venv/bin/python" setsid nohup bash -c 'r=0; timeout -k 30 "$1" bash "$2" publish || r=$?
+    case "$r" in 124|137) echo "cache_sync: WARNING: publish timed out after $1 s (rc $r)";; esac; exit "$r"' \
+    publish "$PUB_T" "$D/bin/cache_sync.sh" > "$D/cache_sync.log" 2>&1 < /dev/null 8>&- &
+fi

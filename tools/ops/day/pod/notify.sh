@@ -33,6 +33,16 @@ offer() { local s="$1" f="$2" c="$WATCH_D" rc; [ "$1" = f ] && c="$WATCH_F"
     [ "$rc" = 0 ] && { date +%s > "$N/taken_$s"; echo "$(date +%s) $s taken"; return 0; }
     sleep 10
   done; echo "$(date +%s) $s not taken before WATCH_HOURS"; return 1; }
+# A quick lane run (meta.env MODE=delta, bin/quick.sh): no runner and no first-failure beacon; the
+# run is over when quick.sh has written quick.rc (it writes it on every exit, a fallback too).
+if [ "${MODE:-}" = delta ]; then
+  while [ "$(date +%s)" -lt "$END" ]; do
+    if [ -f "$D/quick.rc" ]; then echo "$(date +%s) quick run over"; bash "$D/bin/fetch.sh" --pack
+      offer d "$D/results.tgz"; touch "$N/stop"; exit 0; fi
+    sleep 5
+  done
+  echo "$(date +%s) quick run not over before WATCH_HOURS"; touch "$N/stop"; exit 0
+fi
 FAILED=0; DEAD=0
 while [ "$(date +%s)" -lt "$END" ]; do
   S=$(bash "$D/bin/status.sh" 2>&1); L=$(printf '%s\n' "$S" | grep -m1 '^setup=')

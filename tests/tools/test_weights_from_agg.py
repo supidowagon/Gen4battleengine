@@ -48,7 +48,8 @@ def test_floor_is_1_25_x_or_plus_2_gb_and_1_1_x_from_40_gb(m, floor):
     (30, 10, 13),    # down to the floor
     (12, 10, 12),    # the floor (13) is above the line: it stays
     (13, 10, 13),
-    (10, 20, 20),    # a raise takes the measured peak
+    (10, 20, 22),    # a raise takes the measured peak + 2
+    (11, 10, 12),    # under m + 2: raised to it
     (82, 50, 55),    # 40 GB and more: x 1.1
     (82, None, 82),  # no fresh measurement: stays
 ])
@@ -60,9 +61,9 @@ def test_file_lines_take_the_max_with_floor_and_skip_hand_kept_units(tmp_path):
     w = _table(tmp_path, "# head\ntests/h.py::test_big 90 r0\ntests/f.py 7 r0\n", "tests/old.py 9 x\n")
     a1 = _agg(tmp_path / "out", "run-a", [
         "u_001 2 20000 10 0 tests/a.py::test_1",        # 20000 MiB -> 21 GB
-        "u_002 2 100 1 0 tests/b.py::test_1",           # 1 GB -> floor 4
+        "u_002 2 100 1 0 tests/b.py::test_1",           # 1 GB -> 4 GB at least, a first line at floor(4) = 6
         "u_003 1 80000 9 137 tests/h.py::test_big",     # only a hand-kept id: left out
-        "u_004 2 30000 9 0 tests/h.py::test_big",       # ids file adds an unlisted id: counts
+        "u_004 2 100000 9 0 tests/h.py::test_big",      # ids file adds an unlisted id, above the hand line: counts
         "u_005 2 50000 1 0 tests/f.py::test_1",         # file with a hand file-level line: not printed
         "u_006 1 0 1 0 tests/c.py::test_1",             # no measurement
     ], ids={"u_004": ["tests/h.py::test_big", "tests/h.py::test_small"]})
@@ -70,7 +71,26 @@ def test_file_lines_take_the_max_with_floor_and_skip_hand_kept_units(tmp_path):
     out = wfa.render(w, [a1, a2], [], report=[]).splitlines()
     # tests/f.py's units have only hand-kept ids: its hand line has no fresh measurement
     assert out[:4] == ["# head", "tests/h.py::test_big 90 r0", "tests/f.py 7 r0", wfa.MARK]
-    assert out[4:] == ["tests/a.py 32 run-b", "tests/h.py 32 run-a", "tests/old.py 9 x", "tests/b.py 4 run-a"]
+    # first lines at floor(m): h 105 -> 116, a 32 -> 40, b 4 -> 6
+    assert out[4:] == ["tests/h.py 116 run-a", "tests/a.py 40 run-b", "tests/old.py 9 x", "tests/b.py 6 run-a"]
+
+
+def test_a_unit_whose_peak_a_hand_kept_line_carries_leaves_the_file_line_alone(tmp_path):
+    w = _table(tmp_path, "tests/h.py::test_big[1] 33 r0\n", "")
+    mixed = {"u_001": ["tests/h.py::test_big[1]", "tests/h.py::test_a", "tests/h.py::test_b"]}
+    a = _agg(tmp_path / "out", "run-a", [
+        "u_001 3 30000 10 0 tests/h.py::test_big[1]",   # 32 GB, under the hand-kept 33: left out
+        "u_002 2 10000 10 0 tests/h.py::test_c",        # 11 GB: the file line, first written at floor 14
+    ], ids=mixed)
+    report: list[str] = []
+    assert wfa.render(w, [a], [], report=report).splitlines()[2:] == ["tests/h.py 14 run-a"]
+    assert report == ["changed: 0 down, 0 up",
+                      "EXCLUDED run-a u_001 tests/h.py: peak 32 GB at or under its hand-kept weight 33 GB"]
+    # a peak above the hand-kept weight, or a kernel kill (a lower bound), still counts
+    for rc, mib, want in (("0", 40000, "tests/h.py 47 run-b"), ("137", 30000, "tests/h.py 40 run-c")):
+        run = "run-b" if rc == "0" else "run-c"
+        b = _agg(tmp_path / "out", run, [f"u_001 3 {mib} 10 {rc} tests/h.py::test_big[1]"], ids=mixed)
+        assert wfa.render(w, [b], [], report=[]).splitlines()[2:] == [want]
 
 
 def test_an_agg_without_a_unit_table_uses_its_file_rows(tmp_path):
@@ -78,7 +98,7 @@ def test_an_agg_without_a_unit_table_uses_its_file_rows(tmp_path):
     d = tmp_path / "out" / "old" / "results"
     d.mkdir(parents=True)
     (d / "agg.txt").write_text(HEADER + "\ntests/q.py 3 3 0 0 0 0 0 0 9000 5 yes\n--- wall 5 s\n", encoding="utf-8")
-    assert wfa.render(w, [d / "agg.txt"], [], report=[]).splitlines()[1:] == ["tests/q.py 10 old"]
+    assert wfa.render(w, [d / "agg.txt"], [], report=[]).splitlines()[1:] == ["tests/q.py 13 old"]   # 10, floor 13
 
 
 def test_tracked_table_has_the_marker_and_loads():
@@ -111,7 +131,7 @@ def test_per_test_lines_come_from_1_id_units_that_passed_their_test(tmp_path):
     w = _table(tmp_path, "tests/p.py::test_h 80 run-a\ntests/p.py::test_k 80 r0 keep\ntests/p.py::test_z 80 r0\n",
                "tests/p.py 80 old\ntests/p.py::test_e 30 run-a\n")
     a1 = _agg(tmp_path / "out", "run-a", [
-        "u_001 5 76000 50 0 tests/p.py::test_a",        # 80 GB: the file line
+        "u_001 5 76000 50 0 tests/p.py::test_a",        # 80 GB: the file line goes to 82 (test_h's line drops)
         "u_002 1 8000 10 0 tests/p.py::test_a",         # passed alone at 9
         "u_003 1 3000 10 0 tests/p.py::test_b",         # skipped: not its cost
         "u_004 1 4000 10 1 tests/p.py::test_c",         # failed
@@ -119,7 +139,7 @@ def test_per_test_lines_come_from_1_id_units_that_passed_their_test(tmp_path):
         "u_006 1 5000 10 0 tests/p.py::test_h",         # hand-kept 80, alone at 6: down to 8
         "u_007 1 5000 10 0 tests/p.py::test_k",         # hand-kept 80 with "keep": stays
         "u_008 2 9000 10 0 tests/p.py::test_e",         # 2 ids: no measurement of e
-        "u_009 1 69000 10 0 tests/p.py::test_g",        # 73: floor 81 above the file line: its own line
+        "u_009 1 69000 10 0 tests/p.py::test_g",        # 73: floor 81, within 4 of the file line 82: no line
         "u_010 1 4000 10 0 tests/p.py::test_x[a b]",    # an id with a space: no line
         "u_011 1 4000 10 0 tests/p.py::test_y",         # no log: no line
         "u_012 1 5000 10 0 tests/p.py::test_z",         # hand-kept 80, alone at 6, but also killed:
@@ -135,21 +155,22 @@ def test_per_test_lines_come_from_1_id_units_that_passed_their_test(tmp_path):
     out = wfa.render(w, [a1, a2], [], report=report).splitlines()
     assert out[:4] == [f"{'tests/p.py::test_h':<74} 8 run-a", "tests/p.py::test_k 80 r0 keep", "tests/p.py::test_z 80 r0",
                        wfa.MARK]
-    assert out[4:] == ["tests/p.py 80 old",          # the cited run is not given: not lowered, kept
+    # u_001 holds test_h, whose hand line goes down to 8 in this pass: it no longer carries u_001's 80 GB,
+    # so u_001 counts toward the file line, raised to 80 + 2
+    assert out[4:] == ["tests/p.py 82 run-a",
                        "tests/p.py::test_a 13 run-b",       # the larger of two passed 1-id units (10), floor 13
                        "tests/p.py::test_d 68 run-a",
                        "tests/p.py::test_e 27 run-b",       # old line 30, measured 21 (a warnings count is a pass)
-                       "tests/p.py::test_g 81 run-a",
                        "tests/p.py::test_q 64 run-a"]
-    assert report == ["REDUCED tests/p.py::test_h 80 -> 8 GB", "REDUCED tests/p.py::test_a 80 -> 13 GB",
-                      "REDUCED tests/p.py::test_q 80 -> 64 GB", "REDUCED tests/p.py::test_d 80 -> 68 GB",
+    assert report == ["REDUCED tests/p.py::test_h 80 -> 8 GB", "REDUCED tests/p.py::test_a 82 -> 13 GB",
+                      "REDUCED tests/p.py::test_q 82 -> 64 GB", "REDUCED tests/p.py::test_d 82 -> 68 GB",
                       "REDUCED tests/p.py::test_e 30 -> 27 GB", "changed: 5 down, 1 up"]
     # the new table loads; a multi-id chunk weighs the max over its ids; a rerun changes nothing
     w2 = tmp_path / "w2.txt"
     w2.write_text("\n".join(out) + "\n", encoding="utf-8")
     t = wfa.weights.load(w2)
     assert wfa.weights.unit_weight(["tests/p.py::test_a", "tests/p.py::test_e"], t) == 27
-    assert wfa.weights.unit_weight(["tests/p.py::test_a", "tests/p.py::test_b"], t) == 80
+    assert wfa.weights.unit_weight(["tests/p.py::test_a", "tests/p.py::test_b"], t) == 82
     assert wfa.render(w2, [a1, a2], [], report=[]) == w2.read_text(encoding="utf-8")
 
 
@@ -203,14 +224,15 @@ def test_since_counts_only_the_named_commits_or_runs(tmp_path, monkeypatch):
     old = _agg(out, "old-run", ["u_001 2 30000 1 0 tests/a.py::t", "u_002 2 30000 1 0 tests/b.py::t"], commit="c1")
     new = _agg(out, "new-run", ["u_001 2 10000 1 0 tests/a.py::t", "u_002 2 10000 1 0 tests/b.py::t"], commit="c2")
     both = [old, new]
-    assert wfa.render(w, both, [], report=[]).splitlines()[1:] == ["tests/a.py 32 old-run", "tests/b.py 32 old-run"]
-    assert wfa.render(w, both, [], since=["b1"], report=[]).splitlines()[1:] == ["tests/a.py 11 new-run",
-                                                                                 "tests/b.py 11 new-run"]
-    assert wfa.render(w, both, [], since=["new-*"], report=[]).splitlines()[1:] == ["tests/a.py 11 new-run",
-                                                                                   "tests/b.py 11 new-run"]
+    # first lines at floor(m): 32 -> 40, 11 -> 14
+    assert wfa.render(w, both, [], report=[]).splitlines()[1:] == ["tests/a.py 40 old-run", "tests/b.py 40 old-run"]
+    assert wfa.render(w, both, [], since=["b1"], report=[]).splitlines()[1:] == ["tests/a.py 14 new-run",
+                                                                                 "tests/b.py 14 new-run"]
+    assert wfa.render(w, both, [], since=["new-*"], report=[]).splitlines()[1:] == ["tests/a.py 14 new-run",
+                                                                                   "tests/b.py 14 new-run"]
     # a per-file spec narrows that file only
     got = wfa.render(w, both, [], since=["*-run", "tests/b.py=b2"], report=[]).splitlines()[1:]
-    assert got == ["tests/a.py 32 old-run", "tests/b.py 11 new-run"]
+    assert got == ["tests/a.py 40 old-run", "tests/b.py 14 new-run"]
 
 
 def test_main_takes_since_and_prints_the_report(tmp_path, capsys):
@@ -221,3 +243,38 @@ def test_main_takes_since_and_prints_the_report(tmp_path, capsys):
     assert io.out.splitlines()[-1] == "tests/a.py 13 run-a"
     assert io.err.splitlines() == ["REDUCED tests/a.py 30 -> 13 GB", "changed: 1 down, 0 up"]
     assert wfa.main(["--bad", str(w), str(agg)]) == 2
+
+
+def test_since_file_gives_one_spec_per_line(tmp_path, capsys):
+    w = _table(tmp_path, "", "tests/a.py 30 run-a\n")
+    agg = _agg(tmp_path / "out", "run-a", ["u_001 2 9000 10 0 tests/a.py::test_1"])
+    specs = tmp_path / "since.txt"
+    specs.write_text("# comment\n\nnone-*\n", encoding="utf-8")
+    assert wfa.main(["--since-file", str(specs), str(w), str(agg)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "tests/a.py 30 run-a"   # no run counted
+    specs.write_text("# comment\n\n[r]un-a   # that run only\n", encoding="utf-8")
+    assert wfa.main(["--since-file", str(specs), str(w), str(agg)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "tests/a.py 13 run-a"
+
+
+def test_tracked_since_file_names_runs_and_commits_only():
+    for ln in (ROOT / "tools/ops/day/weights_since.txt").read_text(encoding="utf-8").splitlines():
+        spec = ln.split("#", 1)[0].strip()
+        if spec:
+            f, _, c = spec.rpartition("=")
+            assert (f.startswith("tests/") and c.isalnum()) or (not f and spec[0] == "[" and spec[2] == "]"), spec
+
+
+def test_an_old_per_test_line_the_file_line_absorbs_becomes_its_first_line_value(tmp_path):
+    # old per-test 13 stays 13 (m = 11, 11 + 2 is not above it); the file line rises 12 -> 13, which
+    # absorbs 13, so the test takes floor(11) = 14, the value a rerun would give a new line
+    w = _table(tmp_path, "", "tests/c.py 12 run-a\ntests/c.py::test_x 13 run-a\n")
+    a = _agg(tmp_path / "out", "run-a", ["u_001 3 10000 10 0 tests/c.py::test_y", "u_002 1 10000 10 0 tests/c.py::test_x"],
+             logs={"u_002": OK})
+    report: list[str] = []
+    out = wfa.render(w, [a], [], report=report)
+    assert out.splitlines()[1:] == ["tests/c.py 13 run-a", "tests/c.py::test_x 14 run-a"]
+    assert report == ["changed: 0 down, 2 up"]
+    w2 = tmp_path / "w2.txt"
+    w2.write_text(out, encoding="utf-8")
+    assert wfa.render(w2, [a], [], report=[]) == out
