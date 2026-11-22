@@ -66,7 +66,8 @@ of the turn:
   check: read only on a later turn.
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe moves
   first with a ``CONFUSE_FOE`` or ``SECONDARY_CONFUSE`` move and ``s`` is not confused
-  (counter 2-5; ``step._use_move``, step.py:496-499).
+  (counter 2-5; ``step._use_move``, step.py:496-499), or a disliked flavor berry can confuse
+  it before its check (``berry_confusion`` below).
 * ``duration[s]``: ``s``'s move is Taunt, Bind, ``CONFUSE_FOE``, ``SECONDARY_CONFUSE`` or
   inflicts sleep (effects.py:189, :286, :297, :307).
 * ``speed_tie``: the two orders ``order.action_order`` gives under ``speed_tie`` 0 and 1
@@ -168,7 +169,15 @@ of the turn:
   confused, holds a flavor berry it dislikes (``hooks.held_item_check`` after the foe's hit):
   the draw of ``step._use_move``'s confusion check. A berry eaten after ``s``'s check leaves the
   counter pending for a later turn. The same foe-first case makes ``confusion_hit[s]`` and
-  ``roll[s, 0]`` relevant (the "confusion_berry" path: the foe's move hits).
+  ``roll[s, 0]`` relevant (the "confusion_berry" path: the foe's move hits). Also (E2-ML-1)
+  when ``s``'s Pokemon is in the berry's range (``curHP <= maxHP / 2``) at the start and any
+  action comes before ``s``'s: that action's MoveEnd runs the held-item pass over every battler
+  (bcp.c:3973, battle_lib.c:4151-4165), an item, a switch or a missed move included (the
+  "confusion_berry_start" path, no condition), with the berry shown (``state.held_item``) or
+  its Klutz taken first, and its Own Tempo maybe gone by then (the foe's Skill Swap, Worry Seed
+  or Gastro Acid). ShowBattleMon runs that pass before the commands (bcp.c:256-268), so at a
+  turn start this needs a hidden berry or a paused state. At B = 4 the range is not tested (a
+  third battler's hit).
 * Nothing is relevant once the battle is over (``step`` returns the state,
   ``step.step_events``, step.py:1439).
 
@@ -424,6 +433,7 @@ class Reads(NamedTuple):
     band_move: jnp.ndarray  # bool[B, MAX_HITS]: the foe's Focus Band rolls at that hit
     band_self: jnp.ndarray  # it holds a Focus Band: a confusion self-hit rolls focus_band[s, 0]
     berry_by_foe: jnp.ndarray  # bool[2, B]: a foe move first can feed it a disliked flavor berry
+    berry_start: jnp.ndarray  # bool[2, B]: in range at the start, an earlier MoveEnd feeds it
     pending_own: jnp.ndarray  # it moves with a CONFUSION_PENDING counter at the start
     # G-30: it uses Present against a side with a Wonder Guard Pokemon: the draw picks the heal
     # path's SYSCTL_IGNORE_IMMUNITIES before the accuracy check, so a miss reads it too (the
@@ -756,7 +766,10 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     # A foe moving first can bring an unconfused holder of a disliked flavor berry to half HP
     # (hooks.held_item_check, G-5): its check then reads the berry's counter.
     berry_by_foe = b["uses_move"] & foe_first & b["berry_confuse"] & foes(b["uses_move"])
-    confusable = b["confused_own"] | confused_by_foe | berry_by_foe
+    # A holder in the berry's range at the start eats it at the MoveEnd of any action before its
+    # own (E2-ML-1, ``berry_start`` in ``outcome_laws``): read whatever that action did.
+    berry_start = b["berry_start"] & (foe_first | ~first_self)
+    confusable = b["confused_own"] | confused_by_foe | berry_by_foe | berry_start
     # A flinch roll is read only when the user moves first (subscript_flinch_mon.s: the
     # target has not moved, effects._flinch). A secondary status or confusion on a target
     # that cannot take it changes nothing (status eligibility), judged on the turn-start
@@ -787,9 +800,10 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         # Focus Band (G-1): the foe's on the move's hits, the side's own on a self-hit.
         "focus_band": b["focus_band"]
         | ((confusable & b["own_band"])[:, None] & (b["hit_index"] == 0)),
-        "berry_confusion": b["pending"] | berry_by_foe,
+        "berry_confusion": b["pending"] | berry_by_foe | berry_start,
         "chatter": b["chatter"],
         "berry_by_foe": berry_by_foe,
+        "berry_start": berry_start,
         # E3-B2-3: Conversion 2's pick for each recorded type the move can meet in this order.
         "conv2": b["conv2_use"][:, None]
         & jnp.where(foe_first[:, None], b["conv2_foe"], b["conv2_own"]),
@@ -2260,8 +2274,36 @@ def outcome_laws(
     # holder's Own Tempo before its berry's check (subscript_confuse.s:6; CheckAbility reads
     # Battler_Ability, battle_script.c:3168-3175), outside the pairing ``berry_by_foe`` follows.
     calm_now = calm_now | (b4 & (state.confusion == 0))
+    # The berry's check at an earlier action's MoveEnd (E2-ML-1): every action, a move, an item, a
+    # switch or a skipped one, ends in BattleControllerPlayer_MoveEnd (bcp.c:1973, :1984, :893),
+    # whose TriggerEffectOnSwitch (bcp.c:3973) runs SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS over
+    # every battler (battle_lib.c:4151-4165): TriggerHeldItemOnStatus eats a flavor berry at
+    # curHP <= maxHP / 2 (battle_lib.c:5121-5194). A holder already in range at the turn start
+    # eats it at the first such MoveEnd, whatever that action was or did (step._move_end_tail).
+    # ShowBattleMon runs the same pass before the commands (bcp.c:256-268, step._turn_start_items),
+    # so at a turn start a holder in range has its berry hidden (Battler_HeldItem: Klutz or
+    # Embargo, battle_lib.c:5352-5363; ``state.held_item``) or the state is a paused one. The
+    # foe's Skill Swap, Worry Seed or Gastro Acid before the MoveEnd can take a Klutz (Embargo
+    # stays to the turn's end) and an Own Tempo (subscript_confuse.s:6 reads Battler_Ability then);
+    # ``b4`` covers the third battlers'. At B = 4 a third battler's hit can bring the holder into
+    # range before an earlier MoveEnd, outside the foe pairing: the range is not tested there.
+    hp_now = state.hp[party(fmt, sides), mons].astype(_I32)
+    max_now = state.max_hp[party(fmt, sides), mons].astype(_I32)
+    in_range = (hp_now > 0) & (hp_now <= max_now // 2)
+    if fmt.B == 4:
+        in_range = jnp.ones((fmt.B,), bool)
+    taken_by_foe = foes(uses_move & _any_of(effect, (_E.SKILL_SWAP, _E.WORRY_SEED, _E.GASTRO_ACID)))
+    ability_goes = taken_by_foe | b4
+    klutz_goes = (
+        ability_goes
+        & (battler_ability(state, sides, mons) == AbilityId.KLUTZ)
+        & (state.embargo[sides] == 0)
+    )
+    berry_shown = (held_items(state) != 0) | klutz_goes
+    calm_start = calm_now | ((state.confusion == 0) & ability_goes)
     if loose:
         calm_now = jnp.ones((fmt.B,), bool)
+        calm_start = berry_shown = in_range = calm_now
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
     kings_rock = outcome_kings_rock_chance(tables, state, actions, moves)
     kings_move = (tables.move_flags[moves] & MoveFlag.KINGS_ROCK) != 0
@@ -2357,6 +2399,7 @@ def outcome_laws(
         "focus_band": band_move,
         "own_band": uses_move & own_band,
         "berry_confuse": uses_move & own_berry & calm_now,
+        "berry_start": uses_move & own_berry & berry_shown & calm_start & in_range,
         "pending": uses_move & (state.confusion == CONFUSION_PENDING),
     }
 
@@ -2958,6 +3001,7 @@ def outcome_laws(
         band_move=base["focus_band"],
         band_self=base["own_band"],
         berry_by_foe=jnp.stack([m["berry_by_foe"] for m in branches]),
+        berry_start=jnp.stack([m["berry_start"] for m in branches]),
         pending_own=base["pending"],
         present_guard=off
         if loose
@@ -3871,6 +3915,11 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         if bool(reads.berry_by_foe[t, s]):
             for elem in (*selfs, ("berry_confusion", (s,))):
                 plan.path(elem, "confusion_berry", *move_conds(foe))
+        # E2-ML-1: in the berry's range at the start, it eats the berry at any earlier action's
+        # MoveEnd (an item, a switch, a miss): a path with no condition on that action.
+        if bool(reads.berry_start[t, s]):
+            for elem in (*selfs, ("berry_confusion", (s,))):
+                plan.path(elem, "confusion_berry_start")
 
     # The first mover's flinch roll: Thunder Fang's own element, else its secondary.
     if bool(reads.fang[first]):
