@@ -2983,6 +2983,16 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
     (bs:7286-7312) adds every lock move. Recharge (80) is left out: its turn prints no attack message
     (subscript_recharging.s, bcp.c:2514-2522). Tests: `test_a_sketch_can_copy_a_party_move_a_foe_copycat_transformed_into`,
     `test_a_sketch_can_copy_a_lock_move_a_foe_called`, `test_a_metronome_called_lock_move_is_graded_for_the_sketch_holder`.
+  - SHOULD 2 a gained Metronome's calls (`gained_calls`) leave `extra`: they go to the holder's per-mon lines and, as
+    the new `extra_calls` of `check_opponent` / `_check_trainer`, to the terrain and ROM-change lines only, as a known
+    Metronome's `fight_calls` do. `foe_moves` (the AI's Mimic / Transform pool) and `exp_refusals`' `fight_moves` no
+    longer read them: Mimic copies `movePrevByBattler` (DEFENDER_LAST_MOVE, common.h:19; bs:4481), which is
+    `moveTemp`, the Metronome itself (bcp.c:3945-3946), refused by Move_CanBeMimicked (lib.c:7182-7191); Transform
+    copies slots (bs:5346-5348). The one reachable call, a lock move (next turn's `moveTemp`, bcp.c:1885-1888), joins
+    `extra` through `locked_calls` over the player's moves and Sketch copies (a known invoker included). Width: the
+    lock moves' read rows sum to at most 6 (`read_bounds.READ_BOUNDS`, effects in `LOCK_EFFECTS`; the table's most is
+    18), so 4 * 2**6 stays far under `WIDTH_CAP` 131072; the removed gained calls could reach 18 reads. Test:
+    `test_a_gained_metronomes_calls_stay_on_the_holders_lines`.
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

@@ -470,6 +470,43 @@ def test_a_sketched_metronome_calls_are_graded_for_the_holder(tables, names):
     )
 
 
+def test_a_gained_metronomes_calls_stay_on_the_holders_lines(tables, names, monkeypatch):
+    """A sketched Metronome's calls are the holder's: the fight's terrain check reads them
+    (``extra_calls``), but the AI's Mimic and Transform pool (``foe_moves``) does not. Mimic
+    copies ``movePrevByBattler`` (battle_script.c:4481), the Metronome itself (bcp.c:3945-3946),
+    which Move_CanBeMimicked refuses (battle_lib.c:7182-7191). Only a called lock move, its
+    next turn's ``moveTemp`` (bcp.c:1885-1888), joins that pool."""
+    from dataclasses import replace
+
+    from nuzline.engine import coverage
+    from tests.engine.helpers import roark_party, roark_trainer
+
+    seen: dict[str, list[int]] = {}
+    terrain = coverage.terrain_refusal
+    pool = coverage.foe_moves
+
+    def _terrain(tables_, names_, trainer, moves):
+        seen["terrain"] = list(moves)
+        return terrain(tables_, names_, trainer, moves)
+
+    def _pool(tables_, player, opp_, extra=()):
+        seen["pool"] = list(extra)
+        return pool(tables_, player, opp_, extra)
+
+    monkeypatch.setattr(coverage, "terrain_refusal", _terrain)
+    monkeypatch.setattr(coverage, "foe_moves", _pool)
+    smeargle = _slow_smeargle(names, "Tackle")
+    gyro, outrage = names.move("Gyro Ball"), names.move("Outrage")
+    plain = roark_party(names)
+    for calls in ((), (gyro,)):
+        coverage.check_opponent(tables, names, roark_trainer(), plain, 0, [smeargle], (), calls)
+        assert (gyro in seen["terrain"]) == bool(calls)
+    opp = list(plain)
+    opp[0] = replace(opp[0], moves=(names.move("Metronome"), names.move("Mimic"), 0, 0))
+    coverage.check_coverage(tables, names, [smeargle], roark_trainer(), opp, 0)
+    assert gyro not in seen["pool"] and outrage in seen["pool"]
+
+
 @pytest.mark.parametrize("transform", [True, False])
 def test_a_sketch_can_copy_a_party_move_a_foe_copycat_transformed_into(tables, names, transform):
     """A foe's Copycat calls ``movePrev`` when ``Move_CanBeMetronomed`` allows it

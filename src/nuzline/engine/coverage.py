@@ -1065,7 +1065,10 @@ def _check_trainer(
     trainer: Trainer,
     specs: Sequence[PokemonSpec],
     extra_moves: Sequence[int] = (),
+    extra_calls: Sequence[int] = (),
 ) -> None:
+    """``extra_moves``: the player's moves beyond its known ones; ``extra_calls``: the calls of a
+    Metronome the player gains in battle, read here only by the terrain and ROM-change lines."""
     if POLICY.get(names.game) is None:
         c.add(
             Support.NONE,
@@ -1080,9 +1083,12 @@ def _check_trainer(
     c.add(support, what, "battle format")
     _check_kaizo_fields(c, names, trainer)
     if names.game == KAIZO:
-        for label in rom_change_refusals(tables, names, trainer, specs, extra_moves):
+        for label in rom_change_refusals(
+            tables, names, trainer, specs, [*extra_moves, *extra_calls]
+        ):
             c.add(Support.NONE, rom_change_line(label), "ROM change")
-    moves = [m for s in specs for m in s.moves] + list(extra_moves) + fight_calls(tables, specs)
+    moves = [m for s in specs for m in s.moves] + [*extra_moves, *extra_calls]
+    moves += fight_calls(tables, specs)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
     # A bag item acts by its party params (engine.bag, E1 rulings G-43, F-15).
@@ -1169,15 +1175,17 @@ def check_opponent(
     start_condition: int,
     player: Sequence[PokemonSpec] = (),
     extra_moves: Sequence[int] = (),
+    extra_calls: Sequence[int] = (),
 ) -> CoverageReport:
     """The trainer's side of ``check_coverage``: its party, bag, AI flags and the weather
-    lines (``player``, when given, and ``extra_moves``, the player's learnable moves, only
-    widen the Kaizo ROM-change conditions and the terrain check). It runs no
+    lines (``player``, when given, ``extra_moves``, the player's learnable and Sketch moves, and
+    ``extra_calls``, a gained Metronome's calls, only widen the Kaizo ROM-change conditions and
+    the terrain check; ``extra_moves`` also joins the AI's Mimic and Transform pool). It runs no
     ``ai_refusals``: those depend on the player's party, so a caller that needs them runs
     them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp)
-    _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
+    _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves, extra_calls)
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
     if not unknown_start(trainer):
@@ -1264,7 +1272,13 @@ def check_coverage(
     ]
     # A Metronome gained in battle (a Sketch copy or a level-up move) calls for its holder too:
     # any move ``Move_CanBeMetronomed`` allows (battle_script.c:4535-4562), its known moves at the
-    # call unknown here, so none excluded (the superset).
+    # call unknown here, so none excluded (the superset). The calls are the holder's: they go to
+    # its per-mon lines and to the fight's terrain and ROM lines (``extra_calls``), as a known
+    # Metronome's do (``fight_calls``), not into ``extra``. A call is never ``movePrevByBattler``,
+    # which Mimic copies (DEFENDER_LAST_MOVE, battle_script.c:4481): that is ``moveTemp``, the
+    # Metronome itself (bcp.c:3945-3946), which Mimic refuses (Move_CanBeMimicked, battle_lib.c:
+    # 7182-7191); Transform copies slot moves (:5346-5348). Only a called lock move is its next
+    # turn's ``moveTemp`` (``locked_calls``), so those join ``extra`` for the AI's Mimic pool.
     effect = np.asarray(tables.move_effect)
     gained_calls = [
         metronome_calls(tables, _NO_MOVES)
@@ -1272,7 +1286,11 @@ def check_coverage(
         else []
         for i in range(len(player))
     ]
-    extra = sorted({m for moves in (*learnable, *sketched, *gained_calls) for m in moves})
+    own = [m for moves in sketched for m in moves] + party_moves
+    extra = sorted(
+        {m for moves in (*learnable, *sketched) for m in moves} | {*locked_calls(tables, own)}
+    )
+    extra_calls = sorted({m for moves in gained_calls for m in moves})
     if chatot_cry is None:
         for slot, mon in enumerate(player):
             if mon.species == SPECIES_CHATOT and MOVE_CHATTER in (*mon.moves, *learnable[slot]):
@@ -1282,7 +1300,9 @@ def check_coverage(
                     "confusion chance needs the save's Chatot cry",
                     "chatter",
                 )
-    theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
+    theirs = check_opponent(
+        tables, names, trainer, opp, start_condition, player, extra, extra_calls
+    )
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
     c.report.level = min(c.report.level, theirs.level)
