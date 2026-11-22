@@ -123,6 +123,25 @@ def selected_move(
     return jnp.where(locked, lock_move, move), struggling
 
 
+def fight_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
+    """``int32``: the move ``side``'s move action runs (moveTemp), ``selected_move``'s with
+    BattleControllerPlayer_FightCommand's turn-start Encore (bcp.c:1866-1873): a battler whose
+    encored slot holds the encored move runs it, whatever it chose or is locked into
+    (``moveLockedInto`` comes after, :1885-1888), unless it Struggles (:1866-1868; a locked
+    battler never does unless the pause fixed it, ``step._execute_actions``). The same takeover
+    as ``step._use_move``'s ``encored_now`` (E2-ML-2: a lock, Bide's say, under an Encore of
+    another move). The order keeps ``selected_move`` (CalcTurnOrder)."""
+    fmt = format_of(state)
+    move, struggling = selected_move(tables, state, side, action)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    struggles = jnp.where(paused, struggling, struggling & (locked_slot(state, side) < 0))
+    mon = state.active[side]
+    encored = state.encore_move[side].astype(_I32)
+    slot_move = state.moves[party(fmt, side), mon, state.encore_slot[side].astype(_I32)]
+    holds = (encored != 0) & (slot_move.astype(_I32) == encored)
+    return jnp.where(holds & ~struggles, encored, move).astype(_I32)
+
+
 def terrain_index(state: BattleState) -> jnp.ndarray:
     """``int32``: the row of the terrain tables (``ids.TERRAIN_MOVES``, ``TERRAIN_TYPES``) the
     battle reads: ``min(terrain, TERRAIN_SPECIAL)`` (``BtlCmd_GetTerrainMove``,
@@ -492,10 +511,10 @@ def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> 
     rows where it did not happen (``enumerate.call_consistent``)."""
     actions = jnp.asarray(actions, _I32)
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    chosen = selected_move(tables, state, side, actions[side])[0]
+    chosen = fight_move(tables, state, side, actions[side])
     kind = call_kind(tables, chosen)
     calls = (kind == CALL_SLEEP_TALK) | (kind == CALL_METRONOME) | (kind == CALL_ASSIST)
-    foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
+    foe_chosen = fight_move(tables, state, foe, actions[foe])
     foe_can = uses_move[foe] & can_call_effect(tables, state, foe, foe_chosen, EffectId.GRAVITY)
     return ~fcm.gravity_on(state) & uses_move[side] & calls & foe_can
 
@@ -565,7 +584,7 @@ def takeover_possible(tables: Tables, state: BattleState, actions, side, foe) ->
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     chosen, struggling = selected_move(tables, state, side, actions[side])
-    foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
+    foe_chosen = fight_move(tables, state, foe, actions[foe])
     fails = encore_slot_of(tables, state, side)[0]
     foe_can = uses_move[foe] & can_call_encore(tables, state, foe, foe_chosen)
     return (
@@ -599,12 +618,12 @@ def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray,
 def used_move(
     tables: Tables, state: BattleState, side, action, call=None, move_prev=None
 ) -> jnp.ndarray:
-    """``int32``: ``called_move`` of ``selected_move``: the move whose accuracy, crit odds,
+    """``int32``: ``called_move`` of ``fight_move``: the move whose accuracy, crit odds,
     damage and effect a move action draws for. ``call`` (``int[2]``, ``Outcome.call``) resolves
     an invoker (``invoked_move``; ``move_prev`` for Copycat, default ``state.move_prev``); one
     whose call finds no move uses itself (it fails). Without ``call`` an invoker uses itself:
     the heuristics' view (``search.playout``), never a chance law's."""
-    chosen = selected_move(tables, state, side, action)[0]
+    chosen = fight_move(tables, state, side, action)
     if call is None:
         return called_move(tables, state, chosen)
     invoked = invoked_move(tables, state, side, chosen, jnp.asarray(call)[side], move_prev)
@@ -619,13 +638,13 @@ def used_moves(
     action) makes it the foe's chosen move (moveTemp, UpdateMoveBuffers bcp.c:3936-3942; a foe
     whose attack message did not show leaves MOVE_NONE and Copycat fails, reading nothing),
     else the turn-start ``state.move_prev``. ``chosen`` (``int32[2]``, default each action's
-    ``selected_move``) overrides the moveTemp of each side: a takeover variant's encored move
+    ``fight_move``, E2-ML-2) overrides the moveTemp of each side: a takeover variant's encored move
     (ruling B11-1), with ``state`` its ``encored_state``."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     if chosen is None:
         chosen = jnp.stack(
-            [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
+            [fight_move(tables, state, side, actions[side]) for side in range(fmt.B)]
         )
     chosen = jnp.asarray(chosen, _I32)
     after_foe = jnp.asarray(after_foe, bool)

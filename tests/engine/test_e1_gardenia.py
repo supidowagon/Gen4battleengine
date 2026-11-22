@@ -36,7 +36,7 @@ from nuzline.engine.ids import (
     Status,
     Weather,
 )
-from nuzline.engine.order import MOVE_ACTIONS
+from nuzline.engine.order import MOVE_ACTIONS, fight_move
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
@@ -317,6 +317,49 @@ def test_a_berry_in_range_boards_are_mask_sound(tables, names):
     )
     for acts in (potion, leer):
         _assert_mask_sound(tables, s, np.asarray(acts), arbitrary, 0)
+
+
+def _encored_lock_board(tables, names):
+    """E2-ML-2 (test_enumerate.py::test_mask_sound_with_a_trainer_item falsifier, explore seed 7):
+    the player's lead locked into Bide (bide_turns 2: it stores this turn) and encored into
+    Scratch, which its encored slot holds; the foe uses a bag Potion. FightCommand runs the
+    encored move before the lock (bcp.c:1869-1873 before :1885-1888), so Scratch hits with its
+    crit and roll."""
+    n = names
+    s = roark_state(tables, names, player_moves=["Supersonic", "Scratch"])
+    scratch = n.move("Scratch")
+    s = s._replace(
+        locked_move=s.locked_move.at[0].set(n.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(2),
+        encore_move=s.encore_move.at[0].set(scratch),
+        encore_slot=s.encore_slot.at[0].set(1),
+        encore_turns=s.encore_turns.at[0].set(2),
+        last_move=s.last_move.at[0].set(scratch),
+    )
+    return s, A(0, FIRST_ITEM_ACTION, s, names)
+
+
+def test_a_turn_start_encore_runs_over_a_lock_in_the_laws(tables, names):
+    s, acts = _encored_lock_board(tables, names)
+    assert int(fight_move(tables, s, 0, 0)) == names.move("Scratch")
+    laws, drawn = _drawn(tables, s, acts)
+    assert bool(laws.relevant.crit[0, 0]) and bool(laws.relevant.roll[0, 0])
+    assert np.asarray(drawn.roll)[:, 0, 0].all()
+    # Without the Encore the lock runs Bide, which stores this turn: no crit, no roll.
+    bare = s._replace(encore_move=s.encore_move.at[0].set(0))
+    laws = jax.tree.map(np.asarray, _laws(tables, bare, acts))
+    assert not bool(laws.relevant.roll[0, 0])
+
+
+@pytest.mark.slow  # one mask-sound step of the board
+def test_a_turn_start_encore_over_a_lock_is_mask_sound(tables, names):
+    from tests.engine.test_enumerate import _assert_mask_sound
+
+    s, acts = _encored_lock_board(tables, names)
+    arbitrary = O._replace(
+        crit=jnp.ones((2, MAX_HITS), jnp.int8), roll=jnp.zeros((2, MAX_HITS), jnp.int8)
+    )
+    _assert_mask_sound(tables, s, np.asarray(acts), arbitrary, 0)
 
 
 def test_own_tempo_and_safeguard_stop_the_berry_confusion(tables, names):

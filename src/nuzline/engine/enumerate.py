@@ -312,6 +312,7 @@ from nuzline.engine.order import (
     dislikes_berry,
     effective_speed,
     encored_state,
+    fight_move,
     gravity_possible,
     gravity_state,
     invoked_move,
@@ -1686,7 +1687,7 @@ def damage_inputs_can_change(
     # ``moves`` from outcome_laws).
     if moves is None:
         chosen = jnp.stack(
-            [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
+            [fight_move(tables, state, side, actions[side]) for side in range(fmt.B)]
         )
         moves = jnp.stack([called_move(tables, state, chosen[side]) for side in range(fmt.B)])
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
@@ -1986,7 +1987,10 @@ def outcome_laws(
     # A takeover variant (B11-1): the action runs the encored move (moveTemp) from the start.
     taken = jnp.zeros((fmt.B,), bool) if taken is None else jnp.asarray(taken, bool)
     took_state = encored_state(tables, state, taken)
-    chosen = jnp.where(taken, state.last_move.astype(_I32), picked)
+    # FightCommand's turn-start Encore runs the encored move over the chosen or locked one
+    # (order.fight_move, E2-ML-2); ``picked`` stays the order's (CalcTurnOrder's priority).
+    fought = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
+    chosen = jnp.where(taken, state.last_move.astype(_I32), fought)
     kinds = call_kind(tables, chosen)
     # Copycat's, Me First's and Mirror Move's calls follow the order (the foe's move before them,
     # or not).
@@ -4443,9 +4447,7 @@ def call_consistent(
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     taken = jnp.zeros((fmt.B,), bool) if taken is None else jnp.asarray(taken, bool)
-    chosen = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
+    chosen = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     fight = (state.over == 0) & ~is_switch(actions) & ~is_item(actions) & ~taken
     kinds = call_kind(tables, chosen)
     talk = fight & (kinds == CALL_SLEEP_TALK)
@@ -4650,9 +4652,7 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     state, actions = pivot_view(tables, state, actions)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
-    chosen = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
+    chosen = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     kinds = jnp.where(uses_move, call_kind(tables, chosen), CALL_NONE)
     foe_called = foes(
         jnp.stack([called_move(tables, state, chosen[side]) for side in range(fmt.B)])

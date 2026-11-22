@@ -109,6 +109,7 @@ from nuzline.engine.order import (
     disabled_state,
     dislikes_berry,
     encored_state,
+    fight_move,
     gravity_possible,
     gravity_state,
     is_item,
@@ -2610,7 +2611,7 @@ def replacement_possible(tables: Tables, state: BattleState, actions, side, foe)
     by the caller (doubles rule 1; B11-11). Over-approximate."""
     actions = jnp.asarray(actions, _I32)
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    chosen = selected_move(tables, state, side, actions[side])[0]
+    chosen = fight_move(tables, state, side, actions[side])
     talk = uses_move[side] & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & uses_move[foe]
     return (
         talk
@@ -2698,9 +2699,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         if pairs
         else jnp.zeros((fmt.B, 0), _I32)
     )
-    chosen = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
+    # The move each action runs: a turn-start Encore over the chosen or locked one (E2-ML-2).
+    chosen = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     call = _draw_calls(key, tables, state, chosen)
     # Nature Power and the invokers draw for their called move (order.called_move, used_moves):
     # its accuracy, crit odds, effect chance and secondary effect are the called move's. Copycat's
