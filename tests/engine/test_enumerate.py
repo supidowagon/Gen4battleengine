@@ -52,7 +52,7 @@ from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
 from tests.engine.helpers import BATCH, A, roark_real_state, roark_state, sample_rows, step_batch
 from tests.search.fixtures import shinx_vs_cranidos, spike_cannon_root, spore_1v1
-from tests.strategies import any_outcome, legal_action_pair, outcome_law_state
+from tests.strategies import any_outcome, legal_action_pair, outcome_law_state, settle_traces
 
 CHUNK = BATCH  # the suite's one padded row count: one step program for every file
 EMPTY = Outcome(*(np.asarray(f) for f in empty_outcome()))
@@ -842,7 +842,8 @@ def order_state(draw, tables, names) -> BattleState:
         if (a["status"][1, m1] == Status.PARALYSIS) != para0:
             a["status"][1, m1] = a["status"][0, m0] if para0 else Status.NONE
             a["status_counter"][1, m1] = a["status_counter"][0, m0] if para0 else 0
-    return BattleState(**{name: np.asarray(a[name]) for name in BattleState._fields})
+    s = BattleState(**{name: np.asarray(a[name]) for name in BattleState._fields})
+    return settle_traces(tables, s)  # the Trace invariant (STATE.md)
 
 
 @st.composite

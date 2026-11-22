@@ -1825,9 +1825,12 @@ def damage_inputs_can_change(
     # weather.
     src = trace_sources(tables, state, actions, moves)
     foe_action = foe_action | (live & jnp.any(trace_copies(tables, state, actions, src=src)))
-    # At B = 4 any battler's ability mover can change the hit's ability factors too (``foe_move``
-    # reads the foe's move alone): outcome.doubles_ability_change.
-    foe_action = foe_action | (live & doubles_ability_change(tables, state, actions, moves, src))
+    # At B = 4 any battler's ability mover, a Trace firing at any battler's MoveEnd or a called
+    # Roar's drag (outcome.doubles_ability_change) can change the hit's ability factors or its
+    # target before it, whatever the order: a third battler moving first is in neither
+    # ``foe_first`` nor ``foe_move`` (Gastro Acid, subscript_suppress_target_ability.s:10; Skill
+    # Swap, subscript_exchange_abilities.s:21-24), so every hit is loose then.
+    doubles = live & doubles_ability_change(tables, state, actions, moves, src)
 
     # A White Herb resets its holder's lowered stages to 0 (hooks.held_item_check,
     # battle_lib.c:4875-4887). The hit reads two stages only, the attacker's Attack / Sp. Atk
@@ -1916,7 +1919,9 @@ def damage_inputs_can_change(
 
     later = jnp.arange(MAX_HITS)[None, :] >= 1
     before = jnp.asarray(foe_first, bool) & (foe_action | items)
-    return own_pre_move[:, None] | before[:, None] | (later & (own_hits | items)[:, None])
+    return (
+        (own_pre_move | doubles)[:, None] | before[:, None] | (later & (own_hits | items)[:, None])
+    )
 
 
 def outcome_laws(
@@ -2073,8 +2078,12 @@ def outcome_laws(
 
     def handed(abilities) -> jnp.ndarray:
         """``bool[B]``: at B = 4 (``b4``), another battler on the field holds one of
-        ``abilities`` raw, which a mover can hand to this one."""
-        return b4 & jnp.any(not_self & _any_of(raw_now, abilities)[None, :], axis=1)
+        ``abilities`` raw, which a mover can hand to this one, or a living party member off the
+        field does, which a Roar's drag can put in this slot or beside it
+        (``trace_sources.bench_live``)."""
+        field = jnp.any(not_self & _any_of(raw_now, abilities)[None, :], axis=1)
+        bench = jnp.any(src.bench_live & _any_of(src.bench_raw, abilities))
+        return b4 & (field | bench)
 
     def gains(abilities) -> jnp.ndarray:
         return (
@@ -2247,6 +2256,10 @@ def outcome_laws(
     # subscript_confuse.s:6: the holder's own Own Tempo (CheckAbility) stops a berry's confusion
     # (hooks.berry_confuse, H-2).
     calm_now = (state.confusion == 0) & (battler_ability(state, sides, mons) != AbilityId.OWN_TEMPO)
+    # At B = 4 (``b4``) a third battler's Gastro Acid, Worry Seed or Skill Swap can take the
+    # holder's Own Tempo before its berry's check (subscript_confuse.s:6; CheckAbility reads
+    # Battler_Ability, battle_script.c:3168-3175), outside the pairing ``berry_by_foe`` follows.
+    calm_now = calm_now | (b4 & (state.confusion == 0))
     if loose:
         calm_now = jnp.ones((fmt.B,), bool)
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
@@ -2481,6 +2494,12 @@ def outcome_laws(
     # (BtlCmd_TryWhirlwind fails at eligibleMons <= 1, battle_script.c:5285-5297, before
     # any drag).
     dragged = foes(roar & (roar_bench >= 1))
+    if fmt.B == 4:
+        # Any opposing battler's Roar can drag this side's Pokemon (its target is the chosen
+        # one, step.py:5677-5680, not ``foe``); over-approximate: whatever the bench and anchor.
+        across = side_of(sides)[:, None] != side_of(sides)[None, :]
+        any_roar = uses_move & (effect == _E.ROAR)
+        dragged = dragged | jnp.any(across & any_roar[None, :], axis=1)
     if loose:
         # The brute force: both draws whenever the side uses Roar, whatever the levels and the
         # bench (the pick's law is then over max(bench, 1) values), and every living party
