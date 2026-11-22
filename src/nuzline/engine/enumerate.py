@@ -3186,6 +3186,9 @@ def _starf_reads(
     rows = party(fmt, sides)
     live = state.over == 0
     switch = is_switch(actions)
+    # ``pinched`` halves the param for the raw Gluttony: for an active holder under Gastro Acid
+    # (``Battler_Ability`` none, battle_lib.c:3088-3093, :5273-5278) it is a superset of the
+    # eat's test, a sound over-read of relevance (review 4, must 1).
     holds, pinched = starf_holders(tables, state)
     holds_b, pinched_b = holds[rows], pinched[rows]  # [B, SLOTS]
     slots = jnp.arange(state.hp.shape[1])[None, :]
@@ -3254,6 +3257,19 @@ def _starf_reads(
     gain, fresh_gain = _starf_gain(
         tables, state, actions, uses_move, effect, params, moves, dragged, armed_before
     )
+    # d's own held stat pinch berry (or Kaizo's Berserk Gene), +1 (``hooks._raise_stat``;
+    # battle_lib.c:4773-4836, subscript_held_item_raise_stat.s), eaten before a Starf Berry d does
+    # not hold: a foe's Fling reads its draw at TryFling (effect_script_0233.s:7, lib.c:6110-6127),
+    # after d's earlier move whose recoil puts d at its pinch and whose AFTER_MOVE_EFFECT_
+    # ATTACKER_ITEM eats the berry (bcp.c:3684-3689; subscript_recoil_1_3.s:14 is UPDATE_HP with
+    # no item check); or d's Pluck / Bug Bite of a foe's Starf Berry after a faster foe's hit
+    # put d at its pinch and AFTER_MOVE_EFFECT_DEFENDER_ITEM ate it (bcp.c:3691-3696). Only the
+    # flung and plucked paths: a holder of that item holds no Starf Berry (review 4, must 2).
+    field_item = jnp.where(switch, state.item[rows, incoming], state.item[rows, state.active])
+    own_pinch = _any_of(
+        tables.item_effect[field_item].astype(_I32), (ItemId.PINCH_BERRY, ItemId.BERSERK_GENE)
+    )
+    gain = gain + ((flung | plucked) & own_pinch).astype(_I32)
     jump = jnp.any(uses_move & _any_of(effect, _STARF_STAGE_JUMPS))
     turn_loose = jump | (highest + gain >= STAGE_MAX) | open_
     # Indices 2 and 3: battler d's eats this turn (F-O3), counted: ``own`` the same battler's,
@@ -3339,6 +3355,11 @@ def _starf_reads(
     # replacement's ShowBattleMon checks every battler's item (battle_lib.c:4151-4165). That eat
     # reads the whole draw: its count is that of the turn's end, below 5 where a stat can reach +6
     # (the gains, an armed Trace copying the newcomer's Download, +1, and +2 per earlier eat).
+    # Not modelled, so not here: Liquid Ooze (no ``AbilityId`` member; step.py's unsupported list)
+    # is a second way. The MON_COND loop is battler-major (bcp.c:1302-1310, :1720-1724), so a
+    # slower seeded battler's Liquid Ooze hurts the seeder after the seeder's own ITEM_CONDITION
+    # (subscript_leech_seed_effect.s:23, :41-43: UPDATE_HP, no item check); add it with the
+    # mechanic, here and in ``step.starf_kept_active`` (review 4, should 5).
     foreseen = state.future_timer[sides].astype(_I32) == 1
     standing = live & foreseen & jnp.any(candidates, axis=1)
     rep = rep | standing

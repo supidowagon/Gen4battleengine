@@ -3003,7 +3003,9 @@ def _starf_kept_active(tables, s: RefState) -> list[bool]:
     pinch while a replacement is pending or a newcomer's states wait (a Future Sight hit after
     ITEM_CONDITION, bcp.c:1758-1783; the next ShowBattleMon's held-item check,
     battle_lib.c:4151-4165, eats it with the replacement's draw: modulo 5 where its five stats
-    are all at +4 or below, else whole)."""
+    are all at +4 or below, else whole). The pinch test halves the param for the effective
+    Gluttony (``_pinch_limit`` reads ``_ability``: none under Gastro Acid, lib.c:3088-3093,
+    :5273-5278; review 4, must 1)."""
     waiting = any(_awaits_replacement(s, b) for b in range(_fmt(s).B)) or any(
         sd.entry_pending for sd in s.battlers
     )

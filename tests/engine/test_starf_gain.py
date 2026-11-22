@@ -336,7 +336,9 @@ def _waiting(tables, names, variant="eats"):
     """Singles, the state after a ``_foreseen`` turn: side 0's lead fainted, a Geodude to send in;
     side 1's Blissey at its pinch with its Starf Berry. ``variant``: ``eats`` (it can eat),
     ``klutz`` / ``embargo`` (``Battler_HeldItem`` gives ITEM_NONE, lib.c:5352-5363), ``maxed``
-    (all five stats at +6, lib.c:5281-5286)."""
+    (all five stats at +6, lib.c:5281-5286), ``gastro-gluttony`` (a Gluttony holder under Gastro
+    Acid at a third of its HP: ``Battler_Ability`` is none, lib.c:3088-3093, so the param is not
+    halved, lib.c:5273-5278, and it is above its pinch)."""
     s = make_state(
         tables,
         [_mon(names, "Bidoof", ["Growl"], 5), _mon(names, "Geodude", ["Growl"], 5)],
@@ -353,14 +355,22 @@ def _waiting(tables, names, variant="eats"):
         for x in STARF_STATS:
             stages = stages.at[1, int(x)].set(6)
         s = s._replace(stages=stages)
+    elif variant == "gastro-gluttony":
+        s = s.replace_hp(1, 0, top // 3)
+        s = s._replace(
+            ability=s.ability.at[1, 0].set(AbilityId.GLUTTONY),
+            ability_suppressed=s.ability_suppressed.at[1].set(1),
+        )
     return s
 
 
-@pytest.mark.parametrize("variant", ["eats", "klutz", "embargo", "maxed"])
+@pytest.mark.parametrize("variant", ["eats", "klutz", "embargo", "maxed", "gastro-gluttony"])
 def test_only_a_holder_that_can_eat_keeps_its_draw(tables, names, variant):
     """Review 3, must 2 (fast, both engines): ``starf_kept_active`` needs the effective item
     (Klutz, Embargo: lib.c:5352-5363, read by TriggerHeldItemOnStatus at :4970) and a stat below
-    +6 (lib.c:5281-5286), as the law's ``standing``. f840758b kept it for all four."""
+    +6 (lib.c:5281-5286), as the law's ``standing``. f840758b kept it for the first four.
+    Review 4, must 1: ``gastro-gluttony`` needs the effective ability's pinch test
+    (lib.c:5273-5278, ``order.pinch_divisor``); 20137b9e kept it in step (raw Gluttony)."""
     from nuzline.data.tables import to_numpy
     from nuzline.engine.step import starf_kept, starf_kept_active
     from nuzline.reference.convert import to_ref
@@ -396,6 +406,34 @@ def test_the_b2_replace_eats_the_active_holder_with_entry_0(tables, names, spa, 
     for name, x, y in zip(sent._fields, sent, ref, strict=True):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
     assert int(sent.item[1, 0]) == 0 and int(np.asarray(sent.stages[1])[stat]) == 2
+
+
+def _own_salac(tables, names):
+    """Review 4, must 2 (singles): side 1's Blissey holds a Salac Berry at Speed +5 (its other
+    stats at 0), a little above its pinch, and uses Double-Edge; side 0's Bidoof Flings its Starf
+    Berry at it. Double-Edge's recoil (subscript_recoil_1_3.s:14, UPDATE_HP with no item check)
+    can put Blissey at its pinch and AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684-3689) eats the
+    Salac: Speed +6. Bidoof's TryFling (effect_script_0233.s:7, lib.c:6110-6127) then reads the
+    draw with four stats below +6. The old bound: highest 5 + gain 0 = 5, tight."""
+    s = make_state(
+        tables,
+        [_mon(names, "Bidoof", ["Fling"], 5, "Starf Berry")],
+        [_mon(names, "Blissey", ["Double-Edge"], 100, "Salac Berry")],
+    )
+    top = int(s.max_hp[1, 0])
+    s = s.replace_hp(1, 0, top // 4 + 2)
+    s = s._replace(stages=s.stages.at[1, Stat.SPE].set(5))
+    acts = jnp.asarray(
+        [names.move_slot(s, 0, "Fling"), names.move_slot(s, 1, "Double-Edge")], jnp.int32
+    )
+    return s, acts
+
+
+def test_a_flung_starf_after_the_own_pinch_berry_reads_all_draws(tables, names):
+    """Review 4, must 2 (fast, law alone): ``_starf_gain`` plus d's own held stat pinch berry,
+    +1 on the flung path: side 1's flung-Starf draw is loose (20137b9e: tight, five values)."""
+    laws = _laws(tables, *_own_salac(tables, names))
+    assert bool(laws.relevant.starf[1, 0]) and bool(laws.starf_loose[1, 0])
 
 
 def _doubles_waiting(tables, names, holder, fainted):

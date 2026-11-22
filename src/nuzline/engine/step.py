@@ -280,6 +280,8 @@ from nuzline.engine.order import (
     is_item,
     is_switch,
     me_first_copy,
+    pinch_divisor,
+    pinch_limit,
     player_second,
     qc_recycle,
     qc_transfer,
@@ -5862,19 +5864,43 @@ def starf_kept_active(tables: Tables, state: BattleState) -> jnp.ndarray:
     ``Battler_HeldItem`` gives it (``state.held_item``: no Klutz, no Embargo, lib.c:5352-5363,
     read by TriggerHeldItemOnStatus at :4970) is the Starf Berry, and one of its five stats is below +6 (lib.c:5281-5286).
     A holder with all five at +6 that a newcomer's Intimidate lowers before the check eats with
-    one stat below +6: count 1, every draw the same, so the 0 kept is exact."""
+    one stat below +6: count 1, every draw the same, so the 0 kept is exact.
+
+    Not modelled: Liquid Ooze (no ``AbilityId`` member), a second way to stand at the pinch
+    with the berry at TurnEnd: a slower seeded battler's Liquid Ooze hurts the seeder after its
+    own ITEM_CONDITION (battler-major MON_COND loop, bcp.c:1302-1310, :1720-1724;
+    subscript_leech_seed_effect.s:23, :41-43, UPDATE_HP with no item check). Add it here and in
+    the law's ``standing`` with the mechanic."""
     fmt = format_of(state)
     rows = party(fmt, jnp.arange(fmt.B))
-    _, pinched = starf_holders(tables, state)
+    holds, _ = starf_holders(tables, state)
     waiting = jnp.any(needs_replacement(state) != 0) | jnp.any(state.entry_pending != 0)
+    # The pinch test with the holder's effective ability: TriggerHeldItemOnStatus halves the param
+    # for ``Battler_Ability`` Gluttony (battle_lib.c:5273-5278), none under Gastro Acid
+    # (:3088-3093), as the eat's ``order.pinch_divisor`` (review 4, must 1). ``starf_holders``'
+    # raw-ability test stays right for bench Pokemon only (the suppression bit is the
+    # BattleMon's).
     eats = jnp.stack(
         [
             (tables.item_effect[held_item(state, b)] == ItemId.STARF_BERRY)
             & (starf_count(state, b) > 0)
+            & (
+                state.hp[rows[b], state.active[b]].astype(_I32)
+                <= pinch_limit(
+                    state.max_hp[rows[b], state.active[b]],
+                    pinch_divisor(
+                        tables,
+                        state,
+                        b,
+                        state.active[b],
+                        state.item[rows[b], state.active[b]],
+                    ),
+                )
+            )
             for b in range(fmt.B)
         ]
     )
-    return (state.over == 0) & waiting & pinched[rows, state.active] & eats
+    return (state.over == 0) & waiting & holds[rows, state.active] & eats
 
 
 def canonical_target(state: BattleState) -> BattleState:
