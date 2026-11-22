@@ -142,7 +142,13 @@ back: the saved inputs (``in_state``, ``in_ai_state``: state; ``in_outcome``: ou
 are loaded and in ``rebuild_state`` / ``rebuild_outcome``, and in the captured output entries of
 every part, on each group of entries under one path prefix that holds the kind's ``MARKS`` (a
 BattleState or Outcome at any depth: ``.root_belief[][]``, ``.step_events[]``,
-``.ref_replay``, ``.enumerate_turn[]``). The compare header lists the rows with their ledger ids
+``.ref_replay``, ``.enumerate_turn[]``), except an input-only row (``Upgrade.outputs`` False:
+``move_slot``, ``selected_temp``, ``ts_move_temp``, fields the capture never saved whose value the
+checkout's own selection or tail rewrites every turn): it builds only the saved inputs the
+checkout steps from, so every part of both sides steps from the same saved inputs, and in a
+captured entry (an output, the record's ``in_state`` echo, the "gen" record) the rerun's field
+is one-sided (``only_new``: --allow-new names it), never compared against a derived value. The
+compare header lists the rows with their ledger ids
 and reasons; each part prints the rows it ran with their counts, and a line before the final one
 sums them. Today's rows: ``starf_roll`` (B,) -> (B, 3) and ``Outcome.starf`` (B, 2) -> (B, 4)
 (F-O3, G-27..G-30); ``weather``, ``weather_timer``, ``gravity``, ``trick_room`` (with
@@ -515,7 +521,11 @@ class Upgrade:
     old dtype and shape and no write that is not also a read is there yet (a newer capture).
     ``new_columns``: ``(field, columns)`` the fill invents along the last axis (no old data:
     compared as sampler drift, see the docstring). ``ledger``: the ledger ids whose rule decides
-    the mapping; ``reason``: why the mapping is lossless."""
+    the mapping; ``reason``: why the mapping is lossless. ``outputs`` False: an input-only row
+    (a field the capture never saved whose value the checkout's own turn rewrites: the
+    selection's moveSlot / TEMP_VALUE, the paused moveTemp): it builds the saved inputs the
+    checkout steps from, never a captured output entry, so the rerun's field is one-sided there
+    (``only_new``, which --allow-new names) and is never compared against a derived value."""
 
     kind: str
     reads: tuple
@@ -526,6 +536,7 @@ class Upgrade:
     reason: str
     keeps: tuple = ()
     new_columns: tuple = ()
+    outputs: bool = True
 
     @property
     def name(self) -> str:
@@ -580,10 +591,11 @@ def reshape(kind, field, dtype, old, new, fill, ledger, reason, new_columns=()):
     return Upgrade(kind, reads, (field,), fill, label, ledger, reason, new_columns=cols)
 
 
-def derive(kind, reads, writes, fill, ledger, reason, keeps=()):
-    """New fields computed from old ones (several reads, several writes)."""
+def derive(kind, reads, writes, fill, ledger, reason, keeps=(), outputs=True):
+    """New fields computed from old ones (several reads, several writes); ``outputs`` False:
+    an input-only row (``Upgrade.outputs``)."""
     label = f"{'+'.join(r[0] for r in reads)} -> {'+'.join(writes)}"
-    return Upgrade(kind, reads, writes, fill, label, ledger, reason, keeps=keeps)
+    return Upgrade(kind, reads, writes, fill, label, ledger, reason, keeps=keeps, outputs=outputs)
 
 
 def zero(kind, field, like, ledger, reason):
@@ -813,9 +825,9 @@ UPGRADES = (
     dropped("state", "learn_pin", _I1, (), "E3-B2-21", "1 + the selected slot a deferred learn masked (main 08a57000); the prompt now pauses at the payout, before the slot is re-read (review b2 #6): learn_site is a pause site, not a slot, and 0 at every saved point"),
     dropped("state", "exp_refused", _I1, (), "E3-B2-21", "main's sticky window (c) refusal code; the payout's prompt now pauses the turn, so learn work never refuses (review b2 #6)"),
     derive("state", (("leech_seed", _I1, ("B",)),), ("leech_seed_recipient",), _leech_seed_recipient, "D3-11b", "older Leech Seeds were set by the opposite battler: 1 + (b ^ 1) where seeded", ("leech_seed",)),
-    derive("state", _SLOT_READS, ("move_slot",), _move_slot, "E2-ML-5", "the old engine had no moveSlot: a locked battler's lock slot (its old priority), a paused battler's ts_actions slot (its old TryGrudge slot), else 0", tuple(r[0] for r in _SLOT_READS)),
-    derive("state", _SLOT_READS, ("selected_temp",), _selected_temp, "E2-ML-8", "the old engine had no TEMP_VALUE: Battler_SelectedMove read a locked battler's lock move, a paused battler's action move, else none; 1 + that slot, else 0", tuple(r[0] for r in _SLOT_READS)),
-    derive("state", _TEMP_READS, ("ts_move_temp",), _move_temp, "E2-ML-4", "the old tail's move: the paused battler's ts_move, the Encore's move where its slot held it; 0 off a pause", tuple(r[0] for r in _TEMP_READS)),
+    derive("state", _SLOT_READS, ("move_slot",), _move_slot, "E2-ML-5", "the old engine had no moveSlot: a locked battler's lock slot (its old priority), a paused battler's ts_actions slot (its old TryGrudge slot), else 0", tuple(r[0] for r in _SLOT_READS), outputs=False),
+    derive("state", _SLOT_READS, ("selected_temp",), _selected_temp, "E2-ML-8", "the old engine had no TEMP_VALUE: Battler_SelectedMove read a locked battler's lock move, a paused battler's action move, else none; 1 + that slot, else 0", tuple(r[0] for r in _SLOT_READS), outputs=False),
+    derive("state", _TEMP_READS, ("ts_move_temp",), _move_temp, "E2-ML-4", "the old tail's move: the paused battler's ts_move, the Encore's move where its slot held it; 0 off a pause", tuple(r[0] for r in _TEMP_READS), outputs=False),
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}
@@ -832,6 +844,7 @@ def upgrade_fields(
     batched: bool = False,
     tables=None,
     flat: bool = False,
+    entries: bool = False,
 ) -> dict:
     """``saved`` (a field dict of ``kind``; with ``batched``, leading axes allowed) through
     every ``UPGRADES`` row of ``kind`` that runs on it (``Upgrade.lead``), in table order; every
@@ -839,11 +852,14 @@ def upgrade_fields(
     ``new_columns`` that ran. ``tables``: the tables of the game ``saved`` belongs to
     (``Ctx.tables_for``); a row that reads them (camouflage) raises without them. ``flat``:
     ``saved`` came from ``canon`` entries (``Upgrade.lead``); a read of old shape () reaches the
-    fill reshaped to the lead."""
+    fill reshaped to the lead. ``entries``: ``saved`` is a captured entry group
+    (``upgrade_entries``), where an input-only row (``Upgrade.outputs`` False) does not run."""
     import numpy as np
 
     out = dict(saved)
     for u in UPGRADES:
+        if entries and not u.outputs:
+            continue
         lead = u.lead(out, batched, flat) if u.kind == kind else None
         if lead is None:
             continue
@@ -889,14 +905,16 @@ def upgrade_entries(entries: dict, tables, invented: dict | None = None) -> dict
     out = dict(entries)
     for prefix, names in groups.items():
         kind = next((k for k, m in MARKS.items() if all(f in names for f in m)), None)
-        if kind is None or not any(f in names for u in UPGRADES for f in u.fields):
+        if kind is None or not any(f in names for u in UPGRADES if u.outputs for f in u.fields):
             continue
         saved = {}
         for name, path in names.items():
             e = entries[path]
             saved[name] = np.frombuffer(e[3], np.dtype(e[1])).reshape(ast.literal_eval(e[2]))
         cols: dict = {}
-        new = upgrade_fields(kind, saved, cols, batched=True, tables=tables, flat=True)
+        new = upgrade_fields(
+            kind, saved, cols, batched=True, tables=tables, flat=True, entries=True
+        )
         for name in set(saved) - set(new):
             del out[names[name]]
         for name, a in new.items():
@@ -1911,7 +1929,8 @@ def parent(args) -> int:
         )
         stop = compare_problems(args, base, here, problems, parts)
         for u in UPGRADES:
-            print(f"layout upgrade: {u.name} ({u.ledger}): {u.reason}", flush=True)
+            only = "" if u.outputs else " [inputs only]"
+            print(f"layout upgrade: {u.name}{only} ({u.ledger}): {u.reason}", flush=True)
     if stop:
         for p in stop:
             print(f"FAIL: {p}", flush=True)
