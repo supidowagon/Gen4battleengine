@@ -35,8 +35,8 @@
 # uses its defaults and quick.sh finds them on the pod. Other runner knobs go in the exec body by hand.
 # The payload's bin/ also holds sweep/ (tools/ops/sweep/*.py from git at HEAD of the checkout that
 # runs pack.sh, pack_lib.sh pack_sweep_tools): sweep.sh uses it for a repo without tools/ops/sweep.
-# meta.env also gets NIGHT (yyyymmdd: SWEEP_NIGHT, else the packing date; the sweep's collect.py reads
-# night and tip from it), TABLES_CHASH (and a delta's OLD_TABLES_CHASH) and GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
+# meta.env also gets NIGHT (yyyymmdd: SWEEP_NIGHT, else the packing date; the sweep's collect.py takes
+# the tip from COMMIT and the night from it when the run name has no date), TABLES_CHASH (and a delta's OLD_TABLES_CHASH) and GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
 # pod_sum: the packed *.sh and weights.py) and POD_WEIGHTS (pod_wsum: weights.txt); setup.sh copies
 # them to gate.env for podcheck.sh, which podcheck_body.sh runs before every pack,
 # and WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
@@ -127,7 +127,7 @@ fi
 pod_bin "$TOP" "$OPS" "$P/bin" || refuse "could not extract tools/ops/day/pod at $OPS" ""
 pack_sweep_tools "$TOP" "$OPS" "$P/bin" || refuse "could not extract tools/ops/sweep (extract.py, replay.py) at $OPS" ""
 pack_draw_beacons   # WF, WD
-NIGHT="${SWEEP_NIGHT:-$(date +%Y%m%d)}"   # meta.env NIGHT: tools/ops/sweep/collect.py reads night and tip from meta.env
+NIGHT="${SWEEP_NIGHT:-$(date +%Y%m%d)}"   # meta.env NIGHT: tools/ops/sweep/collect.py falls back to it when the run name has no date
 echo "$NIGHT" | grep -qE '^[0-9]{8}$' || refuse "SWEEP_NIGHT is not yyyymmdd" "$NIGHT"
 PODSUM=$(pod_sum "$P/bin"); PODW=$(pod_wsum "$P/bin")
 if [ "$DELTA" = 0 ]; then

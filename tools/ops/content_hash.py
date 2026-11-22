@@ -2,7 +2,13 @@
 
 Usage: python tools/ops/content_hash.py <tables.tar.xz>
        python tools/ops/content_hash.py --root <checkout> --list <file of paths relative to root>
-Prints one line: the 64-hex content hash.
+       python tools/ops/content_hash.py --version
+Prints one line: the 64-hex content hash (or VERSION).
+
+VERSION names this definition of the hash. Raise it whenever the definition changes (this file or
+snap_compare.py file_content): build_tables.sh writes it into the meta file (CONTENT_HASH_V), and
+tools/ops/day/table_key16.sh table_chash treats a meta file of another version as having no content
+hash, so the table key decides (TABLE_CHASH_V there must equal VERSION; a test checks it).
 
 The hash is a sha256 over the sorted per-file lines "<sha256 of the file's content>  <path>"
 (one per regular file, path with '/'), where a file's content is read as tools/snap_compare.py
@@ -21,6 +27,8 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path
+
+VERSION = 1
 
 SNAP = Path(__file__).resolve().parents[1] / "snap_compare.py"
 
@@ -66,6 +74,9 @@ def hash_archive(archive: Path) -> str:
 
 
 def main(argv: list[str]) -> int:
+    if argv == ["--version"]:
+        print(VERSION)
+        return 0
     if len(argv) == 1 and not argv[0].startswith("-"):
         print(hash_archive(Path(argv[0])))
         return 0

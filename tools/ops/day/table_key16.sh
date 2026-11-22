@@ -32,12 +32,16 @@ table_key16() { local k="" a="${3:-}" ka
 # from <archive minus .tar.xz>.meta beside the archive when its KEY= starts with that key16. The
 # key16 decides which build it is (capture: from the archive only, checked byte for byte against the
 # build), so a content hash is never taken from a stale file beside another archive. Nothing for an
-# archive of a build made before the meta files existed: the caller then goes by the key.
+# archive of a build made before the meta files existed, nor from a meta file whose CONTENT_HASH_V is
+# not TABLE_CHASH_V (another definition of the hash, tools/ops/content_hash.py VERSION, which a test
+# keeps equal to TABLE_CHASH_V): the caller then goes by the key.
+TABLE_CHASH_V=1
 table_chash() { local k m h a="${3:-}"
   k=$(table_key16 "$1" "$2" "$a") || true; [ -n "$k" ] || return 0
   for m in "$RENT/tables/tables_k$k.meta" "${a%.tar.xz}.meta"; do
     [ -f "$m" ] || continue
     [ "$(sed -n 's/^KEY=//p' "$m" | tail -1 | tr -d '\r' | cut -c1-16)" = "$k" ] || continue
+    [ "$(sed -n 's/^CONTENT_HASH_V=//p' "$m" | tail -1 | tr -d '\r')" = "$TABLE_CHASH_V" ] || continue
     h=$(sed -n 's/^CONTENT_HASH=//p' "$m" | tail -1 | tr -dc 0-9a-f)
     if [[ "$h" =~ ^[0-9a-f]{64}$ ]]; then echo "$h"; return 0; fi
   done; return 0; }

@@ -16,11 +16,12 @@ count is unknown)", "jobs.txt has no job line", "0 processes in summary.txt", "<
 summary.txt". <k> counts the classes the replay gave (a CLASS KEY with its diverging fields); <u>
 counts the failed processes and falsifiers in the fallback groups below, which the replay did not
 classify (one such group can hold several different bugs).
-The night and tip default to the run's meta.env (pack.sh writes it: NIGHT=<yyyymmdd>, the packing
-date or SWEEP_NIGHT, and COMMIT=<full sha>, whose first 8 characters are the tip), read from
-<out dir>/meta.env, else <out dir>/../meta.env (`<run>/sweep_out`, the fetched layout); a value
-meta.env lacks (a run packed before NIGHT) comes from the out folder's name
-(`...-<yyyymmdd>-<sha>`), else its parent's, else "?".
+The night defaults to the date in the out folder's name (`...-<yyyymmdd>-<sha>`), else its
+parent's (`<run>/sweep_out`, the fetched layout): the night the jobs file was made for, also when the
+pack slipped past midnight. Without such a name it comes from the run's meta.env (pack.sh writes
+NIGHT=<yyyymmdd>, the packing date or SWEEP_NIGHT), read from <out dir>/meta.env, else
+<out dir>/../meta.env, else "?". The tip defaults to the first 8 characters of meta.env's
+COMMIT=<full sha>, else the name's <sha>, else "?".
 A log with more falsifying examples than @reproduce_failure lines gives the extra examples
 "(repro line not matched)".
 
@@ -219,7 +220,8 @@ def main(argv: list[str]) -> int:
     meta = read_meta(out)
     mnight = meta.get("NIGHT", "") if re.fullmatch(r"\d{8}", meta.get("NIGHT", "")) else ""
     mtip = meta.get("COMMIT", "") if re.fullmatch(r"[0-9a-f]{7,40}", meta.get("COMMIT", "")) else ""
-    night = opts.get("--night") or mnight or (m.group(1) if m else "?")
+    # the night: the run name's date first (the jobs file's night; a pack can slip past midnight)
+    night = opts.get("--night") or (m.group(1) if m else "") or mnight or "?"
     tip = (opts.get("--tip") or mtip or (m.group(2) if m else "?"))[:8]
     rows = read_summary(out)
     secs, why = replay_sections(out)

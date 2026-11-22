@@ -1316,8 +1316,8 @@ def test_only_committed_content_gets_into_a_send(src, tmp_path):
 # --- the content hash: "the same tables" (quick-lane-3) -------------------------------------------
 
 
-def _meta(rent: Path, key64: str, chash: str) -> None:
-    _w(rent / f"tables/tables_k{key64[:16]}.meta", f"KEY={key64}\nCONTENT_HASH={chash}\n")
+def _meta(rent: Path, key64: str, chash: str, v: str = "1") -> None:
+    _w(rent / f"tables/tables_k{key64[:16]}.meta", f"KEY={key64}\nCONTENT_HASH_V={v}\nCONTENT_HASH={chash}\n")
 
 
 def test_the_delta_ships_tables_only_when_the_content_hash_differs(src, tmp_path):
@@ -1363,8 +1363,23 @@ def test_a_meta_file_beside_another_archive_gives_no_content_hash(src, tmp_path)
     _w(rent / f"tables/tables_k{k[:16]}.tar.xz", "archive bytes\n")
     assert _bash(script, env).stdout.strip() == h
     # a meta whose KEY is another build's is not read
-    _w(rent / f"tables/tables_k{k[:16]}.meta", f"KEY={'d' * 64}\nCONTENT_HASH={h}\n")
+    _w(rent / f"tables/tables_k{k[:16]}.meta", f"KEY={'d' * 64}\nCONTENT_HASH_V=1\nCONTENT_HASH={h}\n")
     assert _bash(script, env).stdout.strip() == ""
+    # a meta of another hash version, or of none, is not read either: the key decides
+    for v in ("2", ""):
+        (rent / f"tables/tables_k{k[:16]}.meta").unlink()
+        _meta(rent, k, h, v)
+        assert _bash(script, env).stdout.strip() == ""
+    (rent / f"tables/tables_k{k[:16]}.meta").unlink()
+    _w(rent / f"tables/tables_k{k[:16]}.meta", f"KEY={k}\nCONTENT_HASH={h}\n")
+    assert _bash(script, env).stdout.strip() == ""
+
+
+def test_table_chash_version_is_the_content_hash_version():
+    from tools.ops import content_hash
+
+    text = (DAY / "table_key16.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert f"\nTABLE_CHASH_V={content_hash.VERSION}\n" in text
 
 
 @needs_setsid
@@ -1422,6 +1437,12 @@ def test_the_body_env_carries_spacing_and_the_sweep_knobs_and_setup_records_them
     assert out == ',"env":{"SPACING":"5","SWEEP_P":"3","SWEEP_W":"13","SWEEP_JOB_S":"900","SWEEP_REPLAY_S":"60"}'
     r = _bash(_lib("pack_body_env"), {"SWEEP_CAP": "9x"}, check=False)
     assert r.returncode == 3 and "SWEEP_CAP '9x' is not a whole number" in r.stdout
+    # the two sleep lengths take a decimal, as sweep_body.sh does; the other knobs do not
+    out = _bash(_lib("pack_body_env"), {"SWEEP_POLL": "0.5", "SWEEP_SPACING": "2"}).stdout
+    assert out == ',"env":{"SWEEP_SPACING":"2","SWEEP_POLL":"0.5"}'
+    for bad in ({"SWEEP_POLL": "0.5s"}, {"SWEEP_SPACING": ".5"}, {"SWEEP_JOB_S": "1.5"}):
+        r = _bash(_lib("pack_body_env"), bad, check=False)
+        assert r.returncode == 3 and "is not a" in r.stdout, (bad, r.stdout)
     # every knob pack.sh passes is one setup.sh writes to run.env (a restart and sweep_body.sh read it there)
     names = _bash(_lib('echo "$PACK_ENV_NAMES"')).stdout.split()
     line = next(x for x in (POD / "setup.sh").read_text(encoding="utf-8").splitlines() if x.startswith("RUN_ENV_NAMES="))

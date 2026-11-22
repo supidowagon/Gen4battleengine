@@ -3,6 +3,7 @@ plain Python plus numpy, and bash for the meta() step."""
 
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -114,6 +115,8 @@ def test_a_checkout_and_its_archive_hash_alike_and_the_cli_prints_one_line(tmp_p
     assert r.stdout.strip() == want  # a listed file that does not exist is skipped
     r = subprocess.run([sys.executable, str(OPS / "content_hash.py")], check=False, capture_output=True, text=True)
     assert r.returncode == 2
+    r = subprocess.run([sys.executable, str(OPS / "content_hash.py"), "--version"], check=True, capture_output=True, text=True)
+    assert r.stdout.strip() == str(content_hash.VERSION)
 
 
 def test_the_hash_reads_files_as_snap_compare_does(tmp_path):
@@ -149,11 +152,13 @@ def test_build_tables_meta_writes_key_and_content_hash_once_and_read_only(tmp_pa
     r = _meta_step(tmp_path, arch, key)
     assert r.returncode == 0, r.stdout + r.stderr
     want = content_hash.hash_archive(arch)
-    one = f"KEY={key}\nCONTENT_HASH={want}\n"
+    one = f"KEY={key}\nCONTENT_HASH_V={content_hash.VERSION}\nCONTENT_HASH={want}\n"
     assert r.stdout == one + one  # the keyed meta file and tables_<short>.meta, the second meta call kept it
-    keyed = tmp_path / "rent" / "tables" / "tables_kaaaaaaaaaaaaaaaa.meta"
-    # the meta file sits where table_key16.sh table_chash reads it, beside the archive's name
-    assert keyed.is_file() or (arch.with_suffix("").with_suffix(".meta")).is_file()
+    # the meta file sits beside the archive, under its name (KA minus .tar.xz), where table_key16.sh
+    # table_chash reads it for a keyed archive in $RENT/tables; it is read-only, its copy writable
+    keyed = arch.with_suffix("").with_suffix(".meta")
+    assert keyed.is_file() and not os.access(keyed, os.W_OK)
+    assert os.access(tmp_path / "rent" / "tables_abc1234.meta", os.W_OK)
     assert not list((tmp_path / "rent").glob("*tmp*"))
 
 

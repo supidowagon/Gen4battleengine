@@ -4,8 +4,10 @@
     python -m tools.ops.sweep.seeds --seeds 1..15
 
 The second form prints the same jobs for fixed seeds (`1..15`, `3`, `1,4,9` or `1..5,9`: whole
-numbers up to 2**32 - 1) on every node, whatever the night: a rerun with the same seeds on another
-commit (a gate or a road test) needs no hand-written jobs file.
+numbers up to 2**32 - 1, at most MAX_SEEDS of them) on every node, whatever the night: a rerun with
+the same seeds on another commit needs no hand-written jobs file. sweep.sh runs every job with the
+explore profile, so a `--seeds` rerun is a road test or a by-hand check outside the gates (DAYBOX.md
+"Soundness sweep" step 1), never part of a merge gate.
 
 Prints one job line per process, `<node id> <short name> <seed>` (the nodes come from
 tools/ops/sweep/nodes.txt), the format tools/ops/day/pod/sweep.sh reads. The date defaults to
@@ -50,6 +52,9 @@ def job_lines(night: str, n: int = 15, path: Path = NODES) -> list[str]:
     return [f"{node} {short} {s}" for node, short in nodes(path) for s in seeds(night, node, n)]
 
 
+MAX_SEEDS = 1000  # seeds per node in one --seeds list (a nightly runs 15)
+
+
 def parse_seeds(spec: str) -> list[int]:
     """`1..15`, `3`, `1,4,9`, `1..5,9` -> the seeds in the order written (a repeat is an error)."""
     out: list[int] = []
@@ -61,8 +66,10 @@ def parse_seeds(spec: str) -> list[int]:
         hi = int(m.group(2)) if m.group(2) is not None else lo
         if hi < lo:
             raise ValueError(f"bad seed range {part!r}: {hi} is under {lo}")
-        if hi >= 2**32:  # before the range is built: a huge B must not fill memory
+        if hi >= 2**32:
             raise ValueError(f"bad seed list {spec!r}: seeds must be under 2**32")
+        if len(out) + hi - lo + 1 > MAX_SEEDS:  # checked before the range is built
+            raise ValueError(f"bad seed list {spec!r}: more than {MAX_SEEDS} seeds")
         out.extend(range(lo, hi + 1))
     if not out or max(out) >= 2**32:
         raise ValueError(f"bad seed list {spec!r}: seeds must be under 2**32")

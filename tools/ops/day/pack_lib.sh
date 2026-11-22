@@ -119,11 +119,16 @@ pack_sent_chash() { local f k
 # SWEEP_P, SWEEP_W, SWEEP_CAP, SWEEP_NICE, SWEEP_JOB_S, SWEEP_SPACING, SWEEP_POLL, SWEEP_REPLAY_S
 # (tools/ops/day/pod/sweep.sh; setup.sh writes them to run.env, sweep_body.sh's start.sh reads them
 # from there when the PC's environment of sweep_body.sh does not set them). Nothing when none is
-# set. Refuses a value that is not a whole number; warns on stderr when it sets any.
+# set. Refuses a value that is not a whole number (SWEEP_SPACING and SWEEP_POLL: a decimal, as
+# sweep_body.sh); warns on stderr when it sets any.
 PACK_ENV_NAMES="GATE_GB KILL_GB MAXP SPACING SWEEP_P SWEEP_W SWEEP_CAP SWEEP_NICE SWEEP_JOB_S SWEEP_SPACING SWEEP_POLL SWEEP_REPLAY_S"
 pack_body_env() { local n v out=""
   for n in $PACK_ENV_NAMES; do v=${!n-}; [ -n "$v" ] || continue
-    case "$v" in *[!0-9]*) refuse "$n '$v' is not a whole number" "";; esac
+    case "$n" in
+      SWEEP_SPACING|SWEEP_POLL)   # sleep lengths: decimals as sweep_body.sh accepts them
+        [[ "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]] || refuse "$n '$v' is not a number" "";;
+      *) case "$v" in *[!0-9]*) refuse "$n '$v' is not a whole number" "";; esac;;
+    esac
     out="$out${out:+,}\"$n\":\"$v\""; done
   [ -z "$out" ] && return 0
   # A knob exported in the shell reaches every body, normal runs included: say so on stderr.

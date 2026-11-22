@@ -1093,8 +1093,10 @@ def test_fixed_seeds_give_every_node_the_same_seeds_whatever_the_night(capsys):
     assert seeds.parse_seeds("7") == [7]
     assert seeds.parse_seeds("1,4,9") == [1, 4, 9]
     assert seeds.parse_seeds("1..2,9") == [1, 2, 9]
+    assert len(seeds.parse_seeds(f"1..{seeds.MAX_SEEDS}")) == seeds.MAX_SEEDS
     for bad in ("", "a", "3..1", "1,1", "1..2,2", "-1", "4294967296", "1..", "1,,2",
-                "1..99999999999999999999"):  # refused before the range is built
+                "1..99999999999999999999", "1..4294967295", "1..1001", "1..600,601..1001"):
+        # refused before the range is built: a seed of 2**32 or more, more than MAX_SEEDS seeds
         with pytest.raises(ValueError):
             seeds.parse_seeds(bad)
     assert seeds.main(["--seeds", "1..15"]) == 0
@@ -1128,9 +1130,10 @@ def test_collect_reads_night_and_tip_from_the_runs_meta_env(tmp_path):
     assert collect.read_meta(out) == {"COMMIT": full, "MARK": "not slow", "NIGHT": "20261123"}
 
 
-def test_collect_meta_beats_the_run_name_and_the_options_beat_meta(tmp_path):
+def test_collect_night_from_the_run_name_tip_from_meta_and_the_options_beat_both(tmp_path):
+    # the name's date is the jobs file's night: it wins over NIGHT (a pack that slipped past midnight)
     out = _meta_run(tmp_path, "COMMIT=aaaaaaaa11111111\nNIGHT=20261123\n", "sweep-20261101-bbbbbbbb")
-    assert _first(out).startswith("SWEEP 20261123 aaaaaaaa: ")
+    assert _first(out).startswith("SWEEP 20261101 aaaaaaaa: ")
     assert collect.main([str(out), "--night", "20261124", "--tip", "cccccccc99"]) == 0
     head = (out / "sweep_failures.txt").read_text(encoding="utf-8").splitlines()[0]
     assert head.startswith("SWEEP 20261124 cccccccc: ")
@@ -1145,12 +1148,12 @@ def test_collect_takes_a_value_meta_lacks_from_the_name_and_ignores_a_bad_one(tm
     other.mkdir()
     out = _meta_run(other, "COMMIT=zz\nNIGHT=tomorrow\n")
     assert _first(out).startswith("SWEEP ? ?: ")
-    # meta.env inside the out dir counts too
+    # meta.env inside the out dir counts too (its COMMIT; the out dir's name sweep-20261122-... has the night)
     third = tmp_path / "third"
     third.mkdir()
     out3 = _clean_out(third)
     (out3 / "meta.env").write_text("COMMIT=feedface0000\nNIGHT=20260101\n", encoding="utf-8")
-    assert _first(out3).startswith("SWEEP 20260101 feedface: ")
+    assert _first(out3).startswith("SWEEP 20261122 feedface: ")
 
 
 def test_logfields_zero_fills_a_state_field_an_old_log_lacks():
@@ -1303,7 +1306,8 @@ def test_podcheck_lists_a_sweep_whose_driver_died_while_its_job_group_lives(tmp_
     (d / "sweep" / "out" / "run").mkdir(parents=True)
     driver = subprocess.Popen(["true"])
     driver.wait()  # the driver is gone; sweep.pid names a dead process
-    job = subprocess.Popen(["setsid", "sleep", "60"])
+    # a job as sweep.sh starts it: its own group, the run's repo among its arguments
+    job = subprocess.Popen(["setsid", "bash", "-c", "sleep 60; true", "j1", _posix(d / "repo")])
     want = "run sweep-x gate=old scripts=old runner=sweep live=1 pending=0"
 
     def check() -> str:
@@ -1337,7 +1341,9 @@ def test_sweeplive_in_gate_sh_counts_a_live_group_and_not_a_dead_or_malformed_on
     run = tmp_path / "r"
     (run / "sweep" / "out" / "run").mkdir(parents=True)
     f = run / "sweep" / "out" / "run" / "j1"
-    job = subprocess.Popen(["setsid", "sleep", "60"])
+    job = subprocess.Popen(["setsid", "bash", "-c", "sleep 60; true", "j1", _posix(run / "repo")])
+    # a live group that is not this run's (its id reused after the job ended): no run path in its args
+    other = subprocess.Popen(["setsid", "bash", "-c", "sleep 60; true", "x", _posix(tmp_path / "r2" / "repo")])
     gate = _posix(POD / "gate.sh")
 
     def live(content: str) -> bool:
@@ -1349,12 +1355,14 @@ def test_sweeplive_in_gate_sh_counts_a_live_group_and_not_a_dead_or_malformed_on
         assert live(f"{job.pid}\n")
         for bad in ("", "abc\n", "0\n", "1\n"):
             assert not live(bad)
+        assert not live(f"{other.pid}\n")  # r2/ is not r/: another run's group does not count
         job.kill()
         job.wait()
         assert not live(f"{job.pid}\n")
     finally:
-        job.kill()
-        job.wait()
+        for p in (job, other):
+            p.kill()
+            p.wait()
     # status.sh and podcheck.sh both call it
     assert "sweeplive" in (POD / "status.sh").read_text(encoding="utf-8")
     assert "sweeplive" in (POD / "podcheck.sh").read_text(encoding="utf-8")

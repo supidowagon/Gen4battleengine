@@ -10,8 +10,8 @@
 # $RENT/tables/tables_k<key16>.tar.xz exists the build is skipped; a new one is made read-only.
 # Either way $RENT/tables_<short>.tar.xz is a copy of it, $RENT/tables_<short>.key holds <key>,
 # and $RENT/tables/index.txt gets the line "<full sha> <key>". The archive's meta file
-# $RENT/tables/tables_k<key16>.meta (read-only; copied to $RENT/tables_<short>.meta) holds KEY=<key>
-# and CONTENT_HASH=<64 hex> (tools/ops/content_hash.py: sha256 over the sorted per-file digests of the
+# $RENT/tables/tables_k<key16>.meta (read-only; copied to $RENT/tables_<short>.meta) holds KEY=<key>,
+# CONTENT_HASH_V=<content_hash.py VERSION> and CONTENT_HASH=<64 hex> (tools/ops/content_hash.py: sha256 over the sorted per-file digests of the
 # archive's table files, by content as tools/snap_compare.py reads a file). Two builds with equal
 # table files have equal content hashes and different keys; the quick lane's delta (pack.sh --delta)
 # ships tables only when the content hash differs. The key stays the cache identity.
@@ -85,12 +85,14 @@ if [ "$MODE" = commit ]; then
     --symbols "$(wp "$SYM")" --config "$(wp "$B/data/local.toml")" | tr -d '\r')
   echo "$KEY" | grep -qE '^[0-9a-f]{64}$' || { echo "ERROR: table_key.py printed no key: $KEY"; exit 2; }
   FULL=$(git -C "$REPO" rev-parse "$C^{commit}"); TD="$RENT/tables"; KA="$TD/tables_k${KEY:0:16}.tar.xz"; mkdir -p "$TD"
-  meta() {  # the key's meta file (KEY, CONTENT_HASH), written once; tables_<short>.meta is a copy
-    local M="${KA%.tar.xz}.meta" ch
+  meta() {  # the key's meta file (KEY, CONTENT_HASH_V, CONTENT_HASH), written once; tables_<short>.meta is a copy
+    local M="${KA%.tar.xz}.meta" ch v
     if [ ! -f "$M" ]; then
       ch=$("${PY[@]}" "$(wp "$OPS_DIR/content_hash.py")" "$(wp "$KA")" | tr -d '\r')
       echo "$ch" | grep -qE '^[0-9a-f]{64}$' || { echo "ERROR: content_hash.py printed no hash: $ch"; exit 2; }
-      printf 'KEY=%s\nCONTENT_HASH=%s\n' "$KEY" "$ch" > "$M.tmp.$$" && mv -f "$M.tmp.$$" "$M"; chmod a-w "$M"; fi
+      v=$("${PY[@]}" "$(wp "$OPS_DIR/content_hash.py")" --version | tr -d '\r')
+      echo "$v" | grep -qE '^[0-9]+$' || { echo "ERROR: content_hash.py printed no version: $v"; exit 2; }
+      printf 'KEY=%s\nCONTENT_HASH_V=%s\nCONTENT_HASH=%s\n' "$KEY" "$v" "$ch" > "$M.tmp.$$" && mv -f "$M.tmp.$$" "$M"; chmod a-w "$M"; fi
     rm -f "$RENT/tables_$C.meta"; cp "$M" "$RENT/tables_$C.meta"; chmod u+w "$RENT/tables_$C.meta"; }
   record() {  # tables_<short>.tar.xz is the key's archive; the key and the sha -> key line are kept
     meta
