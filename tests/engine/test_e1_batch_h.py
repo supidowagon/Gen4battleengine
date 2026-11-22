@@ -199,12 +199,15 @@ def test_four_battlers_keep_the_roll_whole_where_an_acid_pair_is_reachable(table
     """T5. B = 4: battler 2 switches while battler 3 (the other side) uses Pursuit. Only the pair
     [2, 3] is reachable; a due Future Sight is kept whole (a third battler can write the mask
     before the chase; the exact handling is the doubles milestone's), and without the Pursuit it
-    is not."""
-    s = with_moves(four(tables, names), names, 3, ("Pursuit",))
-    s = _pending(s, names, 0, 1)
+    is not. The case without it is a board where battler 3 selects Growl: TryPursuit takes a
+    battler by its selection (battle_script.c:6905-6909, Battler_SelectedMove, battle_lib.c:
+    2858-2868), so a battler that selects Pursuit but runs no move is unreachable (review 8; the
+    laws' pursuer mask reads the selection, ``outcome.chase_pursuers``)."""
     acts = jnp.asarray([0, 0, MOVE_ACTIONS + 2, 0], jnp.int32)
-    for pursuit in (names.move("Pursuit"), 0):
-        moves = jnp.asarray([0, 0, 0, pursuit], jnp.int32)
+    for known in ("Pursuit", "Growl"):
+        s = _pending(with_moves(four(tables, names), names, 3, (known,)), names, 0, 1)
+        pursuit = known == "Pursuit"
+        moves = jnp.asarray([0, 0, 0, names.move(known)], jnp.int32)
         effect, _ = move_effects(tables, s, moves)
         uses = ~is_switch(acts)
         pairs = np.asarray(acid_rain_pairs(s, acts, uses, effect))
