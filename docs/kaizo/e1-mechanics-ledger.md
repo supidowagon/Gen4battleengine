@@ -2853,6 +2853,9 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   - Final closing compare: branch `e1-close-h-8` (e50e2349) = `e1-close-h-7` plus the class E revert, so classes A
     to E are all reverted. It runs against the 38099359 capture with the same allow-new. Expected: `compare: ok`
     with 0 generator drift.
+  - Result `snapcmp-e1closeh8-e50e234`: `compare: ok`, COMPARE_RC=0, 122 ok, 0 diverged, 0 error, 0 sampler drift,
+    0 generator drift, seeds 0-199, all groups. Log `_scratch/rent/out/snapcmp-e1closeh8-e50e234/fetch-1795310785/compare.log`.
+    Classes A to E account for every difference between batch H and the train tip.
   - Baseline: the closing compares of the merged tip use the train-tip capture 38099359 (82e54463, the
     `train/e3-slowfix-nmw` tip, plus an off-site test change), not main. 507220df contains that train
     (merge c592ddf9), which merges into main before batch H. Against main, the compare would also show the train's
