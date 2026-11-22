@@ -40,7 +40,28 @@ from nuzline.data.learnsets import Learnsets
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.engine.coverage import learn_masked
-from nuzline.engine.ids import ItemParam, Stat
+from nuzline.engine.damage import WEIGHT_BOUNDS
+from nuzline.engine.ids import (
+    SPECIES_ARCEUS,
+    SPECIES_CASTFORM,
+    SPECIES_CHANSEY,
+    SPECIES_CHATOT,
+    SPECIES_CHERRIM,
+    SPECIES_CLAMPERL,
+    SPECIES_CUBONE,
+    SPECIES_DIALGA,
+    SPECIES_DITTO,
+    SPECIES_FARFETCHD,
+    SPECIES_GIRATINA,
+    SPECIES_LATIAS,
+    SPECIES_LATIOS,
+    SPECIES_MAROWAK,
+    SPECIES_PALKIA,
+    SPECIES_PIKACHU,
+    SPECIES_SHAYMIN,
+    ItemParam,
+    Stat,
+)
 from nuzline.engine.levelup import (
     BOOST_PERCENT,
     FRIENDSHIP_TIERS,
@@ -116,6 +137,37 @@ _HELD_ITEM_METHODS = frozenset(
     {"trade_with_held_item", "level_with_held_item_day", "level_with_held_item_night"}
 )
 _SHEDINJA_METHODS = frozenset({"level_ninjask", "level_shedinja"})
+# The species a battle rule names by id, so evolving into or out of one changes a rule
+# (``evolve_dominates``): the species-bound held items of BattleSystem_CalcMoveDamage
+# (Latios/Latias, Clamperl, Pikachu, Ditto, Cubone/Marowak, Dialga, Palkia, Giratina;
+# battle_lib.c:6730-6774), Quick Powder (Ditto, :1252-1254), the crit items
+# (Chansey, Farfetch'd; :7127-7128), the form changes (Castform :6314, Cherrim :6366,
+# Arceus :6399 and :7629, Giratina :6412, Shaymin subscript_check_shaymin_form.s:13),
+# Chatter (Chatot, battle_script.c:8402) and Burmy's form after the battle
+# (battle_system.c:938, :1562).
+_SPECIES_BURMY = 412  # generated/species.txt line 413
+_SPECIES_KEYED = frozenset(
+    {
+        SPECIES_PIKACHU,
+        SPECIES_FARFETCHD,
+        SPECIES_CUBONE,
+        SPECIES_MAROWAK,
+        SPECIES_CHANSEY,
+        SPECIES_DITTO,
+        SPECIES_CASTFORM,
+        SPECIES_CLAMPERL,
+        SPECIES_LATIAS,
+        SPECIES_LATIOS,
+        _SPECIES_BURMY,
+        SPECIES_CHERRIM,
+        SPECIES_CHATOT,
+        SPECIES_DIALGA,
+        SPECIES_PALKIA,
+        SPECIES_GIRATINA,
+        SPECIES_SHAYMIN,
+        SPECIES_ARCEUS,
+    }
+)
 
 _DAY, _NIGHT = "day", "night"
 _MALE, _FEMALE = 0, 1  # PokemonSpec.gender
@@ -297,7 +349,9 @@ def _recalculated(tables: Tables, mon: PokemonSpec, species: int, personality: i
     (``Pokemon_CalcStats``, ``src/pokemon.c:640-651``). ``current_hp`` ``None`` (full HP)
     stays full: the gain added to a full HP is the new maximum. The stored stats are dropped
     and the ``ability_form`` / ``stats_form`` quirks of a trainer Pokemon end (the game reads
-    the Pokemon's own form row)."""
+    the Pokemon's own form row). The gender is the new species' for the personality: the game
+    stores none that survives, every read recomputes it (``BoxPokemon_GetGender``,
+    ``src/pokemon.c:2696-2705``; the battle's, ``battle_lib.c:116``)."""
     old_max = int(spec_stats(tables, mon)[Stat.HP])
     exp = spec_exp(tables, mon)
     row, form = _row(tables, species, mon.form)
@@ -308,6 +362,7 @@ def _recalculated(tables: Tables, mon: PokemonSpec, species: int, personality: i
         level=_level_at(tables, species, exp),
         exp=exp,
         ability_slot=_ability_slot(tables, row, personality),
+        gender=_gender(tables, row, personality),
         ability_form=None,
         stats_form=None,
         stats=None,
@@ -983,33 +1038,69 @@ def evolve_dominates(
     tables: Tables, learnsets: Learnsets, options: MemberOptions, option: EvolutionOption
 ) -> bool:
     """Whether evolving at ``option`` never does worse than cancelling (design section 6,
-    "Bound" rule 2): the evolved species keeps its types and its ability, no base stat falls, and
-    no learnset entry before the last cap is lost (every move the member would be offered
-    without evolving is offered on the evolved path). To keep the pruning exact it also requires
-    that the evolution does not use up a held item (``_HELD_ITEM_METHODS``) and that the new
-    species' experience table keeps the member's level at its experience
-    (:func:`_recalculated` takes the level from the experience)."""
+    "Bound" rule 2), claimed only when the evolved form is the same in every battle rule and
+    the only difference is extra learn offers (each of which can be given up):
+
+    - the same types, the same ability, and the same species ability pair (the trainer AI
+      guesses an unannounced ability from the species' two, ``trainer_ai.c:1191-1192``);
+    - the same base stats. A rise is not provably better: a faster battler moves last under
+      Trick Room (``battle_lib.c:1432-1435``), Gyro Ball's power falls with the user's speed and
+      rises with the target's (``battle_script.c:7127``), the confusion self-hit uses the
+      battler's own Attack (``CALC_SELF_HIT``, ``battle_controller_player.c:2631``), and the
+      trainer AI scores its moves by damage against the battler's stats
+      (``TrainerAI_CalcDamage``, ``trainer_ai.c:2835``);
+    - the same gender for the personality (the battle recomputes it from the species,
+      ``src/pokemon.c:2696-2705``, ``battle_lib.c:116``);
+    - the same experience group (later level-ups and :func:`_recalculated`'s level come from
+      the species' own experience table);
+    - the same Low Kick / Grass Knot power against it: ``BattleMon.weight`` is the species'
+      Pokedex weight (``battle_lib.c:150``), read by ``BtlCmd_CalcWeightBasedPower``
+      (``battle_script.c:6808-6826``) and the AI's power estimate (``trainer_ai.c:3059-3066``);
+    - neither species is one a battle rule names (``_SPECIES_KEYED``: species-bound held items
+      such as Chansey's Lucky Punch, form changes, Chatter);
+    - the method neither uses up a held item (``_HELD_ITEM_METHODS``) nor adds a Shedinja
+      (``_SHEDINJA_METHODS``);
+    - every offer of the cancelled path, ``(level, move)``, is offered at the same level on the
+      evolved path (an offer at another level changes which moves the member holds in the
+      fights between)."""
     member = options.member
     old_row, _ = _row(tables, member.species, member.form)
     new_row, _ = _row(tables, option.target, member.form)
-    types = np.asarray(tables.species_types)
-    if not np.array_equal(types[old_row], types[new_row]):
+    if member.species in _SPECIES_KEYED or option.target in _SPECIES_KEYED:
         return False
+    name = learnsets.evolution_methods[option.method]
+    if name in _HELD_ITEM_METHODS or name in _SHEDINJA_METHODS:
+        return False
+    for column in ("species_types", "species_abilities_decomp", "species_base_stats"):
+        values = np.asarray(getattr(tables, column))
+        if not np.array_equal(values[old_row], values[new_row]):
+            return False
     abilities = np.asarray(tables.species_abilities_decomp)
     new_slot = _ability_slot(tables, new_row, options.personality)
     if abilities[new_row][new_slot] != abilities[old_row][member.ability_slot]:
         return False
-    stats = np.asarray(tables.species_base_stats)
-    if np.any(stats[new_row] < stats[old_row]):
+    # Attract, Cute Charm and Rivalry read the gender, recomputed from the species
+    # (``BoxPokemon_GetGender``, ``src/pokemon.c:2696-2705``; ``battle_lib.c:116``).
+    if _gender(tables, new_row, options.personality) != _gender(
+        tables, old_row, options.personality
+    ):
         return False
-    if learnsets.evolution_methods[option.method] in _HELD_ITEM_METHODS:
+    rates = np.asarray(tables.species_exp_rate)
+    if int(rates[member.species]) != int(rates[option.target]):
         return False
-    rate = int(np.asarray(tables.species_exp_rate)[member.species])
-    exp = int(np.asarray(tables.exp_table)[rate][option.level])
-    if _level_at(tables, option.target, exp) < option.level:
+    weights = np.asarray(tables.species_weight)
+    if _weight_bracket(int(weights[member.species])) != _weight_bracket(
+        int(weights[option.target])
+    ):
         return False
-    kept = {move for _, move in option.pre + option.post}
-    return all(move in kept for _, move in options.offers)
+    kept = set(option.pre + option.post)
+    return all(offer in kept for offer in options.offers)
+
+
+def _weight_bracket(weight: int) -> int:
+    """The index of Low Kick's / Grass Knot's power for a defender of ``weight`` hectograms:
+    the first bound at least the weight (``sWeightToPower``, ``battle_script.c:6815-6826``)."""
+    return sum(weight > bound for bound in WEIGHT_BOUNDS)
 
 
 def _paths(
@@ -1024,10 +1115,63 @@ def _paths(
     return [(None, options.offers), *paths]
 
 
-def _free(tables: Tables, options: MemberOptions, offers: Sequence[Offer]) -> list[Offer]:
-    """The offers with more than one worthwhile answer (not :func:`give_up_only`)."""
-    known = set(options.member.moves)
-    return [o for o in offers if not give_up_only(tables, known, o[1])]
+def _answer_lists(
+    tables: Tables, options: MemberOptions, offers: Sequence[Offer]
+) -> Iterator[tuple[tuple[Offer, int | None], ...]]:
+    """Every answer list of one path's ``offers``, taken in game order (by level; within a
+    level the order given: the old species' battle level-up before the evolution's own learn
+    loop, ``src/evolution.c:461-480``), sorted for :class:`GrowthPlan`. An offer is
+    :func:`give_up_only` (no entry) only against the root moves this plan still surely holds:
+    a root move leaves only by an answer that names its slot (an offer with an empty slot is
+    learned there, ``Pokemon_LevelUpMove``, ``src/pokemon.c:3935-3966``, and removes nothing),
+    so a slot an earlier answer of the plan names no longer counts. An HM slot is never an
+    answer (:func:`_answers`), so an HM always counts."""
+    order = sorted(offers, key=lambda offer: offer[0])
+    roots = tuple(options.member.moves)
+    answers = _answers(tables, options)
+    pruned: dict[tuple[int, frozenset[int]], bool] = {}
+
+    def only_give_up(i: int, named: frozenset[int]) -> bool:
+        if (i, named) not in pruned:
+            held = [m for s, m in enumerate(roots) if s not in named]
+            pruned[i, named] = give_up_only(tables, held, order[i][1])
+        return pruned[i, named]
+
+    def walk(i: int, named: frozenset[int], chosen: tuple) -> Iterator[tuple]:
+        if i == len(order):
+            yield tuple(sorted(chosen, key=lambda entry: entry[0]))
+            return
+        if only_give_up(i, named):
+            yield from walk(i + 1, named, chosen)
+            return
+        for answer in answers:
+            after = named if answer is GIVE_UP_ANSWER else named | {answer}
+            yield from walk(i + 1, after, (*chosen, (order[i], answer)))
+
+    yield from walk(0, frozenset(), ())
+
+
+def _answer_count(tables: Tables, options: MemberOptions, offers: Sequence[Offer]) -> int:
+    """``len(list(_answer_lists(...)))`` without listing them (the same walk, counted)."""
+    order = sorted(offers, key=lambda offer: offer[0])
+    roots = tuple(options.member.moves)
+    answers = _answers(tables, options)
+    counts: dict[tuple[int, frozenset[int]], int] = {}
+
+    def count(i: int, named: frozenset[int]) -> int:
+        if i == len(order):
+            return 1
+        if (i, named) not in counts:
+            held = [m for s, m in enumerate(roots) if s not in named]
+            if give_up_only(tables, held, order[i][1]):
+                counts[i, named] = count(i + 1, named)
+            else:
+                counts[i, named] = sum(
+                    count(i + 1, named if a is GIVE_UP_ANSWER else named | {a}) for a in answers
+                )
+        return counts[i, named]
+
+    return count(0, frozenset())
 
 
 def _answers(tables: Tables, options: MemberOptions) -> list[int | None]:
@@ -1040,12 +1184,11 @@ def _answers(tables: Tables, options: MemberOptions) -> list[int | None]:
 
 
 def member_plan_count(tables: Tables, learnsets: Learnsets, options: MemberOptions) -> int:
-    """The number of non-dominated plans of one member: per path 5^m for its m free offers
-    (fewer answers with an HM slot), summed over the paths (design section 6, "Bound")."""
-    width = len(_answers(tables, options))
+    """The number of non-dominated plans of one member: per path, every answer list of its
+    offers (5 answers per free offer, fewer with an HM slot; a :func:`give_up_only` offer has
+    one), summed over the paths (design section 6, "Bound")."""
     return sum(
-        width ** len(_free(tables, options, offers))
-        for _, offers in _paths(tables, learnsets, options)
+        _answer_count(tables, options, offers) for _, offers in _paths(tables, learnsets, options)
     )
 
 
@@ -1054,13 +1197,11 @@ def member_plans(
 ) -> tuple[GrowthPlan, ...]:
     """Every non-dominated plan of one member (:func:`member_plan_count` of them). A given-up-
     only offer has no entry."""
-    answers = _answers(tables, options)
-    plans = []
-    for evolve_at, offers in _paths(tables, learnsets, options):
-        free = sorted(_free(tables, options, offers))
-        for combo in itertools.product(answers, repeat=len(free)):
-            plans.append(GrowthPlan(tuple(zip(free, combo, strict=True)), evolve_at))
-    return tuple(plans)
+    return tuple(
+        GrowthPlan(answers, evolve_at)
+        for evolve_at, offers in _paths(tables, learnsets, options)
+        for answers in _answer_lists(tables, options, offers)
+    )
 
 
 def _committed_plans(
@@ -1080,22 +1221,24 @@ def _committed_plans(
     for option in options.evolutions:
         if option.gap != current_gap:
             continue
-        free = sorted(_free(tables, options, [o for o in option.post if o[0] == option.level]))
-        for combo in itertools.product(_answers(tables, options), repeat=len(free)):
-            plan = GrowthPlan(tuple(zip(free, combo, strict=True)), option.gap)
-            plans.append(complete(options.slot, plan))
+        at_level = [o for o in option.post if o[0] == option.level]
+        for answers in _answer_lists(tables, options, at_level):
+            plans.append(complete(options.slot, GrowthPlan(answers, option.gap)))
     return tuple(plans)
 
 
 class GrowthPlanSet(NamedTuple):
     """The plans one setup screens: ``members`` the plans of each member (a setup takes one of
     each), ``total`` the non-dominated setups before the cap, ``cap`` the limit used
-    (``UNLIMITED`` = -1: none), ``capped`` whether the cap removed options."""
+    (``UNLIMITED`` = -1: none), ``capped`` whether the cap removed options, ``screened_later``
+    whether the later prompts of a capped set took the caller's single-fight screen answer
+    (``later``) rather than the base plan's."""
 
     members: tuple[tuple[GrowthPlan, ...], ...]
     total: int
     cap: int
     capped: bool
+    screened_later: bool = False
 
     @property
     def kept(self) -> int:
@@ -1110,10 +1253,16 @@ class GrowthPlanSet(NamedTuple):
         """The plain report line when the cap removed options (GT-11 prints it), else ``None``."""
         if not self.capped:
             return None
+        rest = (
+            "every later learn and evolution prompt takes the best answer by single-fight screen"
+            if self.screened_later
+            else "every later learn prompt learns into an empty slot, else gives the move up, "
+            "and no later evolution is taken (the base plan)"
+        )
         return (
             f"growth options removed by --growth-cap {self.cap}: screened {self.kept} of "
-            f"{self.total} growth plans; the rest take the best answer by single-fight screen. "
-            "Run with --growth-cap -1 to screen all."
+            f"{self.total} growth plans; only this fight's evolution and its learn prompts are "
+            f"enumerated, and {rest}. Run with --growth-cap -1 to screen all."
         )
 
 
@@ -1141,4 +1290,4 @@ def growth_plans(
         members = tuple(member_plans(tables, learnsets, o) for o in options)
         return GrowthPlanSet(members, total, cap, False)
     members = tuple(_committed_plans(tables, learnsets, o, current_gap, later) for o in options)
-    return GrowthPlanSet(members, total, cap, True)
+    return GrowthPlanSet(members, total, cap, True, later is not None)

@@ -2157,3 +2157,40 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/prep/test_gauntlet_start.py, tests/prep/test_problem.py (`test_a_hatched_member_in_a_gym_prep_runs`),
   tests/tools/rom/test_maps.py (labels vs decomp, Kaizo labels), tests/tools/rom/test_extract_rom.py (Kaizo trainer labels),
   tests/tools/rom/test_code_tables.py (class switch).
+
+- E3-B3-15 fix (areas review `_scratch/manager/review_b3_areas.md`, must-fix 4): `give_up_only` against the moves the plan still holds (`src/nuzline/prep/growth.py`). No table input changed.
+  Was: the free offers of a path were computed once against the root moves, so a plan that replaced the dominating move earlier still had the later offer pruned to give up.
+  Now: `_answer_lists` / `_answer_count` walk a path's offers in game order (by level, stable: the old species' battle level-up before the evolution's learn loop, `src/evolution.c:461-480`) and test each
+  offer against the root moves whose slot no earlier answer of the plan names. A root move leaves only by an answer naming its slot (an empty slot is filled, `Pokemon_LevelUpMove`, `src/pokemon.c:3935-3966`,
+  and removes nothing), so this never prunes an offer whose better move may be gone; an HM slot is never an answer, so an HM always counts. `member_plan_count`, `member_plans` and `_committed_plans` use the walk.
+  Tests: tests/prep/test_growth.py `test_an_offer_is_pruned_only_while_the_plan_still_holds_the_better_move` (hand-built: 9 plans, 5 + 4; was 5).
+
+- E3-B3-15 fix (areas review, must-fix 5): `evolve_dominates` exact (`src/nuzline/prep/growth.py`). No table input changed.
+  Was: types, ability, no base stat falls, every never-path move id offered somewhere on the evolved path, no held item used up, level kept.
+  Now domination needs every one of: same types; same ability and the same species ability pair (the AI guesses an unannounced ability from the pair, `trainer_ai.c:1191-1192`); same base stats
+  (a rise is not provably better: Trick Room `battle_lib.c:1432-1435`, Gyro Ball `battle_script.c:7127`, confusion self-hit on own Attack `battle_controller_player.c:2631`, AI damage scoring
+  `trainer_ai.c:2835`); same experience group; same Low Kick / Grass Knot bracket (`BattleMon.weight` `battle_lib.c:150`, `battle_script.c:6808-6826`, AI `trainer_ai.c:3059-3066`); neither species in
+  `_SPECIES_KEYED` (species-bound items `battle_lib.c:6730-6774`, `:1252-1254`, `:7127-7128`; form changes `:6314`, `:6366`, `:6399`, `:6412`, `subscript_check_shaymin_form.s:13`; Chatter
+  `battle_script.c:8402`; Burmy `battle_system.c:938`, `:1562`); no held-item or Shedinja method; every never-path offer `(level, move)` offered at the same level on the evolved path.
+  Also the same gender for the personality: the game stores no lasting gender, every read recomputes it from species and personality (`BoxPokemon_GetGender`, `src/pokemon.c:2696-2705`;
+  the battle's `battle_lib.c:116`), and Attract, Cute Charm and Rivalry read it. Found while fixing: GT-13's `_recalculated` kept the old gender; it now sets `gender = _gender(new row, personality)`
+  (test `test_the_gender_is_the_new_species_for_the_personality`, 4 ratios).
+  Effect: the prune now fires only for a species pair that differs in nothing a battle reads; real evolutions (stats rise) keep both paths. Design rule 2 (`docs/gauntlet-design.md:273`) still says
+  "no base stat falls": outside this stream's files, for the managing session.
+  Tests: tests/prep/test_growth.py `test_evolve_dominates_cancel_only_when_every_condition_holds` (types, stat falls, stat rises, ability, other ability, exp group, weight bracket; same bracket still
+  dominates), `test_evolve_does_not_dominate_when_a_move_comes_at_another_level` (16, 14, lost), `..._out_of_or_into_a_species_a_rule_names` (Chansey, Pikachu), `..._with_an_item_using_or_shedinja_method`.
+
+- E3-B3-15 fix (areas review, must-fix 6): the cap report line is exact (`src/nuzline/prep/growth.py` `GrowthPlanSet.report_line`). No table input changed.
+  `GrowthPlanSet.screened_later` (set when `later` is given): with it the line says later prompts take the best answer by single-fight screen; without it, that only this fight's evolution and its
+  learn prompts are enumerated and every later learn prompt learns into an empty slot, else gives the move up, with no later evolution (the base plan).
+  Tests: tests/prep/test_growth.py `test_the_cap_enumerates_only_the_current_fight_and_reports_the_count`, `test_later_prompts_take_the_screens_best_answer_above_the_cap`.
+
+- E3-B3-17 fix (areas review, should-consider): win chances rounded down (`src/nuzline/prep/report.py`). No table input changed.
+  `_tenths(p, up=False)`: one decimal, floor (ceil with `up`) after rounding 1000 p to 9 places. `_percent`, the odds ladder (p and interval) and the "Cheaper" line round down, so 0.9996 prints
+  "99.9 %", not "100.0 %"; the death-distribution line rounds the 0-deaths cell down and every loss cell (1, 2, 3+, whiteout, unfinished, protected lost) up.
+  Tests: tests/prep/test_report.py `test_a_win_chance_is_rounded_down_and_a_loss_chance_up`.
+
+- E3-B3-17 fix (areas review, should-consider): the no-`--next` text (`src/nuzline/prep/report.py` `post_fight_lines`). No table input changed.
+  Was "nothing is lost". Now: a cancelled evolution is offered again at the next level-up, but the evolved species' learn loop offers only the entries of exactly the level it evolves at
+  (`src/evolution.c:461-480`), so after a cancel a move the evolved species learns only at the current level is never offered.
+  Tests: tests/prep/test_report.py `test_post_fight_without_next_recommends_cancel`.

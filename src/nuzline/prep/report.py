@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import math
 from collections.abc import Callable, Sequence
 from typing import NamedTuple
 
@@ -302,7 +303,8 @@ def _distribution_line(result: PrepResult) -> str:
         ("unfinished", p[7]),
         ("protected lost", p[5]),
     )
-    return f"Deaths ({source}): " + "  ".join(f"{n}: {100 * v:.1f} %" for n, v in cells)
+    # The 0-deaths cell is a win chance, rounded down; every other cell is a loss, rounded up.
+    return f"Deaths ({source}): " + "  ".join(f"{n}: {_tenths(v, up=n != '0')} %" for n, v in cells)
 
 
 def ladder_lines(result: PrepResult, problem: PrepProblem, names: Names) -> list[str]:
@@ -311,8 +313,8 @@ def ladder_lines(result: PrepResult, problem: PrepProblem, names: Names) -> list
     out = [f"Odds ladder (rung {problem.deaths} planned):"]
     for rung in result.ladder:
         out.append(
-            f"  deaths <= {rung.k}: {100 * rung.p:.1f} % "
-            f"[{100 * rung.ci_low:.1f}, {100 * rung.ci_high:.1f}]  {rung.source}"
+            f"  deaths <= {rung.k}: {_percent(rung.p)} "
+            f"[{_tenths(rung.ci_low)}, {_tenths(rung.ci_high)}]  {rung.source}"
         )
         if rung.setup != result.chosen:
             out.append(f"  (best for this rung: {_team_text(problem, names, rung.setup)})")
@@ -360,7 +362,7 @@ def _cheaper_lines(result: PrepResult, problem: PrepProblem, names: Names) -> li
     top = f.result.ranking[0]
     line = (
         f"Cheaper, tied within noise: {setup_label(names, problem, f.setup)} "
-        f"{top.estimate:.1%} ({top.ci_low:.1%}-{top.ci_high:.1%}), "
+        f"{_tenths(top.estimate)}% ({_tenths(top.ci_low)}%-{_tenths(top.ci_high)}%), "
         f"{top.e_deaths:.3f} expected deaths, {cost_line(problem, names, f.setup)}"
     )
     return [line]
@@ -513,8 +515,17 @@ def next_fight_scorer(
     return score
 
 
+def _tenths(p: float, *, up: bool = False) -> str:
+    """``p`` as a percentage to one decimal, rounded down (a win chance never shows higher than
+    it is: 0.9996 is "99.9", not "100.0") or, with ``up``, rounded up (a loss chance never shows
+    lower). The product is rounded to 9 places first, so a float such as 0.999 * 1000 =
+    998.9999999999999 stays 99.9."""
+    tenths = round(1000 * p, 9)
+    return f"{(math.ceil(tenths) if up else math.floor(tenths)) / 10:.1f}"
+
+
 def _percent(p: float) -> str:
-    return f"{100 * p:.1f} %"
+    return f"{_tenths(p)} %"
 
 
 def _answer_text(post: PostFight, names: Names, answer: PostFightAnswer) -> str:
@@ -562,8 +573,11 @@ def post_fight_lines(post: PostFight, names: Names) -> list[str]:
     else:
         out.append(
             "  No --next given. Recommended answer: cancel. A cancelled evolution is offered "
-            "again at that Pokemon's next level-up, so nothing is lost; give --next "
-            "<trainer-id> to score both answers against the next fight."
+            "again at that Pokemon's next level-up, but the evolved species' moves of the level "
+            "it evolves at are not: its learn loop offers only the entries of exactly that level "
+            "(src/evolution.c:461-480), so after a cancel a move the evolved species learns only "
+            "at the level reached now is never offered. Give --next <trainer-id> to score both answers "
+            "against the next fight."
         )
     out.append(f"  {CANNOT_UNDO}")
     return out

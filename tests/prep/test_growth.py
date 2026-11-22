@@ -580,6 +580,16 @@ def test_ability_slot_is_personality_bit_zero(tables, learnsets, pid, slot):
     assert evolved.ability_slot == slot
 
 
+@pytest.mark.parametrize(
+    ("ratio", "pid", "gender"), [(254, 0, 1), (0, 0, 0), (255, 0, 2), (127, 200, 0)]
+)
+def test_the_gender_is_the_new_species_for_the_personality(tables, learnsets, ratio, pid, gender):
+    # BoxPokemon_GetGender recomputes it from species and personality (src/pokemon.c:2696-2705)
+    t = edited(tables, species_gender={ALAKAZAM: ratio})
+    evolved, _, _ = run_evolve(t, learnsets, mon(gender=1 - gender % 2), personality=pid)
+    assert evolved.gender == gender
+
+
 def test_single_ability_species_ignores_the_personality_bit(tables, learnsets):
     assert int(np.asarray(tables.species_abilities_decomp)[SHEDINJA][1]) == 0
     evolved, _, _ = run_evolve(tables, learnsets, mon(), target=SHEDINJA, personality=1)
@@ -1076,15 +1086,24 @@ def with_learnsets(manifest, method, entries, rows=None):
     return Learnsets(patched)
 
 
-def plan_tables(tables):
-    """A twin of OLD: A with OLD's types, ability, experience group and a higher base stat, and
-    the offered moves apart from each other and from the known ones."""
+TWIN = 7  # the evolving species of the domination tests: no battle rule names it
+CHANSEY, PIKACHU = 113, 25  # species a battle rule names (battle_lib.c:7127, :6749)
+
+
+def plan_tables(tables, old=TWIN, new=A):
+    """A twin of ``old``: ``new`` with ``old``'s types, abilities, base stats, experience group
+    and weight, and the offered moves apart from each other and from the known ones."""
+    columns = (
+        "species_types",
+        "species_abilities_decomp",
+        "species_base_stats",
+        "species_weight",
+        "species_gender",
+    )
     twin = edited(
         tables,
-        species_types={A: np.asarray(tables.species_types)[OLD]},
-        species_abilities_decomp={A: np.asarray(tables.species_abilities_decomp)[OLD]},
-        species_base_stats={A: np.asarray(tables.species_base_stats)[OLD] + 10},
-        species_exp_rate={A: 0, OLD: 0},
+        **{c: {new: np.asarray(getattr(tables, c))[old]} for c in columns},
+        species_exp_rate={new: 0, old: 0},
     )
     return apart(twin, [*KNOWN, M1, M2, M3, M4])
 
@@ -1180,12 +1199,12 @@ def test_an_unsupported_move_is_pruned_and_costs_no_branch(tables, manifest, met
     assert all(dict(p.answers).keys() == {(12, M1)} for p in member_plans(t, ls, opts))
 
 
-def twin_case(tables, manifest, method):
-    entries = {OLD: [(12, M1), (15, M2)], A: [(15, M2)]}
-    ls = with_learnsets(manifest, method, entries, [("level", 14, A)])
-    t = plan_tables(tables)
-    gap = EvolutionGap(0, 14, A, method["level"])
-    return t, ls, member_options(t, ls, 0, old_member(), 0, CAP, [gap])
+def twin_case(tables, manifest, method, old=TWIN, new=A, new_entries=((15, M2),)):
+    entries = {old: [(12, M1), (15, M2)], new: list(new_entries)}
+    ls = with_learnsets(manifest, method, entries)
+    t = plan_tables(tables, old, new)
+    gap = EvolutionGap(0, 14, new, method["level"])
+    return t, ls, member_options(t, ls, 0, old_member(species=old), 0, CAP, [gap])
 
 
 def test_evolve_dominates_cancel_only_when_every_condition_holds(tables, manifest, method):
@@ -1196,38 +1215,100 @@ def test_evolve_dominates_cancel_only_when_every_condition_holds(tables, manifes
     assert member_plan_count(t, ls, opts) == 25
     assert {p.evolve_at for p in member_plans(t, ls, opts)} == {0}
 
-    types = np.array(np.asarray(t.species_types)[A])
-    types[0] = (int(types[0]) + 1) % 17
-    stats = np.array(np.asarray(t.species_base_stats)[A])
-    stats[3] = np.asarray(t.species_base_stats)[OLD][3] - 1
-    abilities = np.array(np.asarray(t.species_abilities_decomp)[A])
-    abilities[0] += 1
+    def row(column, index, delta):
+        values = np.array(np.asarray(getattr(t, column))[A])
+        values[index] = int(values[index]) + delta
+        return {A: values}
+
+    second = np.array(np.asarray(t.species_abilities_decomp)[A])
+    second[1] = 0 if second[1] else int(second[0]) + 1
     cases = {
-        "types change": edited(t, species_types={A: types}),
-        "a base stat falls": edited(t, species_base_stats={A: stats}),
-        "the ability changes": edited(t, species_abilities_decomp={A: abilities}),
-        "the level falls on the new exp table": edited(t, species_exp_rate={A: 5}),
+        "types change": edited(t, species_types=row("species_types", 0, 1)),
+        "a base stat falls": edited(t, species_base_stats=row("species_base_stats", 3, -1)),
+        # a faster battler moves last under Trick Room (battle_lib.c:1432-1435)
+        "a base stat rises": edited(t, species_base_stats=row("species_base_stats", 3, 1)),
+        "the ability changes": edited(
+            t, species_abilities_decomp=row("species_abilities_decomp", 0, 1)
+        ),
+        # the AI guesses an unannounced ability from the species' pair (trainer_ai.c:1191-1192)
+        "the species' other ability changes": edited(t, species_abilities_decomp={A: second}),
+        "the experience group changes": edited(t, species_exp_rate={A: 5}),
+        # personality 0 against ratio 254 is female, against 0 male (src/pokemon.c:2696-2705)
+        "the gender changes": edited(t, species_gender={TWIN: 254, A: 0}),
+        # Low Kick / Grass Knot: 10.0 kg and 10.1 kg are in different brackets (WEIGHT_BOUNDS)
+        "Low Kick's power changes": edited(t, species_weight={TWIN: 100, A: 101}),
     }
     for why, bad in cases.items():
         assert not evolve_dominates(bad, ls, opts, gap), why
         assert member_plan_count(bad, ls, opts) == 25 + 25, why  # never and the gap, both kept
-    # a learnset entry lost: the old species' M2 at 15 is not offered by A
-    entries = {OLD: [(12, M1), (15, M2)], A: [(15, M3)]}
-    lost = with_learnsets(manifest, method, entries, [("level", 14, A)])
-    gaps = [EvolutionGap(0, 14, A, method["level"])]
-    lost_opts = member_options(t, lost, 0, old_member(), 0, CAP, gaps)
-    assert not evolve_dominates(t, lost, lost_opts, lost_opts.evolutions[0])
-    # a method that uses up a held item
-    held = [EvolutionGap(0, 14, A, method["level_with_held_item_day"])]
-    held_opts = member_options(t, ls, 0, old_member(), 0, CAP, held)
-    assert not evolve_dominates(t, ls, held_opts, held_opts.evolutions[0])
+    same_bracket = edited(t, species_weight={TWIN: 101, A: 250})
+    assert evolve_dominates(same_bracket, ls, opts, gap)
+
+
+def test_evolve_does_not_dominate_when_a_move_comes_at_another_level(tables, manifest, method):
+    # the old species' M2 at 15 comes at 16 on the evolved path: one fight without it
+    t, ls, opts = twin_case(tables, manifest, method, new_entries=((16, M2),))
+    assert not evolve_dominates(t, ls, opts, opts.evolutions[0])
+    # and earlier is not better either: M2 at 14 replaces a move for the fights at 14
+    t, ls, opts = twin_case(tables, manifest, method, new_entries=((14, M2),))
+    assert not evolve_dominates(t, ls, opts, opts.evolutions[0])
+    # lost outright
+    t, ls, opts = twin_case(tables, manifest, method, new_entries=((15, M3),))
+    assert not evolve_dominates(t, ls, opts, opts.evolutions[0])
+
+
+def test_evolve_does_not_dominate_out_of_or_into_a_species_a_rule_names(tables, manifest, method):
+    # Chansey's Lucky Punch (battle_lib.c:7127) is lost on its twin; Pikachu gains Light Ball
+    for old, new in ((CHANSEY, A), (TWIN, PIKACHU)):
+        t, ls, opts = twin_case(tables, manifest, method, old=old, new=new)
+        assert not evolve_dominates(t, ls, opts, opts.evolutions[0]), (old, new)
+
+
+@pytest.mark.parametrize("name", ["level_with_held_item_day", "level_ninjask"])
+def test_evolve_does_not_dominate_with_an_item_using_or_shedinja_method(
+    tables, manifest, method, name
+):
+    t, ls, _ = twin_case(tables, manifest, method)
+    gaps = [EvolutionGap(0, 14, A, method[name])]
+    opts = member_options(t, ls, 0, old_member(species=TWIN), 0, CAP, gaps)
+    assert not evolve_dominates(t, ls, opts, opts.evolutions[0])
 
 
 def test_only_the_earliest_gap_is_kept_when_evolving_dominates(tables, manifest, method):
     t, ls, _ = twin_case(tables, manifest, method)
     gaps = [EvolutionGap(g, 14 + g, A, method["level"]) for g in range(3)]
-    opts = member_options(t, ls, 0, old_member(), 0, CAP, gaps)
+    opts = member_options(t, ls, 0, old_member(species=TWIN), 0, CAP, gaps)
     assert {p.evolve_at for p in member_plans(t, ls, opts)} == {0}
+
+
+def test_an_offer_is_pruned_only_while_the_plan_still_holds_the_better_move(
+    tables, manifest, method
+):
+    """Hand-built: TACKLE (slot 0) dominates move 160, offered at 15. A plan that replaced
+    slot 0 with M1 at 12 no longer holds TACKLE, so 160 keeps its five answers there."""
+    t = apart(tables, [*KNOWN, M1])
+    t = edited(t, **{c: {160: np.asarray(getattr(t, c))[TACKLE]} for c in MOVE_COLUMNS})
+    t = edited(t, move_power={160: int(np.asarray(t.move_power)[TACKLE]) - 1})
+    assert give_up_only(t, KNOWN, 160)
+    ls = with_learnsets(
+        manifest, method, {OLD: [(15, 160), (12, M1)]}
+    )  # table order is not game order
+    opts = member_options(t, ls, 0, old_member(), 0, CAP, [])
+    plans = member_plans(t, ls, opts)
+    # M1 into slot 0: 160 has 5 answers; M1 elsewhere or given up: TACKLE is held, 160 pruned
+    assert member_plan_count(t, ls, opts) == len(plans) == 5 + 4
+    replaced = [p for p in plans if p.answer((12, M1)) == 0]
+    assert sorted(p.answer((15, 160)) for p in replaced if p.answer((15, 160)) is not None) == [
+        0,
+        1,
+        2,
+        3,
+    ]
+    assert len(replaced) == 5 and all(
+        dict(p.answers).keys() == {(12, M1), (15, 160)} for p in replaced
+    )
+    kept = [p for p in plans if p.answer((12, M1)) != 0]
+    assert len(kept) == 4 and all((15, 160) not in dict(p.answers) for p in kept)
 
 
 def many_gaps(tables, manifest, method, n):
@@ -1246,6 +1327,9 @@ def test_the_cap_enumerates_only_the_current_fight_and_reports_the_count(tables,
     assert {p.evolve_at for (p,) in over.setups()} == {None, 0}
     line = over.report_line()
     assert "2 of 65" in line and "--growth-cap -1" in line
+    # without ``later`` the rest take the base plan, and the line says so (not a screen)
+    assert "single-fight screen" not in line and "(the base plan)" in line
+    assert "gives the move up" in line and "no later evolution is taken" in line
     # the default cap is MAX_GROWTH_PLANS
     assert growth_plans(tables, ls, [opts]).capped
     at = growth_plans(tables, ls, [opts], growth_cap=65)
@@ -1267,3 +1351,5 @@ def test_later_prompts_take_the_screens_best_answer_above_the_cap(tables, manife
     over = growth_plans(tables, ls, [opts], growth_cap=10, later=later)
     assert calls == [0, 0]
     assert all(p.answer((20, M1)) == 1 for (p,) in over.setups())
+    line = over.report_line()
+    assert "best answer by single-fight screen" in line and "base plan" not in line

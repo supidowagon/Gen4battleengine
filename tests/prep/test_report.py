@@ -14,6 +14,8 @@ from nuzline.prep.problem import Resources
 from nuzline.prep.report import (
     CANNOT_UNDO,
     PostFight,
+    _percent,
+    _tenths,
     cost_line,
     ladder_lines,
     post_fight_evolution,
@@ -430,7 +432,16 @@ def test_post_fight_without_next_recommends_cancel(tables, names, manifest, meth
     assert [(p.slot, p.target) for p in got.prompts] == [(0, A)] and got.answers == ()
     assert names.species_names[A] in text and "Recommended answer: cancel" in text
     assert "offered again at that Pokemon's next level-up" in text
+    # a cancel can lose the evolved species' move of this level (evolution.c:461-480)
+    assert "nothing is lost" not in text and "only the entries of exactly that level" in text
     assert lines[-1] == "  " + CANNOT_UNDO and text.isascii()
+
+
+def test_a_win_chance_is_rounded_down_and_a_loss_chance_up():
+    assert _percent(0.9996) == "99.9 %"  # not "100.0 %": a loss chance stays visible
+    assert _percent(0.999) == "99.9 %" and _percent(1.0) == "100.0 %"
+    assert _percent(0.8549) == "85.4 %" and _percent(0.0) == "0.0 %"
+    assert _tenths(0.0004, up=True) == "0.1" and _tenths(0.05, up=True) == "5.0"
 
 
 def test_post_fight_with_next_names_the_better_answer_with_both_numbers(
