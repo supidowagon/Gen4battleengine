@@ -91,6 +91,7 @@ from nuzline.engine.actions import (
     imprisoning_foe,
     locked_slot,
     move_imprisoned,
+    picks_no_command,
     replacement_bench,
     sealed_mask,
     usable_moves,
@@ -1406,7 +1407,10 @@ def _use_move(
     # deals 2 * storedDamage (damage.fixed_damage) at the last hitter, i.e. the foe's
     # active Pokemon, a replacement included. Nothing stored (subscript_bide_end.s:
     # "But it failed!") or the foe fainted (subscript_bide_no_target.s) ends the move
-    # here; either way the lock is released after the move (below).
+    # here. A release runs subscript_bide_end.s (or _no_target.s) first (bcp.c:2722-2724:
+    # commandNext = command), which clears VOLATILE_CONDITION_MOVE_LOCKED (:11; _no_target.s:9)
+    # before the move: a charge move then charges, Rollout and Uproar start their own lock, and
+    # that lock stays after the move. The stored damage stays until the move is done (below).
     biding = can_act & ~reflected_pass & (state.bide_turns[side] > 0)
     bide_left = jnp.maximum(state.bide_turns[side].astype(_I32) - 1, 0)
     state = state._replace(
@@ -1420,6 +1424,12 @@ def _use_move(
     # ends the move in subscript_bide_no_target.s. At B = 2 it is the foe while it lives.
     bide_def = targets.bide_defender(state, side, outcome.bide_target_draw[side])
     bide_stop = bide_ends & ((state.bide_damage[side] <= 0) | (bide_def == NO_DEFENDER))
+    # No uproar while biding: both are move locks, so ``unlock_move``'s uproar test is moot here.
+    state = state._replace(
+        locked_move=state.locked_move.at[side].set(
+            jnp.where(bide_ends, 0, state.locked_move[side]).astype(state.locked_move.dtype)
+        )
+    )
     can_act = can_act & ~bide_stop
     resolved = _redefend(resolved, side, bide_def, bide_ends)
     target_side = resolved.target_side
@@ -3071,9 +3081,16 @@ def _use_move(
         state = try_grudge(
             state, side, user, pivot_slot, b, state_in.ts_grudge[b] != 0, False, resumed
         )
-    # The unleash script clears the lock (the Bide counter is spent); the move above still
-    # saw it locked, so effect_script_0026.s did not restart Bide.
-    state = _unlock(state, side, bide_ends & head_on)
+    # The release cleared the lock before the move (subscript_bide_end.s:11, above); the stored
+    # damage it dealt (bcp.c:2701) is hidden state, 0 once the move is done. A lock the move set
+    # (a charge turn, Rollout, Uproar) stays. Reference: ref_step's ``turn.bide_release``.
+    state = state._replace(
+        bide_damage=state.bide_damage.at[side].set(
+            jnp.where(bide_ends & head_on, 0, state.bide_damage[side]).astype(
+                state.bide_damage.dtype
+            )
+        )
+    )
     # BattleControllerPlayer_UpdateFlagsWhenHit (battle_controller_player.c:4499-4507),
     # reached on every path once the move was chosen (UPDATE_MOVE_BUFFERS, :3956, or
     # LOOP_SPREAD_MOVES, :3837): moveHit[defender] = the move when the attack message
@@ -6013,8 +6030,8 @@ def canonical_selection(tables: Tables, state: BattleState) -> BattleState:
     (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182), so
     an unrun pick (a battler immobilized, or fainted before acting) would leave states that differ
     only in dead values. For a battler whose active Pokemon has HP and that picks a command next
-    turn (not locked: ``locked_slot < 0``, Battler_CanPickCommand, battle_lib.c:6224-6235, whose
-    RECHARGING no move sets) both are dead when it has a usable move (``usable_moves``, the test
+    turn (``picks_no_command`` FALSE: not locked nor recharging, Battler_CanPickCommand,
+    battle_lib.c:6224-6235) both are dead when it has a usable move (``usable_moves``, the test
     ``order.selection_slots`` / ``selection_temps`` apply to this state at the next turn start):
     a FIGHT writes both (bcp.c:525-526; under an Encore moveSlot and TEMP_VALUE 0, :445-447), a
     switch or item writes TEMP_VALUE (:565, :595) and leaves a moveSlot that only a FIGHT battler's
@@ -6023,7 +6040,8 @@ def canonical_selection(tables: Tables, state: BattleState) -> BattleState:
     bcp.c:433-442) writes neither: its moveSlot has no reader under Struggle (lib.c:1382-1383,
     battle_script.c:6752), so it is 0; its TEMP_VALUE stays readable (the Rage check, bcp.c:844;
     TryPursuit, battle_script.c:6909, neither tests Struggle), so it is kept. A locked battler
-    writes nothing (bcp.c:334-337) and its readers take both: kept. A battler at 0 HP keeps both:
+    writes nothing (bcp.c:334-337) and its readers take both: kept; a recharging one too (its
+    values are read by the speed order, lib.c:1376-1386, and the Rage check, bcp.c:844). A battler at 0 HP keeps both:
     an absent one writes nothing (bcp.c:330-333), and a pending replacement's newcomer decides at
     ``replace`` / ``replace_round``, which canonicalize again. A paused state (``pivot_battler``,
     ``learn_site``) keeps both: the turn's remaining actions read them. Idempotent."""
@@ -6032,7 +6050,7 @@ def canonical_selection(tables: Tables, state: BattleState) -> BattleState:
     slots, temps = [], []
     for b in range(fmt.B):
         present = state.hp[party(fmt, b), state.active[b]] > 0
-        picks = present & (locked_slot(state, b) < 0) & ~paused
+        picks = present & ~picks_no_command(state, b) & ~paused
         usable = jnp.any(usable_moves(tables, state, b))
         slots.append(jnp.where(picks, 0, state.move_slot[b]))
         temps.append(jnp.where(picks & usable, 0, state.selected_temp[b]))

@@ -58,6 +58,7 @@ from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
     legal_actions,
     locked_slot,
+    picks_no_command,
     usable_moves,
     usable_trainer_items,
 )
@@ -1065,7 +1066,9 @@ class _Turn:
         lib.c:7390-7395, bcp.c:844, battle_script.c:6909), a Struggle-bound one keeps
         ``selected_temp`` (bcp.c:844, battle_script.c:6909). The trace records neither, and an
         unrun pick shows no PP drop, so (1) tied candidates that differ there are refused; (2) an
-        Encore that lands before the battler's move this turn and leaves it locked runs the
+        Encore that lands before the battler's move this turn and leaves it live (locked, or with
+        no usable move: the PP drop emptied the encored slot, battle_lib.c:2302-2304, :2265-2268,
+        so its next selection is STRUGGLING_ALL, bcp.c:433-442, which writes nothing) runs the
         encored move (FightCommand's takeover, bcp.c:1868-1872, changes moveTemp, not moveSlot or
         TEMP_VALUE): the PP drop (bcp.c:2272, the encored slot) hides the pick, refused too."""
         state, start = fit.state, self.state
@@ -1075,7 +1078,7 @@ class _Turn:
         live = []
         for b in range(fmt.B):
             present = int(state.hp[party(fmt, b), int(state.active[b])]) > 0
-            locked = int(locked_slot(state, b)) >= 0
+            locked = bool(picks_no_command(state, b))
             if present and (locked or not bool(jnp.any(usable_moves(self.tables, state, b)))):
                 live.append(b)
         if not live:
@@ -1085,13 +1088,12 @@ class _Turn:
                 int(start.encore_move[b]) == 0
                 and int(state.encore_move[b]) != 0
                 and int(locked_slot(start, b)) < 0
-                and int(locked_slot(state, b)) >= 0
                 and int(start.active[b]) == int(state.active[b])
             )
             if took_over and self._encored_first(b):
                 raise AmbiguousTrace(
                     f"turn {self.index}: battler {b} was Encored before its move and is locked "
-                    "after it; its picked slot (moveSlot, battlerActions[b][2]) is not in the "
+                    "or Struggle-bound after it; its picked slot (moveSlot, battlerActions[b][2]) is not in the "
                     "trace",
                     [fit.actions],
                 )

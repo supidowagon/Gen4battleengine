@@ -2932,7 +2932,7 @@ def outcome_laws(
     # BattleControllerPlayer_CheckStatusDisruption, bcp.c:2417-2728, can stop it: no
     # sleep, freeze, paralysis, confusion, flinch, Disable on it, Taunt on a power-0 move,
     # Imprison on it, infatuation or Bide; Gravity and Heal Block ban no flinching move,
-    # battle_lib.c:3385-3392, :3409-3425; recharging is reserved, no move sets it; the first mover cannot fall in love before its own check),
+    # battle_lib.c:3385-3392, :3409-3425; recharging, set by effect_script_0080.s:5 -> subscript_recharge_turn.s:5, is a coverage refusal; the first mover cannot fall in love before its own check),
     # deals damage at every crit and roll (play_hit's ``effective``: the flinch needs it),
     # and the target, the foe's active Pokemon using a move, has no Inner
     # Focus as the attacker sees it (effects._flinch, effects._fang). Fake Out also needs its

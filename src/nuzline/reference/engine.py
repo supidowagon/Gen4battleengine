@@ -330,8 +330,9 @@ class _Turn:
     met_immune: bool = False
     charge_strike: bool = False  # SYSCTL_LAST_OF_MULTI_TURN by subscript_charge_move_cleanup.s:7
     bide_ended: bool = False  # likewise by subscript_bide_end.s
-    # subscript_bide_end.s:9 cleared VOLATILE_CONDITION_MOVE_LOCKED this turn: the release
-    # turn's move went ahead (bcp.c:2694-2722), whatever the move script then did (ref_step).
+    # subscript_bide_end.s:11 cleared VOLATILE_CONDITION_MOVE_LOCKED this turn, before the move
+    # (bcp.c:2722-2724: commandNext = command): the release turn's move went ahead and ran with
+    # SYSCTL_LAST_OF_MULTI_TURN (:12) and no lock.
     bide_release: bool = False
     # E2 batch 6: the turn's actions, picks and order as chosen, the position acting, the
     # battler whose action a Pursuit ended (1 + battler), the slot a Roar dragged in per side
@@ -1220,7 +1221,9 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: b
     if effect == EffectId.DO_NOTHING:  # effect_script_0085.s:5: no CalcDamage (E3-1-1)
         return 0
     if effect == EffectId.BIDE:
-        return 2 * sd.bide_damage if sd.locked_move and sd.bide_turns == 0 else 0
+        # bcp.c:2699-2701 set damage = 2 * storedDamage at the release, before subscript_bide_end.s
+        # clears the lock (:11): a release keeps its stored damage until the move is done (ref_step).
+        return 2 * sd.bide_damage if sd.bide_turns == 0 and sd.bide_damage > 0 else 0
     defender = _foe(attacker) if defender is None else defender
     foe = _active(s, defender)
     kind = _move_type(tables, s, attacker, move)
@@ -4922,9 +4925,16 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.WATER_SPORT and landed and not s.battlers[side].water_sport:
         # effect_script_0210.s: fails when the user already has it.
         s.battlers[side].water_sport = 1
-    elif effect == EffectId.BIDE and landed and not s.battlers[side].locked_move:
-        # effect_script_0026.s / subscript_bide_start.s: only a first use (not locked, not
-        # the unleash turn) locks in with BIDE_1 (two turns) and storedDamage = 0.
+    elif (
+        effect == EffectId.BIDE
+        and landed
+        and not s.battlers[side].locked_move
+        and not turn.bide_release
+    ):
+        # effect_script_0026.s / subscript_bide_start.s: only a first use locks in with BIDE_1
+        # (two turns) and storedDamage = 0: not VOLATILE_CONDITION_MOVE_LOCKED (:5), not the
+        # release turn (:6, SYSCTL_LAST_OF_MULTI_TURN set by subscript_bide_end.s:12; the lock is
+        # already clear there, :11).
         s.battlers[side].locked_move = move
         s.battlers[side].bide_turns = 2
         s.battlers[side].bide_damage = 0
@@ -5989,7 +5999,10 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     # CHECK_STATUS_STATE_BIDE (bcp.c:2694): the counter drops; at 0 the unleash is
     # 2 * storedDamage at the foe's active Pokemon (the last hitter, a replacement
     # included). Nothing stored (subscript_bide_end.s) or the foe fainted
-    # (subscript_bide_no_target.s) ends the move; the lock is released after it (_fight).
+    # (subscript_bide_no_target.s) ends the move. A release runs subscript_bide_end.s first
+    # (bcp.c:2722-2724), which clears VOLATILE_CONDITION_MOVE_LOCKED (:11) before the move: a
+    # charge move then charges, Rollout and Uproar start their own lock, and the move's lock
+    # stays after it (ref_step).
     if sd.bide_turns:
         sd.bide_turns -= 1
         if sd.bide_turns == 0:
@@ -6001,6 +6014,7 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
             turn.defender = picked
             turn.target_side = picked if picked != side else _foe(side)
             turn.bide_release = True
+            sd.locked_move = 0  # subscript_bide_end.s:11 (no uproar while biding)
     # CHECK_STATUS_STATE_SELF_THAW (bcp.c:2728).
     if still_frozen:
         mon.status = Status.NONE
@@ -8616,6 +8630,12 @@ def _locked_slot(s: RefState, side: int) -> int:
     return moves.index(locked) if locked in moves else 0
 
 
+def _picks_no_command(s: RefState, side: int) -> bool:
+    """``Battler_CanPickCommand`` is FALSE (lib.c:6224-6235): move-locked (``_locked_slot``) or
+    RECHARGING (``recharge``, subscript_recharge_turn.s:5); bcp.c:334-337 writes nothing for it."""
+    return _locked_slot(s, side) >= 0 or bool(s.battlers[side].recharge)
+
+
 # RANGE_MY_SIDE (moves.h:91): the B = 2 target is the user (bcp.c:4363-4367).
 _MY_SIDE_RANGES = (
     MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
@@ -8908,16 +8928,17 @@ def ref_step(
 def _canonical_selection(tables, s: RefState) -> None:
     """``engine.step.canonical_selection`` in place (E2-ML-9): at a turn boundary that is not a
     pause (``pivot_battler``, ``learn_site``), a battler whose active Pokemon has HP and that is not
-    locked (``_locked_slot < 0``, Battler_CanPickCommand, lib.c:6224-6235) gets ``move_slot`` 0
+    locked nor recharging (``_picks_no_command``, Battler_CanPickCommand, lib.c:6224-6235) gets ``move_slot`` 0
     (its next FIGHT writes it, bcp.c:445, :526, and no reader takes it under Struggle or a non-FIGHT
     command: lib.c:1378-1391, battle_script.c:6752-6753) and, when it has a usable move
     (``_usable``, the next selection's test), ``selected_temp`` 0 (the next selection writes it,
     bcp.c:447, :525, :565, :595); a Struggle-bound one keeps ``selected_temp`` (read by the Rage
-    check, bcp.c:844, and TryPursuit, battle_script.c:6909). Locked and 0-HP battlers keep both."""
+    check, bcp.c:844, and TryPursuit, battle_script.c:6909). Locked, recharging and 0-HP battlers
+    keep both."""
     if s.pivot_battler or s.learn_site:
         return
     for b, sd in enumerate(s.battlers):
-        if _active(s, b).hp <= 0 or _locked_slot(s, b) >= 0:
+        if _active(s, b).hp <= 0 or _picks_no_command(s, b):
             continue
         sd.move_slot = 0
         if any(_usable(tables, s, b)):
@@ -8971,11 +8992,13 @@ def _ref_step(
     choices = [_choose(tables, s, side, actions[side]) for side in range(_fmt(s).B)]
     commands = [_command(a) for a in actions]
     # The selection's moveSlot (E2-ML-5): a FIGHT that picks a move writes the Encore slot under
-    # an Encore (bcp.c:440-446), else the chosen slot (:526); a locked (:333-337), Struggling
-    # (:433-434) or absent (:330-333) battler, an item and a switch keep it.
+    # an Encore (bcp.c:440-446), else the chosen slot (:526); a locked or recharging (:333-337,
+    # _picks_no_command), Struggling (:433-434) or absent (:330-333) battler, an item and a switch
+    # keep it.
     for side in range(_fmt(s).B):
         sd = s.battlers[side]
-        _, struggling, locked = choices[side]
+        _, struggling, _locked = choices[side]
+        locked = _picks_no_command(s, side)
         if commands[side] == FIGHT and not (struggling or locked) and not _absent_now(s, side):
             sd.move_slot = (
                 sd.encore_slot if sd.encore_move else min(actions[side], MOVE_ACTIONS - 1)
@@ -9136,12 +9159,12 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 )  # fmt: skip
             finally:
                 _unstrip_roost(turn, s)
-            # subscript_bide_end.s:9 clears the lock before the move script runs, so an early
-            # failure of the move (an Encore takeover's Future Sight, a Metronome call, ...)
-            # releases it too; the move itself still saw it locked (effect_script_0026.s:5-6).
-            # Engine: step._use_move's ``_unlock(state, side, bide_ends & head_on)``.
+            # The release cleared the lock before the move (_status_disrupted,
+            # subscript_bide_end.s:11); the stored damage it dealt is hidden state, 0 once
+            # the move is done. A lock the move set (a charge turn, Rollout, Uproar) stays.
+            # Engine: step._use_move's ``bide_damage`` reset at ``bide_ends & head_on``.
             if turn.bide_release:
-                _unlock(s.battlers[side])
+                s.battlers[side].bide_damage = 0
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
             no_effects = turn.met_reached and not (
                 turn.met_worked and not turn.met_immune and not turn.knot_failed

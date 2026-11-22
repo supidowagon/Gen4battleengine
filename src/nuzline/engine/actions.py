@@ -95,6 +95,14 @@ for _range, _row in {
     _RELATIONS[_range] = _row
 
 
+def picks_no_command(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``Battler_CanPickCommand`` is FALSE for ``side`` (battle_lib.c:6224-6235):
+    RECHARGING (``recharge``; effect_script_0080.s:5 -> subscript_recharge_turn.s:5 sets it),
+    THRASH, UPROAR or MOVE_LOCKED (``locked_move``: ``locked_slot >= 0``; an uproar keeps it).
+    Such a battler writes nothing at the selection (bcp.c:334-337)."""
+    return (locked_slot(state, side) >= 0) | (state.recharge[side] != 0)
+
+
 def locked_slot(state: BattleState, side) -> jnp.ndarray:
     """``int32``: the move slot of ``side``'s active Pokemon holding ``locked_move``
     (``moveLockedInto``), 0 when it is locked into a move it does not know (module docstring),

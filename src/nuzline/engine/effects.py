@@ -1169,10 +1169,13 @@ def unlock_move(state: BattleState, side, cond) -> BattleState:
 
 def _bide(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """``subscript_bide_start.s``: only a first use (``effect_script_0026.s`` skips the
-    start while ``VOLATILE_CONDITION_MOVE_LOCKED`` is set or on the unleash turn,
-    ``SYSCTL_LAST_OF_MULTI_TURN``) locks the user in with ``BIDE_1`` (two turns) and
-    ``storedDamage = 0``."""
-    cond = (h.effect == _E.BIDE) & h.landed & (state.locked_move[h.side] == 0)
+    start while ``VOLATILE_CONDITION_MOVE_LOCKED`` is set, :5, or on the release turn,
+    ``SYSCTL_LAST_OF_MULTI_TURN``, :6) locks the user in with ``BIDE_1`` (two turns) and
+    ``storedDamage = 0``. The release cleared the lock already (subscript_bide_end.s:11-12);
+    its turn is the one with the Bide counter spent and stored damage kept (``damage.py``'s
+    ``unleash``; only a release reaches a move with both, step._use_move)."""
+    release = (state.bide_turns[h.side] == 0) & (state.bide_damage[h.side] > 0)
+    cond = (h.effect == _E.BIDE) & h.landed & (state.locked_move[h.side] == 0) & ~release
     state = _set(state, "locked_move", h.side, h.move, cond)
     state = _set(state, "bide_turns", h.side, BIDE_TURNS, cond)
     return _set(state, "bide_damage", h.side, 0, cond)

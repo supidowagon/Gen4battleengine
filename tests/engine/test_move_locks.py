@@ -137,6 +137,32 @@ def test_bide_without_target_is_lost(tables, names):
     assert int(out.locked_move[0]) == 0 and int(out.bide_damage[0]) == 0
 
 
+@pytest.mark.parametrize("move", ["SolarBeam", "Rollout"])
+def test_bide_release_unlocks_before_the_move(tables, names, move):
+    """Review M1 (tracelaws 26ea67d7): on the release turn ``CHECK_STATUS_STATE_BIDE`` runs
+    subscript_bide_end.s before the move (bcp.c:2722-2724, commandNext = command), and its :11
+    clears VOLATILE_CONDITION_MOVE_LOCKED. An Encore takeover (bcp.c:1869-1873, before the relock
+    at :1884-1887) runs another move that turn: SolarBeam then charges (effect_script_0151.s:9
+    tests only the lock) and Rollout starts at its first power (battle_script.c:5667-5674); the
+    lock either sets stays after the move."""
+    s = locked_into_bide(bide_state(tables, names), names, turns=1, damage=30)
+    moved = names.move(move)
+    s = s._replace(
+        moves=s.moves.at[0, 0, 1].set(moved),
+        pp=s.pp.at[0, 0, 1].set(10),
+        encore_move=s.encore_move.at[0].set(moved),
+        encore_slot=s.encore_slot.at[0].set(1),
+        encore_turns=s.encore_turns.at[0].set(3),
+    )
+    out = play(tables, s, acts(s, names, "Tackle"))
+    assert int(out.locked_move[0]) == moved
+    assert int(out.bide_turns[0]) == 0 and int(out.bide_damage[0]) == 0
+    if move == "SolarBeam":
+        assert int(out.hp[1, 0]) == int(s.hp[1, 0])  # the charge turn: no damage
+    else:
+        assert int(out.rollout_count[0]) == 4  # rolloutCount 5, decremented once
+
+
 def test_locked_side_actions(tables, names):
     """Review Focus 2: a locked side's only legal action is its locked slot."""
     s0 = bide_state(tables, names, player_count=3, opp_count=3)

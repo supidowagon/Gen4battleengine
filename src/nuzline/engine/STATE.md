@@ -726,7 +726,7 @@ three structs has a row.
   a FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447), the party slot 0..5 for a switch
   (:595) and the BattleItemUse data for a bag item (:565); a battler that picks no command (a
   locked one, :333-337; Battler_CanPickCommand, battle_lib.c:6224-6232, also counts RECHARGING,
-  which no modelled move sets: `recharge` is reserved), a Struggling one (:433-434) and an
+  `recharge`, set by subscript_recharge_turn.s:5: `actions.picks_no_command`), a Struggling one (:433-434) and an
   absent one keep it, and nothing resets it (BattleContext_Init, battle_lib.c:1974-2017).
   `Battler_SelectedMove` (battle_lib.c:2858-2868) reads `moves[TEMP_VALUE - 1]` under a FIGHT
   command: 1..4 read the move slots; 5 reads `moves[4]`, the u16 after them, the low 16 bits of the

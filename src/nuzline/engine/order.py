@@ -49,6 +49,7 @@ from nuzline.engine.actions import (
     gravity_banned,
     locked_slot,
     move_imprisoned,
+    picks_no_command,
     usable_moves,
 )
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
@@ -146,9 +147,9 @@ def fight_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
 
 def selection_slots(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     """``int32[B]``: ``BattleContext.moveSlot`` after this turn's command selection (E2-ML-5). A
-    battler whose action is a move and that picks a command (not absent, bcp.c:330-333; not locked,
-    :333-337, Battler_CanPickCommand, battle_lib.c:6224-6232, whose RECHARGING no move sets:
-    ``recharge`` is reserved) writes it unless it Struggles (STRUGGLING_ALL, :433-434): the Encore
+    battler whose action is a move and that picks a command (not absent, bcp.c:330-333; not locked
+    nor recharging, :333-337, Battler_CanPickCommand, battle_lib.c:6224-6235: ``picks_no_command``)
+    writes it unless it Struggles (STRUGGLING_ALL, :433-434): the Encore
     slot under an Encore (:440-446), else the chosen slot (:526). Every other battler keeps
     ``state.move_slot``, and a paused state kept the selection's. Idempotent: a state the selection already wrote
     gives the same slots."""
@@ -159,7 +160,7 @@ def selection_slots(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     for b in range(fmt.B):
         action = actions[b]
         fight = (action < MOVE_ACTIONS) & (state.over == 0) & ~absent_now(state, b)
-        picks = fight & (locked_slot(state, b) < 0) & jnp.any(usable_moves(tables, state, b))
+        picks = fight & ~picks_no_command(state, b) & jnp.any(usable_moves(tables, state, b))
         slot = jnp.where(
             state.encore_move[b] != 0,
             state.encore_slot[b].astype(_I32),
@@ -178,9 +179,8 @@ def selection_temps(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     a bag item writes its BattleItemUse (:565), a struct of the item id, category and target
     (message_defs.h:15-19) whose ``moves[TEMP_VALUE - 1]`` lies far past the BattleMon: kept as
     0 (MOVE_NONE), a stated assumption (STATE.md, ledger E2-ML-8). A Struggling FIGHT (:433-434),
-    a battler that picks no command (Battler_CanPickCommand, battle_lib.c:6224-6232: a locked one,
-    bcp.c:333-337; RECHARGING counts too, but no move sets it, ``recharge`` is reserved, so
-    ``locked_slot`` is the whole test) and an absent one keep it; nothing resets it
+    a battler that picks no command (Battler_CanPickCommand, battle_lib.c:6224-6235: a locked or
+    recharging one, bcp.c:333-337, ``picks_no_command``) and an absent one keep it; nothing resets it
     (BattleContext_Init, battle_lib.c:1974-2017). A paused state kept the selection's. Idempotent
     on a state the selection wrote."""
     fmt = format_of(state)
@@ -189,7 +189,7 @@ def selection_temps(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     out = []
     for b in range(fmt.B):
         action = actions[b]
-        picks_command = (state.over == 0) & ~absent_now(state, b) & (locked_slot(state, b) < 0)
+        picks_command = (state.over == 0) & ~absent_now(state, b) & ~picks_no_command(state, b)
         fight = (action < MOVE_ACTIONS) & jnp.any(usable_moves(tables, state, b))
         fight_temp = jnp.where(
             state.encore_move[b] != 0, 0, jnp.clip(action, 0, MOVE_ACTIONS - 1) + 1
