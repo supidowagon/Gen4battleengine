@@ -12,13 +12,13 @@
 # compare: pod folder /work/<name>; payload = git archive of the candidate + its tables; run.sh
 #   compares <capture dir> (e.g. /work/snapmain-08a5700/snap) with the candidate's own
 #   tools/snap_compare.py; --allow-new is left out when empty.
-# Both write $RENT/out/<name>/{code.tar,tables.tar.xz,payload.tar,run.sh,body.json,send.log},
+# Both write $RENT/out/<name>/{code.tar,tables.tar.xz,run.sh,start.sh,payload.tar,body.json,send.log},
 #   refuse forbidden files (FORBID and TABLE_DENY in the code archive; table entries with '..', a
-#   leading '/' or './', outside TABLE_ALLOW or in TABLE_DENY), start a detached send whose
-#   send.log ends with SEND_RC=<n>, and print the exec-pod body (run.sh in argv chunks of at most
-#   4000 characters, checked by sha256 on the pod before it runs: see "The body" below; a body
-#   over exec-pod's limits, 4096 characters an item and 256 items, is refused). --dry-run runs every check and
-#   writes run.sh and body.json (receive code "<code>") but sends nothing.
+#   leading '/' or './', outside TABLE_ALLOW or in TABLE_DENY), start a detached send of
+#   payload.tar (run.sh and start.sh in it) whose send.log ends with SEND_RC=<n>, and print the
+#   exec-pod body: one short script that receives the payload and starts start.sh only when its
+#   sha256 is the PC's (see "The body" below). --dry-run runs every check and writes payload.tar
+#   and body.json (receive code "dry-run-no-code") but sends nothing.
 #   run.sh first writes /work/<name>/reads (the capture dir a compare reads; empty for a
 #   capture), then /work/<name>/times.txt: START, SYNC_RC=<n> (a failed uv sync stops here,
 #   without ALL_DONE; it runs under timeout -k 30 1800: rc 124 or 137 once it hangs),
@@ -76,7 +76,7 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
 . "$HERE/pod/gate.sh"   # podgate and reserve_knobs, copied into run.sh
-. "$HERE/snap_body.sh"  # body_chunks, body_json: the exec-pod body
+. "$HERE/send_body.sh"  # send_start, recv_frag, body_json: the transfer and the exec-pod body
 . "$HERE/table_key16.sh"  # table_key16 capture|compare <full sha> <tables archive>: the first 16 hex of a build's table key
 usage() { sed -n '4,7p' "$0" | sed 's/^# *//'; exit 2; }
 # The functions below are copied into run.sh (declare -f); run.sh runs on the pod, not here.
@@ -286,7 +286,6 @@ deny "calc or docs-sheet extraction in code.tar" "$CT" -E "$TABLE_DENY"
 deny "calc or docs-sheet extraction in tables" "$TALL" -E "$TABLE_DENY"
 deny "tables entry outside the allowed data/ paths" "$T" -vE "$TABLE_ALLOW"
 [ -n "$T" ] || refuse "tables archive holds no files" "$TB"
-tar -cf "$O/payload.tar" -C "$O" "${FILES[@]}"
 
 W="/work/$NAME"
 # --workers/--gate-gb only for a snap_compare that has them (older commits run their parts serially).
@@ -361,31 +360,38 @@ echo ALL_DONE >> "\$W/times.txt"
 EOS
 tr -d '\r' < "$O/run.sh" > "$O/run.tmp" && mv "$O/run.tmp" "$O/run.sh"
 bash -n "$O/run.sh" || refuse "generated run.sh does not parse" "$O/run.sh"
-# The body (snap_body.sh): run.sh in argv chunks of at most 4000 characters after the script; the
-# script joins them (printf %s "$@"), decodes run.sh and runs it only when its sha256 is run.sh's
-# on the PC (else RUNSH_SHA_MISMATCH <sha>, exit 1, nothing started). Refused (exit 3) before the
-# send when the body would have over 256 items; after it when the script is over 4000 characters.
-body_chunks "$O/run.sh" || exit 3
+UNTOOL=""; [ -z "$TSHA" ] || UNTOOL=" && mkdir tool && tar --no-same-owner -xf tool.tar -C tool"
+DM="/work/_decomp/$DECOMP"
+# start.sh (in the payload, run by the body after the sha check): unpack and start run.sh.
+cat > "$O/start.sh" <<EOS
+#!/bin/bash
+# Unpacks the $MODE payload in $W and starts run.sh; written by tools/ops/day/snap.sh
+cd $W || exit 1
+[ -d $DM ] || { echo "DECOMP_MISSING: $DM is not on this pod; send any pack.sh run first (its setup.sh creates it), then send this body again under a new name"; exit 1; }
+{ mkdir repo && tar --no-same-owner -xf code.tar -C repo && tar --no-same-owner -xJf tables.tar.xz -C repo$UNTOOL && mkdir -p repo/external && ln -sfn $DM repo/external/pokeplatinum; } || { echo UNPACK_FAILED; exit 1; }
+echo PREP_OK
+setsid nohup bash $W/run.sh > run.out 2>&1 < /dev/null &
+EOS
+tr -d '\r' < "$O/start.sh" > "$O/start.tmp" && mv "$O/start.tmp" "$O/start.sh"
+bash -n "$O/start.sh" || refuse "generated start.sh does not parse" "$O/start.sh"
+FILES+=(run.sh start.sh)
+tar -cf "$O/payload.tar" -C "$O" "${FILES[@]}"
+PSUM=$(sha256sum "$O/payload.tar" | cut -c1-64)
 
 echo "== payload.tar"; tar -tvf "$O/payload.tar"
 echo "== code.tar $(printf '%s\n' "$CT" | wc -l) entries; tables $(printf '%s\n' "$T" | wc -l) files"
 echo "== run.sh"; cat "$O/run.sh"
 
-if [ "$DRY" = 1 ]; then CODE="<code>"; SPID=""
-else
-  cd "$O"; HOME="$RENT/home" USERPROFILE="$RENT/home" nohup bash -c '"$0" send payload.tar & c=$!; trap "kill $c" TERM; wait "$c"; echo "SEND_RC=$?"' "$RPC" > send.log 2>&1 < /dev/null &
-  SPID=$!
-  for i in $(seq 1 60); do grep -q "code is" send.log 2>/dev/null && break; sleep 0.5; done
-  CODE=$(grep -o "code is: [^ ]*" send.log | head -1 | sed 's/code is: //' | tr -d '\r' || true)
-  [ -n "$CODE" ] || { echo "no code; send.log:"; cat send.log; kill "$SPID" 2>/dev/null || true; exit 4; }
-fi
-
-UNTOOL=""; [ -z "$TSHA" ] || UNTOOL=" && mkdir tool && tar --no-same-owner -xf tool.tar -C tool"
-DM="/work/_decomp/$DECOMP"
-PREP="/work/_bin/runpodctl receive $CODE || { echo RECEIVE_FAILED; exit 1; }; [ -d $DM ] || { echo \"DECOMP_MISSING: $DM is not on this pod; send any pack.sh run first (its setup.sh creates it), then send this body again under a new name\"; exit 1; }; { tar --no-same-owner -xf payload.tar && mkdir repo && tar --no-same-owner -xf code.tar -C repo && tar --no-same-owner -xJf tables.tar.xz -C repo$UNTOOL && mkdir -p repo/external && ln -sfn $DM repo/external/pokeplatinum; } || { echo UNPACK_FAILED; exit 1; }; echo PREP_OK; setsid nohup bash $W/run.sh > run.out 2>&1 < /dev/null &"
-SHC="mkdir -p $W && cd $W || exit 1; printf %s \"\$@\" | base64 -d > run.sh || { echo RUNSH_DECODE_FAILED; exit 1; }; s=\$(sha256sum run.sh | cut -c1-64); [ \"\$s\" = $RSUM ] || { echo RUNSH_SHA_MISMATCH \$s; rm -f run.sh; exit 1; }; chmod +x run.sh && nohup sh -c '$PREP' > prep.log 2>&1 < /dev/null & sleep 20; tail -c 300 $W/prep.log"
+if [ "$DRY" = 1 ]; then CODE="dry-run-no-code"; SPID=""
+else send_start "$O" payload.tar 2400 || exit 4; fi   # 2400 s: the receive (1800 s) starts once the body is sent
+# The body (send_body.sh): receive payload.tar (RECEIVE_FAILED after a failed receive or 1800 s),
+# check its sha256 against the PC's (else PAYLOAD_SHA_MISMATCH, payload removed, nothing started),
+# unpack it (UNPACK_FAILED) and run start.sh; prep.log holds every line. A folder that already
+# has a prep.log (an earlier attempt under this name): NAME_USED, exit 1, nothing received.
+# Over BODY_LIM: refused.
+SHC="mkdir -p $W && cd $W || exit 1; [ ! -e prep.log ] || { echo NAME_USED $W holds an earlier attempt: run snap.sh again under a new name; exit 1; }; nohup sh -c '$(recv_frag "$CODE" payload.tar "$PSUM" 1800); tar --no-same-owner -xf payload.tar || { echo UNPACK_FAILED; exit 1; }; bash start.sh' > prep.log 2>&1 < /dev/null & sleep 20; tail -c 300 prep.log"
 BJ=$(body_json "$SHC") || { [ -z "$SPID" ] || kill "$SPID" 2>/dev/null; echo "$BJ"; exit 3; }
 printf '%s\n' "$BJ" > "$O/body.json"
-echo "== exec-pod body ($O/body.json):"; cat "$O/body.json"
+echo "== exec-pod body ($O/body.json, ${#BJ} characters):"; cat "$O/body.json"
 [ "$DRY" = 1 ] && echo "DRY RUN: nothing sent; delete $O before reusing the name" && exit 0
 echo "== finished when exec 'tail -3 $W/times.txt' shows ${JOB}_RC=<n> then ALL_DONE"

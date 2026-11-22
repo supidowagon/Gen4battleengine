@@ -94,7 +94,7 @@ else
       && git -C "$LR" config core.autocrlf false \
       && lane_copy "$M_REPO" "$LR" \
       && [ -f "$LR/data/gen4_platinum_kaizo/manifest.json" ] \
-      && { cd "$LR" && uv sync --frozen -q; }; }; then cd "$D" || true; rm -rf "${LR:?}"; fallback "lane repo creation failed"; fi
+      && { cd "$LR" && uv sync --frozen -q --group rom; }; }; then cd "$D" || true; rm -rf "${LR:?}"; fallback "lane repo creation failed"; fi
   cd "$D" || exit 1
 fi
 # The decomp: the worktree of this run's DECOMP commit, as setup.sh links it.
