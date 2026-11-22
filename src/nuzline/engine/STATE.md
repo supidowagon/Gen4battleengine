@@ -676,23 +676,39 @@ three structs has a row.
 - The move slot (E2-ML-5): `move_slot` (per battler, `BattleContext.moveSlot[b]`, a slot 0..3, initial 0).
   The command selection writes it for a FIGHT that picks a move: the Encore slot under an Encore
   (bcp.c:440-446), else the chosen slot (:526); a Struggling battler (:433-434), a locked one (it
-  picks no command, :333-337), an item, a switch and an absent battler keep it. Nothing else writes
-  or clears it (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182; not a switch or a faint), so it is not
-  in `VOLATILE_FIELDS`. Readers: CalcTurnOrder's priority, `moves[moveSlot]` as it stands now
-  (battle_lib.c:1375-1397; `order.order_moves`), and TryGrudge's ATTACKER_MOVE_SLOT (common.h:8).
-  Written in `step._action_phase` (`order.selection_slots`) and the reference's `_ref_step`.
+  picks no command, :333-337), an item, a switch and an absent battler keep it. The only other
+  writer is the disobedience check (ATTACKER_MOVE_SLOT = a random slot, bcp.c:2183), which never
+  runs under the obedient-party assumption (the `BattleMon.OTId` row). Nothing clears it
+  (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182; not a
+  switch or a faint), so it is not in `VOLATILE_FIELDS`. An Encore takeover changes moveTemp, not
+  moveSlot (bcp.c:1869-1883). Readers: CalcTurnOrder's priority, `moves[moveSlot]` as it stands
+  now (battle_lib.c:1375-1397; `order.order_moves`), and ATTACKER_MOVE_SLOT (common.h:8) in
+  TryGrudge (battle_script.c:6753), Trump Card's power (:7237) and BattleSystem_DecPPForPressure
+  (battle_lib.c:7390-7395): Counter, Mirror Coat and Metal Burst (battle_script.c:4646, :4699,
+  :7180) and the Magic Coat reflection's drain of the holder's slot (bcp.c:3083; the slot is kept
+  in `magic_coat` as 1 + moveSlot when the Magic Coat lands). The engines read `move_slot` at every
+  one of them (`chosen_slot` in `step._use_move`, `_Turn.chosen_slot` in the reference). Written
+  in `step._action_phase` (`order.selection_slots`) and the reference's `_ref_step`.
 - The selected move's carried value (E2-ML-8): `selected_temp` (per battler,
   `battlerActions[b][BATTLE_ACTION_TEMP_VALUE]`, initial 0). The selection writes 1 + the slot for
-  a FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447), the party slot for a switch
-  (:595) and the BattleItemUse data for a bag item (:565); a Struggling, locked or absent battler
-  keeps it, and nothing resets it (BattleContext_Init, battle_lib.c:1974-2017). The engine keeps a
-  value only where `Battler_SelectedMove` (battle_lib.c:2858-2868, `moves[TEMP_VALUE - 1]` under a
-  FIGHT command) reads a move with it: 1..4; a party slot 0 or 5 and an item's data are kept as 0
-  (5 and the item data read past `moves[4]`, battle_mon.h:64: the engine models that read as
-  MOVE_NONE). Readers: Pursuit (battle_script.c:6909) and Me First (:7296), through
-  `order.battler_selected_move`; a locked battler reads the value of its last selection, not its
-  lock's move. Written by `order.with_selection` (`step._action_phase`, the laws' entry points) and
-  the reference's `_ref_step`. Not in `VOLATILE_FIELDS`.
+  a FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447), the party slot 0..5 for a switch
+  (:595) and the BattleItemUse data for a bag item (:565); a battler that picks no command (a
+  locked one, :333-337; Battler_CanPickCommand, battle_lib.c:6224-6232, also counts RECHARGING,
+  which no modelled move sets: `recharge` is reserved), a Struggling one (:433-434) and an
+  absent one keep it, and nothing resets it (BattleContext_Init, battle_lib.c:1974-2017).
+  `Battler_SelectedMove` (battle_lib.c:2858-2868) reads `moves[TEMP_VALUE - 1]` under a FIGHT
+  command: 1..4 read the move slots; 5 reads `moves[4]`, the u16 after them, the low 16 bits of the
+  IV bitfield (battle_mon.h:64-72): `hpIV | attackIV << 5 | defenseIV << 10 | (speedIV & 1) << 15`
+  (`order.past_moves_word`, the reference's `_past_moves_word`). Stated assumptions: the bitfield
+  is allocated from bit 0 (the ARM ABI); a `moves[4]` id past the move table (>= MAX_MOVES = 468,
+  ai_context.h:45) reads as MOVE_NONE (MOVE_DATA would read past `moveTable`); a bag item's
+  BattleItemUse (message_defs.h:15-19: item id, category, target) is kept as 0 (MOVE_NONE): its
+  `moves[TEMP_VALUE - 1]` lies far past the BattleMon. Both are reachable only through a
+  Struggling or locked battler whose last selection was the switch or the item. Readers: Pursuit
+  (battle_script.c:6909) and Me First (:7296), through `order.battler_selected_move`; a locked
+  battler reads the value of its last selection, not its lock's move. Written by
+  `order.with_selection` (`step._action_phase`, `step.replacement_power_mul`, the laws' entry
+  points) and the reference's `_ref_step`. Not in `VOLATILE_FIELDS`.
 - The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
   counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
   written at B = 4 only.
