@@ -329,8 +329,8 @@ def test_cli_pod_rom_gate_and_build(monkeypatch, tmp_path):
     assert run(["tests/heavy.py"]) == 13 and out[-1] == "POD 30"
     assert run(["tests/heavy.py", "--rom-gate"]) == 0 and out[-1] == "GO 30"
     assert run(["tools.kaizo.x", "--weight", "9"]) == 13 and out[-1] == "POD 9"
-    # a build never goes to the pod: 14 without a tools/build_tables.py line, only the RAM wait applies
-    assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 14"
+    # a build never goes to the pod: 6 without a tools/build_tables.py line, only the RAM wait applies
+    assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 6"
     assert run(["--build", "--weight", "12", "--", *OK_CHILD]) == 0 and out[-1] == "GO 12"
     monkeypatch.setattr(rg, "load_weights", lambda: {**TABLE, "tools/build_tables.py": 11.0})
     assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 11"  # the measured line
@@ -360,19 +360,19 @@ def test_cli_honours_the_timeout_env(monkeypatch, tmp_path):
         ["--build", "--", *OK_CHILD], free=lambda: 1.0, sleep=clock.sleep, clock=clock.now,
         say=out.append, lock=rg.MachineLock(tmp_path / "l"), platform="win32",
     )  # fmt: skip
-    assert code == 14 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 14"
+    assert code == 14 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 6"
 
 
 def test_cli_build_waits_for_ram(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
-    seq = iter([10.0, 19.0, 20.5])
+    seq = iter([10.0, 11.5, 12.5])  # need > 6 + 6 (the unlisted-build default)
     sleeps = []
     out = []
     code = rg.main(
         ["--build", "--", *OK_CHILD], free=lambda: next(seq), sleep=sleeps.append,
         say=out.append, lock=rg.MachineLock(tmp_path / "l"), platform="win32",
     )  # fmt: skip
-    assert code == 0 and sleeps == [60.0, 60.0] and out[-1] == "GO 14"
+    assert code == 0 and sleeps == [60.0, 60.0] and out[-1] == "GO 6"
     assert not any(m.startswith("POD") for m in out)
 
 
@@ -410,7 +410,7 @@ def test_cli_build_waits_for_the_lock_within_the_timeout(monkeypatch, tmp_path):
         say=out.append, platform="win32",
         lock=rg.MachineLock(lock_file, procs=lambda: procs, started=born.get, me=100),
     )  # fmt: skip
-    assert code == 14 and out[-1] == "TIMEOUT 14"
+    assert code == 14 and out[-1] == "TIMEOUT 6"
     assert clock.sleeps == [10.0] * 6  # 10 s polls, up to the 1 minute timeout
     told = [m for m in out if "holds the lock" in m]
     assert len(told) == 1 and "pid 4242" in told[0] and str(lock_file) in told[0]

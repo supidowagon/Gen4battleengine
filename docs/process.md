@@ -164,8 +164,8 @@ per day is the rate used for estimates.
   `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`, `quick.sh`, `sweep.sh`; `tests/tools/test_ramgate.py` fails for any script under `tools/ops/day/pod/` that starts pytest, or python importing the engine, without it in effect), which skips the gate on Linux only (on the
   Windows PC it is ignored). Local jobs that are not
   pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
-  waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
-  more than 20 GB free) and the machine lock, runs the command under the lock and exits with
+  waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, 3, else 6, so
+  more than 9 or 12 GB free) and the machine lock, runs the command under the lock and exits with
   its code; it never prints POD. On the pod (`NUZLINE_ON_POD=1`) or off Windows it runs the
   command directly: no wait, no lock, no watchdog. `tools/ops/build_tables.sh` wraps its build
   steps in it itself.

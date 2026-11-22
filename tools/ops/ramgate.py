@@ -15,7 +15,7 @@ stops it when free RAM drops below 4 GB (exit 15).
 CLI:
     python tools/ops/ramgate.py --build [--weight GB] -- <command ...>
         a local job that is not pytest (table builds, `tools.kaizo.*` runs): waits for free RAM >
-        6 GB + weight (--weight, else the weights.txt line `tools/build_tables.py`, else 14), takes
+        6 GB + weight (--weight, else the weights.txt line `tools/build_tables.py`, else 6), takes
         the machine lock, runs the command as its child under the lock and exits with its code.
         On the pod or off Windows it runs the command directly (no wait, lock or watchdog).
     python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]
@@ -50,7 +50,7 @@ ENGINE_FREE_WEIGHT = 6.0  # the same in an engine-free run (the blocker is on): 
 POD_WEIGHT = 8.0
 RESERVE_GB = 6.0
 BUILD_KEY = "tools/build_tables.py"  # the weights.txt line a table build waits for
-BUILD_DEFAULT_WEIGHT = 14.0  # without that line: a build waits for > 6 + 14 = 20 GB free
+BUILD_DEFAULT_WEIGHT = 6.0  # without that line: > 6 + 6 = 12 GB free (measured build peak 0.64 GB)
 POLL_S = 60.0
 EXIT_REFUSE = 13  # refused (pytest) or POD (CLI)
 EXIT_TIMEOUT = 14
