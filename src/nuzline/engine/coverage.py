@@ -151,6 +151,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -841,19 +842,37 @@ def fight_calls(tables: Tables, party: Sequence[PokemonSpec]) -> list[int]:
     return sorted(out)
 
 
-def sketch_calls(known: Sequence[int], opp: Sequence[PokemonSpec]) -> list[int]:
+# A Pokemon that knows no move: ``metronome_calls``' superset for a Metronome gained in battle.
+_NO_MOVES = SimpleNamespace(moves=(0, 0, 0, 0))
+
+
+def sketch_calls(
+    tables: Tables,
+    known: Sequence[int],
+    opp: Sequence[PokemonSpec],
+    party_moves: Sequence[int] = (),
+) -> list[int]:
     """The moves a player's Sketch can copy (``BtlCmd_TrySketch``, battle_script.c:4839-4884):
     ``known`` are the Pokemon's moves and its ``learnable_moves`` (empty unless one is Sketch); the
-    copy is a foe's ``moveSketched``, its chosen move (``moveTemp``: the slot's move, Mimic's copy
-    included, which the player already knows), so a move of ``opp`` that is neither forbidden
-    (``SKETCH_FORBIDDEN``) nor already known. A superset: the foe may not use it. The checks that
-    read every move of the fight (``move_effect_line``, the AI's ``player_move_refusal``,
-    ``halved_defense_line``, the terrain and the ROM changes) run over them, as over the
-    Metronome calls (``fight_calls``)."""
+    copy is a foe's ``moveSketched``, the move in its slot when the attack message shows
+    (``moveTemp``, bcp.c:3952-3954), so a move of ``opp`` that is neither forbidden
+    (``SKETCH_FORBIDDEN``) nor already known. A foe that can copy a move of the player's party
+    carries it in a slot too: Mimic's copy (``BtlCmd_TryMimic``, battle_script.c:4476-4524) and
+    Transform's four moves (``BtlCmd_Transform``, :5346-5348), Transform also through Metronome
+    (not in ``sCannotMetronomeMoves``, battle_lib.c:7152-7177). Then ``party_moves`` (the moves
+    of the player's party and their ``learnable_moves``) join, as the Sketch holder itself may
+    not know them. A superset: the foe may not use it. The checks that read every move of the
+    fight (``move_effect_line``, the AI's ``player_move_refusal``, the holder's own
+    ``halved_defense_line`` and ``gyro_speed_line``, its Metronome calls, the terrain and the ROM
+    changes) run over them, as over the Metronome calls (``fight_calls``)."""
     if MOVE_SKETCH not in known:
         return []
+    effect = np.asarray(tables.move_effect)
+    copier = (EffectId.MIMIC, EffectId.TRANSFORM, EffectId.METRONOME)
+    copies = any(m and int(effect[m]) in copier for mon in opp for m in mon.moves)
+    pool = [m for mon in opp for m in mon.moves] + (list(party_moves) if copies else [])
     banned = {*known, *SKETCH_FORBIDDEN}
-    return sorted({m for mon in opp for m in mon.moves if m and m not in banned})
+    return sorted({m for m in pool if m and m not in banned})
 
 
 def _check_party(
@@ -1200,8 +1219,22 @@ def check_coverage(
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
-    sketched = [sketch_calls([*mon.moves, *learnable[i]], opp) for i, mon in enumerate(player)]
-    extra = sorted({m for moves in (*learnable, *sketched) for m in moves})
+    party_moves = [m for i, mon in enumerate(player) for m in (*mon.moves, *learnable[i])]
+    sketched = [
+        sketch_calls(tables, [*mon.moves, *learnable[i]], opp, party_moves)
+        for i, mon in enumerate(player)
+    ]
+    # A Metronome gained in battle (a Sketch copy or a level-up move) calls for its holder too:
+    # any move ``Move_CanBeMetronomed`` allows (battle_script.c:4535-4562), its known moves at the
+    # call unknown here, so none excluded (the superset).
+    effect = np.asarray(tables.move_effect)
+    gained_calls = [
+        metronome_calls(tables, _NO_MOVES)
+        if any(int(effect[m]) == EffectId.METRONOME for m in (*learnable[i], *sketched[i]) if m)
+        else []
+        for i in range(len(player))
+    ]
+    extra = sorted({m for moves in (*learnable, *sketched, *gained_calls) for m in moves})
     if chatot_cry is None:
         for slot, mon in enumerate(player):
             if mon.species == SPECIES_CHATOT and MOVE_CHATTER in (*mon.moves, *learnable[slot]):
@@ -1239,7 +1272,7 @@ def check_coverage(
         foe_defense = low_defense(tables, foes)
         for slot, mon in enumerate(party):
             extra_moves = [*learnable[slot], *sketched[slot]] if owner == "Player" else ()
-            calls = fight_calls(tables, [mon])
+            calls = fight_calls(tables, [mon]) + (gained_calls[slot] if owner == "Player" else [])
             for move in [*mon.moves, *(m for m in [*extra_moves, *calls] if m not in mon.moves)]:
                 if move and (low := halved_defense_line(tables, move, foe_defense)):
                     where = f"{owner} {names.species_names[mon.species]} (slot {slot})"

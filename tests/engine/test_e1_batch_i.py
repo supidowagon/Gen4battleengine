@@ -318,7 +318,7 @@ def test_coverage_grades_the_moves_a_sketch_can_copy(tables, names):
         moves=(MOVE_SKETCH, names.move("Tackle"), 0, 0),
     )
     rock = names.move("Rock Throw")
-    calls = sketch_calls(list(smeargle.moves), opp)
+    calls = sketch_calls(tables, list(smeargle.moves), opp)
     assert rock in calls and names.move("Tackle") not in calls
     assert not set(calls) & set(SKETCH_FORBIDDEN)
     ok = check_coverage(tables, names, [smeargle], roark_trainer(), opp, 0)
@@ -405,3 +405,61 @@ def test_the_call_law_follows_an_imprisoners_sketch(tables, names, order):
         row = int(np.flatnonzero(calls == value)[0])
         assert_matches_reference(tables, s, acts, jax.tree.map(lambda f, r=row: f[r], outcomes))
 
+
+def _slow_smeargle(names, *moves):
+    """A level-5 Smeargle (Speed 13, below ``GYRO_SPEED_MIN``) that knows Sketch."""
+    from dataclasses import replace
+
+    from tests.engine.helpers import sample_party
+
+    ids = [MOVE_SKETCH, *(names.move(m) for m in moves)]
+    return replace(
+        sample_party(names)[0],
+        species=names.species("Smeargle"),
+        level=5,
+        moves=tuple(ids + [0] * (4 - len(ids))),
+    )
+
+
+@pytest.mark.parametrize("copier", ["Transform", "Mimic", None])
+def test_a_sketch_can_copy_a_party_move_a_foe_copied(tables, names, copier):
+    """A foe's Transform (battle_script.c:5346-5348) or Mimic (:4476-4524) puts a move of the
+    player's party in its slot, so its ``moveSketched`` (bcp.c:3952-3954) can be a move the
+    Smeargle does not know: ``sketch_calls`` lists the party's moves then, and the Smeargle's own
+    Gyro Ball line (``gyro_speed_line``, Speed 13) is graded. Without a copier it is not."""
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import check_coverage, sketch_calls
+    from tests.engine.helpers import roark_party, roark_trainer, sample_party
+
+    gyro = names.move("Gyro Ball")
+    smeargle = _slow_smeargle(names, "Tackle")
+    mate = replace(sample_party(names)[1], moves=(gyro, 0, 0, 0))
+    opp = roark_party(names)
+    if copier is not None:
+        opp[0] = replace(opp[0], moves=(names.move(copier), *opp[0].moves[1:]))
+    calls = sketch_calls(tables, list(smeargle.moves), opp, [gyro])
+    assert (gyro in calls) == (copier is not None)
+    report = check_coverage(tables, names, [smeargle, mate], roark_trainer(), opp, 0)
+    line = [m for m in report.missing if "SMEARGLE" in m.upper() and "Gyro Ball with Speed" in m]
+    assert bool(line) == (copier is not None), report.missing
+
+
+def test_a_sketched_metronome_calls_are_graded_for_the_holder(tables, names):
+    """A foe's Metronome is a move a Sketch can copy; the copied Metronome then calls any move
+    ``Move_CanBeMetronomed`` allows (battle_script.c:4535-4562) for the Smeargle, Gyro Ball
+    included: its own Speed-13 Gyro line is graded (``fight_calls`` reads only known moves)."""
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import check_coverage, sketch_calls
+    from tests.engine.helpers import roark_party, roark_trainer
+
+    metronome = names.move("Metronome")
+    smeargle = _slow_smeargle(names, "Tackle")
+    opp = roark_party(names)
+    opp[0] = replace(opp[0], moves=(metronome, *opp[0].moves[1:]))
+    assert metronome in sketch_calls(tables, list(smeargle.moves), opp)
+    report = check_coverage(tables, names, [smeargle], roark_trainer(), opp, 0)
+    assert any("SMEARGLE" in m.upper() and "Gyro Ball with Speed" in m for m in report.missing), (
+        report.missing
+    )
