@@ -90,6 +90,9 @@ class FreeLock:
     def held_by_lineage(self, kind=None):
         return False
 
+    def in_lineage(self, pid):
+        return pid == 4242  # the fake gated parent run
+
 
 def gate(items, free=100.0, modules=NO_ENGINE, env=None, rom_table=None, **kw):
     clock = kw.pop("clock", None) or Clock()
@@ -198,10 +201,18 @@ def test_gate_collect_only_allowed_without_waiting():
     assert clock.sleeps == []
 
 
-def test_gate_skipped_on_pod_and_in_nested_runs():
-    assert gate([ENG], modules=ENGINE, env={rg.ENV_ON_POD: "1"})[0] == "SKIP"
-    assert gate([ENG], modules=ENGINE, env={rg.ENV_DONE: "1"})[0] == "SKIP"
-    assert gate([ENG], modules=ENGINE, env={rg.ENV_NESTED: "x::y (call)"})[0] == "SKIP"
+def test_gate_skipped_on_the_linux_pod_and_inside_a_live_gated_ancestor():
+    assert gate([ENG], modules=ENGINE, env={rg.ENV_ON_POD: "1"}, platform="linux")[0] == "SKIP"
+    assert gate([ENG], modules=ENGINE, env={rg.ENV_DONE: "4242"})[0] == "SKIP"
+
+
+def test_the_env_switches_do_not_turn_the_gate_off_on_the_pc():
+    on_pc = {"modules": ENGINE, "platform": "win32"}
+    assert gate([ENG], env={rg.ENV_ON_POD: "1"}, **on_pc)[0] == "REFUSE"  # the pods are Linux
+    for done in ("1", "77", "x", ""):  # not the pid of a live gated ancestor
+        assert gate([ENG], env={rg.ENV_DONE: done}, **on_pc)[0] == "REFUSE"
+    assert gate([ENG], env={"PYTEST_CURRENT_TEST": "x::y (call)"}, **on_pc)[0] == "REFUSE"
+    assert not rg.on_pod({rg.ENV_ON_POD: "1"}, "win32") and rg.on_pod({rg.ENV_ON_POD: "1"}, "linux")
 
 
 def test_gate_weight_is_the_heaviest_collected_item_not_the_args():
@@ -580,13 +591,26 @@ def test_rom_ids_group_by_file_and_print_ready_commands():
     assert len(lines) == 2 and "test_engine" not in lines[0]
 
 
-def test_no_wait_env_skips_the_ram_wait_but_not_the_refusal():
+def test_no_wait_counts_only_under_the_measuring_harness_lock(tmp_path):
+    procs = {1: 0, 50: 1, 51: 50, 60: 1}  # 50 = harness, 51 = its pytest; 60 unrelated
+    path = tmp_path / "ramgate.lock"
+    harness = rg.MachineLock(path, procs=lambda: procs, me=50)
+    assert harness.acquire("measure")
     clock = Clock()
     env = {rg.ENV_NO_WAIT: "1"}
-    assert gate([PLAIN], free=0.0, env=env, clock=clock)[0] == "GO"
+    child = rg.MachineLock(path, procs=lambda: procs, me=51)
+    assert gate([PLAIN], free=0.0, env=env, clock=clock, lock=child)[0] == "GO"
     assert clock.sleeps == []
-    assert gate([ENG], free=0.0, modules=ENGINE, env=env)[0] == "REFUSE"
-    assert gate([PLAIN], free=0.0, env={rg.ENV_NO_WAIT: "0", rg.ENV_TIMEOUT: "0"})[0] == "TIMEOUT"
+    assert gate([ENG], free=0.0, modules=ENGINE, env=env, lock=child)[0] == "REFUSE"
+    stranger = rg.MachineLock(path, procs=lambda: procs, me=60)  # NO_WAIT alone: ignored
+    lines = []
+    env_t = {**env, rg.ENV_TIMEOUT: "0"}
+    assert gate([PLAIN], free=0.0, env=env_t, lock=stranger, lines=lines)[0] == "TIMEOUT"
+    assert any("ignored" in m for m in lines)
+    harness.release()
+    assert harness.acquire("pytest")  # a plain run's lock is not the harness's
+    assert gate([PLAIN], free=0.0, env=env_t, lock=rg.MachineLock(path, procs=lambda: procs, me=51))[0] == "TIMEOUT"
+    harness.release()
 
 
 def test_the_committed_rom_weights_file_parses():

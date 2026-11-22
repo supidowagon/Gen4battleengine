@@ -92,9 +92,10 @@ ENV_ON_POD = "NUZLINE_ON_POD"
 ENV_TIMEOUT = "NUZLINE_RAMGATE_TIMEOUT"
 ENV_ROM_GATE = "NUZLINE_RAMGATE_ROM_GATE"
 ENV_ENGINE_BLOCKED = "NUZLINE_ENGINE_BLOCKED"  # src/nuzline/engine/__init__.py refuses on it
-ENV_NO_WAIT = "NUZLINE_RAMGATE_NO_WAIT"  # measuring harness only: it checks RAM and runs a watchdog
-ENV_DONE = "NUZLINE_RAMGATE_DONE"
-ENV_NESTED = "PYTEST_CURRENT_TEST"  # set while a test runs: a pytest inside it is not gated
+# Honoured only while a live ancestor holds the machine lock as kind "measure" (the measuring
+# harness, tools/ops/ramgate_measure.py, which checks RAM and runs a watchdog itself).
+ENV_NO_WAIT = "NUZLINE_RAMGATE_NO_WAIT"
+ENV_DONE = "NUZLINE_RAMGATE_DONE"  # the gated run's pid; honoured only when it is a live ancestor
 
 def load_weights(path: str | Path = WEIGHTS) -> dict[str, float]:
     """`<id> <GB> ...` lines of weights.txt; comments and unreadable lines are skipped."""
@@ -168,6 +169,11 @@ def free_gb() -> float:
 
 def _flag(env: Mapping[str, str], name: str) -> bool:
     return env.get(name, "") not in ("", "0")
+
+
+def on_pod(env: Mapping[str, str], platform: str = sys.platform) -> bool:
+    """NUZLINE_ON_POD counts on Linux only: the pods are Linux, the PC is Windows."""
+    return platform != "win32" and _flag(env, ENV_ON_POD)
 
 
 def process_table() -> dict[int, int]:
@@ -271,6 +277,10 @@ class MachineLock:
         self.owned = False
         self.inherited = False
 
+    def in_lineage(self, pid: int) -> bool:
+        """pid is this process or one of its live ancestors."""
+        return pid in lineage(self.me, self._procs())
+
     @property
     def held(self) -> bool:
         return self.owned or self.inherited
@@ -288,7 +298,7 @@ class MachineLock:
         pid, k = self.holder()
         if pid is None or (kind is not None and k != kind):
             return False
-        return pid in lineage(self.me, self._procs())
+        return self.in_lineage(pid)
 
     def acquire(self, kind: str = "pytest") -> bool:
         """Take the lock once (no waiting). True when it is now held by this process or its line."""
@@ -486,6 +496,7 @@ def pytest_gate(
     table: Mapping[str, float] | None = None,
     rom_table: Mapping[str, float] | None = None,
     lock: "MachineLock | None" = None,
+    platform: str = sys.platform,
     free: Callable[[], float] = free_gb,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -494,9 +505,10 @@ def pytest_gate(
     """The root conftest's decision after collection: (SKIP | GO | REFUSE | TIMEOUT, message).
     GO after the wait holds `lock` (default: the machine lock); the caller releases it."""
     env = os.environ if env is None else env
-    if _flag(env, ENV_ON_POD):
+    if on_pod(env, platform):
         return "SKIP", "on the pod"
-    if _flag(env, ENV_DONE) or ENV_NESTED in env:
+    lock = MachineLock() if lock is None else lock
+    if inside_gated_run(env, lock):
         return "SKIP", "inside a gated run"
     if collect_only:  # --collect-only only imports test modules: allowed, no wait
         return "GO", "ramgate: collect-only"
@@ -514,7 +526,9 @@ def pytest_gate(
             f"{ENV_ROM_GATE}=1 is a last resort: it also lets engine tests run on the PC."
         )
     if _flag(env, ENV_NO_WAIT):
-        return "GO", "ramgate: GO (no wait)"
+        if lock.held_by_lineage("measure"):
+            return "GO", "ramgate: GO (no wait: the measuring harness holds the lock)"
+        say(f"ramgate: {ENV_NO_WAIT} ignored: no measuring harness holds the machine lock")
     table = load_weights() if table is None else table
     rom_table = load_rom_weights() if rom_table is None else rom_table
     w = max((item_weight(i, table, rom_table, engine_free) for i in items), default=0.0)
@@ -522,7 +536,6 @@ def pytest_gate(
         timeout = float(env.get(ENV_TIMEOUT, DEFAULT_TIMEOUT_MIN))
     except ValueError:
         timeout = DEFAULT_TIMEOUT_MIN
-    lock = MachineLock() if lock is None else lock
     if not wait_for_ram(
         w, timeout_min=timeout, lock=lock, free=free, sleep=sleep, clock=clock, say=say
     ):
@@ -532,6 +545,16 @@ def pytest_gate(
             "in tools/ops/day/pod/weights.txt and tools/ops/day/rom_weights.txt). Run again later."
         )
     return "GO", f"ramgate: GO weight {w:g} GB"
+
+
+def inside_gated_run(env: Mapping[str, str], lock: "MachineLock") -> bool:
+    """NUZLINE_RAMGATE_DONE holds the pid of a gated run that is this process or a live ancestor:
+    a pytest started by a test of that run (or inside it) is part of it."""
+    try:
+        pid = int(env.get(ENV_DONE, ""))
+    except ValueError:
+        return False
+    return pid > 0 and lock.in_lineage(pid)
 
 
 def rom_ids_by_file(items: Iterable) -> dict[str, list[str]]:

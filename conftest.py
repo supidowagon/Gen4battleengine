@@ -31,6 +31,8 @@ def pytest_unconfigure(config):
     lock = config.stash.get(_LOCK, None)
     if lock is not None:
         lock.release()
+    if os.environ.get(ramgate.ENV_DONE) == str(os.getpid()):
+        os.environ.pop(ramgate.ENV_DONE)
 
 
 # trylast: -m and -k have deselected by then, so the gate sees exactly what will run.
@@ -55,4 +57,4 @@ def pytest_collection_modifyitems(config, items):
         if not config.option.collectonly and ramgate.blocker_wanted(items, os.environ):
             config.stash[_BLOCKER] = ramgate.install_blocker()
         # Child pytest processes of a test (pytester subprocesses) inherit this and skip the gate.
-        os.environ[ramgate.ENV_DONE] = "1"
+        os.environ[ramgate.ENV_DONE] = str(os.getpid())

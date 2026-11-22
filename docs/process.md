@@ -133,9 +133,13 @@ per day is the rate used for estimates.
   wait and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` is a last
   resort: it lets a refused run through, so engine tests run on the PC too; the RAM wait
   stays. A wait that times out exits 4. `NUZLINE_RAMGATE_NO_WAIT=1` turns the RAM wait off (the
-  refusal stays): for the measuring harness only, which checks free RAM and runs the watchdog
-  itself. The pod sets
-  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`), which skips the gate. Local jobs that are not
+  refusal stays) only while a live ancestor holds the machine lock as the measuring harness
+  (kind `measure`), which checks free RAM and runs the watchdog itself; otherwise it is ignored
+  with a note. A pytest started by a test of a gated run is part of that run: the gate sets
+  `NUZLINE_RAMGATE_DONE=<its pid>` and skips a run whose live ancestor (or itself) has that pid;
+  any other value is ignored. The pod sets
+  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`), which skips the gate on Linux only (on the
+  Windows PC it is ignored). Local jobs that are not
   pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
   waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
   more than 20 GB free) and the machine lock, runs the command under the lock and exits with
