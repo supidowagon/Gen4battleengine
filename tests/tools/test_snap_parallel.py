@@ -485,8 +485,8 @@ def snap_dry(tmp_path):
     if BASH is None:
         pytest.skip("no POSIX bash")
     repo, scratch = tmp_path / "repo", tmp_path / "scratch"
-    for rel in ("tools/ops/common.sh", "tools/ops/day/snap.sh", "tools/ops/day/pod/gate.sh",
-                "tools/ops/day/pod/cache_sync.sh"):  # fmt: skip
+    for rel in ("tools/ops/common.sh", "tools/ops/day/snap.sh", "tools/ops/day/snap_body.sh",
+                "tools/ops/day/pod/gate.sh", "tools/ops/day/pod/cache_sync.sh"):  # fmt: skip
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         (repo / rel).write_bytes((ROOT / rel).read_bytes().replace(b"\r", b""))
     (repo / ".gitignore").write_text("external/\n", encoding="utf-8", newline="\n")
@@ -633,6 +633,40 @@ def test_snap_sh_body_writes_run_sh_and_refuses_a_changed_one(snap_dry, tmp_path
             else:
                 assert r.returncode == 0 and r.stdout.strip() == "RUNSH_OK", (sh, r.stderr)
                 assert (w / "run.sh").read_bytes() == run_sh.encode()
+
+
+def _body_fn(tmp_path, call):
+    """<call> in bash after sourcing tools/ops/day/snap_body.sh, in <tmp_path>."""
+    from tests.tools.test_pod_gate import BASH, ROOT, _clean_env
+
+    if BASH is None:
+        pytest.skip("no POSIX bash")
+    body = (ROOT / "tools" / "ops" / "day" / "snap_body.sh").as_posix()
+    return subprocess.run([BASH, "-c", f". '{body}'; cd '{tmp_path.as_posix()}' && {call}"],
+                          capture_output=True, text=True, env=_clean_env(), check=False)  # fmt: skip
+
+
+def test_snap_body_refuses_a_run_sh_over_256_argv_items(tmp_path):
+    """252 chunks of 4000 base64 characters (756,000 bytes) is the most run.sh may be."""
+    (tmp_path / "ok.sh").write_bytes(b"x" * 756000)
+    (tmp_path / "big.sh").write_bytes(b"x" * 756001)
+    r = _body_fn(tmp_path, 'body_chunks ok.sh && echo "N ${#CH[@]}"')
+    assert r.returncode == 0 and r.stdout.strip() == "N 252", r.stdout + r.stderr
+    r = _body_fn(tmp_path, "body_chunks big.sh; echo rc $?")
+    assert r.stdout.splitlines() == ["REFUSED: exec body would have 257 argv items, over 256 (run.sh too large)",
+                                     "rc 3"], r.stdout + r.stderr  # fmt: skip
+
+
+def test_snap_body_refuses_a_script_over_4000_characters(tmp_path):
+    import json
+
+    (tmp_path / "r.sh").write_bytes(b"echo hi\n")
+    ok, big = "a" * 3998 + '"\\', "a" * 4001
+    r = _body_fn(tmp_path, f"body_chunks r.sh && body_json '{ok}'")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout)["command"] == ["sh", "-c", ok, "_", "ZWNobyBoaQo="]
+    r = _body_fn(tmp_path, f"body_chunks r.sh && body_json '{big}'; echo rc $?")
+    assert r.stdout.splitlines() == ["REFUSED: exec body script is 4001 characters, over 4000", "rc 3"], r.stdout
 
 
 @pytest.mark.parametrize("knob", ["SNAP_WORKERS", "SNAP_GATE_GB"])

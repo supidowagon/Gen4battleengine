@@ -76,6 +76,7 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
 . "$HERE/pod/gate.sh"   # podgate and reserve_knobs, copied into run.sh
+. "$HERE/snap_body.sh"  # body_chunks, body_json: the exec-pod body
 # table_key16 capture|compare <full sha> <tables archive>: the first 16 hex of a build's table
 # key (tools/ops/build_tables.sh, tools/ops/table_key.py), or nothing.
 #   capture (the key a capture is stored under): only from the archive itself, the
@@ -384,15 +385,11 @@ echo ALL_DONE >> "\$W/times.txt"
 EOS
 tr -d '\r' < "$O/run.sh" > "$O/run.tmp" && mv "$O/run.tmp" "$O/run.sh"
 bash -n "$O/run.sh" || refuse "generated run.sh does not parse" "$O/run.sh"
-# The body: exec-pod refuses an argv item over 4096 characters and an argv over 256 items, so
-# run.sh travels base64-encoded in chunks of at most 4000 characters after the script, as
-# common.sh exec_body does: ["sh","-c",<script>,"_",<chunk>,...]. The script joins them
-# (printf %s "$@"), decodes run.sh and runs it only when its sha256 is run.sh's on the PC
-# (else RUNSH_SHA_MISMATCH <sha>, exit 1, nothing started). Refuses (exit 3) a body that would
-# break either limit.
-LIM=4000; RB=$(base64 -w0 "$O/run.sh"); RSUM=$(sha256sum "$O/run.sh" | cut -c1-64); CH=()
-while [ -n "$RB" ]; do CH+=("${RB:0:$LIM}"); RB=${RB:$LIM}; done
-[ $(( ${#CH[@]} + 4 )) -le 256 ] || refuse "exec body would have $(( ${#CH[@]} + 4 )) argv items, over 256 (run.sh too large)"
+# The body (snap_body.sh): run.sh in argv chunks of at most 4000 characters after the script; the
+# script joins them (printf %s "$@"), decodes run.sh and runs it only when its sha256 is run.sh's
+# on the PC (else RUNSH_SHA_MISMATCH <sha>, exit 1, nothing started). Refused (exit 3) before the
+# send when the body would have over 256 items; after it when the script is over 4000 characters.
+body_chunks "$O/run.sh" || exit 3
 
 echo "== payload.tar"; tar -tvf "$O/payload.tar"
 echo "== code.tar $(printf '%s\n' "$CT" | wc -l) entries; tables $(printf '%s\n' "$T" | wc -l) files"
@@ -411,10 +408,8 @@ UNTOOL=""; [ -z "$TSHA" ] || UNTOOL=" && mkdir tool && tar --no-same-owner -xf t
 DM="/work/_decomp/$DECOMP"
 PREP="/work/_bin/runpodctl receive $CODE || { echo RECEIVE_FAILED; exit 1; }; [ -d $DM ] || { echo \"DECOMP_MISSING: $DM is not on this pod; send any pack.sh run first (its setup.sh creates it), then send this body again under a new name\"; exit 1; }; { tar --no-same-owner -xf payload.tar && mkdir repo && tar --no-same-owner -xf code.tar -C repo && tar --no-same-owner -xJf tables.tar.xz -C repo$UNTOOL && mkdir -p repo/external && ln -sfn $DM repo/external/pokeplatinum; } || { echo UNPACK_FAILED; exit 1; }; echo PREP_OK; setsid nohup bash $W/run.sh > run.out 2>&1 < /dev/null &"
 SHC="mkdir -p $W && cd $W || exit 1; printf %s \"\$@\" | base64 -d > run.sh || { echo RUNSH_DECODE_FAILED; exit 1; }; s=\$(sha256sum run.sh | cut -c1-64); [ \"\$s\" = $RSUM ] || { echo RUNSH_SHA_MISMATCH \$s; rm -f run.sh; exit 1; }; chmod +x run.sh && nohup sh -c '$PREP' > prep.log 2>&1 < /dev/null & sleep 20; tail -c 300 $W/prep.log"
-python_json() { local s="$1"; s=${s//\\/\\\\}; s=${s//\"/\\\"}; printf '"%s"' "$s"; }
-[ "${#SHC}" -le "$LIM" ] || { [ -z "$SPID" ] || kill "$SPID" 2>/dev/null; refuse "exec body script is ${#SHC} characters, over $LIM"; }
-ITEMS=""; for c in "${CH[@]}"; do ITEMS="$ITEMS, \"$c\""; done
-printf '{"command": ["sh", "-c", %s, "_"%s], "timeoutSeconds": 25}\n' "$(python_json "$SHC")" "$ITEMS" > "$O/body.json"
+BJ=$(body_json "$SHC") || { [ -z "$SPID" ] || kill "$SPID" 2>/dev/null; echo "$BJ"; exit 3; }
+printf '%s\n' "$BJ" > "$O/body.json"
 echo "== exec-pod body ($O/body.json):"; cat "$O/body.json"
 [ "$DRY" = 1 ] && echo "DRY RUN: nothing sent; delete $O before reusing the name" && exit 0
 echo "== finished when exec 'tail -3 $W/times.txt' shows ${JOB}_RC=<n> then ALL_DONE"
