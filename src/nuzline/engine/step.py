@@ -5802,10 +5802,12 @@ def step_events(
     # The faint replacement's Starf Berry draw, kept for ``replace`` where it can be read; 0 at a
     # pause and elsewhere, so states merge (F-10).
     # Stored modulo 5: a replacement's check always meets five stats below +6 (a fresh battler;
-    # at most an Intimidate or Download stage before it), so states that read alike merge.
-    # The kept draw sits in the queue's entry 0 with ``starf_taken`` 0 (F-O3).
+    # at most an Intimidate or Download stage before it), so states that read alike merge. An
+    # active holder the same check meets (``starf_kept_active``) keeps the whole draw: its count
+    # can be below 5. The kept draw sits in the queue's entry 0 with ``starf_taken`` 0 (F-O3).
     kept = starf_kept(tables, s) & ~all_halted
-    replacement_draw = jnp.asarray(outcome.starf)[:, 1].astype(_I32) % len(STARF_STATS)
+    draw1 = jnp.asarray(outcome.starf)[:, 1].astype(_I32)
+    replacement_draw = jnp.where(starf_kept_active(tables, s), draw1, draw1 % len(STARF_STATS))
     entry0 = jnp.arange(len(STARF_QUEUE))[None, :] == 0
     roll = jnp.where(kept[:, None] & entry0, replacement_draw[:, None], 0)
     s = s._replace(
@@ -5828,7 +5830,28 @@ def starf_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     holds, pinched = starf_holders(tables, state)
     can = pinched[rows] | (holds[rows] & entry_damage_up(state)[:, None])
     bench = jnp.arange(state.hp.shape[1])[None, :] != state.active[:, None]
-    return (needs_replacement(state) != 0) & jnp.any(can & bench, axis=1)
+    benched = (needs_replacement(state) != 0) & jnp.any(can & bench, axis=1)
+    return benched | starf_kept_active(tables, state)
+
+
+def starf_kept_active(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the battler's active Pokemon holds a Starf Berry (the raw item) at its pinch
+    while a faint replacement is pending (``needs_replacement``) or a newcomer's switch-in states
+    wait (``entry_pending``), and the battle goes on. A Future Sight hit (SIDE_COND_CHECK_STATE_
+    FUTURE_SIGHT, bcp.c:1758-1783) comes after the holder's MON_COND_CHECK_STATE_ITEM_CONDITION
+    (bcp.c:1283, :1699) and subscript_future_sight_damage.s has no held-item check, so the holder
+    can stand at its pinch with its berry at TurnEnd. ``_turn_start_items`` then eats it with the
+    turn's queue; with a replacement pending, the next ShowBattleMon's
+    SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (bcp.c:256, battle_lib.c:4151-4165, every battler)
+    eats it first: in ``replace`` (``hooks.switch_in_effects``' ``after_damage_items`` of the
+    foe) or ``switch_in.show_battle_mon4``. That check draws ``RandNext() % 5``
+    (battle_lib.c:5273-5294), the replacement's draw (``Outcome.starf[:, 1]``), kept whole:
+    its stats can be at +6."""
+    fmt = format_of(state)
+    rows = party(fmt, jnp.arange(fmt.B))
+    _, pinched = starf_holders(tables, state)
+    waiting = jnp.any(needs_replacement(state) != 0) | jnp.any(state.entry_pending != 0)
+    return (state.over == 0) & waiting & pinched[rows, state.active]
 
 
 def canonical_target(state: BattleState) -> BattleState:

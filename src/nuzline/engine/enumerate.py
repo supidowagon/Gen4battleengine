@@ -1933,6 +1933,10 @@ def outcome_laws(
     damaged a target that has not moved."""
     fmt = format_of(state)
     paused_rock = _paused_rock(tables, state)
+    # An armed Trace holder before the view rewrites its ability (``_starf_gain``, B = 4).
+    trace_armed = (battler_ability(state, jnp.arange(fmt.B)) == AbilityId.TRACE) & (
+        state.trace_announced == 0
+    )
     state, actions = pivot_view(tables, state, actions)
     live = state.over == 0
     sides = jnp.arange(fmt.B)
@@ -2636,7 +2640,7 @@ def outcome_laws(
         quick_claw = jnp.broadcast_to(live & anywhere, (fmt.B,))
 
     starf_draw, starf_loose = _starf_reads(
-        tables, state, actions, uses_move, effect, params, moves, dragged, loose
+        tables, state, actions, uses_move, effect, params, moves, dragged, loose, trace_armed
     )
 
     band_party = jnp.any(
@@ -2999,7 +3003,9 @@ _STARF_STAGE_JUMPS = (
 )
 
 
-def _starf_gain(tables, state, actions, uses_move, effect, params, moves, dragged):
+def _starf_gain(
+    tables, state, actions, uses_move, effect, params, moves, dragged, armed_before=None
+):
     """``(gain int32[B], fresh int32[B])``: an upper bound on how far one of battler ``d``'s five
     Starf stats can rise this turn before any of its eats (``_starf_reads``), and the same for a
     fresh Roar newcomer of ``d``'s side. Every source of a raise in the engine, summed (each adds
@@ -3038,10 +3044,19 @@ def _starf_gain(tables, state, actions, uses_move, effect, params, moves, dragge
       and its foe's switch action is copied, ``outcome.pivot_view`` already shows ``d`` holding
       the copy (``_armed_trace``, ruling G-25), so ``_holds`` counts it and this term is 0
       (``d`` no longer holds Trace); the term covers the rest: a drag (random pick), ``d``'s own
-      Trace newcomer, ``d``'s Pursuit on the switch (``_armed_trace`` leaves Trace). A U-turn or
-      Baton Pass newcomer enters in the resumed call, whose ``pivot_view`` shows the copy. A
+      Trace newcomer, ``d``'s Pursuit on the switch (``_armed_trace`` leaves Trace). At B = 2 a
+      U-turn or Baton Pass newcomer enters in the resumed call, whose ``pivot_view`` shows the
+      copy. At B = 4 the term is +1 with no entry condition wherever ``d``'s active Pokemon
+      held Trace with ``trace_announced`` 0 before ``pivot_view`` (``armed_before``: the view
+      can have rewritten it) or ``d`` switches in a Trace holder: ``switch_in._trace_state``
+      (:3711-3737, ``TRACE_ROUNDS``) lets a holder copy a partner's newcomer through the foe's
+      earlier copy, either foe's entry (``_armed_trace`` pairs ``d`` with ``d ^ 1`` only), a
+      diagonal foe's ability (ChooseTraceTarget's third branch, :7774-7778), or a resumed
+      pivot of either foe. Still one copy per stint: traceAnnounced (:3726) and
+      downloadAnnounced (:3838) are set once, so a chain gives ``d`` one raise, +1. A
       Trace that Skill Swap / Role Play hands ``d`` is in their +2. Faint replacements come at
-      TurnEnd (bcp.c:1848), after every eat this law covers.
+      TurnEnd (bcp.c:1848), after every eat of index 0; the replacement's own check is
+      ``_starf_reads``' index 1.
 
     Not modelled, so not here (each maps to ``AbilityId.UNSUPPORTED`` / ``EffectId.UNSUPPORTED``;
     add it here with its mechanic): Anger Point (Attack to +6, subscript_critical_hit.s:10-15),
@@ -3097,14 +3112,20 @@ def _starf_gain(tables, state, actions, uses_move, effect, params, moves, dragge
     armed = (
         (battler_ability(state, sides) == AbilityId.TRACE) & (state.trace_announced[sides] == 0)
     ) | (is_switch(actions) & (battler_ability(state, sides, incoming) == AbilityId.TRACE))
-    enters = is_switch(actions) | dragged
-    across = side_of(sides)[:, None] != side_of(sides)[None, :]
-    foe_enters = jnp.any(across & enters[None, :], axis=1)
-    ability = ability + (armed & foe_enters).astype(_I32)
+    if fmt.B == 4:
+        before = jnp.zeros((fmt.B,), bool) if armed_before is None else armed_before
+        ability = ability + (armed | before).astype(_I32)
+    else:
+        enters = is_switch(actions) | dragged
+        across = side_of(sides)[:, None] != side_of(sides)[None, :]
+        foe_enters = jnp.any(across & enters[None, :], axis=1)
+        ability = ability + (armed & foe_enters).astype(_I32)
     return own + others + reflected + ability, others + 1
 
 
-def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragged, loose):
+def _starf_reads(
+    tables, state, actions, uses_move, effect, params, moves, dragged, loose, armed_before=None
+):
     """``(relevant bool[B, 4], loose bool[B, 4])`` of ``Outcome.starf`` (F-10). Index 0, the first
     eat's draw, is read where side ``d`` can eat a Starf Berry this turn: its active Pokemon or the
     one it switches in holds one, or any living holder of its party can enter (its own U-turn or
@@ -3116,7 +3137,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragg
     a battle-start berry is still open (``starf_open``). Index 1, the faint replacement's draw,
     where a living holder of the party can be at its pinch when a replacement sends it in: at its
     pinch now, on the field this turn when it can leave, or with Spikes / Stealth Rock up or set
-    this turn (``step.starf_kept``).
+    this turn (``step.starf_kept``); or where its own holder on the field (or entering) meets a
+    Future Sight hit this turn: it can stand at its pinch with its berry at TurnEnd, eaten by a
+    replacement's switch-in item check (``step.starf_kept_active``).
 
     The law: the draw is read modulo the count of the five stats below +6 at the eating. A fresh
     newcomer has all five below +6; an active one keeps that count when its highest of them plus
@@ -3124,8 +3147,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragg
     other battlers' raising moves and Flings of a stat berry, its abilities and an armed Trace);
     no Belly Drum, Psych Up, Power / Guard Swap, Transform, Baton Pass or Recycle
     (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The
-    replacement's draw is always 5 values: a fresh battler (``step.starf_kept`` stores it
-    modulo 5).
+    replacement's draw is 5 values for a fresh battler (``step.starf_kept`` stores it
+    modulo 5); for the Future Sight holder its count is the turn end's (``step`` keeps the whole
+    draw): 5 values while ``highest + gain + 1 + 2 * eats`` stays below +6, else all.
 
     Index 2 (F-O3, G-27), battler ``d``'s second eat this turn: every eat draws its own
     (battle_lib.c:4864-4866, :5286-5288, Pluck :5808). Read where two of its eat sources can meet
@@ -3223,7 +3247,7 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragg
     five = jnp.asarray([int(x) for x in STARF_STATS], _I32)
     highest = jnp.maximum(jnp.max(state.stages[:, five].astype(_I32), axis=1), 0)
     gain, fresh_gain = _starf_gain(
-        tables, state, actions, uses_move, effect, params, moves, dragged
+        tables, state, actions, uses_move, effect, params, moves, dragged, armed_before
     )
     jump = jnp.any(uses_move & _any_of(effect, _STARF_STAGE_JUMPS))
     turn_loose = jump | (highest + gain >= STAGE_MAX) | open_
@@ -3302,8 +3326,20 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragg
 
     second, second_loose = later(2)
     third, third_loose = later(3)
+    # Index 1, also battler d's own holder on the field at the turn end
+    # (``step.starf_kept_active``):
+    # a Future Sight hit (SIDE_COND_CHECK_STATE_FUTURE_SIGHT, bcp.c:1758-1783: it lands where the
+    # count is 1) comes after its ITEM_CONDITION (bcp.c:1699) and its script checks no item
+    # (subscript_future_sight_damage.s), so it can stand at its pinch with its berry when a
+    # replacement's ShowBattleMon checks every battler's item (battle_lib.c:4151-4165). That eat
+    # reads the whole draw: its count is that of the turn's end, below 5 where a stat can reach +6
+    # (the gains, an armed Trace copying the newcomer's Download, +1, and +2 per earlier eat).
+    foreseen = state.future_timer[sides].astype(_I32) == 1
+    standing = live & foreseen & jnp.any(candidates, axis=1)
+    rep = rep | standing
+    rep_loose = standing & (turn_loose | (highest + gain + 1 + 2 * own >= STAGE_MAX))
     relevant = jnp.stack([turn, rep, second, third], axis=1)
-    loose_out = jnp.stack([turn_loose, jnp.zeros_like(turn), second_loose, third_loose], axis=1)
+    loose_out = jnp.stack([turn_loose, rep_loose, second_loose, third_loose], axis=1)
     if loose:
         # The brute force: the turn's draw, all STARF_DRAWS values, wherever a living holder is
         # in the side's party (or its foe's, for a Pluck / Bug Bite) or a berry is open, and the
@@ -3321,7 +3357,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragg
         )
         relevant = jnp.stack([first, live & anyone, first & more, first & more], axis=1)
         all_ = jnp.ones_like(first)
-        loose_out = jnp.stack([all_, jnp.zeros_like(first), all_, all_], axis=1)
+        foresight = state.future_timer[sides] != 0  # the active holder's index 1 (above)
+        loose_out = jnp.stack([all_, live & anyone & foresight, all_, all_], axis=1)
     return relevant, loose_out
 
 

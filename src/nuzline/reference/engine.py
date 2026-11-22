@@ -2992,6 +2992,31 @@ def _starf_kept(tables, s: RefState) -> list[bool]:
         mons = _party_of(s, b).mons
         holder = any(i != sd.active and can(m) for i, m in enumerate(mons))
         out.append(not s.over and _awaits_replacement(s, b) and holder)
+    active = _starf_kept_active(tables, s)
+    return [k or a for k, a in zip(out, active, strict=True)]
+
+
+def _starf_kept_active(tables, s: RefState) -> list[bool]:
+    """``step.starf_kept_active``: the battler's active Pokemon holds a Starf Berry (the raw
+    item) at its pinch while a replacement is pending or a newcomer's states wait (a Future
+    Sight hit after ITEM_CONDITION, bcp.c:1758-1783; the next ShowBattleMon's held-item check,
+    battle_lib.c:4151-4165, eats it with the replacement's draw, kept whole)."""
+    waiting = any(_awaits_replacement(s, b) for b in range(_fmt(s).B)) or any(
+        sd.entry_pending for sd in s.battlers
+    )
+    out = []
+    for b in range(_fmt(s).B):
+        mon = _active(s, b)
+        out.append(
+            bool(
+                not s.over
+                and waiting
+                and mon.species
+                and mon.hp
+                and _item_effect(tables, mon, None) == ItemId.STARF_BERRY
+                and mon.hp <= _pinch_limit(tables, s, mon)
+            )
+        )
     return out
 
 
@@ -8769,9 +8794,10 @@ def ref_step(
     # The faint replacement's draw is kept in entry 0 where ``ref_replace`` can read it; 0 at a
     # pause.
     kept = _starf_kept(tables, out)
-    for sd, keep, draw in zip(out.battlers, kept, outcome.starf, strict=True):
+    active = _starf_kept_active(tables, out)
+    for sd, keep, whole, draw in zip(out.battlers, kept, active, outcome.starf, strict=True):
         first = (
-            int(draw[1]) % len(STARF_STATS)
+            (int(draw[1]) if whole else int(draw[1]) % len(STARF_STATS))
             if keep and not (out.pivot_battler or out.learn_site)
             else 0
         )
