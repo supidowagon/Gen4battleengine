@@ -456,14 +456,12 @@ def order_swaps(tables: Tables, state: BattleState) -> jnp.ndarray:
     (``CompareBattlerSpeed(0, 1, TRUE)`` swaps: ``order.player_second``; ``ignoreQuickClaw``
     leaves both priorities 0, but each Quick Claw's ``speedRand`` bit ``qc`` still activates it,
     :1278-1286, and an exact tie swaps on ``RandNext() & 1``, :1445). A fainted battler goes
-    after a living one (:1205-1211). Ruling G-26."""
-    fmt = format_of(state)
-    down = [state.hp[party(fmt, b), state.active[b]] == 0 for b in range(fmt.B)]
+    after a living one (:1205-1211): ``order.compare_speed`` applies that short-circuit itself,
+    so no separate dead-battler line is needed here. Ruling G-26."""
     bits = jnp.int32(0)
     for draw in range(ORDER_DRAWS):
         qc = jnp.asarray([(draw >> 1) & 1, (draw >> 2) & 1], _I32)
         second = player_second(tables, state, draw & 1, qc)
-        second = jnp.where(down[0] != down[1], down[0], second)
         bits = bits | (second.astype(_I32) << draw)
     return bits
 
