@@ -2910,6 +2910,28 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
   reads), complete, nothing to build. E3's B4-4 `carry_out` needs no change.
   Tests: tests/engine/test_e1_batch_i.py (mapping, forbidden-id pin vs bs, copy with table PP and permanence, kept
   with no message, failures, Last Resort, Sleep Talk calling Sketch, switch clears). Snapshot allow-new: `sketch_move`.
+  MANIFEST CLASH: `MANIFEST_VERSION` 44 here clashes with `claude/e3-batch3` (44 at ccf7150d, 45 at 2c485b5f; main
+  43). Whichever merges second renumbers above the other and rebuilds both tables.
+- Review fixes (I-3, I-1a):
+  - Fix 1 (930716b1) tests in test_e1_batch_i.py: `test_a_faint_clears_sketch_move` (lib.c:2208),
+    `test_a_shown_move_that_misses_is_sketched` (subscript_missed.s:5 PrintAttackMessage, bs:1432, bcp.c:3952-3954),
+    `test_the_choice_lock_on_sketch_is_released_next_turn` (bcp.c:3921-3930, lib.c:2307-2309),
+    `test_coverage_grades_the_moves_a_sketch_can_copy` (coverage.py "Sketch move effect" lines, `sketch_calls`).
+    Each failed on code with its rule removed (both engines mutated), passes on the tip.
+  - Fix 2 (84c5bed5) `docs/kaizo/mechanics_backlog.md` regenerated (`tools/kaizo/backlog.py`): the player-only row
+    "move effect #95: Sketch" is gone; opponent side unchanged. tests/tools/test_backlog.py 33 passed.
+  - Fix 3 (c809e81a) vanilla `SWITCH_SITES` stays 9 (option b: deriving it as Kaizo's would change `SWITCH_NONE`, the
+    switch-stop width and every vanilla AI outcome shape). The cited bound is beside it: at most 8 draws for every
+    vanilla trainer whose party fits `MOVE_EFFECTS` (Roark 246 plus one-Pokemon Tackle parties 2, 12, 355, 370);
+    Stealth Rock counts as super effective (lib.c:2681-2730, no power test). Fullset test
+    `tests/ai/test_switching.py::test_vanilla_switch_sites_bound_every_accepted_trainer` recomputes it. The I-1a NOTE
+    above is answered.
+  - Fix 4 (6b218822) Sketch's substitute test is `h.shielded` / `_shielded` (subscript_sketch.s:5 CheckSubstitute,
+    bs:9180-9181). Mimic keeps `substitute_hp`: subscript_mimic.s has no CheckSubstitute and `BtlCmd_TryMimic` reads
+    the volatile alone (bs:4483); the review's premise was wrong there. No test can show the Sketch change in any
+    format: SUBSTITUTE_HIT is set only by a damaging hit (bcp.c:3358-3371), selfTurnFlags clear after every action
+    (lib.c:2013-2015 from bcp.c:3998, :1855), and Sketch deals no damage.
+  - Fix 5 this ledger: the clash line and these lines.
 
 ## Stream state (restart point, 2026-11-19)
 
