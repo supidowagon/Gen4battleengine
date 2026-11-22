@@ -25,6 +25,7 @@ from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import (
     CRIT_WRITE_VARIANTS,
     Outcome,
+    ability_whole,
     doubles_ability_change,
     empty_outcome,
     trace_copies,
@@ -113,8 +114,62 @@ def test_a_standoff_trace_copies_the_newcomer_and_worry_seeds_insomnia(tables, n
     seed = roark_state(tables, names, player_moves=("Tackle",), opp_moves=("Worry Seed",))
     seed = seed._replace(ability=s.ability)
     acts = A("Tackle", "Worry Seed", seed, names)
-    assert np.asarray(trace_copies(tables, seed, acts, (AbilityId.INSOMNIA,))).all()
+    # The foe's Worry Seed writes the player's Insomnia: the foe's Trace can copy it at that
+    # MoveEnd; the player's Trace is gone (it is the target), so only the foe copies.
+    insomnia = trace_copies(tables, seed, acts, (AbilityId.INSOMNIA,))
+    assert np.asarray(insomnia).tolist() == [False, True]
     assert not np.asarray(trace_copies(tables, seed, acts, (AbilityId.SUPER_LUCK,))).any()
+    # B = 2: the foe's Role Play takes the player's Trace (subscript_copy_ability.s:14-15), which
+    # ChooseTraceTarget skips: a changed foe gives the player's armed Trace nothing to copy.
+    role = roark_state(tables, names, player_moves=("Tackle",), opp_moves=("Role Play",))
+    role = role._replace(ability=s.ability)
+    assert not np.asarray(trace_copies(tables, role, A("Tackle", "Role Play", role, names))).any()
+
+
+def test_a_trace_newcomer_can_copy_a_foe_that_switches_out_after_it(tables, names):
+    # The player switches in a Trace Pokemon while the foe's Static lead switches out: if the
+    # player's switch goes first, the newcomer's entry trace meets the Static (ChooseTraceTarget,
+    # battle_lib.c:7750-7781); ``faced`` counts only staying foes, so the newcomer is armed and
+    # the foe's active as it stands is a source (``TraceSources.start``).
+    s = roark_state(tables, names, player_moves=("Tackle",))
+    s = s._replace(ability=s.ability.at[0, 1].set(AbilityId.TRACE).at[1, 0].set(AbilityId.STATIC))
+    both = np.array([MOVE_ACTIONS + 1, MOVE_ACTIONS + 1], np.int32)
+    assert bool(trace_copies(tables, s, both, (AbilityId.STATIC,))[0])
+    # The foe stays: the newcomer traces the Static on entry (``_entry_abilities``), no armed one.
+    stay = np.array([MOVE_ACTIONS + 1, 0], np.int32)
+    assert not bool(trace_sources(tables, s, stay).armed[0])
+
+
+def test_a_paused_state_is_no_turn_start_for_the_invariant(tables, names):
+    # A state paused mid-turn (a learn prompt, a U-turn's party list) follows no ShowBattleMon:
+    # an armed Trace there may face a traceable foe, which it copies at the next MoveEnd, and a
+    # copied accuracy ability keeps the hit whole (outcome.ability_whole). At a turn start the
+    # invariant says no such holder exists: no copy, the roll keeps its classes.
+    s = roark_state(tables, names, player_species="Sandshrew")
+    s = s._replace(
+        ability=s.ability.at[0, 0].set(AbilityId.TRACE).at[1, 0].set(AbilityId.COMPOUNDEYES)
+    )
+    acts = A("Scratch", "Tackle", s, names)
+    eyes = (AbilityId.COMPOUNDEYES,)
+    for field in ("learn_site", "pivot_battler"):
+        paused = s._replace(**{field: jnp.asarray(1, getattr(s, field).dtype)})
+        assert np.asarray(trace_copies(tables, paused, acts, eyes)).tolist() == [True, False]
+        assert np.asarray(ability_whole(tables, paused, acts, None)).all()
+    assert not np.asarray(trace_copies(tables, s, acts)).any()
+    assert not np.asarray(ability_whole(tables, s, acts, None)).any()
+
+
+def test_only_an_accuracy_copy_keeps_the_hit_whole(tables, names):
+    # The foe's armed Trace copies the player's newcomer at its entry; where that is paused
+    # mid-switch (a U-turn's list) the copy is the newcomer's ability: Super Luck changes no
+    # accuracy check (bcp.c:2876-2947), Compoundeyes does.
+    for ability, whole in ((AbilityId.SUPER_LUCK, False), (AbilityId.COMPOUNDEYES, True)):
+        s = _standoff(tables, names, ability)
+        s = s._replace(learn_site=jnp.asarray(1, s.learn_site.dtype))
+        s = s._replace(ability=s.ability.at[0, 0].set(ability))
+        acts = A("Tackle", "Tackle", s, names)
+        assert bool(trace_copies(tables, s, acts)[1])
+        assert np.asarray(ability_whole(tables, s, acts, None)).tolist() == [whole, whole]
 
 
 def test_a_super_luck_newcomer_is_copied_in_the_view_not_by_the_trace_columns(tables, names):

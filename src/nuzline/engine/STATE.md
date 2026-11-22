@@ -267,10 +267,12 @@ three structs has a row.
   with HP whose raw `ability` ChooseTraceTarget accepts (not Forecast, Trace or Multitype,
   battle_lib.c:7750-7781): it would have traced (:3711-3737). `outcome.trace_sources` /
   `trace_copies` (the laws and the sampler) rely on it: an armed holder copies only what enters
-  or changes this turn; the opposing actives as they stand count only for a battler that gains
-  Trace mid-turn and in a state resumed at a learn prompt (`learn_site`, no turn start in
-  between). `step` and the reference do not rely on it (they fire the hook where the decomp
-  does). Generated states keep it: `tests/strategies.settle_traces` sets `trace_announced` 1 on
+  or changes this turn (at B = 2: an opposing newcomer, or the Insomnia of its own Worry Seed;
+  at B = 4 also any battler's changed raw ability and a drag's bench); the opposing actives as
+  they stand count only for a battler that gains Trace mid-turn, a Trace newcomer (a traceable
+  foe may switch out after it), and in a state paused mid-turn (`learn_site`, `pivot_battler`:
+  no turn start since the last firing point). `step` and the reference do not rely on it (they
+  fire the hook where the decomp does). Generated states keep it: `tests/strategies.settle_traces` sets `trace_announced` 1 on
   a drawn holder that breaks it (no draw; a raw Trace with the flag set is reachable, by a later
   Skill Swap of Trace back, which leaves the flag). A hand-built state that breaks it is not a
   game state; the laws may under-read it.
