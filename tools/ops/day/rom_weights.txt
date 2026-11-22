@@ -1,7 +1,7 @@
 # Local peak per ROM-only file, read by tools/ops/ramgate.py (rom_weights.txt; same format as pod/weights.txt).
 # Line: <test file or node id> <GB> <tag>. Longest matching key wins; an id with no line weighs 14 (ROM_UNMEASURED_GB).
 # GB = ceil(max(1.25 m, m + 2)), m = peak summed RSS of the pytest tree in GB (10^9 bytes), polled every 0.5 s,
-# one file's non-slow ROM-only ids per process (measuring harness: NUZLINE_RAMGATE_NO_WAIT=1, watchdog at 4 GB free).
+# one file's non-slow ROM-only ids per process (measuring harness tools/ops/ramgate_measure.py: NUZLINE_RAMGATE_NO_WAIT=1, watchdog at 4 GB free).
 # `pod-measure-needed`: the local run did not measure it (here: the probe save is absent, tests skip), weight 20.
 # `unmeasured-slow`: a slow-marked ROM-only test, not measured locally, weight 14.
 

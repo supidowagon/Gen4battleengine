@@ -9,7 +9,8 @@ applies it at collection.
 
 One local run at a time on the PC: after the RAM check a gated run takes the machine lock
 (`<main checkout>/_scratch/ramgate.lock`, MachineLock) and holds it until it ends; waiting on it
-counts toward the same timeout.
+counts toward the same timeout. While it runs a watchdog thread kills its child processes and
+stops it when free RAM drops below 4 GB (exit 15).
 
 CLI:
     python tools/ops/ramgate.py --build [--weight GB] -- <command ...>
@@ -24,15 +25,18 @@ unreadable free-RAM figure exits 16. The pytest gate exits 13 (refused), 14 (tim
 codes apart from pytest's own 0-5.
 """
 
+import _thread
 import ast
 import importlib.abc
 import inspect
 import math
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -49,7 +53,10 @@ BUILD_DEFAULT_WEIGHT = 14.0  # without that line: a build waits for > 6 + 14 = 2
 POLL_S = 60.0
 EXIT_REFUSE = 13  # refused (pytest) or POD (CLI)
 EXIT_TIMEOUT = 14
+EXIT_WATCHDOG = 15  # free RAM fell below WATCHDOG_GB during the run
 EXIT_NO_RAM_READ = 16  # free_gb raised OSError
+WATCHDOG_GB = 4.0
+WATCHDOG_POLL_S = 0.5
 LOCK_POLL_S = 10.0  # free RAM is enough but another local run holds the machine lock
 LOCK_NAME = "ramgate.lock"  # under the main checkout's _scratch/: one local run on the PC at a time
 LOCK_EMPTY_STALE_S = 10.0  # a lock file without a pid (its writer died between create and write)
@@ -374,6 +381,134 @@ class MachineLock:
         if self.owned:
             self._remove_if_holder(self.me)
         self.owned = self.inherited = False
+
+
+def start_time(pid: int) -> float | None:
+    """When the process started (seconds, platform clock), None when it cannot be read."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                return None
+            return (times[0].dwHighDateTime << 32 | times[0].dwLowDateTime) / 1e7
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        stat = Path("/proc", str(pid), "stat").read_text(encoding="utf-8", errors="replace")
+        return float(stat.rsplit(")", 1)[1].split()[19])  # field 22, starttime in clock ticks
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def kill_tree(
+    pid: int,
+    procs: Mapping[int, int] | None = None,
+    *,
+    started: Callable[[int], float | None] = start_time,
+    kill: Callable[[int, int], None] = os.kill,
+) -> list[int]:
+    """Kill every process below pid (never pid itself), found by its recorded parent pid. A child
+    that started before its parent holds a reused pid as parent (Windows keeps dead parents'
+    pids) and is not ours: it is skipped with its subtree. Returns the pids killed, leaves first."""
+    procs = process_table() if procs is None else procs
+    seen: dict[int, float | None] = {}
+
+    def born(p: int) -> float | None:
+        if p not in seen:
+            seen[p] = started(p)
+        return seen[p]
+
+    victims: list[int] = []
+    todo = [pid]
+    while todo:
+        parent = todo.pop(0)
+        for child, pp in procs.items():
+            if pp != parent or child in (pid, parent) or child in victims:
+                continue
+            tc, tp = born(child), born(parent)
+            if tc is None or tp is None or tc < tp:
+                continue
+            victims.append(child)
+            todo.append(child)
+    sig = getattr(signal, "SIGKILL", signal.SIGTERM)  # Windows: TerminateProcess
+    for victim in reversed(victims):
+        try:
+            kill(victim, sig)
+        except OSError:
+            pass
+    return victims[::-1]
+
+
+class Watchdog(threading.Thread):
+    """While a gated local run goes: when free RAM drops below 4 GB, kill every child process of
+    `pid` (default: this process) and call on_fire(self) (the pytest gate: interrupt the run)."""
+
+    def __init__(
+        self,
+        *,
+        pid: int | None = None,
+        floor_gb: float = WATCHDOG_GB,
+        poll_s: float = WATCHDOG_POLL_S,
+        free: Callable[[], float] = free_gb,
+        kill: Callable[[int], list[int]] = kill_tree,
+        on_fire: "Callable[[Watchdog], None] | None" = None,
+        say: Callable[[str], None] = print,
+    ):
+        super().__init__(name="ramgate-watchdog", daemon=True)
+        self.pid = os.getpid() if pid is None else pid
+        self.floor_gb, self.poll_s = floor_gb, poll_s
+        self._free, self._kill, self._on_fire, self._say = free, kill, on_fire, say
+        self.halted = threading.Event()
+        self.fired = False
+
+    def halt(self) -> None:
+        self.halted.set()
+
+    def check(self) -> bool:
+        """One poll. True once it has fired."""
+        if self.fired:
+            return True
+        try:
+            f = self._free()
+        except OSError:
+            return False
+        if f >= self.floor_gb:
+            return False
+        self.fired = True
+        killed = self._kill(self.pid)
+        self._say(
+            f"ramgate watchdog: {f:.1f} GB free < {self.floor_gb:g} GB: killed {len(killed)} child "
+            f"process(es) of pid {self.pid}, stopping the run (exit {EXIT_WATCHDOG}). Run the ids on "
+            "the pod, or again once RAM is free."
+        )
+        if self._on_fire is not None:
+            self._on_fire(self)
+        return True
+
+    def run(self) -> None:
+        while not self.halted.wait(self.poll_s):
+            if self.check():
+                return
+
+
+def interrupt_pytest(watchdog: Watchdog, grace_s: float = 30.0) -> None:
+    """on_fire of the pytest gate: KeyboardInterrupt in the main thread, so pytest ends the
+    session (unconfigure releases the lock); if it is still running after grace_s (stuck in C
+    code), the process exits at once with EXIT_WATCHDOG (the lock then goes stale)."""
+    _thread.interrupt_main()
+    if not watchdog.halted.wait(grace_s):
+        os._exit(EXIT_WATCHDOG)
 
 
 def wait_for_ram(
@@ -715,10 +850,14 @@ def main(
     say(f"GO {w:g}")
     if not build:
         return 0
+    watchdog = Watchdog(free=free, say=say)  # kills the command's tree below 4 GB free
+    watchdog.start()
     try:
-        return subprocess.call(command)
+        code = subprocess.call(command)
     finally:
+        watchdog.halt()
         lock.release()
+    return EXIT_WATCHDOG if watchdog.fired else code
 
 
 if __name__ == "__main__":

@@ -126,11 +126,15 @@ per day is the rate used for estimates.
   `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
   weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured
-  ROM-only item waits for more than 20 GB free. Local measuring pass: one file's ROM-only ids
-  per process, strictly serial, started when free RAM is above 20 GB and no other local run
-  is live; a watchdog polls every 0.5 s and kills that pytest tree when free RAM drops below
-  4 GB (the file is then marked `pod-measure needed`, weight 20); figure = ceil(max(1.25 m,
-  m + 2)) GB of the peak summed RSS m of the tree, tag `local-measure-<sha7>-<yyyymmdd>`.
+  ROM-only item waits for more than 20 GB free. Local measuring pass:
+  `python tools/ops/ramgate_measure.py IDS_FILE OUT_JSON [--skip SLOW_IDS_FILE]` (its header
+  has the details): it holds the machine lock as kind `measure` for the whole pass, runs one
+  file's ROM-only ids per process, strictly serial, each started when free RAM is above 20 GB;
+  it polls every 0.5 s and kills that pytest tree when free RAM drops below 4 GB (the file is
+  then marked `pod-measure needed`, weight 20); figure = ceil(max(1.25 m, m + 2)) GB of the
+  peak summed RSS m of the tree, tag `local-measure-<sha7>-<yyyymmdd>`. Every gated run (and
+  every `--build` command) has a watchdog thread too: below 4 GB free it kills the run's child
+  processes and stops the run (KeyboardInterrupt, then a hard exit after 30 s), exit 15.
   The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
   never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
   engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a

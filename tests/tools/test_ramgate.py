@@ -793,3 +793,75 @@ def test_an_unreadable_free_ram_figure_is_an_error_not_a_crash(monkeypatch, tmp_
         lock=rg.MachineLock(tmp_path / "l"),
     )  # fmt: skip
     assert code == rg.EXIT_NO_RAM_READ and out[-1].startswith("ERROR")
+
+
+def test_watchdog_fires_below_four_gb_kills_the_children_and_calls_on_fire():
+    readings = iter([10.0, 4.0, 3.9, 1.0])
+    killed, fired, lines = [], [], []
+    wd = rg.Watchdog(
+        pid=77, free=lambda: next(readings), kill=lambda pid: killed.append(pid) or [78, 79],
+        on_fire=fired.append, say=lines.append,
+    )  # fmt: skip
+    assert not wd.check() and not wd.check()  # 10 and 4.0 are not below 4
+    assert wd.check() and wd.fired and killed == [77] and fired == [wd]
+    assert "3.9 GB free" in lines[0] and "killed 2" in lines[0] and "exit 15" in lines[0]
+    assert wd.check() and killed == [77]  # fires once
+
+
+def test_watchdog_ignores_an_unreadable_figure_and_stops_when_halted():
+    def broken():
+        raise OSError("x")
+
+    wd = rg.Watchdog(pid=1, free=broken, kill=lambda pid: [], poll_s=0.01)
+    assert not wd.check()
+    wd.start()
+    wd.halt()
+    wd.join(5)
+    assert not wd.is_alive() and not wd.fired
+
+
+def test_kill_tree_kills_below_the_pid_and_skips_a_reused_parent_pid():
+    procs = {1: 0, 10: 1, 11: 10, 12: 11, 13: 10, 20: 1, 30: 10}
+    born = {1: 0, 10: 5, 11: 6, 12: 7, 13: 8, 20: 1, 30: 2}  # 30 is older than 10: not its child
+    sent = []
+    killed = rg.kill_tree(10, procs, started=born.get, kill=lambda pid, sig: sent.append(pid))
+    assert sorted(killed) == [11, 12, 13] and 10 not in sent and 30 not in sent
+    assert sent.index(12) < sent.index(11)  # leaves first
+
+
+def test_kill_tree_kills_a_real_process_tree():
+    import subprocess
+    import time
+
+    code = (
+        "import subprocess, sys, time; "
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); "
+        "print(p.pid, flush=True); time.sleep(120)"
+    )
+    middle = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    try:
+        grandchild = int(middle.stdout.readline())
+        killed = rg.kill_tree(middle.pid)
+        assert grandchild in killed and middle.pid not in killed
+        for _ in range(100):
+            if grandchild not in rg.process_table():
+                break
+            time.sleep(0.1)
+        assert grandchild not in rg.process_table()
+    finally:
+        middle.kill()
+        middle.wait(30)
+
+
+def test_the_measuring_harness_figures_and_reads_rss():
+    import os
+
+    spec = importlib.util.spec_from_file_location("ramgate_measure_t", ROOT / "tools/ops/ramgate_measure.py")
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)
+    assert harness.figure(2.0) == 4 and harness.figure(10.0) == 13 and harness.figure(0.5) == 3
+    assert harness.rss_bytes(os.getpid()) > 10_000_000  # this pytest process
+    assert harness.tree_pids(os.getpid())[0] == os.getpid()
+    assert harness.START_FREE_GB - rg.RESERVE_GB == 14.0
+    text = (ROOT / "tools/ops/ramgate_measure.py").read_text(encoding="utf-8")
+    assert 'kind="measure"' in text and "rg.ENV_NO_WAIT" in text
