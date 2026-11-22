@@ -85,6 +85,7 @@ ROM_ONLY_IDS = frozenset(
 # ROM_UNMEASURED_GB until rom_weights.txt (same format as weights.txt, measured locally) has it.
 ROM_UNMEASURED_GB = 14.0  # an unmeasured ROM-only item waits for > 6 + 14 = 20 GB free
 ROM_WEIGHTS = ROOT / "tools" / "ops" / "day" / "rom_weights.txt"
+POD_ONLY = ROOT / "tools" / "ops" / "day" / "pod_only.txt"  # refused on the PC whatever they import
 ENGINE_PREFIX = "nuzline.engine"
 MAX_LISTED = 5
 
@@ -128,6 +129,21 @@ def weight(ident: str, table: Mapping[str, float], default: float = DEFAULT_WEIG
 
 def load_rom_weights(path: str | Path = ROM_WEIGHTS) -> dict[str, float]:
     return load_weights(path) if Path(path).exists() else {}
+
+
+def load_pod_only(path: str | Path = POD_ONLY) -> frozenset[str]:
+    """`<id> <reason>` lines of pod_only.txt (comments and blank lines skipped)."""
+    return frozenset(
+        line.split()[0]
+        for line in Path(path).read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    )
+
+
+def pod_only_ids(items: Iterable, keys: Iterable[str]) -> list[str]:
+    """Node ids under a pod_only.txt key (same matching as a weights.txt key)."""
+    table = dict.fromkeys(keys, 0.0)
+    return [i.nodeid for i in items if lookup(i.nodeid, table) is not None]
 
 
 def decide(weight_gb: float, free: float, rom_gate: bool = False) -> str:
@@ -495,6 +511,7 @@ def pytest_gate(
     env: Mapping[str, str] | None = None,
     table: Mapping[str, float] | None = None,
     rom_table: Mapping[str, float] | None = None,
+    pod_only: Iterable[str] | None = None,
     lock: "MachineLock | None" = None,
     platform: str = sys.platform,
     free: Callable[[], float] = free_gb,
@@ -513,6 +530,14 @@ def pytest_gate(
     if collect_only:  # --collect-only only imports test modules: allowed, no wait
         return "GO", "ramgate: collect-only"
     items = list(items)
+    pod = pod_only_ids(items, load_pod_only() if pod_only is None else pod_only)
+    if pod:  # even with NUZLINE_RAMGATE_ROM_GATE=1
+        more = f" and {len(pod) - MAX_LISTED} more" if len(pod) > MAX_LISTED else ""
+        return "REFUSE", (
+            f"ramgate: pod-only tests (tools/ops/day/pod_only.txt) are never run on the PC: "
+            f"{', '.join(pod[:MAX_LISTED])}{more}. "
+            f"{QUICK_LANE_HINT[0].upper() + QUICK_LANE_HINT[1:]}."
+        )
     modules = sys.modules if modules is None else modules
     engine_free = not engine_loaded(modules)
     bad = [] if _flag(env, ENV_ROM_GATE) else disallowed(items, modules)

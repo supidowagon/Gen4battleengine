@@ -103,6 +103,7 @@ def gate(items, free=100.0, modules=NO_ENGINE, env=None, rom_table=None, **kw):
         env={} if env is None else env,
         table=TABLE,
         rom_table={} if rom_table is None else rom_table,
+        pod_only=kw.pop("pod_only", ()),
         lock=kw.pop("lock", None) or FreeLock(),
         free=free if callable(free) else (lambda: free),
         sleep=clock.sleep,
@@ -741,3 +742,22 @@ def test_xdist_is_refused_off_the_pod():
     assert rg.xdist_refusal(opt(numprocesses=2), {rg.ENV_ON_POD: "1"}, "linux") is None
     assert rg.xdist_refusal(opt(), {}, "win32") is None  # xdist not installed: no such options
     assert rg.xdist_refusal(opt(numprocesses=None, dist="no"), {}, "win32") is None
+
+
+def test_pod_only_tests_are_refused_on_the_pc_even_engine_free():
+    keys = {"tests/test_spike_step.py", "tests/x.py::t"}
+    spike = item("tests/test_spike_step.py::test_jit[a]", "tmp_path")
+    verdict, msg = gate([PLAIN, spike], modules=NO_ENGINE, pod_only=keys)
+    assert verdict == "REFUSE" and "pod_only.txt" in msg and "test_spike_step" in msg
+    assert "quick lane" in msg and "tests/a/test_x.py" not in msg
+    env = {rg.ENV_ROM_GATE: "1"}
+    assert gate([spike], modules=NO_ENGINE, pod_only=keys, env=env)[0] == "REFUSE"
+    assert gate([item("tests/x.py::tt")], modules=NO_ENGINE, pod_only=keys)[0] == "GO"
+    assert gate([spike], pod_only=keys, collect_only=True)[0] == "GO"  # collecting is fine
+
+
+def test_the_committed_pod_only_list():
+    keys = rg.load_pod_only()
+    assert {"tests/test_spike_step.py", "tests/test_jaxcache.py"} <= keys
+    assert "tests/tools/test_ramgate_collect.py" in keys
+    assert all((ROOT / k.split("::")[0]).exists() for k in keys)

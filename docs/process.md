@@ -112,7 +112,11 @@ per day is the rate used for estimates.
   after collection. A local pytest run is allowed only when every selected test is ROM-only (its
   fixture closure holds a local-input fixture, `ROM_FIXTURES` in `ramgate.py`) or when
   `nuzline.engine` was not imported by the collected modules (a tool test). Any other run exits
-  at once, naming the first disallowed ids: send them to the quick lane below. An allowed run
+  at once, naming the first disallowed ids: send them to the quick lane below. The tests listed
+  in `tools/ops/day/pod_only.txt` (JAX compiles without the engine: `tests/test_spike_step.py`,
+  `tests/test_jaxcache.py`; manager ruling 22 Nov 2026) are refused on the PC the same way,
+  whatever they import and even with `NUZLINE_RAMGATE_ROM_GATE=1`. `-n` / `--dist`
+  (pytest-xdist) is refused on the PC at configure time. An allowed run
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
   6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, then takes the machine lock
   `<main checkout>/_scratch/ramgate.lock` (created exclusively, holding `<pid> <kind>`; stale
