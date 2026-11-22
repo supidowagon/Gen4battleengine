@@ -1611,7 +1611,7 @@ _FLING_CURES = {
     FlingEffect.ALL_RESTORE: ItemId.LUM_BERRY,
 }
 # FLING_EFFECT_*_UP's stat (battle_lib.c:6075-6108), as ``Stat``.
-_FLING_STAT_UP = {
+FLING_STAT_UP = {
     FlingEffect.ATK_UP: Stat.ATK,
     FlingEffect.DEF_UP: Stat.DEF,
     FlingEffect.SPEED_UP: Stat.SPE,
@@ -1708,8 +1708,8 @@ def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond, pick
             jnp.where(cured, 0, state.infatuated[side]).astype(state.infatuated.dtype)
         )
     )
-    up = _fling_lookup(_FLING_STAT_UP, Stat.ATK)[kind]
-    raises = cond & jnp.isin(kind, jnp.asarray([int(k) for k in _FLING_STAT_UP], _I32))
+    up = _fling_lookup(FLING_STAT_UP, Stat.ATK)[kind]
+    raises = cond & jnp.isin(kind, jnp.asarray([int(k) for k in FLING_STAT_UP], _I32))
     state = change_stage(state, side, up, 1, raises & (state.stages[side, up] < STAGE_MAX))
     pick = jnp.asarray(pick, _I32)
     starf = cond & (kind == FlingEffect.RANDOM_UP2) & (pick > 0)

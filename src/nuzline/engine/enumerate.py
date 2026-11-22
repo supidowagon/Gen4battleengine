@@ -251,7 +251,7 @@ from nuzline.engine.effects import (
 from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.hooks import (
-    _FLING_STAT_UP,
+    FLING_STAT_UP,
     PLUCKABLE,
     entry_damage_up,
     reverted_stats,
@@ -2999,7 +2999,7 @@ _STARF_STAGE_JUMPS = (
 )
 
 
-def _starf_gain(tables, state, actions, uses_move, effect, params, moves):
+def _starf_gain(tables, state, actions, uses_move, effect, params, moves, dragged):
     """``(gain int32[B], fresh int32[B])``: an upper bound on how far one of battler ``d``'s five
     Starf stats can rise this turn before any of its eats (``_starf_reads``), and the same for a
     fresh Roar newcomer of ``d``'s side. Every source of a raise in the engine, summed (each adds
@@ -3016,20 +3016,40 @@ def _starf_gain(tables, state, actions, uses_move, effect, params, moves):
       docs/doubles-state-design.md; the partner can target its ally): Swagger / Flatter and a
       raising ``STAT_FOE`` / ``SECONDARY_STAT_FOE`` param (twice for ``HIT_TWICE``); a Fling of a
       stat berry, +1 (FLING_EFFECT_ATK_UP..SPDEF_UP, battle_lib.c:6075-6108,
-      subscript_held_item_raise_stat.s); at B = 4 the partner's Acupressure, +2 (RANGE_USER_OR_ALLY).
+      subscript_held_item_raise_stat.s); at B = 4 the partner's Acupressure, +2
+      (RANGE_USER_OR_ALLY).
       A flung or plucked Starf Berry is an eat of its own (``_starf_reads``' ``+2`` per earlier
-      eat). ``d``'s own Swagger / Flatter counts too when another battler uses Magic Coat
-      (``MoveFlag.MAGIC_COAT`` reflects it onto ``d``).
+      eat). When another battler uses Magic Coat, every raise ``d`` aims at another battler
+      counts on ``d`` too (an over-count: ``MoveFlag.MAGIC_COAT`` reflects only its Swagger /
+      Flatter and stat moves, the code adds its Fling of a stat berry as well).
     - abilities, each +1: Speed Boost at the turn end (MON_COND_CHECK_STATE_ABILITY bcp.c:1354,
       battle_lib.c:3555-3562, before USE_ITEM :1362 and ITEM_CONDITION :1699), Steadfast on a
-      flinch (subscript_flinched.s:12), Download on entry (battle_lib.c:3814-3851); +2 when a
+      flinch (subscript_flinched.s:10-14), Download on entry (battle_lib.c:3814-3851); +2 when a
       Skill Swap / Role Play can hand ``d`` either of the first two this turn.
+    - an armed Trace, +1: ``d``'s active Trace holder with ``trace_announced`` 0 (an earlier
+      trace found no target: a foe at 0 HP or with Forecast / Trace / Multitype,
+      ChooseTraceTarget battle_lib.c:7750-7781), or a Trace holder ``d`` switches in (its own
+      trace can find nothing while a foe still switches after it), where a battler of the other
+      side can enter this turn (a switch action or a Roar / Whirlwind drag).
+      SWITCH_IN_CHECK_STATE_TRACE loops over every battler with traceAnnounced FALSE
+      (:3711-3731), so that newcomer is copied: Download fires at once (:3814-3851; engine
+      ``hooks.switch_in_effects``), a copied Speed Boost at the turn end, a copied Steadfast on a
+      flinch. The copy sets traceAnnounced (:3726), so one copy per stint: +1. Where ``d`` stays
+      and its foe's switch action is copied, ``outcome.pivot_view`` already shows ``d`` holding
+      the copy (``_armed_trace``, ruling G-25), so ``_holds`` counts it and this term is 0
+      (``d`` no longer holds Trace); the term covers the rest: a drag (random pick), ``d``'s own
+      Trace newcomer, ``d``'s Pursuit on the switch (``_armed_trace`` leaves Trace). A U-turn or
+      Baton Pass newcomer enters in the resumed call, whose ``pivot_view`` shows the copy. A
+      Trace that Skill Swap / Role Play hands ``d`` is in their +2. Faint replacements come at
+      TurnEnd (bcp.c:1848), after every eat this law covers.
 
     Not modelled, so not here (each maps to ``AbilityId.UNSUPPORTED`` / ``EffectId.UNSUPPORTED``;
     add it here with its mechanic): Anger Point (Attack to +6, subscript_critical_hit.s:10-15),
-    Motor Drive (battle_lib.c:3532-3536), Rage (bcp.c:4605-4611), Stockpile
-    (subscript_stockpile.s), Thief / Covet / Trick giving ``d`` a berry. Simple scales only the
-    stat calc, not the stored stage (battle_lib.c:1171-1185, :6850-6870), so it adds nothing.
+    Motor Drive (battle_lib.c:3532-3536), Rage (bcp.c:4605-4611), the real Stockpile
+    (subscript_stockpile.s; Kaizo's move named Stockpile has the ``DRAGON_DANCE`` effect,
+    ``ids.EffectId.DRAGON_DANCE``, and counts above), Thief / Covet / Trick giving ``d`` a berry.
+    Simple scales only the stat calc, not the stored stage (battle_lib.c:1171-1185,
+    :6850-6870), so it adds nothing.
 
     The fresh newcomer (``InitBattleMon`` resets its stages, battle_lib.c:97-101) does not act and
     has entered this turn (no Speed Boost, battle_lib.c:3558): the other battlers' gains plus its
@@ -3057,7 +3077,7 @@ def _starf_gain(tables, state, actions, uses_move, effect, params, moves):
         param1 * hits,
         0,
     )
-    fling_up = jnp.asarray([int(k) for k in _FLING_STAT_UP], _I32)
+    fling_up = jnp.asarray([int(k) for k in FLING_STAT_UP], _I32)
     flung = tables.item_fling_effect[state.item[rows, state.active]].astype(_I32)
     at_foe = at_foe + (uses_move & (effect == _E.FLING) & jnp.isin(flung, fling_up)).astype(_I32)
     others = jnp.sum(at_foe) - at_foe  # every battler but d
@@ -3073,6 +3093,14 @@ def _starf_gain(tables, state, actions, uses_move, effect, params, moves):
         + _holds(tables, state, actions, (AbilityId.DOWNLOAD,)).astype(_I32)
         + jnp.where(swap, 2, 0)
     )
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
+    armed = (
+        (battler_ability(state, sides) == AbilityId.TRACE) & (state.trace_announced[sides] == 0)
+    ) | (is_switch(actions) & (battler_ability(state, sides, incoming) == AbilityId.TRACE))
+    enters = is_switch(actions) | dragged
+    across = side_of(sides)[:, None] != side_of(sides)[None, :]
+    foe_enters = jnp.any(across & enters[None, :], axis=1)
+    ability = ability + (armed & foe_enters).astype(_I32)
     return own + others + reflected + ability, others + 1
 
 
@@ -3093,9 +3121,11 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragg
     The law: the draw is read modulo the count of the five stats below +6 at the eating. A fresh
     newcomer has all five below +6; an active one keeps that count when its highest of them plus
     the most this turn can add stays below +6 (``_starf_gain``: its own move or bag item, the
-    other battlers' raising moves and Flings of a stat berry, its abilities); no Belly Drum, Psych
-    Up, Power / Guard Swap, Transform, Baton Pass or Recycle (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The replacement's
-    draw is always 5 values: a fresh battler (``step.starf_kept`` stores it modulo 5).
+    other battlers' raising moves and Flings of a stat berry, its abilities and an armed Trace);
+    no Belly Drum, Psych Up, Power / Guard Swap, Transform, Baton Pass or Recycle
+    (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The
+    replacement's draw is always 5 values: a fresh battler (``step.starf_kept`` stores it
+    modulo 5).
 
     Index 2 (F-O3, G-27), battler ``d``'s second eat this turn: every eat draws its own
     (battle_lib.c:4864-4866, :5286-5288, Pluck :5808). Read where two of its eat sources can meet
@@ -3112,8 +3142,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragg
     same battler's while it has k sources of its own, the index-0 rule with +2 per earlier eat;
     else the fresh Roar newcomer's (``InitBattleMon`` resets the stages, battle_lib.c:97-101; a
     dragged battler does not act, so only the other battlers' gains and its Download reach it,
-    ``_starf_gain``): five values unless those reach +6. A foe's Fling of a Starf Berry at d (``flung``, lib:6110-6127,
-    its own ``RandNext() % 5`` loop at :6121, at TryFling, hit or miss: ``hooks.fling_try``) is
+    ``_starf_gain``): five values unless those reach +6. A foe's Fling of a Starf Berry at d
+    (``flung``, lib:6110-6127, its own ``RandNext() % 5`` loop at :6121, at TryFling, hit or
+    miss: ``hooks.fling_try``) is
     one more of d's own sources: it takes the next queue entry like an eat (E3-B2-1 on G-28). In
     singles the foe has one move: a flinger or a foe that Recycles a Starf Berry for d's Pluck
     has no Roar the same turn, a Recycling foe does not Fling, and a plucked or flung foe Starf
@@ -3191,7 +3222,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, moves, dragg
     # The count: fixed at 5 unless a stat can reach +6 before the eating.
     five = jnp.asarray([int(x) for x in STARF_STATS], _I32)
     highest = jnp.maximum(jnp.max(state.stages[:, five].astype(_I32), axis=1), 0)
-    gain, fresh_gain = _starf_gain(tables, state, actions, uses_move, effect, params, moves)
+    gain, fresh_gain = _starf_gain(
+        tables, state, actions, uses_move, effect, params, moves, dragged
+    )
     jump = jnp.any(uses_move & _any_of(effect, _STARF_STAGE_JUMPS))
     turn_loose = jump | (highest + gain >= STAGE_MAX) | open_
     # Indices 2 and 3: battler d's eats this turn (F-O3), counted: ``own`` the same battler's,
