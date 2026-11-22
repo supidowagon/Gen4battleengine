@@ -2996,6 +2996,9 @@ First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratc
     lock moves' read rows sum to at most 6 (`read_bounds.READ_BOUNDS`, effects in `LOCK_EFFECTS`; the table's most is
     18), so 4 * 2**6 stays far under `WIDTH_CAP` 131072; the removed gained calls could reach 18 reads. Test:
     `test_a_gained_metronomes_calls_stay_on_the_holders_lines`.
+  - Commits: SHOULD 1 debebc81, SHOULD 2 f4ba0c2e; NITs 0fbf718a (the faster-imprisoner test is a draw pin), 3af34fac
+    (Open F: either side), 6f5c7f48 (ppUps zeroing cites), 1b2a436c (`replacement_known` docstring). No table rebuild:
+    no id or table input changed.
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
