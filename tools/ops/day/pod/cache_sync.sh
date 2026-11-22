@@ -15,16 +15,24 @@
 # Layout on the volume (<vol>, default /vol):
 #   jax/<ver>-<host>/<name>-cache  compile cache entries; <ver> = the 16-hex jax_version() folder
 #                            (src/nuzline/jaxcache.py), as in the local cache; <host> = the host
-#                            tag (12 hex: sha256 of /proc/cpuinfo's first "model name" and its
-#                            sorted "flags"). The entries are compiled XLA CPU executables, and
-#                            JAX's cache key does not hold the host CPU (jax 0.12.0.1,
-#                            jax/_src/cache_key.py get(), lines 93-133: the program, the jaxlib
-#                            version, platform "cpu" and platform_version "cpu" (378-380), XLA_FLAGS,
-#                            compile options, the device topology (270-283), compression), so
-#                            a pod seeds and publishes only entries of its own tag: compiled on an
-#                            identical CPU. JAX keys each entry by program, so merging pods'
-#                            caches of one tag is a plain union. A pod whose cpuinfo has no model
-#                            name or flags has no tag: seed and publish skip.
+#                            tag (16 hex: sha256 of /proc/cpuinfo's first processor's numeric
+#                            "vendor_id", "cpu family", "model" and its sorted "flags"; not the
+#                            "model name" string, not the stepping). The entries are compiled XLA
+#                            CPU executables, and JAX's cache key does not hold the host CPU (jax
+#                            0.12.0.1, jax/_src/cache_key.py get(), lines 93-133: the program, the
+#                            jaxlib version, platform "cpu" and platform_version "cpu" (378-380),
+#                            XLA_FLAGS, compile options, the device topology (270-283),
+#                            compression), so a pod seeds and publishes only entries of its own
+#                            tag. Why these fields: XLA's CPU compiler builds for the host's target
+#                            features (jaxlib's CpuCompiler passes TargetMachineFeatures) and the
+#                            LLVM host CPU name, which LLVM derives on x86 from CPUID's vendor,
+#                            family, model and feature bits, not from the brand string (LLVM's
+#                            Host.cpp; not in this repo, not re-checked here). Two hosts whose
+#                            names differ only in marketing ("AMD EPYC 9655" / "9655P") share a
+#                            tag. JAX keys each entry by program, so merging pods' caches of one
+#                            tag is a plain union. A pod whose cpuinfo has no vendor_id or flags,
+#                            or no numeric cpu family or model, has no tag: seed and publish skip.
+#                            Folders of the earlier 12-hex tag (model name + flags) are pruned.
 #   jax/<ver>-<host>/used-<YYYYMMDD> a pod seeded from or published to it that UTC day
 #   jax/.prune.lock/         the prune lock (mkdir; flock is not relied on over the network mount);
 #                            its owner file holds "<pod> <pid> <epoch>"
@@ -65,12 +73,16 @@
 #   before it is renamed aside, and the renamed one checked again; a held one skips the prune;
 #   released only while its owner file still names this pod and pid): deletes .tmp-* names whose
 #   newest file is older than CACHE_TMP_STALE_S (3600 s; a copy in progress keeps writing
-#   files), every jax/<ver> folder without a host tag (written before tags), per host tag every
+#   files), every jax/<ver> folder without a host tag (written before tags) and every
+#   jax/<ver>-<12 hex> folder (the earlier model name tag, which no pod seeds), per host tag every
 #   jax/<ver>-<host> except its most recently used one once its newest used-<date> is
 #   CACHE_KEEP_DAYS (7) days old, then the oldest entries (by mtime) until jax/ is under
 #   CACHE_CAP_BYTES (20 GiB, the cap tests/conftest.py keeps locally), and every capture but the
 #   CACHE_SNAP_KEEP (10) newest. It warns when the volume has under CACHE_FREE_WARN_GB (3) GB
-#   free: grow it (needs the owner).
+#   left: left = CACHE_VOL_QUOTA_GB (30, the volume's size; the pod cannot read it, and df of the
+#   mount shows the whole storage cluster) minus du -sk of <vol> (GiB, rounded up), du under
+#   timeout -k 5 CACHE_DU_TIMEOUT (60 s); a timed-out or failed du prints "volume used ?" and no
+#   warning. Grow the volume only with the owner.
 # Knobs (env): CACHE_VOL (/vol), NUZLINE_TEST_COMPILE_CACHE (/work/_jaxcache/jax-tests, the
 #   folder holding the <ver> folders, as unit.sh), CACHE_PY (python3; setup.sh and runner.sh pass
 #   the run's repo/.venv/bin/python), CACHE_JAXVER (seed: the <ver> to seed; setup.sh passes
@@ -90,16 +102,21 @@ J="$VOL/jax"; S="$VOL/snap"
 say() { echo "cache_sync: $*"; }
 vol_ok() { [ -d "$VOL" ] || return 1; [ "${CACHE_VOL_MOUNTCHECK:-1}" = 0 ] && return 0; mountpoint -q "$VOL" 2>/dev/null; }
 ver_ok() { [[ "$1" =~ ^[0-9a-f]{16}$ ]]; }
-vt_ok() { [[ "$1" =~ ^[0-9a-f]{16}-[0-9a-f]{12}$ ]]; }   # <ver>-<host>
+vt_ok() { [[ "$1" =~ ^[0-9a-f]{16}-[0-9a-f]{16}$ ]]; }   # <ver>-<host>
+vt_old() { [[ "$1" =~ ^[0-9a-f]{16}-[0-9a-f]{12}$ ]]; }  # <ver>-<12-hex tag of the model name scheme>
 key_ok() { [[ "$1" =~ ^[0-9a-f]{40}-[0-9a-f]{16}$ ]]; }
 size() { stat -c %s "$1" 2>/dev/null; }
-# host_tag: 12 hex of sha256("<model name>\n<sorted flags>\n") from CACHE_CPUINFO's first
-# processor; fails when either line is missing.
-host_tag() { local f="${CACHE_CPUINFO:-/proc/cpuinfo}" m fl
-  m=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' "$f" 2>/dev/null | head -1 | tr -d '\r')
-  fl=$(sed -n 's/^flags[[:space:]]*:[[:space:]]*//p' "$f" 2>/dev/null | head -1 | tr -d '\r' | tr -s ' \t' '\n\n' | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ')
-  [ -n "$m" ] && [ -n "$fl" ] || return 1
-  printf '%s\n%s\n' "$m" "$fl" | sha256sum | cut -c1-12; }
+# cpu_field <name>: the value of CACHE_CPUINFO's first "<name> : <value>" line (the first
+# processor), CR and surrounding blanks dropped; "model" never matches "model name".
+cpu_field() { sed -n "s/^$1[[:space:]]*:[[:space:]]*//p" "${CACHE_CPUINFO:-/proc/cpuinfo}" 2>/dev/null | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//'; }
+# host_tag: 16 hex of sha256("vendor_id=<v>\ncpu family=<n>\nmodel=<n>\nflags=<sorted flags>\n")
+# from CACHE_CPUINFO's first processor; the marketing "model name" and the stepping are left out.
+# Fails when vendor_id or flags is empty or cpu family or model is not a number.
+host_tag() { local v fa mo fl
+  v=$(cpu_field vendor_id); fa=$(cpu_field 'cpu family'); mo=$(cpu_field model)
+  fl=$(cpu_field flags | tr -s ' \t' '\n\n' | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ')
+  [ -n "$v" ] && [ -n "$fl" ] && [[ "$fa" =~ ^[0-9]+$ ]] && [[ "$mo" =~ ^[0-9]+$ ]] || return 1
+  printf 'vendor_id=%s\ncpu family=%s\nmodel=%s\nflags=%s\n' "$v" "$fa" "$mo" "$fl" | sha256sum | cut -c1-16; }
 # newest <path>: the newest mtime (whole seconds) of <path> and everything under it.
 newest() { find "$1" -printf '%T@\n' 2>/dev/null | sort -n | tail -1 | cut -d. -f1; }
 # A TERM or INT (timeout) removes this call's temp copies (TMPS) and releases a prune lock it
@@ -259,7 +276,7 @@ PY
 seed() {
   vol_ok || { say "no volume mounted at $VOL: seed skipped"; return 0; }
   local ver="${CACHE_JAXVER:-}"; ver_ok "$ver" || { say "seed: CACHE_JAXVER '$ver' is not a 16-hex jax version"; return 2; }
-  local ht; ht=$(host_tag) || { say "seed: no model name or flags in ${CACHE_CPUINFO:-/proc/cpuinfo}: no host tag, seed skipped"; return 0; }
+  local ht; ht=$(host_tag) || { say "seed: no vendor_id, cpu family, model or flags in ${CACHE_CPUINFO:-/proc/cpuinfo}: no host tag, seed skipped"; return 0; }
   local src="$J/$ver-$ht" dst="$LC/$ver" t0 ok=0 bad=0 names n st p why
   mkdir -p "$dst" || return 1
   exec 7>> "$SEED_LOCK"
@@ -313,7 +330,7 @@ publish() {
     say "publish $ver-$ht: $ok entries published, $bad skipped"
   done
   [ "$any" = 1 ] || say "publish: no local cache folder under $LC"
-  else say "publish: no model name or flags in ${CACHE_CPUINFO:-/proc/cpuinfo}: no host tag, nothing published"; fi
+  else say "publish: no vendor_id, cpu family, model or flags in ${CACHE_CPUINFO:-/proc/cpuinfo}: no host tag, nothing published"; fi
   prune
   say "publish wall $(( $(date +%s) - t0 )) s"
   say "publish done"
@@ -365,6 +382,7 @@ prune() {
     [ -n "$l" ] || l=$(date -u -d "@$(stat -c %Y "$J/$1")" +%Y%m%d); echo "$l"; }
   for d in "$J"/*/; do v=${d%/}; v=${v##*/}
     if ver_ok "$v"; then rm -rf "${J:?}/$v"; say "prune: jax folder $v has no host tag (written before host tags): deleted"; continue; fi
+    if vt_old "$v"; then rm -rf "${J:?}/$v"; say "prune: jax folder $v has a 12-hex host tag (the model name scheme, no pod seeds it): deleted"; continue; fi
     vt_ok "$v" || continue
     last=$(lastused "$v"); h=${v#*-}
     if [ -z "${NEWV[$h]:-}" ] || [[ "$last" > "${NEWU[$h]}" ]]; then NEWV[$h]=$v; NEWU[$h]=$last; fi
@@ -382,8 +400,15 @@ prune() {
   while IFS= read -r d; do [ -n "$d" ] || continue; n=$((n + 1))
     [ "$n" -gt "$SNAP_KEEP" ] && { rm -rf "${d%/}"; say "prune: capture ${d%/} deleted (keep $SNAP_KEEP)"; }
   done < <(ls -dt "$S"/*/ 2>/dev/null)
-  free=$(df -Pk "$VOL" 2>/dev/null | awk 'NR == 2 {printf "%d", $4 / 1048576}')
-  [ -n "$free" ] && [ "$free" -lt "$FREE_WARN_GB" ] && say "WARNING: volume $VOL has $free GB free (under $FREE_WARN_GB GB): grow it (owner approval)"
+  # 5. space left: the quota minus du (df of the mount shows the whole storage cluster)
+  local q="${CACHE_VOL_QUOTA_GB:-30}" dt="${CACHE_DU_TIMEOUT:-60}" k used
+  [[ "$q" =~ ^[1-9][0-9]*$ ]] || { say "prune: CACHE_VOL_QUOTA_GB '$q' is not a whole number: 30 used"; q=30; }
+  [[ "$dt" =~ ^[1-9][0-9]*$ ]] || dt=60
+  k=$(timeout -k 5 "$dt" du -sk "$VOL" 2>/dev/null | awk 'NR == 1 {print $1}')
+  if [[ "$k" =~ ^[0-9]+$ ]]; then used=$(( (k + 1048575) / 1048576 )); free=$(( q - used ))
+    say "prune: volume used $used GB of $q GB"
+    [ "$free" -lt "$FREE_WARN_GB" ] && say "WARNING: volume $VOL has $free GB left of $q GB (under $FREE_WARN_GB GB): grow it (owner approval)"
+  else say "prune: volume used ? (du failed or took over $dt s)"; fi
   lock_release
   say "prune done"
 }
