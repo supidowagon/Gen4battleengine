@@ -8,6 +8,7 @@ import io
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -1053,11 +1054,16 @@ def test_a_process_left_in_the_units_group_is_killed_before_out_run_q_goes(src, 
     run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"])
     left = tmp_path / "left.pid"
     r = _quick(tmp_path, run, _cgroup(tmp_path), FAKE_PYTEST_LEAVE=_p(left))
-    log = _log(run)
-    assert r.returncode == 0 and "QUICK_PASS" in log, log
-    assert re.search(r"^QUICK_LEFTOVER \d+ ", log, re.MULTILINE), log
-    assert not _alive(int(left.read_text(encoding="utf-8")))
-    assert not (run / "out/run/q").exists()
+    pid = int(left.read_text(encoding="utf-8"))
+    try:
+        log = _log(run)
+        assert r.returncode == 0 and "QUICK_PASS" in log, log
+        assert re.search(r"^QUICK_LEFTOVER \d+ ", log, re.MULTILINE), log
+        assert not _alive(pid)
+        assert not (run / "out/run/q").exists()
+    finally:
+        if _alive(pid):
+            os.kill(pid, signal.SIGKILL)
 
 
 @linux
