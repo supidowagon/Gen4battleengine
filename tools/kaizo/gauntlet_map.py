@@ -3052,6 +3052,21 @@ def relevant_moves(walkers: Iterable[Walker]) -> set[str]:
     return set().union(*(w.used for w in walkers))
 
 
+def changing_moves(by: Mapping[tuple[str, ...], object], used: Collection[str]) -> tuple[str, ...]:
+    """The moves of ``used`` (``relevant_moves``) that change the facts: ``by`` holds the facts
+    of every subset T of the held moves; a move m changes them when some T with m has other
+    facts than T without m. A move that changes none is left out (a Cut tree the walk meets
+    but never needs): with every such move dropped, each subset has the facts of its part
+    in the result, which the caller checks."""
+
+    def changes(m: str) -> bool:
+        return any(
+            f != by[tuple(x for x in names if x != m)] for names, f in by.items() if m in names
+        )
+
+    return tuple(m for m in FIELD_MOVES if m in used and changes(m))
+
+
 def chain_group_facts(
     maps,
     walkers_for: Callable[[FieldMoves], Mapping[int, Walker]],
@@ -3072,8 +3087,9 @@ def chain_group_facts(
     Every subset T of the ``held`` moves (the split's badges) is walked with
     ``held.restrict(T)`` (``walkers_for`` gives the walkers by live count): ``chain_facts``,
     ``chain_live_next`` and ``gap_fields``, or no facts when T gives no full sequence. The
-    relevant moves R are those some walk of some subset used (``relevant_moves``); a walk with
-    T is then the walk with T and R (a move it never looked at changes nothing; checked: the
+    relevant moves R are those some walk of some subset used (``relevant_moves``) and whose
+    removal changes some subset's facts (``changing_moves``); a walk with T then has the facts
+    of T and R (a move never looked at, or met but never needed, changes nothing; checked: the
     facts must agree). Returns the facts of R at the top (``orders``, ``leave_gaps``,
     ``fight_headers``, ``pc_gaps``, ``heal_gaps``, ``locked_gaps``, ``live_next``), plus
     ``field_moves`` (R) and ``cases``: one per other subset of R, ``moves`` with the same
@@ -3102,7 +3118,7 @@ def chain_group_facts(
         if reached is not None:
             reached.update(*(w.reached_headers() for w in walkers.values()))
         by[names] = facts
-    relevant = tuple(m for m in FIELD_MOVES if m in used)
+    relevant = changing_moves(by, used)
     for names, facts in by.items():
         if facts != by[tuple(m for m in names if m in relevant)]:
             raise MapReadError(f"{group}: field moves {names} change the walk outside {relevant}")

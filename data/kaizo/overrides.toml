@@ -528,6 +528,8 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 346
+field_moves = []
+field_moves_source = "rom:held rock_smash (the split's badges); none changes the facts: no walk used it (gauntlet_map.chain_group_facts, changing_moves)"
 live_next = [
   { fought = [], live = 1, next = [[13]], headers = [346] },
   { fought = [], live = 2, next = [[15]], headers = [346] },
@@ -562,6 +564,8 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = [1]
 fight_headers = 256
+field_moves = []
+field_moves_source = "rom:held rock_smash (the split's badges); none changes the facts: one script entry, no walk (gauntlet_map.chain_group_facts, changing_moves)"
 orders_source = "rom:scr 277 entry 2 LockAll @36, StartTrainerBattle @44 (296, 0) @73 (297, 0): literal ids, ReleaseAll @106"
 
 # Lass Caroline; Aroma Lady Jenna; Artist Angel
@@ -577,6 +581,8 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 67
+field_moves = []
+field_moves_source = "rom:held rock_smash (the split's badges); none changes the facts: gym_reach: header 67 holds no Rock Smash rock; its Cut trees need the Forest Badge (gauntlet_map.chain_group_facts, changing_moves)"
 orders_source = "rom:header 67 events 66; scr 73 entries 7, 8, 5; clock states 0-3"
 
 # Galactic Amalthia (Gauntlet Start)*; Scientist Galileo (Gauntlet End)*
@@ -592,6 +598,8 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 73
+field_moves = []
+field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Cut tree but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
 orders_source = "rom:header 73 events 72 objs 0, 2; header 72 warps 1 (14,6), 3 (20,6)"
 
 # Galactic Callisto (Gauntlet Start)*; Galactic Europa (Gauntlet End)*
@@ -607,6 +615,8 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 74
+field_moves = []
+field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Cut tree but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
 orders_source = "rom:header 74 events 73 objs 0, 1; header 73 warp 1 (16,3) -> (9,11)"
 
 # Galactic Ganymede (Gauntlet Start)*; Galactic Io (Gauntlet End)*
@@ -622,6 +632,8 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 74
+field_moves = []
+field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Cut tree but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
 orders_source = "rom:header 74 events 73 obj 2; warp 4 (25,20) and the panels leading to it"
 
 # SwimmerF Mary (GAUNTLET START)*; Swimmer Sheltin (GAUNTLET)*; SwimmerF Haley (GAUNTLET)*; Fisherman Kenneth (GAUNTLET)*; Sailor Paul (GAUNTLET END)*
@@ -649,6 +661,8 @@ escape = false
 pc_gaps = []
 locked_gaps = []
 fight_headers = 373
+field_moves = []
+field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Rock Smash rock but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
 live_next = [
   { fought = [], live = 1, next = [[106], [110]], headers = [373, 373] },
   { fought = [], live = 2, next = [[106], [110]], headers = [373, 373] },

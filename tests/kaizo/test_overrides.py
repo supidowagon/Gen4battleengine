@@ -1108,7 +1108,7 @@ def test_a_gauntlet_case_with_no_orders_is_refused_when_picked(tmp_path):
         (
             "leave_gaps = []\npc_gaps = []\nheal_gaps = []\nlocked_gaps = []\nfight",
             "leave_gaps = []\npc_gaps = []\nlocked_gaps = []\nfight",
-            "absent without",
+            "missing heal_gaps",
         ),
     ],
 )

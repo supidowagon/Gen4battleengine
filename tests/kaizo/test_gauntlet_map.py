@@ -1974,3 +1974,16 @@ def test_rom_route_204_live_next_follows_the_count(rom_files, derived):
         if d[k] is None
     }
     assert absent == {("Route 204 North", "leave_gaps"), ("Route 213", "heal_gaps")}
+
+
+def test_a_move_met_but_never_needed_is_not_relevant():
+    # changing_moves: Cut is used (a tree met) but no subset's facts change without it
+    from tools.kaizo.gauntlet_map import changing_moves
+
+    a, b = {"orders": [[[1], [2]]]}, {"orders": [[[1], [2]], [[2], [1]]]}
+    by = {(): a, ("cut",): a, ("rock_smash",): b, ("cut", "rock_smash"): b}
+    assert changing_moves(by, {"cut", "rock_smash"}) == ("rock_smash",)
+    assert changing_moves(by, {"cut"}) == ()
+    # a subset with no full sequence (None) differs from one with facts
+    by = {(): None, ("strength",): a}
+    assert changing_moves(by, {"strength"}) == ("strength",)
