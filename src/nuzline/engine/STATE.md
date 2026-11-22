@@ -771,7 +771,7 @@ three structs has a row.
 | `BattleMon.pressureAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in (the message's AI reveal, ruling G-10, is `ai_ability_known`) |
 | `BattleMon.padding0028_0B` | — | not needed because it is padding |
 | `BattleMon.ppCur` | `pp`, `shadow_pp`, `mimic_slots` | mapped |
-| `BattleMon.ppUps` | `pp_ups` | mapped |
+| `BattleMon.ppUps` | `pp_ups` | mapped; also `ppCur[4]`, the byte after `ppCur` (battle_mon.h:99-100), which TryPursuit reads and spends where no slot holds its move (Battler_SlotForMove gives 4, battle_lib.c:2376-2387; `step._pursuit_pp`, review 7) |
 | `BattleMon.level` | `level` | mapped |
 | `BattleMon.friendship` | `friendship`, `party_friendship` | mapped |
 | `BattleMon.nickname` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
