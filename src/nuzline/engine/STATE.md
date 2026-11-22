@@ -645,7 +645,9 @@ three structs has a row.
   read by the second actor in `step._execute_actions`; a Feint that hits clears it,
   subscript_feint.s:20, E3-B2-13: `step._execute_actions` zeroes the defender's `protect_ok` read), the per-battler `moveFailFlags`
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
-  `ts_damaged`, `ts_dealt`), `moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE` (`ts_se`: the paused or
+  `ts_damaged`, `ts_dealt`), its `moveTemp` (`ts_move_temp`: the move FightCommand ran, the
+  Encore's or the lock's included, bcp.c:1861-1898; its tail's Choice lock, `movePrev` and
+  `movePrevByBattler` read it, bcp.c:3917-3946, E2-ML-4), `moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE` (`ts_se`: the paused or
   chased action's only; the U-turn's, or the last Pursuit's, lib.c:3359, script.c:6964-6973; the tail's
   Enigma Berry reads it with `ts_sub_hit`, battle_lib.c:5378, :5421-5428), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
@@ -671,6 +673,14 @@ three structs has a row.
   included, bcp.c:3347, :3357) and never cleared: not by a switch or a faint (lib.c:2110-2225), so
   it is not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`. Bide's release reads it. Written at
   B = 4 only (ruling D2-24).
+- The move slot (E2-ML-5): `move_slot` (per battler, `BattleContext.moveSlot[b]`, a slot 0..3, initial 0).
+  The command selection writes it for a FIGHT that picks a move: the Encore slot under an Encore
+  (bcp.c:440-446), else the chosen slot (:526); a Struggling battler (:433-434), a locked one (it
+  picks no command, :333-337), an item, a switch and an absent battler keep it. Nothing else writes
+  or clears it (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182; not a switch or a faint), so it is not
+  in `VOLATILE_FIELDS`. Readers: CalcTurnOrder's priority, `moves[moveSlot]` as it stands now
+  (battle_lib.c:1375-1397; `order.order_moves`), and TryGrudge's ATTACKER_MOVE_SLOT (common.h:8).
+  Written in `step._action_phase` (`order.selection_slots`) and the reference's `_ref_step`.
 - The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
   counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
   written at B = 4 only.
@@ -941,7 +951,7 @@ three structs has a row.
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleScript` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleMons` | `active` | mapped |
-| `BattleContext.moveTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.moveTemp` | `ts_move_temp` | mapped: per-action scratch `step` recomputes inside the turn, kept only for an action paused at a party list (the paused action's moveTemp, which its resumed tail's UpdateMoveBuffers reads, bcp.c:3917-3946; E2-ML-4) |
 | `BattleContext.moveCur` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.movePrev` | `move_prev` | mapped |
 | `BattleContext.moveLockedInto` | `locked_move` | mapped |
@@ -953,8 +963,8 @@ three structs has a row.
 | `BattleContext.moveCopied` | `move_copied` | mapped |
 | `BattleContext.moveCopiedHit` | `move_copied_hit` | mapped |
 | `BattleContext.moveSketched` | — | later (M6) |
-| `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.moveSlot` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.moveSelected` | — | not needed because its one reader, FightCommand's branch 1.5 (bcp.c:1889), runs only for a battler that picked a move this turn, which wrote it first (:446, :527): a Struggling, encored or locked battler takes an earlier branch (:1866-1888). It is not reset every turn (zeroed only by BattleContext_New, bcp.c:182; BattleContext_Init, battle_lib.c:1974-2017, leaves it), but a stale value is never read; the learn prompt that replaces the slot is `reselected` (E3-B2-21) |
+| `BattleContext.moveSlot` | `move_slot` | mapped: written only at a FIGHT selection that picks a move (bcp.c:445 the Encore slot, :526 the chosen slot), never reset (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182), so a locked battler keeps its last one: CalcTurnOrder's priority (battle_lib.c:1375-1397) and TryGrudge (common.h:8) read it (E2-ML-5) |
 | `BattleContext.conversion2Move` | `conv2_move` | mapped |
 | `BattleContext.conversion2Battler` | `conv2_battler` | mapped |
 | `BattleContext.conversion2Type` | `conv2_type` | mapped |

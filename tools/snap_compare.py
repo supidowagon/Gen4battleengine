@@ -704,6 +704,61 @@ def _leech_seed_recipient(a, lead, tables):
     return {"leech_seed_recipient": np.where(seeded, 1 + (b ^ 1), 0).astype(np.int8)}
 
 
+def _move_slot(a, lead, tables):
+    """``move_slot`` (E2-ML-5, BattleContext.moveSlot) of an older commit's state, which had no
+    moveSlot: a locked battler's the first slot holding its ``locked_move`` (the slot the lock was
+    selected from, where it still holds it; the old order read the lock's priority), a battler of a
+    paused turn whose action is a move its ``ts_actions`` slot (the old TryGrudge read it), else 0
+    (BattleContext's zero init; the next selection writes every unlocked FIGHT's)."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from nuzline.engine.format import format_of
+
+    unbatched = {f: np.empty(a[f].shape[len(lead) :]) for f in ("active", "species")}
+    fmt = format_of(SimpleNamespace(**unbatched))
+    out = np.zeros(a["active"].shape, np.int8)
+    for i in np.ndindex(*lead):
+        paused = int(a["pivot_battler"][i]) != 0 or int(a["learn_site"][i]) != 0
+        for b in range(fmt.B):
+            moves = a["moves"][(*i, fmt.party_of[b], int(a["active"][(*i, b)]))]
+            lock = int(a["locked_move"][(*i, b)])
+            held = [k for k in range(len(moves)) if lock and int(moves[k]) == lock]
+            action = int(a["ts_actions"][(*i, b)])
+            if held:
+                out[(*i, b)] = held[0]
+            elif paused and 0 <= action < len(moves):
+                out[(*i, b)] = action
+    return {"move_slot": out}
+
+
+def _move_temp(a, lead, tables):
+    """``ts_move_temp`` (E2-ML-4) of an older commit's state: at a party-list pause the old
+    tail's move, ``ts_move`` of the paused battler, the Encore's move where its Encore slot still
+    held it; 0 elsewhere (the scratch is 0 between turns)."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from nuzline.engine.format import format_of
+
+    unbatched = {f: np.empty(a[f].shape[len(lead) :]) for f in ("active", "species")}
+    fmt = format_of(SimpleNamespace(**unbatched))
+    out = np.zeros(a["pivot_battler"].shape, np.int16)
+    for i in np.ndindex(*lead):
+        p = int(a["pivot_battler"][i]) - 1
+        if p < 0:
+            continue
+        move = int(a["ts_move"][(*i, p)])
+        enc, slot = int(a["encore_move"][(*i, p)]), int(a["encore_slot"][(*i, p)])
+        moves = a["moves"][(*i, fmt.party_of[p], int(a["active"][(*i, p)]))]
+        if enc and not a["ts_struggling"][(*i, p)] and int(moves[slot]) == enc:
+            move = enc
+        out[i] = move
+    return {"ts_move_temp": out}
+
+
 _I1, _I2 = "|i1", "<i2"
 _MON_READS = tuple(
     (f, d, ("P", 6))
@@ -718,6 +773,16 @@ _FIELD_READS = (
     ("uproar", _I1, ("B",)),
 )
 _ACTIVE = ("active", _I1, ("B",), "|i1")  # a battler field: zero rows of int8[B]
+_SLOT_READS = (
+    ("active", _I1, ("B",)), ("species", _I2, ("P", 6)), ("moves", _I2, ("P", 6, 4)),
+    ("locked_move", _I2, ("B",)), ("ts_actions", _I1, ("B",)), ("pivot_battler", _I1, ()),
+    ("learn_site", _I1, ()),
+)  # fmt: skip
+_TEMP_READS = (
+    ("active", _I1, ("B",)), ("species", _I2, ("P", 6)), ("moves", _I2, ("P", 6, 4)),
+    ("pivot_battler", _I1, ()), ("ts_move", _I2, ("B",)), ("ts_struggling", _I1, ("B",)),
+    ("encore_move", _I2, ("B",)), ("encore_slot", _I1, ("B",)),
+)  # fmt: skip
 UPGRADES = (
     reshape("state", "starf_roll", _I1, ("B",), ("B", 3), _starf_queue, "F-O3, G-27", "the old draw is entry 0; entries 1-2 at 0, what step_events / replace store where no draw is loaded"),
     reshape("outcome", "starf", _I1, ("B", 2), ("B", 4), _starf_columns, "F-O3, G-27..G-30", "columns 0-1 kept; the old engine's 2nd and 3rd eats read column 0, so 2-3 copy it", (2, 3)),
@@ -730,6 +795,8 @@ UPGRADES = (
     dropped("state", "learn_pin", _I1, (), "E3-B2-21", "1 + the selected slot a deferred learn masked (main 08a57000); the prompt now pauses at the payout, before the slot is re-read (review b2 #6): learn_site is a pause site, not a slot, and 0 at every saved point"),
     dropped("state", "exp_refused", _I1, (), "E3-B2-21", "main's sticky window (c) refusal code; the payout's prompt now pauses the turn, so learn work never refuses (review b2 #6)"),
     derive("state", (("leech_seed", _I1, ("B",)),), ("leech_seed_recipient",), _leech_seed_recipient, "D3-11b", "older Leech Seeds were set by the opposite battler: 1 + (b ^ 1) where seeded", ("leech_seed",)),
+    derive("state", _SLOT_READS, ("move_slot",), _move_slot, "E2-ML-5", "the old engine had no moveSlot: a locked battler's lock slot (its old priority), a paused battler's ts_actions slot (its old TryGrudge slot), else 0", tuple(r[0] for r in _SLOT_READS)),
+    derive("state", _TEMP_READS, ("ts_move_temp",), _move_temp, "E2-ML-4", "the old tail's move: the paused battler's ts_move, the Encore's move where its slot held it; 0 off a pause", tuple(r[0] for r in _TEMP_READS)),
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}

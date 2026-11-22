@@ -305,18 +305,20 @@ def _present(state: BattleState, b: int) -> bool:
 
 
 def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
-    """A present battler whose move action selects a move whose effect is in ``effects`` or is a
-    caller (``CALLERS``; ``order.selected_move``)."""
+    """A present battler whose move action selects or runs a move whose effect is in ``effects``
+    or is a caller (``CALLERS``; ``order.selected_move``, and ``order.fight_move``: the move
+    FightCommand runs, a turn-start Encore's over the chosen or locked one, E2-ML-2)."""
     from nuzline.engine.actions import MOVE_ACTIONS
-    from nuzline.engine.order import selected_move
+    from nuzline.engine.order import fight_move, selected_move
 
     wanted = {int(e) for e in set(effects) | CALLERS}
     effect = np.asarray(tables.move_effect)
     for b in range(format_of(state).B):
         if not _present(state, b) or int(actions[b]) >= MOVE_ACTIONS:
             continue  # a switch or item action selects no move
-        move = int(selected_move(tables, state, b, int(actions[b]))[0])
-        if int(effect[move]) in wanted:
+        picked = int(selected_move(tables, state, b, int(actions[b]))[0])
+        runs = int(fight_move(tables, state, b, int(actions[b])))
+        if int(effect[picked]) in wanted or int(effect[runs]) in wanted:
             return True
     return False
 

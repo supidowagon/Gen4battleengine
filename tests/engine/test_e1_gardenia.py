@@ -36,7 +36,7 @@ from nuzline.engine.ids import (
     Status,
     Weather,
 )
-from nuzline.engine.order import MOVE_ACTIONS, fight_move
+from nuzline.engine.order import MOVE_ACTIONS, action_order, fight_move
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
@@ -391,6 +391,146 @@ def test_an_unheld_encore_runs_its_slot_over_a_lock_in_both_engines(tables, name
     s2, acts2 = _encored_lock_board(tables, names)
     out2 = assert_matches_reference(tables, s2, acts2, O)
     assert int(out2.hp[1, 0]) < int(s2.hp[1, 0])
+
+
+def _locked_order_board(tables, names):
+    """E2-ML-5: the player's slower lead locked into Rollout (a lock its slot 1 holds) whose
+    moveSlot is still slot 0, Quick Attack (a level-up wrote it over the slot it last selected).
+    CalcTurnOrder reads moves[moveSlot]'s priority (battle_lib.c:1375-1397), so the player moves
+    first; the foe Tackles."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Geodude", ["Quick Attack", "Rollout"], 20)],
+        [_mon(n, "Starly", ["Tackle"], 30)],
+    )
+    s = s._replace(
+        locked_move=s.locked_move.at[0].set(n.move("Rollout")),
+        rollout_count=s.rollout_count.at[0].set(1),
+        move_slot=s.move_slot.at[0].set(0),
+    )
+    return s, jnp.asarray([0, 0], jnp.int32)
+
+
+def test_a_locked_battler_orders_by_its_move_slot(tables, names):
+    s, acts = _locked_order_board(tables, names)
+    assert int(action_order(tables, s, acts, O)[0]) == 0  # Quick Attack's +1
+    lock_slot = s._replace(move_slot=s.move_slot.at[0].set(1))
+    assert int(action_order(tables, lock_slot, acts, O)[0]) == 1  # Rollout's 0: the faster foe
+
+
+@pytest.mark.slow  # two steps against the reference
+def test_a_locked_battler_orders_by_its_move_slot_in_both_engines(tables, names):
+    s, acts = _locked_order_board(tables, names)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.move_slot[0]) == 0  # a locked battler keeps its moveSlot (bcp.c:333-337)
+    assert int(out.move_slot[1]) == 0  # the foe's FIGHT writes its chosen slot (:526)
+
+
+def _pivot_board(tables, names):
+    n = names
+    return make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn", "Tackle"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Bulbasaur", ["Tackle", "Encore"], 30)],
+    )
+
+
+def _resume_after(tables, paused, slot):
+    side = int(paused.pivot_battler) - 1
+    acts = np.asarray(paused.ts_actions).astype(int).tolist()
+    acts[side] = MOVE_ACTIONS + slot
+    return assert_matches_reference(tables, paused, tuple(acts), O)
+
+
+@pytest.mark.slow  # a pause and its resume against the reference
+def test_an_unheld_encore_u_turn_over_a_lock_resumes_with_its_move(tables, names):
+    """E2-ML-4: the player locked into Bide and encored into Tackle, whose encored slot 0 now
+    holds U-turn: FightCommand runs U-turn (bcp.c:1874-1883) and ends the Encore; at the list the
+    pause keeps that moveTemp (``ts_move_temp``) and the resumed tail's UpdateMoveBuffers writes it
+    on the newcomer (bcp.c:3917-3946), not the lock's Bide."""
+    n = names
+    s = _pivot_board(tables, names)
+    s = s._replace(
+        locked_move=s.locked_move.at[0].set(n.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(2),
+        encore_move=s.encore_move.at[0].set(n.move("Tackle")),
+        encore_slot=s.encore_slot.at[0].set(0),
+        encore_turns=s.encore_turns.at[0].set(2),
+    )
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_move_temp) == n.move("U-turn")
+    after = _resume_after(tables, paused, 1)
+    assert int(after.last_move[0]) == n.move("U-turn")
+
+
+@pytest.mark.slow  # a pause and its resume against the reference
+def test_a_mid_turn_encore_takeover_of_u_turn_resumes_with_it(tables, names):
+    """E2-ML-4: the faster foe encores the player into its last move, U-turn, which replaces the
+    chosen Tackle (bcp.c:1869-1873); the resumed tail writes U-turn (moveTemp), in both engines."""
+    n = names
+    s = _pivot_board(tables, names)
+    s = s._replace(
+        last_move=s.last_move.at[0].set(n.move("U-turn")),
+        stats=s.stats.at[1, 0, Stat.SPE - 1].set(200),
+    )
+    paused = assert_matches_reference(tables, s, (1, 1), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_move_temp) == n.move("U-turn")
+    after = _resume_after(tables, paused, 1)
+    assert int(after.last_move[0]) == n.move("U-turn")
+
+
+def test_an_encored_pursuer_with_an_item_draws_its_pursuit_in_the_laws(tables, names):
+    """E2-ML-6: battler 1 Encored into Pursuit picks a bag Potion while battler 0 switches;
+    TryPursuit takes the held Encore's move (battle_script.c:6905-6909), so its hit's crit and
+    roll are read."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 35), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Pursuit"], 35)],
+    )
+    s = s._replace(
+        encore_move=s.encore_move.at[1].set(n.move("Pursuit")),
+        encore_slot=s.encore_slot.at[1].set(0),
+        encore_turns=s.encore_turns.at[1].set(3),
+        last_move=s.last_move.at[1].set(n.move("Pursuit")),
+        trainer_items=s.trainer_items.at[1, 0].set(n.item("Potion")),
+        trainer_item_count=s.trainer_item_count.at[1].set(1),
+    )
+    acts = jnp.asarray([MOVE_ACTIONS + 1, FIRST_ITEM_ACTION], jnp.int32)
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    assert bool(laws.relevant.crit[1, 0]) and bool(laws.relevant.roll[1, 0])
+
+
+def test_a_klutz_lansat_at_its_pinch_reads_its_crit_after_a_gastro_acid(tables, names):
+    """E2-ML-7 (manager CLASS 7): a Klutz Lopunny holding a Lansat Berry at a quarter of its HP;
+    the faster foe's Gastro Acid takes the Klutz, and that action's MoveEnd pass eats the berry
+    (TriggerHeldItemOnStatus over every battler, battle_lib.c:4151-4165, :5261-5271; the item
+    read through Battler_HeldItem, :5352-5363), so Lopunny's Tackle can crit at the raised
+    stage. Above its pinch with no HP-lowering foe move: no variant."""
+    from nuzline.engine.outcome import CRIT_WRITE_VARIANTS, crit_variants
+
+    s = roark_state(
+        tables,
+        names,
+        player_species="Lopunny",
+        player_ability="Klutz",
+        player_moves=["Tackle"],
+        opp_moves=["Gastro Acid"],
+        opp_faster=True,
+    )
+    s = _item(s, 0, 0, "Lansat Berry", names)
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4)
+    acts = A("Tackle", "Gastro Acid", s, names)
+    w = CRIT_WRITE_VARIANTS
+
+    def opened(board):
+        odds, ok = (np.asarray(x) for x in crit_variants(tables, board, acts))
+        return bool(np.any(ok[0, 1:w] & (odds[0, 1:w] != odds[0, 0])))
+
+    assert opened(s)
+    assert not opened(s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4 + 1))
 
 
 def test_own_tempo_and_safeguard_stop_the_berry_confusion(tables, names):

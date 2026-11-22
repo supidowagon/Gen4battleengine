@@ -324,10 +324,10 @@ from nuzline.engine.order import (
     mirror_call,
     mirror_copied,
     move_effects,
+    order_moves,
     qc_recycle,
     qc_transfer,
     sealed_state,
-    selected_move,
     takeover_possible,
     truant_loafs,
     used_moves,
@@ -1972,7 +1972,9 @@ def outcome_laws(
     live = state.over == 0
     sides = jnp.arange(fmt.B)
     switch, item = is_switch(actions), is_item(actions)
-    uses_move = live & ~switch & ~item  # bool[B]
+    # A held Encore's Pursuit fires on the foe's switch whatever its holder chose (TryPursuit,
+    # battle_script.c:6905-6909, E2-ML-6): an item or a switch action then draws as that move.
+    uses_move = live & ((~switch & ~item) | pursuit_chase(tables, state, actions)[0])  # bool[B]
     # Singles follow-up (ii): a lock move that may be aimed at its own user (outcome.self_lock).
     # Every cut below that reads the foe as the defender (its armor, immunity, Protect, status
     # eligibility, order gates of a flinch, the damage table) is lifted for such a side, whose
@@ -1981,14 +1983,11 @@ def outcome_laws(
     # ``chosen``: the move each action selects (its status checks: Disable, Taunt); ``moves``:
     # the move it runs (Nature Power's and the invokers' call, order.called_move,
     # order.used_moves), whose draws these are.
-    picked = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
     # A takeover variant (B11-1): the action runs the encored move (moveTemp) from the start.
     taken = jnp.zeros((fmt.B,), bool) if taken is None else jnp.asarray(taken, bool)
     took_state = encored_state(tables, state, taken)
     # FightCommand's turn-start Encore runs the encored move over the chosen or locked one
-    # (order.fight_move, E2-ML-2); ``picked`` stays the order's (CalcTurnOrder's priority).
+    # (order.fight_move, E2-ML-2); the order reads moves[moveSlot] (order.order_moves, E2-ML-5).
     fought = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     chosen = jnp.where(taken, state.last_move.astype(_I32), fought)
     kinds = call_kind(tables, chosen)
@@ -2289,13 +2288,16 @@ def outcome_laws(
     # Embargo, battle_lib.c:5352-5363; ``state.held_item``) or the state is a paused one. The
     # foe's Skill Swap, Worry Seed or Gastro Acid before the MoveEnd can take a Klutz (Embargo
     # stays to the turn's end) and an Own Tempo (subscript_confuse.s:6 reads Battler_Ability then);
-    # ``b4`` covers the third battlers'. At B = 4 a third battler's hit can bring the holder into
-    # range before an earlier MoveEnd, outside the foe pairing: the range is not tested there.
+    # ``b4`` covers the third battlers'. At B = 4 any other battler's move (a hit, Pain Split)
+    # can bring the holder into range before an earlier MoveEnd, outside the foe pairing; a bag
+    # item or a switch lowers no other battler's HP (hazards hit the newcomer only), so a holder
+    # out of range with no other battler using a move stays out (E2-ML-7).
     hp_now = state.hp[party(fmt, sides), mons].astype(_I32)
     max_now = state.max_hp[party(fmt, sides), mons].astype(_I32)
     in_range = (hp_now > 0) & (hp_now <= max_now // 2)
     if fmt.B == 4:
-        in_range = jnp.ones((fmt.B,), bool)
+        others_move = jnp.stack([jnp.any(uses_move & (sides != b)) for b in range(fmt.B)])
+        in_range = (hp_now > 0) & (in_range | others_move)
     taken_by_foe = foes(uses_move & _any_of(effect, (_E.SKILL_SWAP, _E.WORRY_SEED, _E.GASTRO_ACID)))
     ability_goes = taken_by_foe | b4
     klutz_goes = (
@@ -2416,7 +2418,9 @@ def outcome_laws(
         # order.action_order: priority only between two moves; a tie only between two
         # actions of the same kind.
         priority = jnp.where(
-            uses_move[0] & uses_move[1], tables.move_priority[picked].astype(_I32), 0
+            ~switch[0] & ~item[0] & ~switch[1] & ~item[1],
+            tables.move_priority[order_moves(tables, state, actions)].astype(_I32),
+            0,
         )
         same_kind = (switch[0] == switch[1]) & (item[0] == item[1])
         speed_tie = (

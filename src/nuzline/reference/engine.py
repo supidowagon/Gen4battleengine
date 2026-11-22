@@ -365,9 +365,12 @@ class _Turn:
     gyro_power: int = 0
     move_slot: int = 0
     # ATTACKER_MOVE_SLOT (common.h:8): moveSlot[attacker], written only at selection (bcp.c:445,
-    # :526); FightCommand's Encore takeover (bcp.c:1868-1872) leaves it, so TryGrudge reads the
-    # chosen slot, not ``move_slot`` (review b2-fix #2).
+    # :526; ``RefBattler.move_slot``, E2-ML-5); FightCommand's Encore takeover (bcp.c:1868-1872)
+    # leaves it, so TryGrudge reads the selected slot, not ``move_slot`` (review b2-fix #2).
     chosen_slot: int = 0
+    # The running action's moveTemp (FightCommand, bcp.c:1861-1898), kept at a party-list pause
+    # (``ts_move_temp``) for its tail's UpdateMoveBuffers (E2-ML-4).
+    move_temp: int = 0
     # The berry Natural Gift's RemoveItem took this action (effect_script_0222.s:8), which its
     # hit's power and type read (_gift_item), B13-37; 0 otherwise.
     gift: int = 0
@@ -1556,7 +1559,7 @@ def _four_turn_order(tables, s: RefState, commands, choices, outcome) -> tuple[l
             if command[b1] == command[b2]:
                 fight = command[b1] == FIGHT
                 priority = (
-                    tuple(_t(tables, "move_priority", choices[b][0]) for b in (b1, b2))
+                    tuple(_t(tables, "move_priority", _order_move(s, b, choices)) for b in (b1, b2))
                     if fight
                     else (0, 0)
                 )
@@ -6374,7 +6377,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     mon = _active(s, side)
     # moveSlot (Trump Card, B13-15).
     turn.move_slot = min(action, MOVE_ACTIONS - 1)
-    turn.chosen_slot = 0 if reflect_pass else min(turn.actions[side], MOVE_ACTIONS - 1)
+    turn.chosen_slot = 0 if reflect_pass else s.battlers[side].move_slot
     turn.gift = 0
     turn.fling = turn.fling_power = 0
     turn.fling_pick = None
@@ -7370,12 +7373,9 @@ def _pursuer_choice(s: RefState, pursuer: int, actions, choices) -> tuple[bool, 
     """``(has, move)`` of ``BtlCmd_TryPursuit``'s move choice for ``pursuer`` (script.c:6905-6909;
     ``step._pursuer_move``): its Encore move when the Encore slot still holds it, whatever it
     selected, else ``Battler_SelectedMove`` (a FIGHT's chosen move; none for any other command or
-    Struggle). D3-9 variant B (SF2 (e) did not land): at B = 2 a FIGHT that is not Struggling
-    only."""
+    Struggle). Every format (SF2 (e), E2-ML-6): no command test before the Encore's move."""
     move, struggling, _ = choices[pursuer]
     picked = _command(actions[pursuer]) == FIGHT and not struggling
-    if _fmt(s).B == 2:
-        return picked, move
     sd, mon = s.battlers[pursuer], _active(s, pursuer)
     if sd.encore_move and mon.moves[sd.encore_slot] == sd.encore_move:
         return True, sd.encore_move
@@ -7505,16 +7505,11 @@ def _pursuit_hit(
     # The Destiny Bond subscript's :28 TryGrudge (battle_script.c:6743-6763) on the pursuer's
     # selected slot, still before the contact ability (subscript_pursuit.s:85 then :86-87): a
     # Rough Skin or Aftermath that faints the pursuer comes after the zero (E3-B2-9). The slot is
-    # moveSlot (:6753, common.h:8), written only at selection (bcp.c:445, :526); TryPursuit never
-    # writes it, so it is the chosen slot, not the PP slot above (step._pursuit_hit). An Encored
-    # pursuer that chose no FIGHT (an item or a switch this turn) keeps an earlier turn's
-    # moveSlot: its Encore slot stands in. Reachable at B = 2, not only B = 4: item and switch
-    # actions run in battler index order (bcp.c:754-768), so an encored battler 1 using an item
-    # can meet battler 0's switch before it acts. Owed SF3 (ledger, D3-9 rows).
-    if _command(actions[pursuer]) == FIGHT:
-        chosen = min(actions[pursuer], MOVE_ACTIONS - 1)
-    else:
-        chosen = s.battlers[pursuer].encore_slot
+    # moveSlot (:6753, common.h:8), written only at selection (bcp.c:445, :526; ``move_slot``,
+    # E2-ML-5); TryPursuit never writes it, so it is the selected slot, not the PP slot above
+    # (step._pursuit_hit): an Encored pursuer that chose no FIGHT, or a locked one, keeps an
+    # earlier selection's.
+    chosen = s.battlers[pursuer].move_slot
     _try_grudge(s, pursuer, chosen, side, target_hp > 0 and _active(s, side).hp == 0, False)
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt, side)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
@@ -8719,6 +8714,16 @@ def _command(action: int) -> str:
     return SWITCH if action >= MOVE_ACTIONS else FIGHT
 
 
+def _order_move(s: RefState, b: int, choices) -> int:
+    """The move whose priority CalcTurnOrder reads for battler ``b``'s FIGHT (battle_lib.c:
+    1375-1397; ``order.order_moves``): Struggle where the selection set ``turnFlags.struggling``,
+    else ``moves[moveSlot]`` as it stands now (``move_slot``: a locked battler's last selected
+    slot, E2-ML-5)."""
+    if choices[b][1]:
+        return MOVE_STRUGGLE
+    return _active(s, b).moves[s.battlers[b].move_slot]
+
+
 def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, bool]:
     """``(move, struggling, locked)`` a move action selects, fixed at command selection:
     the locked move of a battler that picks no command (bcp.c:335, :1885-1888), Struggle
@@ -8838,6 +8843,16 @@ def _ref_step(
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     choices = [_choose(tables, s, side, actions[side]) for side in range(_fmt(s).B)]
     commands = [_command(a) for a in actions]
+    # The selection's moveSlot (E2-ML-5): a FIGHT that picks a move writes the Encore slot under
+    # an Encore (bcp.c:440-446), else the chosen slot (:526); a locked (:333-337), Struggling
+    # (:433-434) or absent (:330-333) battler, an item and a switch keep it.
+    for side in range(_fmt(s).B):
+        sd = s.battlers[side]
+        _, struggling, locked = choices[side]
+        if commands[side] == FIGHT and not (struggling or locked) and not _absent_now(s, side):
+            sd.move_slot = (
+                sd.encore_slot if sd.encore_move else min(actions[side], MOVE_ACTIONS - 1)
+            )
     # TrainerAI_RecordLastMove (trainer_ai.c:2705-2717) runs on the AI's FIGHT path
     # (TrainerAI_MainSingles, :295), which a forced Struggle skips (bcp.c:433): the
     # player's movePrevByBattler joins the AI's list of move ids: the first empty entry, unless
@@ -8876,7 +8891,8 @@ def _ref_step(
         priority = (0, 0)
         if not early[0]:
             priority = tuple(
-                _t(tables, "move_priority", choices[side][0]) for side in range(_fmt(s).B)
+                _t(tables, "move_priority", _order_move(s, side, choices))
+                for side in range(_fmt(s).B)
             )
         # The order reads the speedRand drawn the turn before (qc_roll): this turn's is
         # drawn after CalcTurnOrder (bcp.c:853-857).
@@ -8969,7 +8985,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 move, action_slot = emon.moves[esd.encore_slot], esd.encore_slot
                 if not held:
                     esd.encore_move = esd.encore_slot = esd.encore_turns = 0
-            turn.move_cur = move
+            turn.move_cur = turn.move_temp = move
             turn.shell_dealt = 0
             turn.reflected = False
             turn.met_reached = turn.met_worked = turn.met_immune = False
@@ -9072,13 +9088,7 @@ def _resort(turn: _Turn, s: RefState, b_tr: int) -> None:
                 priority = (0, 0)
                 if fight:
                     priority = tuple(
-                        _t(tables, "move_priority", MOVE_STRUGGLE)
-                        if turn.choices[b][1]
-                        else _t(
-                            tables,
-                            "move_priority",
-                            _active(s, b).moves[min(max(turn.actions[b], 0), MOVE_ACTIONS - 1)],
-                        )
+                        _t(tables, "move_priority", _order_move(s, b, turn.choices))
                         for b in (b1, b2)
                     )
                 swap = _compare_battlers(
@@ -9378,6 +9388,7 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
     _put(s, "ts_move_failed", [int(f) for f in turn.move_failed])
     if not learn:
         s.ts_used = turn.move_cur
+        s.ts_move_temp = turn.move_temp
         s.ts_damaged = int(turn.damaged)
         s.ts_dealt = turn.pivot_dealt
         s.ts_se = int(turn.move_se)  # moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
@@ -9436,7 +9447,7 @@ def _fainted_battler(s: RefState, k: int, i: int) -> int:
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_pursued": 0, "ts_used": 0, "ts_damaged": 0,
     "ts_dealt": 0, "ts_se": 0, "ts_power_mul": 0, "ts_pick_mul": 0, "learn_site": 0,
-    "ts_ran": 0, "ts_defender": 0,
+    "ts_ran": 0, "ts_defender": 0, "ts_move_temp": 0,
 }  # fmt: skip
 
 
@@ -9582,14 +9593,10 @@ def _resume(
     # before ``_enter`` (the outgoing mon's Encore and chosen_target in place), gives that battler
     # but for a foe that fell since (the U-turn's KO, a pursuer's recoil): it stays the defender,
     # as ``step._use_move``'s B = 2 tail keep.
-    p_move, p_struggling, _ = turn.choices[side]
+    # The move FightCommand ran (moveTemp, kept at the stop: ``ts_move_temp``, E2-ML-4).
+    _, p_struggling, _ = turn.choices[side]
+    p_move = s.ts_move_temp
     p_sd = s.battlers[side]
-    if (
-        not p_struggling
-        and p_sd.encore_move
-        and _active(s, side).moves[p_sd.encore_slot] == p_sd.encore_move
-    ):
-        p_move = p_sd.encore_move
     if _fmt(s).B == 4:
         # D3-10: the defender FightCommand fixed (bcp.c:1900) and the sort before the action
         # stay through the list (battleCtx->defender, monSpeedOrder: nothing rewrites them).
@@ -9604,7 +9611,7 @@ def _resume(
             outcome.target_draw[side],
         )[0]  # fmt: skip
         turn.defender = _foe(side) if kept is None else kept
-    move, used = s.battlers[side].ts_move, s.ts_used
+    move, used = s.ts_move_temp, s.ts_used
     damaged, dealt = bool(s.ts_damaged), s.ts_dealt
     se = bool(s.ts_se)  # the tail's moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
     position = s.ts_cursor
@@ -9671,9 +9678,11 @@ def _resume(
         _held_item(turn, s, battler)
     # LOOP_FAINTED (bcp.c:3820-3823): the defender is still flagged with its Grudge bit, so
     # subscript_faint_check_destiny_bond.s:28 runs TryGrudge on the newcomer: moveSlot[attacker]
-    # is the paused action's selected slot, moveTemp the pivot move (review b2 #5).
+    # is the paused action's selected slot (``move_slot``, E2-ML-5), moveTemp the pivot move
+    # (review b2 #5).
     for b in range(_fmt(s).B):
-        _try_grudge(s, side, turn.actions[side], b, bool(grudge[b]), False, bool(grudge[b]))
+        slot = s.battlers[side].move_slot
+        _try_grudge(s, side, slot, b, bool(grudge[b]), False, bool(grudge[b]))
     # UpdateMoveBuffers / UpdateFlagsWhenHit on the newcomer (bcp.c:3917-3944): no Choice lock
     # for U-turn under SYSCTL_UTURN_ACTIVE nor Baton Pass (moveTemp), movePrev and
     # movePrevByBattler the paused move's moveTemp, the protect chain reset.

@@ -116,6 +116,7 @@ from nuzline.engine.order import (
     is_switch,
     metronome_weights,
     move_effects,
+    pinch_limit,
     sealed_state,
     selected_move,
     takeover_possible,
@@ -1848,18 +1849,56 @@ CRIT_ODDS_EFFECTS = {
 }
 
 
-def _lansat_pinch(tables: Tables, state: BattleState) -> BattleState:
+def _lansat_pinch(tables: Tables, state: BattleState, eats=None) -> BattleState:
     """A Lansat Berry's write to the crit inputs (``HOLD_EFFECT_PINCH_CRITRATE_UP``,
     battle_lib.c:4838-4848: the holder's Focus Energy, ``hooks._pinch_effects``): every
-    battler holding one has Focus Energy (its HP test is not judged: over-approximate). It is
-    another battler's move that brings the pinch before the holder's CalcCrit (bcp.c:3691-3696:
-    the held-item check after every move), so it is the last variant bit, used by any non-status
-    move and by Pain Split, the one modelled status move that lowers its target's HP
-    (``effects._pain_split``, subscript_pain_split.s:12-22) (``crit_variants``), F-9."""
-    holds = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
-    return state._replace(
-        focus_energy=(state.focus_energy | holds).astype(state.focus_energy.dtype)
+    battler that can eat one (``eats``, default the shown holders) has Focus Energy (its HP test
+    is not judged here: over-approximate). The held-item check after every action eats it
+    (bcp.c:3691-3696, :3973; battle_lib.c:4151-4165), so it is the last variant bit
+    (``crit_variants``), F-9, E2-ML-7."""
+    if eats is None:
+        eats = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
+    return state._replace(focus_energy=(state.focus_energy | eats).astype(state.focus_energy.dtype))
+
+
+def _lansat_eaters(tables: Tables, state: BattleState, actions, moves) -> tuple:
+    """``(eats, start)``, ``bool[B]`` (E2-ML-7): the battlers whose Lansat Berry an action's
+    MoveEnd can eat this turn (TriggerHeldItemOnStatus over every battler, battle_lib.c:4151-4165,
+    :5261-5271, reading Battler_HeldItemEffect, :4970): shown (``state.held_item``), or hidden by a
+    Klutz an earlier Skill Swap, Worry Seed or Gastro Acid takes (Battler_HeldItem, :5352-5363;
+    Embargo stays to the turn's end; at B = 4 any third battler's, over-approximate); and
+    ``start``: such a holder already at its pinch (``curHP <= maxHP / param``, Gluttony's half
+    included where its ability can change), which the first MoveEnd before its hit, after any
+    action (an item or a switch too), eats whatever that action did."""
+    fmt = format_of(state)
+    sides = jnp.arange(fmt.B)
+    mons = state.active
+    rows = party(fmt, sides)
+    raw = state.item[rows, mons]
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    effect = tables.move_effect[moves]
+    swaps = uses_move & (
+        (effect == EffectId.SKILL_SWAP)
+        | (effect == EffectId.WORRY_SEED)
+        | (effect == EffectId.GASTRO_ACID)
     )
+    ability_goes = foes(swaps) if fmt.B == 2 else jnp.ones((fmt.B,), bool)
+    klutz_goes = (
+        ability_goes
+        & (battler_ability(state, sides, mons) == AbilityId.KLUTZ)
+        & (state.embargo[sides] == 0)
+    )
+    shown = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
+    eats = shown | ((tables.item_effect[raw] == ItemId.LANSAT_BERRY) & klutz_goes)
+    power = tables.item_param[raw, 0].astype(_I32)
+    # Gluttony halves the param (battle_lib.c:4774-4776): the holder's, or one a Skill Swap
+    # hands it first.
+    swapped = foes(uses_move & (effect == EffectId.SKILL_SWAP)) if fmt.B == 2 else ability_goes
+    glutton = (battler_ability(state, sides, mons) == AbilityId.GLUTTONY) | swapped
+    divisor = jnp.where(glutton, power // 2, power)
+    hp = state.hp[rows, mons].astype(_I32)
+    limit = pinch_limit(state.max_hp[rows, mons], divisor)
+    return eats, eats & (hp > 0) & (hp <= limit)
 
 
 # The odds variants of ``crit_variants``: variant v < CRIT_WRITE_VARIANTS applies the writes of
@@ -1893,7 +1932,8 @@ def crit_variants(
     if before is None:
         before = ~jnp.eye(n, dtype=bool)
     before = jnp.asarray(before, bool)
-    writes = (*CRIT_ODDS_EFFECTS.values(), _lansat_pinch)
+    eats, start = _lansat_eaters(tables, state, actions, moves)
+    writes = (*CRIT_ODDS_EFFECTS.values(), lambda t, s: _lansat_pinch(t, s, eats))
     odds, singles = [], []
     for v in range(CRIT_WRITE_VARIANTS):
         s = state
@@ -1911,6 +1951,9 @@ def crit_variants(
     users.append(uses_move & hp_lowering)
     for e, used in enumerate(users):  # [B], by the user
         reached = jnp.any(before & used[None, :], axis=1)  # [B], by the battler hit after
+        if e == len(users) - 1:
+            # A holder at its pinch at the start eats it at any earlier action's MoveEnd (E2-ML-7).
+            reached = reached | (start & jnp.any(before, axis=1))
         singles.append(reached & (odds[1 << e] != base))
     possible = []
     for v in range(CRIT_WRITE_VARIANTS):
@@ -2287,7 +2330,9 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
 
     seen = fcm.uproar_end(state, pivot, True)._replace(
         active=state.active.at[pivot].set(slot.astype(state.active.dtype)),
-        move_prev=state.ts_move[pivot].astype(state.move_prev.dtype),
+        # The tail's UpdateMoveBuffers writes the paused action's moveTemp (bcp.c:3936-3942;
+        # ``ts_move_temp``, E2-ML-4): an Encore's move where one ran.
+        move_prev=state.ts_move_temp.astype(state.move_prev.dtype),
         **{name: reset(name) for name in (*VOLATILE_FIELDS, "stages")},
     )
     seen = clear_copied(seen, pivot)  # the foes' moveCopied of the newcomer's switch-in (E3-B2-2)
@@ -2463,8 +2508,9 @@ def _per_hit(fmt, key, field_key, field: str, low, high) -> jnp.ndarray:
 
 def pursuit_chase(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(bool[B], int32[B])``: battler p's Pursuit fires on its foe's switch
-    (``step.pursuit_fires``) and the move it hits with (the selected move); never in a paused
-    state (the paused U-turn's Pursuit already ran, ``pivot_view``; a list switch-in meets none)."""
+    (``step.pursuit_fires``) and the move it hits with (``order.fight_move``: a held Encore's
+    move, whatever p chose, battle_script.c:6905-6909, E2-ML-6); never in a paused state (the
+    paused U-turn's Pursuit already ran, ``pivot_view``; a list switch-in meets none)."""
     from nuzline.engine.step import pursuit_fires  # step imports this module
 
     fmt = format_of(state)
@@ -2475,7 +2521,7 @@ def pursuit_chase(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndar
         jnp.stack([pursuit_fires(tables, state, _foe(p), actions, choices) for p in range(fmt.B)])
         & ~paused
     )
-    return fires, choices[0]
+    return fires, jnp.stack([fight_move(tables, state, p, actions[p]) for p in range(fmt.B)])
 
 
 def pursuit_armored(tables: Tables, state: BattleState) -> jnp.ndarray:

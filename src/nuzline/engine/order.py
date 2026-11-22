@@ -142,6 +142,50 @@ def fight_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
     return jnp.where(runs, slot_move.astype(_I32), move).astype(_I32)
 
 
+def selection_slots(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``int32[B]``: ``BattleContext.moveSlot`` after this turn's command selection (E2-ML-5). A
+    battler whose action is a move and that picks a command (not absent, bcp.c:330-333; not locked,
+    :333-337) writes it unless it Struggles (STRUGGLING_ALL, :433-434): the Encore slot under an
+    Encore (:440-446), else the chosen slot (:526). Every other battler keeps ``state.move_slot``,
+    and a paused state kept the selection's. Idempotent: a state the selection already wrote
+    gives the same slots."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    out = []
+    for b in range(fmt.B):
+        action = actions[b]
+        fight = (action < MOVE_ACTIONS) & (state.over == 0) & ~absent_now(state, b)
+        picks = fight & (locked_slot(state, b) < 0) & jnp.any(usable_moves(tables, state, b))
+        slot = jnp.where(
+            state.encore_move[b] != 0,
+            state.encore_slot[b].astype(_I32),
+            jnp.clip(action, 0, MOVE_ACTIONS - 1),
+        )
+        out.append(jnp.where(picks & ~paused, slot, state.move_slot[b].astype(_I32)))
+    return jnp.stack(out)
+
+
+def order_moves(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``int32[B]``: the move whose priority CalcTurnOrder reads for each battler's FIGHT
+    (battle_lib.c:1375-1397): Struggle where the selection set ``turnFlags.struggling`` (a battler
+    that picked a command, never a locked one, bcp.c:335, :433), else ``moves[moveSlot]`` as it
+    stands now (``selection_slots``): a locked battler's last selected slot, which a level-up or
+    a lock its slot does not hold (a called Bide or Thrash) makes differ from ``locked_move``
+    (E2-ML-5)."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    slots = selection_slots(tables, state, actions)
+    out = []
+    for b in range(fmt.B):
+        struggling = selected_move(tables, state, b, actions[b])[1]
+        locked = jnp.where(paused, state.ts_locked[b] != 0, locked_slot(state, b) >= 0)
+        slot_move = state.moves[party(fmt, b), state.active[b], slots[b]].astype(_I32)
+        out.append(jnp.where(struggling & ~locked, MOVE_STRUGGLE, slot_move))
+    return jnp.stack(out)
+
+
 def terrain_index(state: BattleState) -> jnp.ndarray:
     """``int32``: the row of the terrain tables (``ids.TERRAIN_MOVES``, ``TERRAIN_TYPES``) the
     battle reads: ``min(terrain, TERRAIN_SPECIAL)`` (``BtlCmd_GetTerrainMove``,
@@ -921,7 +965,9 @@ def resort_action_order(tables: Tables, state: BattleState, order, real, qc, tie
     switch, item = is_switch(real), is_item(real)
     absent = jnp.stack([absent_now(state, b) for b in range(fmt.B)])
     command = jnp.where(absent | (~switch & ~item), 0, jnp.where(item, 1, 2)).astype(_I32)
-    slot = jnp.clip(real, 0, MOVE_ACTIONS - 1)
+    # moveSlot as the turn's selection wrote it (``state.move_slot``, E2-ML-5): a locked
+    # battler's is its last selected slot, not its action's.
+    slot = state.move_slot.astype(_I32)
     moves = jnp.stack(
         [state.moves[party(fmt, b), state.active[b], slot[b]].astype(_I32) for b in range(fmt.B)]
     )
@@ -1151,7 +1197,7 @@ def _four_order(tables: Tables, state: BattleState, actions, order_tie, qc):
     switch, item = is_switch(actions), is_item(actions)
     fight = (~switch & ~item) | ~alive
     command = jnp.where(fight, 0, jnp.where(item, 1, 2)).astype(_I32)
-    moves = jnp.stack([selected_move(tables, state, b, actions[b])[0] for b in range(4)])
+    moves = order_moves(tables, state, actions)  # moves[moveSlot] (E2-ML-5)
     priority = tables.move_priority[moves].astype(_I32)
     facts = _pair_facts(tables, state, qc)
     # Stable sort on "is FIGHT": ITEM / PARTY battlers first, then the rest, each in battler order.
@@ -1212,9 +1258,7 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
         return _four_order(tables, state, actions, outcome.order_tie, state.qc_roll)[0]
     switch, item = is_switch(actions), is_item(actions)
     early = switch | item  # items and switches go before moves
-    moves = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
+    moves = order_moves(tables, state, actions)  # moves[moveSlot] (E2-ML-5)
     both_moves = ~early[0] & ~early[1]
     priority = jnp.where(both_moves, tables.move_priority[moves].astype(_I32), 0)
     second = player_second(tables, state, outcome.speed_tie, state.qc_roll)

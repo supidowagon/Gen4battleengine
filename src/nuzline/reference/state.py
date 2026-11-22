@@ -201,6 +201,7 @@ class RefBattler:
     ts_helping_hand: int  # turnFlags.helpingHand, 0 between turns (D3 fix B)
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
+    move_slot: int  # BattleContext.moveSlot[b], written at a FIGHT's selection (E2-ML-5)
 
 
 @dataclass
@@ -264,6 +265,7 @@ class RefState:
     ts_se: int
     ts_power_mul: int
     ts_pick_mul: int
+    ts_move_temp: int  # the paused action's moveTemp (E2-ML-4)
 
 
 # BattleState field names by level.

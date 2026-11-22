@@ -287,6 +287,7 @@ from nuzline.engine.order import (
     resort_action_order,
     resort_claw_flags,
     selected_move,
+    selection_slots,
     sort_mon_speed,
     truant_loafs,
 )
@@ -1144,9 +1145,10 @@ def _use_move(
     move, struggling, locked = choice[:3]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     # ATTACKER_MOVE_SLOT (common.h:8) is moveSlot[attacker], written only at selection
-    # (bcp.c:445, :526); the Encore takeover below (bcp.c:1868-1872) changes moveTemp, not
-    # moveSlot, so TryGrudge zeroes the chosen slot (review b2-fix #2).
-    chosen_slot = slot
+    # (bcp.c:445, :526; ``state.move_slot``, which ``_action_phase`` wrote, E2-ML-5); the Encore
+    # takeover below (bcp.c:1868-1872) changes moveTemp, not moveSlot, so TryGrudge zeroes the
+    # selected slot (review b2-fix #2), a locked battler's last selected one.
+    chosen_slot = jnp.where(reflected_pass, slot, state.move_slot[side].astype(_I32))
     user = state.active[side]
     # BattleControllerPlayer_FightCommand (bcp.c:1866-1883), B10-9: after Struggle, an encored
     # battler whose encored slot holds the encored move uses it (and that slot's PP: the no-PP
@@ -1157,10 +1159,14 @@ def _use_move(
     encore_slot_move = state.moves[party(fmt, side), user, encore_slot].astype(_I32)
     encore_set = state.encore_move[side] != 0
     encore_holds = encore_set & (encore_slot_move == state.encore_move[side])
-    encore_runs = encore_set & ~jnp.asarray(struggling, bool) & ~reflected_pass
+    encore_runs = encore_set & ~jnp.asarray(struggling, bool) & ~reflected_pass & head_on
     encored_now = encore_holds & encore_runs
     move = jnp.where(encore_runs, encore_slot_move, move)
     slot = jnp.where(encore_runs, encore_slot, slot)
+    # A tail mode runs the paused action's own moveTemp, kept at the stop (``ts_move_temp``,
+    # E2-ML-4): FightCommand ran once, at the head (the newcomer's Encore, or the user's own
+    # Encore that ended there, plays no part).
+    move = jnp.where(head_on, move, state_in.ts_move_temp.astype(_I32))
     # BattleControllerPlayer_FightCommand (bcp.c:1900) fixes the defender with the move after the
     # Encore takeover (``moveTemp``) and the stored target (D2-1) at the action's start: the
     # resolver (``targets.resolve``, D2-4). ``speed_order``: monSpeedOrder, D3's input (B = 2: the
@@ -2963,6 +2969,7 @@ def _use_move(
     note = stopped & head_on
     state = state._replace(
         ts_used=jnp.where(note, used, state.ts_used).astype(state.ts_used.dtype),
+        ts_move_temp=jnp.where(note, move, state.ts_move_temp).astype(state.ts_move_temp.dtype),
         ts_damaged=jnp.where(note, damaged0, state.ts_damaged).astype(state.ts_damaged.dtype),
         ts_dealt=jnp.where(note, dealt0, state.ts_dealt).astype(state.ts_dealt.dtype),
         ts_se=jnp.where(note, se_now, state.ts_se).astype(state.ts_se.dtype),
@@ -3034,7 +3041,7 @@ def _use_move(
     # moveSlot[attacker] (common.h:8, per battler), the paused action's selected slot
     # (``ts_actions``), and moveTemp is still the pivot move, not Struggle. Every battler's bit is
     # tried (doubles section 5 rule 4); ``try_grudge``'s side test drops the attacker's own side.
-    pivot_slot = jnp.clip(state_in.ts_actions[side].astype(_I32), 0, MOVE_ACTIONS - 1)
+    pivot_slot = state_in.move_slot[side].astype(_I32)  # moveSlot[attacker] (E2-ML-5)
     for b in range(fmt.B):
         state = try_grudge(
             state, side, user, pivot_slot, b, state_in.ts_grudge[b] != 0, False, resumed
@@ -3535,14 +3542,11 @@ def _pursuer_move(state: BattleState, pursuer, action, move, struggling):
     6905-6909): its Encore move when the Encore slot still holds it, whatever it selected (a FIGHT,
     a bag item or a switch), else ``Battler_SelectedMove`` (the chosen slot's move of a FIGHT, 0
     for any other command and for Struggle: lib.c:2858-2868; ``move`` / ``struggling`` are
-    ``selected_move``'s). ``has`` is false when it has no move. D3-9 variant B (SF2 (e) did not
-    land): at B = 2 the command test stays, a FIGHT that is not Struggling only, and SF2 (e)
-    removes it."""
+    ``selected_move``'s). ``has`` is false when it has no move. Every format (E2-ML-6, SF2 (e)):
+    at B = 2 too an Encored battler that picked a bag item, a switch or is locked pursues."""
     fmt = format_of(state)
     mon = state.active[pursuer]
     picked = ~is_switch(action) & ~is_item(action) & ~jnp.asarray(struggling)
-    if fmt.B == 2:
-        return picked, move
     enc = state.encore_move[pursuer].astype(_I32)
     holds = (enc != 0) & (
         state.moves[party(fmt, pursuer), mon, state.encore_slot[pursuer]].astype(_I32) == enc
@@ -3671,17 +3675,12 @@ def _pursuit_hit(
     # TryGrudge's slot is ATTACKER_MOVE_SLOT (battle_script.c:6753-6754; common.h:8,
     # moveSlot[attacker]), written only at selection (bcp.c:445 the Encore slot, :526 the chosen
     # slot); TryPursuit sets attacker = pursuer (:6926) but never moveSlot, so Grudge zeroes the
-    # chosen slot, not the PP slot above: they differ when Pursuit sits in two slots, or (B = 4) when a foe's faster Encore
-    # this turn turned another chosen move into Pursuit. An Encored pursuer that chose no FIGHT
-    # (an item or a switch this turn) keeps an earlier turn's moveSlot, not in the state: its
-    # Encore slot stands in. Reachable at B = 2, not only B = 4: item and switch actions run in
-    # battler index order (bcp.c:754-768), so an encored battler 1 using an item can meet
-    # battler 0's switch before it acts. Owed SF3 (ledger, D3-9 rows).
-    action = actions[pursuer]
-    fight = ~is_switch(action) & ~is_item(action)
-    grudge_slot = jnp.where(
-        fight, jnp.clip(action, 0, MOVE_ACTIONS - 1), state.encore_slot[pursuer]
-    ).astype(_I32)
+    # selected slot, not the PP slot above: they differ when Pursuit sits in two slots, or when
+    # an Encore turned another move into Pursuit. ``state.move_slot`` is moveSlot as the turn's
+    # selection left it (E2-ML-5): an Encored pursuer that chose no FIGHT (an item or a switch this
+    # turn), or a locked one, keeps an earlier selection's (the former Owed SF3 stand-in, its
+    # Encore slot, is gone).
+    grudge_slot = state.move_slot[pursuer].astype(_I32)
     # subscript_pursuit.s:11 ApplyTypeEffectiveness: a Wonder Guard block
     # (MOVE_STATUS_WONDER_GUARD, damage.wonder_guarded) goes to subscript_missed.s (:17, :154), whose :107-110 tags the
     # switcher's ability (ruling G-20); the hit then deals nothing (play_hit).
@@ -4591,6 +4590,7 @@ def _execute_actions(
         "ts_move_failed": read["move_failed"],
         # The paused action's own inputs and the party list's: a learn pause has none (0).
         "ts_used": jnp.where(pivot_stopped, state.ts_used, 0),
+        "ts_move_temp": jnp.where(pivot_stopped, state.ts_move_temp, 0),
         "ts_damaged": jnp.where(pivot_stopped, state.ts_damaged, 0),
         "ts_dealt": jnp.where(pivot_stopped, state.ts_dealt, 0),
         # The paused action's battleCtx->defender (1 + battler) and monSpeedOrder: written at B = 4
@@ -5691,6 +5691,10 @@ def _action_phase(
     state = state._replace(starf_roll=queue.astype(state.starf_roll.dtype), starf_taken=opened)
     fresh = _clear_stale_choice_locks(tables, state, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
+    # The selection's moveSlot (bcp.c:445, :526; E2-ML-5), before the order reads it.
+    fresh = fresh._replace(
+        move_slot=selection_slots(tables, state, actions).astype(state.move_slot.dtype)
+    )
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
     order = jnp.where(paused, state.ts_order, order).astype(_I32)
