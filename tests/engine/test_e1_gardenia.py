@@ -878,6 +878,23 @@ def test_a_u_turn_chase_by_a_carried_pursuit_reaches_acid_rain(tables, names):
     assert np.asarray(pursuers).tolist() == [False, True]
     assert not bool(acid_rain_reachable(s, acts, uses, effect))  # Struggle's effect alone
     assert bool(acid_rain_reachable(s, acts, uses, effect, pursuers))
+    # End to end (review 8): a due Future Sight on the foe reads the mask at the turn's end
+    # (bcp.c:2926-2937, :2972-2974). Deep fog alone minus the pursuer's index 1 (:115's
+    # sub_to_zero) is 0x7FFF: fog off, the Gravity counter on, so the hit's grid opens that
+    # field (``_future_fields``); without the carried TEMP_VALUE no chase, no such field.
+    from nuzline.engine.outcome import future_thresholds
+    from tests.engine.test_e1_batch_h import _pending
+
+    fog = _pending(
+        s._replace(field_mask=jnp.asarray(int(FieldCondition.DEEP_FOG), s.field_mask.dtype)),
+        names,
+        1,
+        0,
+    )
+    plain = fog._replace(selected_temp=fog.selected_temp.at[1].set(0))  # nothing carried
+    chased = np.asarray(future_thresholds(tables, fog, acts, moves)[1][1])
+    unchased = np.asarray(future_thresholds(tables, plain, acts, moves)[1][1])
+    assert bool(np.all(chased | ~unchased)) and bool(np.any(chased & ~unchased))
 
 
 def test_b4_a_switch_chase_is_cut_only_by_the_chased_battlers_armor(tables, names):
