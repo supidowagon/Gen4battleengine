@@ -423,10 +423,18 @@ def test_prune_warns_from_used_space_against_the_quota_not_df(tmp_path):
     assert rc == 0 and "prune: volume used 1 GB of 30 GB" in out and "WARNING" not in out, out
     rc, out = _sync(tmp_path, "prune", CACHE_VOL_QUOTA_GB="3")
     assert rc == 0 and "WARNING: volume" in out and "has 2 GB left of 3 GB" in out, out
-    if _has("timeout"):
-        path = _shim(tmp_path, "du", "exec sleep 30\n")
-        rc, out = _sync(tmp_path, "prune", CACHE_DU_TIMEOUT="1", PATH=path)
-        assert rc == 0 and "prune: volume used ? (du failed or took over 1 s)" in out and "WARNING" not in out, out
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="timeout signals a bash shim's process group: Linux only (WSL runner, the pod)")
+def test_prune_with_a_du_that_hangs_reports_used_unknown_and_goes_on(tmp_path):
+    _entry(tmp_path / "vol" / "jax" / VT, "x-cache", _blob(1))
+    path = _shim(tmp_path, "du", "exec sleep 30\n")
+    t0 = time.monotonic()
+    rc, out = _sync(tmp_path, "prune", CACHE_DU_TIMEOUT="1", CACHE_VOL_QUOTA_GB="3", PATH=path)
+    assert time.monotonic() - t0 < 20
+    assert rc == 0 and "prune: volume used ? (du failed or took over 1 s)" in out and "WARNING" not in out, out
+    assert out.rstrip().endswith("prune done"), out
 
 
 def test_prune_keeps_the_newest_version_per_host_tag_and_drops_untagged_folders(tmp_path):
