@@ -2194,3 +2194,28 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Was "nothing is lost". Now: a cancelled evolution is offered again at the next level-up, but the evolved species' learn loop offers only the entries of exactly the level it evolves at
   (`src/evolution.c:461-480`), so after a cancel a move the evolved species learns only at the current level is never offered.
   Tests: tests/prep/test_report.py `test_post_fight_without_next_recommends_cancel`.
+
+- E3-B3-5a fix (manager ruling 22 Nov): battle-start friendship with several map labels (`src/nuzline/prep/friendship.py`). No table input changed.
+  Replaces the "smaller gain = worst" rule of `egg_location_matches` (removed).
+  (a) Fixed label: `fight_label` is the one label of `Trainer.map_labels` (one header, or headers sharing a label: `mapID` is the label,
+  `battle_main.c:1054`, `src/field_battle_data_transfer.c:263`); the raise then has one value. Vanilla: every Gym, E4 and Champion trainer has one label.
+  Kaizo: only Byron 250 has two (7, 119; headers 2 and 34); 261-264, 267 have none (any header: open). Not joined yet, so their labels stay open:
+  `GauntletFacts` holds no header per fight (`src/nuzline/data/gauntlet.py`; the group header is only in `orders_source` text and in
+  `tools/kaizo/gauntlet_map.py`), and `[area.<id>] map_header` (a user's placement answer, `tools/kaizo/overrides.py`) is not applied to `map_labels`.
+  No Gym, E4 or Champion trainer is a gauntlet member with several labels (E4 + Champion 866-870: label 15 each) or has a `map_header` answer.
+  (b) Open label: `battle_start_bounds` gives (low, high), the raise without and with the egg-location +1 (`src/pokemon.c:2668-2670`; high only when
+  the egg location is one of the labels or no label is known). `fight_friendship` gives each member the bound its readers take:
+  Return (effect 121, power `friendship * 10 / 25`, `res/battle/scripts/effects/effect_script_0121.s:5-7`) the low one; Frustration (effect 123,
+  `(255 - friendship) * 10 / 25`, `effect_script_0123.s:5-8`) the high one; both moves the bound where the stronger is weaker (ties: low);
+  no reader the low one, which friendship evolution reads (`EVOLVE_FRIENDSHIP_THRESHOLD <= friendship`, `src/pokemon.c:3565-3583`,
+  `include/constants/pokemon.h:25`; growth.py `_by_level`). Both effects read `BATTLEMON_FRIENDSHIP` (`src/battle/battle_lib.c:398-399`, copied from
+  the party at `:136`, `:179`); the AI's estimate reads the same value (`trainer_ai.c:3018-3026`, `damage.py`). `friendship_readers`: the member's moves
+  and in-fight learnable moves (`coverage.learnable_moves`); Metronome reaches both; Mimic, Transform, Mirror Move, Copycat, Me First, Assist reach
+  the fight's. `battle_start_party` takes `opp`; `setup_specs` and `cli rank`/`solve`/`line` pass it.
+  (c) Kaizo: Return and Frustration are plain effect-0 moves (`docs/kaizo/rom_diff.md:269`), so they ignore friendship and a Kaizo fight has no
+  reader: only vanilla is affected by the Return/Frustration part; Kaizo takes the low bound (evolution's).
+  (d) Open for the chain: the fight's engine state holds the bound its readers took, and a `Carry` has one friendship (`prep/gauntlet.py`). The
+  post-fight carry (GT-4b) must take the low bound for friendship evolution; no Gym, E4 or Champion fight is in a chain until B4-19.
+  Tests: tests/prep/test_gauntlet_start.py (open vs fixed label, bounds with Soothe Bell, each reader's bound, readers from moves and callers,
+  party and `setup_specs`: a Frustration user takes the high bound, a Return user and no reader the low one, a fixed label one value).
+  Docs: `docs/gauntlet-design.md` rule 2 (evolve-domination) now states `growth.evolve_dominates`' exact conditions.

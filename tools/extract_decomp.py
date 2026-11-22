@@ -1055,7 +1055,8 @@ def map_label_fields(
     battle's ``mapLabelTextID`` is its header's (``MapHeader_GetMapLabelTextID``,
     src/field_battle_data_transfer.c:263; ``battleSys->mapHeader``, battle_main.c:1054), which
     ``Pokemon_UpdateFriendship`` compares with the egg location (src/pokemon.c:2668-2670);
-    ``prep.friendship`` takes the worst case over several. Empty: no map places the trainer."""
+    ``prep.friendship`` fixes the label when there is one and carries both friendship bounds
+    otherwise. Empty: no map places the trainer."""
     return [
         {"map_labels": sorted({labels[h] for h in where.get(tid, ())})} for tid in range(n_trainers)
     ]

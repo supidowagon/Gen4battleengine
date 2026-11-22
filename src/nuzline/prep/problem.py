@@ -388,7 +388,8 @@ class PrepProblem:
     script_weather_warp: bool = False
     # Battle-start friendship (ledger E3-B3-5.a; ``prep.friendship``): the class id of the fight's
     # second enemy trainer (None: one enemy). ``trainer.class_id`` is enemy 1's, and
-    # ``trainer.map_labels`` the map label text ids of its headers (``battle_start_spec``).
+    # ``trainer.map_labels`` the map label text ids of its headers: one fixes the fight's label,
+    # several or none leave it open and each reader takes its bound (``battle_start_spec``).
     enemy_2_class: int | None = None
 
 

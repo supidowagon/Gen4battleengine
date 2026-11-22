@@ -126,7 +126,8 @@ def setup_specs(
     """The party specs of ``setup``, lead first (``tables`` as ``member_spec``), as they stand
     when the battle starts: friendship raised against a Gym Leader, Elite Four or Champion
     class (``prep.friendship``; the raise reads each member's held item, so it follows the
-    setup's item changes)."""
+    setup's item changes). Where the fight's map label is open, each member plays with the
+    bound its Return or Frustration takes (``friendship.fight_friendship``)."""
     specs = [member_spec(problem, m, tables) for m in setup.members]
     classes = (problem.trainer.class_id, problem.enemy_2_class)
     if not starts_with_friendship(classes):
@@ -136,6 +137,7 @@ def setup_specs(
         specs,
         classes,
         problem.trainer.map_labels,
+        problem.opp,
     )
 
 

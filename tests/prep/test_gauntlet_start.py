@@ -17,10 +17,14 @@ from nuzline.prep.caps import next_fight_cap
 from nuzline.prep.friendship import (
     BEAT_GYM_FRIENDSHIP,
     GYM_E4_CHAMPION_CLASSES,
+    battle_start_bounds,
     battle_start_friendship,
     battle_start_party,
     battle_start_spec,
-    egg_location_matches,
+    egg_match_bounds,
+    fight_friendship,
+    fight_label,
+    friendship_readers,
     starts_with_friendship,
 )
 from nuzline.prep.gauntlet import CapSitOut, cap_sit_out
@@ -128,16 +132,59 @@ def test_the_egg_location_is_compared_with_the_label_text_id_not_the_header_id(t
     assert battle_start_spec(tables, spec, (header_id,)).friendship == 53
 
 
-def test_several_labels_take_the_smaller_gain(tables, names):
-    # Kaizo Byron (250) is fought on headers 2 and 34, labels 7 and 119 (ledger E3-B3-5.a): the
-    # +1 of src/pokemon.c:2668-2670 only adds, so the worst case is no match unless every label is
-    # the egg location; no label (an unplaced trainer, any header) is no match.
+def test_one_label_fixes_the_fight_several_or_none_leave_it_open():
+    # mapID is the header's label (battle_main.c:1054): headers sharing a label fix it.
+    assert fight_label((7,)) == 7 and fight_label((7, 7)) == 7
+    assert fight_label((7, 119)) is None  # Kaizo Byron 250, headers 2 and 34 (E3-B3-5.a)
+    assert fight_label(()) is None  # no map places the trainer: any header
+    assert egg_match_bounds(7, (7,)) == (True, True)
+    assert egg_match_bounds(8, (7,)) == (False, False)
+    assert egg_match_bounds(7, (7, 119)) == (False, True)
+    assert egg_match_bounds(8, (7, 119)) == (False, False)  # no label is the egg location
+    assert egg_match_bounds(0, ()) == (False, True)  # label 0 (Mystery Zone) may hold it
+
+
+def test_an_open_label_carries_both_bounds(tables, names):
     hatched = _spec(names, friendship=50, item=0, egg_location=7)
-    assert battle_start_spec(tables, hatched, (7,)).friendship == 54
-    assert battle_start_spec(tables, hatched, (7, 119)).friendship == 53
-    assert battle_start_spec(tables, hatched, ()).friendship == 53
-    assert egg_location_matches(7, (7, 7)) and not egg_location_matches(7, (7, 119))
-    assert not egg_location_matches(0, ())
+    assert battle_start_bounds(tables, hatched, (7,)) == (54, 54)
+    assert battle_start_bounds(tables, hatched, (7, 119)) == (53, 54)
+    assert battle_start_bounds(tables, hatched, (8, 119)) == (53, 53)
+    soothe = replace(hatched, item=names.item("Soothe Bell"))
+    assert battle_start_bounds(tables, soothe, (7, 119)) == (54, 56)  # 3 * 1.5, 4 * 1.5
+
+
+def test_each_reader_takes_the_bound_that_hurts_it():
+    ret, frus = 121, 123  # effect_script_0121.s (Return), effect_script_0123.s (Frustration)
+    # Return's power friendship * 10 / 25 rises: the low bound; Frustration's falls: the high.
+    assert fight_friendship(102, 103, {ret}) == 102
+    assert fight_friendship(102, 103, {frus}) == 103
+    assert fight_friendship(102, 103, set()) == 102  # evolution's bound (pokemon.c:3565-3583)
+    # Both: the bound where the stronger is weaker. At 102/103 Frustration (61/60) is stronger.
+    assert fight_friendship(102, 103, {ret, frus}) == 103
+    assert fight_friendship(200, 201, {ret, frus}) == 200  # Return 80 / 80: a tie keeps low
+    assert fight_friendship(101, 102, {frus}) == 101  # 61 at both: a tie keeps low
+
+
+def test_the_readers_come_from_the_moves(tables, names):
+    ret, frus = names.move("Return"), names.move("Frustration")
+    tackle, metronome = names.move("Tackle"), names.move("Metronome")
+    copycat = names.move("Copycat")
+    assert friendship_readers(tables, (ret, tackle), (frus,)) == {121}
+    assert friendship_readers(tables, (frus,), ()) == {123}
+    assert friendship_readers(tables, (tackle,), (ret, frus)) == frozenset()
+    assert friendship_readers(tables, (metronome,), ()) == {121, 123}
+    assert friendship_readers(tables, (copycat,), (frus, tackle)) == {123}
+
+
+def test_an_open_label_gives_frustration_the_high_and_return_the_low_bound(tables, names):
+    # 52 + 3 or + 4: 55 or 56, where Frustration's power (255 - f) * 10 / 25 falls, 80 to 79
+    hatched = _spec(names, friendship=52, item=0, egg_location=7)
+    assert battle_start_spec(tables, hatched, (7, 119), {123}).friendship == 56
+    assert battle_start_spec(tables, hatched, (7, 119), {121}).friendship == 55
+    assert battle_start_spec(tables, hatched, (7, 119)).friendship == 55  # no reader: low
+    # a fixed label has one value whatever reads it
+    assert battle_start_spec(tables, hatched, (7,), {121}).friendship == 56
+    assert battle_start_spec(tables, hatched, (119,), {123}).friendship == 55
 
 
 def test_egg_location_0_matches_a_label_0_header(tables, names):
@@ -150,12 +197,23 @@ def test_egg_location_0_matches_a_label_0_header(tables, names):
 
 def test_a_party_is_raised_only_against_a_gym_class(tables, names):
     party = [_spec(names, friendship=f, item=0, egg_location=0) for f in (0, 100, 200)]
-    raised = battle_start_party(tables, party, (62, None), (8,))
+    foes = roark_party(names)
+    raised = battle_start_party(tables, party, (62, None), (8,), foes)
     assert [s.friendship for s in raised] == [3, 102, 201]
     assert [s.friendship for s in party] == [0, 100, 200]  # the input is not changed
-    e4 = battle_start_party(tables, party, (13, 66), (15,))
+    e4 = battle_start_party(tables, party, (13, 66), (15,), foes)
     assert [s.friendship for s in e4] == [3, 102, 201]
-    assert battle_start_party(tables, party, (13, None), (8,)) == party
+    assert battle_start_party(tables, party, (13, None), (8,), foes) == party
+
+
+def test_a_party_member_takes_the_bound_its_moves_read(tables, names):
+    ret, frus = names.move("Return"), names.move("Frustration")
+    hatched = _spec(names, friendship=52, item=0, egg_location=7)
+    users = [replace(hatched, moves=(m, 0, 0, 0)) for m in (ret, frus)]
+    got = battle_start_party(tables, users, (64,), (7, 119), roark_party(names))
+    assert [s.friendship for s in got] == [55, 56]
+    fixed = battle_start_party(tables, users, (64,), (7,), roark_party(names))
+    assert [s.friendship for s in fixed] == [56, 56]
 
 
 # --- the prep problem's states ------------------------------------------------------------
@@ -182,6 +240,21 @@ def test_setup_specs_carry_the_raise_against_a_leader_only(tables, names):
     assert [s.friendship for s in setup_specs(prob, setup, tables)] == [102, 102, 255]
 
 
+def test_setup_specs_give_each_reader_its_bound_on_an_open_label(tables, names):
+    party = sample_party(names)
+    ret, frus = names.move("Return"), names.move("Frustration")
+    hatched = replace(party[0], friendship=52, item=0, egg_location=82)
+    cands = [
+        candidate(names, replace(hatched, moves=(m, 0, 0, 0)), i) for i, m in enumerate((ret, frus))
+    ]
+    trainer = replace(roark_trainer(), map_labels=(82, 119))
+    prob = replace(problem(tables, names, cands), trainer=trainer)
+    setup = Setup(tuple(base_member(prob, i) for i in range(2)))
+    assert [s.friendship for s in setup_specs(prob, setup, tables)] == [55, 56]
+    prob = replace(prob, trainer=replace(trainer, map_labels=(82,)))  # one header fixes it
+    assert [s.friendship for s in setup_specs(prob, setup, tables)] == [56, 56]
+
+
 def test_the_raise_follows_the_setups_held_item(tables, names):
     soothe = names.item("Soothe Bell")
     prob = _problem(tables, names, (50,), roark_trainer())
@@ -198,7 +271,7 @@ def test_the_map_label_reaches_the_egg_location_test(tables, names):
     prob = replace(problem(tables, names, [cand]), trainer=trainer)
     setup = Setup((base_member(prob, 0),))
     assert setup_specs(prob, setup, tables)[0].friendship == 54
-    prob = replace(prob, trainer=replace(trainer, map_labels=(82, 119)))  # two headers: worst
+    prob = replace(prob, trainer=replace(trainer, map_labels=(82, 119)))  # open, no reader: low
     assert setup_specs(prob, setup, tables)[0].friendship == 53
     prob = replace(prob, trainer=replace(trainer, map_labels=(454,)))  # a header id, not a label
     assert setup_specs(prob, setup, tables)[0].friendship == 53
@@ -218,7 +291,7 @@ def test_return_in_the_first_turn_reads_the_raised_friendship(tables, names):
     foes = roark_party(names)
     spec = _spec(names, friendship=99, item=0, friend_bonus=0, egg_location=0)
     roark = roark_trainer()
-    (raised,) = battle_start_party(tables, [spec], (roark.class_id,), roark.map_labels)
+    (raised,) = battle_start_party(tables, [spec], (roark.class_id,), roark.map_labels, foes)
     assert raised.friendship == 102
     start = make_state(tables, [raised], foes)
     assert int(start.friendship[0, 0]) == int(start.party_friendship[0, 0]) == 102
