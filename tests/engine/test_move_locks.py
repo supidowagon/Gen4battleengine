@@ -17,6 +17,7 @@ import pytest
 
 from nuzline.engine.actions import legal_actions, legal_opponent_actions, locked_slot
 from nuzline.engine.ids import Status
+from nuzline.engine.order import metronome_candidates
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
 
@@ -141,21 +142,26 @@ def test_bide_without_target_is_lost(tables, names):
 def test_bide_release_unlocks_before_the_move(tables, names, move):
     """Review M1 (tracelaws 26ea67d7): on the release turn ``CHECK_STATUS_STATE_BIDE`` runs
     subscript_bide_end.s before the move (bcp.c:2722-2724, commandNext = command), and its :11
-    clears VOLATILE_CONDITION_MOVE_LOCKED. An Encore takeover (bcp.c:1869-1873, before the relock
-    at :1884-1887) runs another move that turn: SolarBeam then charges (effect_script_0151.s:9
-    tests only the lock) and Rollout starts at its first power (battle_script.c:5667-5674); the
-    lock either sets stays after the move."""
+    clears VOLATILE_CONDITION_MOVE_LOCKED. A Metronome called Bide, and Encore then landed on
+    Metronome (movePrevByBattler = moveTemp, bcp.c:3945-3946): on the release turn FightCommand's
+    Encore branch (bcp.c:1869-1873, before the relock at :1884-1887) runs Metronome, which calls
+    ``move``. SolarBeam then charges (effect_script_0151.s:9 tests only the lock) and Rollout
+    starts at its first power (battle_script.c:5667-5674); the lock either sets stays after it."""
     s = locked_into_bide(bide_state(tables, names), names, turns=1, damage=30)
-    moved = names.move(move)
+    metronome = names.move("Metronome")
     s = s._replace(
-        moves=s.moves.at[0, 0, 1].set(moved),
-        pp=s.pp.at[0, 0, 1].set(10),
-        encore_move=s.encore_move.at[0].set(moved),
-        encore_slot=s.encore_slot.at[0].set(1),
+        moves=s.moves.at[0, 0, 0].set(metronome),
+        encore_move=s.encore_move.at[0].set(metronome),
+        encore_slot=s.encore_slot.at[0].set(0),
         encore_turns=s.encore_turns.at[0].set(3),
     )
-    out = play(tables, s, acts(s, names, "Tackle"))
-    assert int(out.locked_move[0]) == moved
+    called = names.move(move)
+    rank = int(jnp.sum(metronome_candidates(tables, s, 0)[:called]))
+    call = empty_outcome().call
+    out = play(
+        tables, s, acts(s, names, "Tackle"), empty_outcome()._replace(call=call.at[0].set(rank))
+    )
+    assert int(out.locked_move[0]) == called
     assert int(out.bide_turns[0]) == 0 and int(out.bide_damage[0]) == 0
     if move == "SolarBeam":
         assert int(out.hp[1, 0]) == int(s.hp[1, 0])  # the charge turn: no damage

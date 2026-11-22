@@ -3051,7 +3051,12 @@ def outcome_laws(
         # ``step._use_move``'s ``second_turn``): the charge turn deals nothing and flinches
         # nothing, so its flinch is never sure there. A Power Herb would strike at once, so this
         # drops a sure flinch it could have: over-approximate, only on a charge move's first turn.
-        & ~(((tables.move_flags[moves] & MoveFlag.CHARGE) != 0) & (state.locked_move == 0))
+        # A Bide release (bide_turns 1 now) clears the lock before the move (subscript_bide_end.s:
+        # 11, bcp.c:2722-2724), so an Encore takeover's charge move charges then too.
+        & ~(
+            ((tables.move_flags[moves] & MoveFlag.CHARGE) != 0)
+            & ((state.locked_move == 0) | (state.bide_turns == 1))
+        )
         # B = 4: a third battler's mover or a Trace firing at its MoveEnd can give the target
         # Inner Focus or Shield Dust before the first mover's flinch (outcome.doubles_ability_change).
         & ~b4
