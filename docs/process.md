@@ -116,7 +116,10 @@ per day is the rate used for estimates.
   in `tools/ops/day/pod_only.txt` (JAX compiles without the engine: `tests/test_spike_step.py`,
   `tests/test_jaxcache.py`; manager ruling 22 Nov 2026) are refused on the PC the same way,
   whatever they import and even with `NUZLINE_RAMGATE_ROM_GATE=1`. `-n` / `--dist`
-  (pytest-xdist) is refused on the PC at configure time. An allowed run
+  (pytest-xdist) is refused on the PC at configure time. A pytest on the PC that never loaded
+  the gate (`--noconftest`, `--confcutdir tests`, also through `PYTEST_ADDOPTS`) cannot import
+  the engine: `src/nuzline/engine/__init__.py` raises ImportError when `_pytest` is loaded on
+  Windows and the gate module is not. An allowed run
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
   6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, then takes the machine lock
   `<main checkout>/_scratch/ramgate.lock` (created exclusively, holding `<pid> <kind>`; stale
