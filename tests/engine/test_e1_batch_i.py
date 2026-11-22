@@ -367,7 +367,9 @@ def test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk(tables, names)
     4868), Sleep Talk then flags every move an imprisoner knows (BtlCmd_TrySleepTalk, :4927;
     CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290, Move_Imprisoned's live ``moves``,
     :3316-3338) and redraws uniformly over the rest (:4931-4933): of the 12 call values, 6 call
-    Tackle and 6 Thunder, none Ember. Engine == reference on each."""
+    Tackle and 6 Thunder, none Ember. Engine == reference on each. A pin of the decomp's draw,
+    not a regression test: ``step`` played ``call % count`` on the live set before the gate fix
+    too. The regression test is ``test_the_call_law_follows_an_imprisoners_sketch[player]``."""
     from nuzline.engine.step import step_events
 
     s = _talker_under_sketch(tables, names, "player")
