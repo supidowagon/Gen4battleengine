@@ -9,9 +9,9 @@ change the result are the keep draws (``RandNext() % 10 != 0`` per super-effecti
 the active, :3588) and the party passes (``RandNext() % rand == 0`` per bench Pokemon and
 super-effective move, :3796, passes :3975 and :3981), and against a player's Wonder Guard
 ``AI_CannotDamageWonderGuard``'s first-success draws (:3338), only when the active has no
-super-effective move (no keep draw). With five bench Pokemon that is at most
-``max(4, 5 * 4) + 2 * 5 * 4 = 60`` sites, ``KAIZO.switch_sites`` (ruling G-33); vanilla keeps
-9.
+super-effective move (no keep draw), and ``AI_HasAbsorbAbilityInParty``'s bench draws
+(:3681-3708). With five bench Pokemon that is at most ``20 + 4 + 5 + 2 * 5 * 4 = 69`` sites, each
+part at its bound, ``KAIZO.switch_sites`` (rulings G-33 and 19 Nov, batch I-1a); vanilla keeps 9.
 
 The exact switch part merges each stop into one categorical (``outcome.switch_stop_probs``)
 and folds ``AI_HasAbsorbAbilityInParty``'s ``RandNext() % 3`` gate (:3651-3653) into it, which
@@ -66,9 +66,10 @@ K = SwitchSite
 # Kaizo move ids (data/gen4_platinum_kaizo names; types and powers asserted in the tests).
 ROCK_THROW, ACCELEROCK, ANCIENT_POWER, HEAD_SMASH, EARTHQUAKE = 88, 205, 246, 457, 89
 ROCK4 = (ROCK_THROW, ACCELEROCK, ANCIENT_POWER, HEAD_SMASH)
-# max(4 keep, 5 x 4 Wonder Guard) + 2 x 5 x 4 pass draws = 60 (ruling G-33)
-KAIZO_SWITCH_SITES = max(MOVES, (SLOTS - 1) * MOVES) + 2 * (SLOTS - 1) * MOVES
-SPARE = KAIZO_SWITCH_SITES - (MOVES + 2 * (SLOTS - 1) * MOVES)  # 16 unused by the six-bench case
+# The four cited parts: 5 x 4 Wonder Guard draws (trainer_ai.c:3315-3344), 4 keep draws
+# (:3576-3592), 5 absorb draws (:3681-3708), 2 x 5 x 4 pass draws (:3756-3804): 69.
+KAIZO_SWITCH_SITES = 5 * 4 + 4 + 5 + 2 * 5 * 4
+SPARE = KAIZO_SWITCH_SITES - (MOVES + 2 * (SLOTS - 1) * MOVES)  # 21 unused by the six-bench case
 TYPE_STEEL = 8  # generated/pokemon_types.txt; checked in test_type_steel_id
 # AI_HasAbsorbAbilityInParty's checkAbility by moveHit's table type (trainer_ai.c:3665-3674);
 # type ids from generated/pokemon_types.txt, checked in test_type_steel_id.
@@ -128,11 +129,11 @@ def test_type_steel_id(kaizo_names):
 
 
 def test_kaizo_switch_sites_are_the_six_party_maximum():
-    """4 keep draws (one per move slot, :3576-3592) or 5 x 4 Wonder Guard draws (:3315-3344,
-    never both: they need no super-effective move of the active, :3300-3311) and, for each of
-    the two passes, one draw per (bench Pokemon, move slot) (:3756-3804): five bench Pokemon
-    in a party of six (ruling G-33)."""
-    assert KAIZO.switch_sites == KAIZO_SWITCH_SITES == 60
+    """4 keep draws (one per move slot, :3576-3592), 5 x 4 Wonder Guard draws (:3315-3344), 5
+    absorb draws (one per bench Pokemon, :3681-3708) and, for each of the two passes, one draw
+    per (bench Pokemon, move slot) (:3756-3804): five bench Pokemon in a party of six. The cap
+    is the sum of the four parts, each at its bound (ruling 19 Nov); no count refusal."""
+    assert KAIZO.switch_sites == KAIZO_SWITCH_SITES == 69
     assert VANILLA.switch_sites == SWITCH_SITES == 9
 
 
@@ -209,14 +210,50 @@ def test_kaizo_switch_sites_reach_sixty(kaizo_tables, kaizo_names, kaizo_roark_p
     assert switching_refusals(t, s, KAIZO.switch_sites) == []
     sites = switch_sites(t, s, KAIZO.switch_sites).tolist()
     assert sites == (
-        [K.WONDER_GUARD] * 20 + [K.PASS_INEFFECTIVE] * 20 + [K.PASS_NOT_VERY_EFFECTIVE] * 20
+        [K.WONDER_GUARD] * 20
+        + [K.PASS_INEFFECTIVE] * 20
+        + [K.PASS_NOT_VERY_EFFECTIVE] * 20
+        + [K.NONE] * (KAIZO_SWITCH_SITES - 60)
     )
-    assert len(sites) == KAIZO_SWITCH_SITES
+
+
+def test_kaizo_switch_sites_reach_sixty_five(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """I-1a: the 65 sites that need no Weather Ball and that the count refusal used to stop (20 + 5 +
+    40). As ``test_kaizo_switch_sites_reach_sixty`` (a Wonder Guard player, the AI's active with
+    no super-effective move), plus ``AI_HasAbsorbAbilityInParty`` (trainer_ai.c:3640-3713): the
+    player's ``moveHit`` is ThunderShock (table type Electric, :3665-3674) and each bench Pokemon
+    has Volt Absorb (:3703), so 5 absorb draws (:3706-3708; no gate: the active has no
+    super-effective move, :3651). Each bench Pokemon is Ground / Dragon, which ThunderShock
+    ``INEFFECTIVE`` (Ground, battle_lib.c:2419) and ``NOT_VERY_EFFECTIVE`` (Dragon, :2421, after
+    the immune row), so both passes draw for it (40)."""
+    t, n = kaizo_tables, kaizo_names
+    from nuzline.engine.ids import AbilityId
+
+    s = _six_bench(t, n, kaizo_roark_party)
+    s = s._replace(
+        moves=s.moves.at[1, 0].set(jnp.asarray([n.move("Tackle")] * MOVES, s.moves.dtype)),
+        species=s.species.at[0, 0].set(n.species("Shedinja")),
+        ability_slot=s.ability_slot.at[0, 0].set(0),
+        ability=s.ability.at[0, 0].set(AbilityId.WONDER_GUARD),
+        move_hit=s.move_hit.at[1].set(n.move("ThunderShock")),
+    )
+    for j in range(1, SLOTS):
+        s = as_species(t, s, 1, j, _species_with(t, ABILITY_IDS["Volt Absorb"]))
+    s = s._replace(types=s.types.at[1, 1:].set(_types(n, "Ground", "Dragon")))
+    assert switching_refusals(t, s, KAIZO.switch_sites) == []
+    sites = switch_sites(t, s, KAIZO.switch_sites).tolist()
+    assert sites == (
+        [K.WONDER_GUARD] * 20
+        + [K.ABSORB] * 5
+        + [K.PASS_INEFFECTIVE] * 20
+        + [K.PASS_NOT_VERY_EFFECTIVE] * 20
+        + [K.NONE] * (KAIZO_SWITCH_SITES - 65)
+    )
 
 
 def test_six_bench_sampled_stops(kaizo_tables, kaizo_names, kaizo_roark_party):
     """``sample_ai_outcome`` under the Kaizo layout draws one u16 per site, so its stops
-    range over 0..60 (``KAIZO.switch_sites`` meaning none)."""
+    range over 0..69 (``KAIZO.switch_sites`` meaning none)."""
     t = kaizo_tables
     s = _six_bench(t, kaizo_names, kaizo_roark_party)
     keys = jax.random.split(jax.random.PRNGKey(3), 4000)
@@ -228,7 +265,7 @@ def test_six_bench_sampled_stops(kaizo_tables, kaizo_names, kaizo_roark_party):
 
 def test_six_bench_policy_switches(kaizo_tables, kaizo_names, kaizo_roark_party):
     """``ai_policy`` under the Kaizo layout maps each stop as ``switch_action`` does: a pass
-    stop of bench slot j is the switch ``4 + j``, the none stop (60) the move pick."""
+    stop of bench slot j is the switch ``4 + j``, the none stop (69) the move pick."""
     t = kaizo_tables
     s = _six_bench(t, kaizo_names, kaizo_roark_party)
     o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, KAIZO)
@@ -236,17 +273,6 @@ def test_six_bench_policy_switches(kaizo_tables, kaizo_names, kaizo_roark_party)
         assert int(policy.ai_policy(t, s, o._replace(switch_stop=jnp.int8(stop)))) == action
     none = int(policy.ai_policy(t, s, o._replace(switch_stop=jnp.int8(KAIZO.switch_sites))))
     assert 0 <= none < MOVES
-
-
-def test_six_bench_under_vanilla_is_still_refused(tables, names, kaizo_roark_party):
-    """The same construction on the vanilla tables: vanilla keeps 9 sites, so the 44 draws
-    are refused with the vanilla line (the vanilla refusal set is frozen)."""
-    s = _six_bench(tables, names, kaizo_roark_party)
-    assert layout_of(tables) is VANILLA
-    refusals = switching_refusals(tables, s)
-    assert refusals == [
-        "switching: 44 voluntary-switch draws exceed the 9 sites AiOutcome.switch_stop encodes"
-    ]
 
 
 # --- Vanilla is unchanged -------------------------------------------------------------------

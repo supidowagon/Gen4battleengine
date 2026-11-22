@@ -142,9 +142,8 @@ moves without transcribed script paths, too many script-roll sites, type-chart
 modifiers the AI does not model, switching-rule refusals) on the fight's turn-0 state,
 and refuses a bag that mixes item ids (the decomp applies the last zeroed slot's item,
 docs/discrepancies.md). The AI's state-dependent refusals that can first appear later in
-the fight (more switch draws than the layout's ``switch_sites``, ``AI_OnlyIneffectiveMoves``)
-are not visible at turn 0; ``ai_policy`` refuses them when they occur. The Kaizo layout's 60
-switch sites are every draw a party of six can make, so only vanilla can exceed its count.
+the fight (``AI_OnlyIneffectiveMoves``) are not visible at turn 0; ``ai_policy`` refuses them
+when they occur. The Kaizo layout's 69 switch sites are every draw a party of six can make.
 """
 
 from __future__ import annotations

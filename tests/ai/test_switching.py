@@ -18,10 +18,7 @@ from nuzline.ai.switching import (
     INEFFECTIVE,
     NO_SWITCH,
     NOT_VERY_EFFECTIVE,
-    REFUSED_ACTION,
     SUPER_EFFECTIVE,
-    SWITCH_NONE,
-    SWITCH_REFUSED,
     SWITCH_SITES,
     SwitchSite,
     UnsupportedSwitching,
@@ -186,28 +183,6 @@ def test_apply_type_chart_stab_then_each_entry(tables, names):
     assert chart(1, "Tackle", 0) == 0
 
 
-def test_too_many_sites_are_refused(tables, names):
-    s = _trace_f(tables, names)
-    rock_throw = jnp.full((4,), names.move("Rock Throw"), jnp.int16)
-    # Geodude and Onix with four Rock Throws each: 8 pass-2 sites; Cranidos with
-    # Rock Throw x4 against Starly: 4 keep sites. 12 > 9.
-    s = s._replace(moves=s.moves.at[1, :3].set(rock_throw))
-    with pytest.raises(UnsupportedSwitching, match="12 voluntary-switch draws"):
-        switch_sites(tables, s)
-    with pytest.raises(UnsupportedSwitching):
-        sample_ai_outcome(jax.random.PRNGKey(0), tables, s)
-    with pytest.raises(UnsupportedSwitching):
-        enumerate_ai_outcomes(tables, s)
-    # Traced (jit/vmap): every entry is REFUSED and the refusal propagates.
-    sites = jax.jit(switch_sites)(tables, s)
-    assert sites.tolist() == [K.REFUSED] * SWITCH_SITES
-    o = jax.jit(sample_ai_outcome)(jax.random.PRNGKey(0), tables, s)
-    assert int(o.switch_stop) == SWITCH_REFUSED
-    _, probs = jax.jit(enumerate_ai_outcomes)(tables, s)
-    assert np.isnan(np.asarray(probs)).all()
-    assert int(jax.jit(switch_action)(tables, s, jnp.int8(SWITCH_NONE))) == REFUSED_ACTION
-
-
 @pytest.mark.parametrize(
     ("change", "missing"),
     [
@@ -255,6 +230,31 @@ def test_hidden_power_move_hit_type(tables, names):
     own = hidden._replace(moves=hidden.moves.at[1, 2, 3].set(names.move("Hidden Power")))
     assert switching_refusals(tables, own) == []
 
+
+@pytest.mark.fullset
+def test_only_ineffective_moves_is_refused(tables, names):
+    """AI_OnlyIneffectiveMoves (trainer_ai.c:3361) can switch with draws not modelled."""
+    s = roark_state(tables, names)
+    ghost = names.type("Ghost")
+    tackle, headbutt = names.move("Tackle"), names.move("Headbutt")
+    s = s._replace(
+        types=s.types.at[0, 0].set(jnp.asarray([ghost, ghost], jnp.int8)),
+        moves=s.moves.at[1, 0].set(jnp.asarray([tackle, headbutt, 0, 0], jnp.int16)),
+    )
+    with pytest.raises(UnsupportedSwitching, match="AI_OnlyIneffectiveMoves"):
+        switch_sites(tables, s)
+
+
+def test_shadow_tag_and_arena_trap_block_the_switch(tables, names):
+    s = _trace_f(tables, names)
+    for species in ("Wobbuffet", "Diglett"):  # Shadow Tag; Diglett's slot 1 is Arena Trap
+        slot = names.species_abilities(names.species(species)).index(
+            names.ability("Shadow Tag" if species == "Wobbuffet" else "Arena Trap")
+        )
+        t = as_species(tables, s, 0, 0, names.species(species), slot)
+        assert switch_sites(tables, t).tolist() == [K.NONE] * SWITCH_SITES, species
+
+
 def _suppressed(s):
     return s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
 
@@ -295,31 +295,6 @@ def test_gastro_acid_keeps_multitype_out_of_the_trap_gate(tables, names):
     t = t._replace(types=t.types.at[0, 0].set(s.types[0, 0]))
     base = switch_sites(tables, t).tolist()
     assert switch_sites(tables, _suppressed(t)).tolist() == base == switch_sites(tables, s).tolist()
-
-
-
-@pytest.mark.fullset
-def test_only_ineffective_moves_is_refused(tables, names):
-    """AI_OnlyIneffectiveMoves (trainer_ai.c:3361) can switch with draws not modelled."""
-    s = roark_state(tables, names)
-    ghost = names.type("Ghost")
-    tackle, headbutt = names.move("Tackle"), names.move("Headbutt")
-    s = s._replace(
-        types=s.types.at[0, 0].set(jnp.asarray([ghost, ghost], jnp.int8)),
-        moves=s.moves.at[1, 0].set(jnp.asarray([tackle, headbutt, 0, 0], jnp.int16)),
-    )
-    with pytest.raises(UnsupportedSwitching, match="AI_OnlyIneffectiveMoves"):
-        switch_sites(tables, s)
-
-
-def test_shadow_tag_and_arena_trap_block_the_switch(tables, names):
-    s = _trace_f(tables, names)
-    for species in ("Wobbuffet", "Diglett"):  # Shadow Tag; Diglett's slot 1 is Arena Trap
-        slot = names.species_abilities(names.species(species)).index(
-            names.ability("Shadow Tag" if species == "Wobbuffet" else "Arena Trap")
-        )
-        t = as_species(tables, s, 0, 0, names.species(species), slot)
-        assert switch_sites(tables, t).tolist() == [K.NONE] * SWITCH_SITES, species
 
 
 def test_jit_without_64bit(tables, names):
