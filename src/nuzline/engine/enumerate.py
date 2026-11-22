@@ -1977,7 +1977,8 @@ def outcome_laws(
     switch, item = is_switch(actions), is_item(actions)
     # A held Encore's Pursuit fires on the foe's switch whatever its holder chose (TryPursuit,
     # battle_script.c:6905-6909, E2-ML-6): an item or a switch action then draws as that move.
-    uses_move = live & ((~switch & ~item) | pursuit_chase(tables, state, actions)[0])  # bool[B]
+    chase_fires, pursues, chase_move = pursuit_chase(tables, state, actions)
+    uses_move = live & ((~switch & ~item) | chase_fires)  # bool[B]
     # Singles follow-up (ii): a lock move that may be aimed at its own user (outcome.self_lock).
     # Every cut below that reads the foe as the defender (its armor, immunity, Protect, status
     # eligibility, order gates of a flinch, the damage table) is lifted for such a side, whose
@@ -1993,6 +1994,10 @@ def outcome_laws(
     # (order.fight_move, E2-ML-2); the order reads moves[moveSlot] (order.order_moves, E2-ML-5).
     fought = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     chosen = jnp.where(taken, state.last_move.astype(_I32), fought)
+    # A pursuer runs TryPursuit's move (a held Encore's, or Battler_SelectedMove's carried
+    # moves[TEMP_VALUE - 1], battle_script.c:6905-6909; E2-ML-6, E2-ML-8), and its action ends at
+    # the chase (:6931): only where it pursues (review 5, Must fix 2).
+    chosen = jnp.where(pursues, chase_move, chosen)
     kinds = call_kind(tables, chosen)
     # Copycat's, Me First's and Mirror Move's calls follow the order (the foe's move before them,
     # or not).
@@ -2036,6 +2041,7 @@ def outcome_laws(
             ),
         )
         call_pending = jnp.asarray(False)
+    moves = jnp.where(pursues, chase_move, moves)  # TryPursuit's move (E2-ML-8)
     foe_moves = foes(uses_move)  # the other side uses a move
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
     foe_move = foes(moves)
@@ -3100,7 +3106,7 @@ def outcome_laws(
         no_crit=(
             (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
             | jnp.where(
-                pursuit_chase(tables, state, actions)[0],
+                chase_fires,
                 pursuit_armored(tables, state),
                 armored(tables, state, actions, moves),
             )

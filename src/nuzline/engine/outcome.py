@@ -2509,14 +2509,23 @@ def _per_hit(fmt, key, field_key, field: str, low, high) -> jnp.ndarray:
     return jnp.concatenate([first, sixth], axis=1)
 
 
-def pursuit_chase(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """``(bool[B], int32[B])``: battler p's Pursuit fires on its foe's switch
-    (``step.pursuit_fires``) and the move it hits with (``order.fight_move``: a held Encore's
-    move, whatever p chose, battle_script.c:6905-6909, E2-ML-6); never in a paused state (the
-    paused U-turn's Pursuit already ran, ``pivot_view``; a list switch-in meets none)."""
-    from nuzline.engine.step import pursuit_fires  # step imports this module
+def pursuit_chase(
+    tables: Tables, state: BattleState, actions
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(fires bool[B], pursues bool[B], move int32[B])``. ``fires``: battler p's side chases its
+    foe's switch (``step.pursuit_fires``). ``pursues``: p itself is the battler TryPursuit takes
+    for that switch (``step.first_pursuer``; at B = 2 the same as ``fires``). ``move``: where p
+    pursues, the move it hits with (``step._pursuer_move``: a held Encore's move whatever p chose,
+    E2-ML-6, else ``Battler_SelectedMove``'s ``moves[TEMP_VALUE - 1]``, a locked or Struggling
+    battler's carried TEMP_VALUE included, E2-ML-8; battle_script.c:6905-6909), else
+    ``order.fight_move``. The laws and the sampler run ``move`` as p's move where ``pursues``
+    holds (review 5, Must fix 2): p's action ends at the chase (:6931, MOVE_END), so its chosen
+    move is never read. Never in a paused state (the paused U-turn's Pursuit already ran,
+    ``pivot_view``; a list switch-in meets none)."""
+    from nuzline.engine.step import _pursuer_move, first_pursuer, pursuit_fires  # step imports us
 
     fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
     state = with_selection(tables, state, actions)  # TEMP_VALUE for TryPursuit (E2-ML-8)
     picks = [selected_move(tables, state, s, actions[s]) for s in range(fmt.B)]
     choices = (jnp.stack([q[0] for q in picks]), jnp.stack([q[1] for q in picks]))
@@ -2525,7 +2534,14 @@ def pursuit_chase(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndar
         jnp.stack([pursuit_fires(tables, state, _foe(p), actions, choices) for p in range(fmt.B)])
         & ~paused
     )
-    return fires, jnp.stack([fight_move(tables, state, p, actions[p]) for p in range(fmt.B)])
+    pursues = fires & jnp.stack(
+        [first_pursuer(tables, state, _foe(p), actions, choices)[0] == p for p in range(fmt.B)]
+    )
+    fought = jnp.stack([fight_move(tables, state, p, actions[p]) for p in range(fmt.B)])
+    carried = jnp.stack(
+        [_pursuer_move(state, p, actions[p], choices[0][p], choices[1][p])[1] for p in range(fmt.B)]
+    )
+    return fires, pursues, jnp.where(pursues, carried, fought).astype(_I32)
 
 
 def pursuit_armored(tables: Tables, state: BattleState) -> jnp.ndarray:
@@ -2762,7 +2778,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     fight = ~is_switch(actions) & ~is_item(actions)
     after_foe = jnp.stack([(first == _foe(side)) & fight[_foe(side)] for side in range(fmt.B)])
     moves = used_moves(tables, state, actions, call, after_foe)
-    fires = pursuit_chase(tables, state, actions)[0]
+    # A pursuer hits with TryPursuit's move (E2-ML-6, E2-ML-8), not the one it chose.
+    fires, pursues, chase_move = pursuit_chase(tables, state, actions)
+    moves = jnp.where(pursues, chase_move, moves)
     drawn = _move_draws(key, tables, state, actions, moves, chase=fires)
     # BtlCmd_SetMultiHit (battle_script.c:2645): & 3 below 2 gives 2-3, else (& 3) + 2.
     first, second = draw(3, per_side, 4), draw(4, per_side, 4)
@@ -2943,7 +2961,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                     ),
                 )
             )
-        fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves), chase=fires)
+        alt_moves = jnp.where(pursues, chase_move, jnp.stack(alt_moves))
+        fields = _move_draws(alt_key, tables, state, actions, alt_moves, chase=fires)
         fields["call"] = alt_call
         replaced = jnp.any(which, axis=0)
         for name, value in fields.items():
