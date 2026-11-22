@@ -687,8 +687,18 @@ three structs has a row.
   (battle_lib.c:7390-7395): Counter, Mirror Coat and Metal Burst (battle_script.c:4646, :4699,
   :7180) and the Magic Coat reflection's drain of the holder's slot (bcp.c:3083; the slot is kept
   in `magic_coat` as 1 + moveSlot when the Magic Coat lands). The engines read `move_slot` at every
-  one of them (`chosen_slot` in `step._use_move`, `_Turn.chosen_slot` in the reference). Written
-  in `step._action_phase` (`order.selection_slots`) and the reference's `_ref_step`.
+  one of them (`chosen_slot` in `step._use_move`, `_Turn.chosen_slot` in the reference; 0 on a
+  reflected pass, which none of them reads: no such move has MOVE_FLAG_MAGIC_COAT,
+  res/moves/*/data.json). Two more readers need no field: MustSelectTarget (bcp.c:536) reads
+  moveSlot right after :526 wrote the chosen slot (it is reached only from :528, never under an
+  Encore), so the engines read the action's slot (`actions.selection_range`, `chosen_targets`);
+  FightCommand's fallback (bcp.c:1889-1893) runs `moves[moveSlot]` with a random target when
+  `moveSelected` (written at :527, or :445 under an Encore) no longer matches that slot, which a
+  learn prompt answered between the selection and the action reaches (`learn_site`, E3-B2-21):
+  the engines re-read the slot's move then (`reselected`, `targets.fight_randomizes`,
+  `step._execute_actions`; the reference's `_Turn.reselected`). Snatch's DecPPForPressure
+  (bcp.c:3107) is not reached: Snatch is not modelled (no effect id, a coverage refusal).
+  Written in `step._action_phase` (`order.selection_slots`) and the reference's `_ref_step`.
 - The selected move's carried value (E2-ML-8): `selected_temp` (per battler,
   `battlerActions[b][BATTLE_ACTION_TEMP_VALUE]`, initial 0). The selection writes 1 + the slot for
   a FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447), the party slot 0..5 for a switch
@@ -704,7 +714,9 @@ three structs has a row.
   ai_context.h:45) reads as MOVE_NONE (MOVE_DATA would read past `moveTable`); a bag item's
   BattleItemUse (message_defs.h:15-19: item id, category, target) is kept as 0 (MOVE_NONE): its
   `moves[TEMP_VALUE - 1]` lies far past the BattleMon. Both are reachable only through a
-  Struggling or locked battler whose last selection was the switch or the item. Readers: Pursuit
+  Struggling battler whose last selection was the switch or the item: a lock starts with a move
+  its own FIGHT ran, whose selection wrote TEMP_VALUE (1 + the slot, or 0 under an Encore), and a
+  switch-in is not locked. Readers: Pursuit
   (battle_script.c:6909) and Me First (:7296), through `order.battler_selected_move`; a locked
   battler reads the value of its last selection, not its lock's move. Written by
   `order.with_selection` (`step._action_phase`, `step.replacement_power_mul`, the laws' entry
