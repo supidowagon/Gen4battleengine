@@ -255,6 +255,48 @@ def test_hidden_power_move_hit_type(tables, names):
     own = hidden._replace(moves=hidden.moves.at[1, 2, 3].set(names.move("Hidden Power")))
     assert switching_refusals(tables, own) == []
 
+def _suppressed(s):
+    return s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+
+
+@pytest.mark.parametrize(
+    "species, ability, steel",
+    [
+        ("Wobbuffet", "Shadow Tag", False),
+        ("Diglett", "Arena Trap", False),
+        ("Magnemite", "Magnet Pull", True),
+    ],
+)
+def test_gastro_acid_lifts_the_trap_gate(tables, names, species, ability, steel):
+    """I-2: ``TrainerAI_ShouldSwitch`` (trainer_ai.c:3906-3913) counts Shadow Tag, Arena Trap and
+    Magnet Pull with ``CountAbility`` (battle_lib.c:2896-2903, :2933-2940), which compares
+    ``Battler_Ability`` (:3088-3106): the player's holder under Gastro Acid gates nothing."""
+    s = _trace_f(tables, names)
+    if steel:  # Magnet Pull traps only a Steel Pokemon (:3910-3911)
+        s = s._replace(
+            types=s.types.at[1, CRANIDOS].set(jnp.asarray([names.type("Steel")] * 2, jnp.int8))
+        )
+    base = switch_sites(tables, s).tolist()
+    assert base != [K.NONE] * SWITCH_SITES  # the gate is the only thing that would stop it
+    slot = names.species_abilities(names.species(species)).index(names.ability(ability))
+    t = as_species(tables, s, 0, 0, names.species(species), slot)
+    t = t._replace(types=t.types.at[0, 0].set(s.types[0, 0]))  # the layout stays trace F's
+    assert switch_sites(tables, t).tolist() == [K.NONE] * SWITCH_SITES
+    u = _suppressed(t)
+    assert switch_sites(tables, u).tolist() == base
+    assert _actions(tables, u) == _actions(tables, s)
+
+
+def test_gastro_acid_keeps_multitype_out_of_the_trap_gate(tables, names):
+    """``Battler_Ability`` keeps Multitype under suppression (battle_lib.c:3090-3093); it is no
+    trap ability, so the gate stays open either way."""
+    s = _trace_f(tables, names)
+    t = as_species(tables, s, 0, 0, names.species("Arceus"), 0)
+    t = t._replace(types=t.types.at[0, 0].set(s.types[0, 0]))
+    base = switch_sites(tables, t).tolist()
+    assert switch_sites(tables, _suppressed(t)).tolist() == base == switch_sites(tables, s).tolist()
+
+
 
 @pytest.mark.fullset
 def test_only_ineffective_moves_is_refused(tables, names):

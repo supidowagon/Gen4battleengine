@@ -56,6 +56,7 @@ from nuzline.ai.switching import (
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import move_type_of
 from nuzline.engine.field import with_gravity
+from nuzline.engine.ids import ABILITY_MULTITYPE
 from nuzline.engine.state import MOVES, SLOTS, BattleState, make_state
 from tests.ai.test_kaizo_outcome import KAIZO  # Roark's fight layout (E1 Ruling R7)
 from tests.ai.test_kaizo_policy import _species_with
@@ -293,14 +294,20 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     reads: list[tuple[float, int | None]] = []  # (P(the read's branch), action or None)
 
     # :3906-3913: trapped (Bind, Mean Look), ingrained, Shadow Tag / Arena Trap on the player's
-    # side, Magnet Pull on Steel.
+    # side, Magnet Pull on Steel. ``CountAbility`` compares ``Battler_Ability`` (battle_lib.c:
+    # 2896-2903, :2933-2940, :3088-3106): ABILITY_NONE under Gastro Acid unless Multitype.
+    trap_ability = (
+        0
+        if int(s.ability_suppressed[0]) and int(ability[0, d]) != ABILITY_MULTITYPE
+        else int(ability[0, d])
+    )
     if (
         int(s.trapped[1]) > 0
         or int(s.mean_look[1]) != 0
         or int(s.ingrain[1]) != 0
-        or int(ability[0, d]) in (ABILITY_IDS["Shadow Tag"], ABILITY_IDS["Arena Trap"])
+        or trap_ability in (ABILITY_IDS["Shadow Tag"], ABILITY_IDS["Arena Trap"])
         or (
-            int(ability[0, d]) == ABILITY_IDS["Magnet Pull"]
+            trap_ability == ABILITY_IDS["Magnet Pull"]
             and TYPE_STEEL in np.asarray(s.types[1, a]).tolist()
         )
     ):
@@ -482,6 +489,8 @@ def test_roark_switch_distribution_matches_loose(
     t, n = kaizo_tables, kaizo_names
     s = data.draw(_switch_states(t, n, kaizo_roark_party))
     assume(not switching_refusals(t, s, KAIZO.switch_sites))
+        # I-2: Gastro Acid on the player's active (Battler_Ability reads none, lib.c:3088-3106).
+        ability_suppressed=s.ability_suppressed.at[0].set(draw(st.sampled_from((0, 0, 1)))),
     assume(not policy.ai_refusals(t, s, n))
     reads = _loose_reads(t, s)
     assume(len(reads) <= 12)
@@ -609,6 +618,27 @@ def test_roark_replacement_each_faint_order(
     effective against the player (checked), so every state reaches stage 2 (:8034-8088);
     against Normal/Normal only Bonsly's Brick Break is, so stage 2 runs once Bonsly is gone."""
     t, n = kaizo_tables, kaizo_names
+@pytest.mark.parametrize("suppressed", [False, True])
+def test_gastro_acid_trap_gate_matches_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, suppressed
+):
+    """I-2: a Wobbuffet (Shadow Tag) player active gates the switch (trainer_ai.c:3908), unless
+    Gastro Acid hid its ability from ``CountAbility`` (``Battler_Ability``, battle_lib.c:2896-2903,
+    :3088-3106). The loose reference applies ``Battler_Ability`` too."""
+    t, n = kaizo_tables, kaizo_names
+    s = _six_bench(t, n, kaizo_roark_party)
+    slot = n.species_abilities(n.species("Wobbuffet")).index(n.ability("Shadow Tag"))
+    types = s.types[0, 0]
+    s = as_species(t, s, 0, 0, n.species("Wobbuffet"), slot)
+    s = s._replace(types=s.types.at[0, 0].set(types))
+    if suppressed:
+        s = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+    gated = not suppressed
+    assert (_loose_reads(t, s) == []) == gated
+    assert (set(switch_sites(t, s, KAIZO.switch_sites).tolist()) == {K.NONE}) == gated
+    _assert_switch_equals_loose(t, s)
+
+
     party = kaizo_roark_party
     s = make_state(t, [party[2]], list(party))
     if player != "Gible":
