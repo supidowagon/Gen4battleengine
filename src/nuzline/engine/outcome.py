@@ -2190,8 +2190,12 @@ def replacement_known(tables: Tables, state: BattleState) -> bool:
     and a ``can_call_encore`` caller; Metronome, Assist and Copycat, ``can_call_encore``'s
     other callers). False means ``replacement_possible`` is false at ``state`` and at every
     state a turn or a playout reaches from it, so ``sample_outcome``'s static ``replacement``
-    may be False there. A move that changes a battler's set mid-battle (Mimic, Sketch,
-    Transform: unsupported, ``coverage.RELOAD_STATE_EFFECTS``) joins Encore when supported.
+    may be False there. The moves that change a battler's set mid-battle copy only a move some
+    Pokemon of the fight knows: Transform its target's slots (battle_script.c:5346-5348), Mimic
+    its target's ``movePrevByBattler`` (:4481), a used slot move or a locked move (bcp.c:
+    3945-3946, :1885-1888), and Sketch its target's ``moveSketched`` (:4839-4884, the same
+    ``moveTemp``, bcp.c:3952-3954). A locked move is never Encore or an invoker
+    (``coverage.LOCK_EFFECTS``), so a copied Encore or invoker is a known one, already counted.
     The guard: tests/engine/test_batch11.py, on generated states."""
     species = np.asarray(state.species).astype(np.int64)
     learnt = np.asarray(tables.learnset_move)[species]
