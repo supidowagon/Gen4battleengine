@@ -547,6 +547,21 @@ def pytest_gate(
     return "GO", f"ramgate: GO weight {w:g} GB"
 
 
+def xdist_refusal(option, env: Mapping[str, str], platform: str = sys.platform) -> str | None:
+    """pytest-xdist off the pod: its controller never collects, so the gate would never run."""
+    if on_pod(env, platform):
+        return None
+    n = getattr(option, "numprocesses", None)
+    dist = getattr(option, "dist", None)
+    if n or (dist not in (None, "no")):
+        return (
+            "ramgate: no -n / --dist (pytest-xdist) on the PC: its controller does not collect, so "
+            "the local gate cannot check the run. One pytest process, one file or chunk; "
+            "parallel runs go to the pod (docs/process.md section 5)."
+        )
+    return None
+
+
 def inside_gated_run(env: Mapping[str, str], lock: "MachineLock") -> bool:
     """NUZLINE_RAMGATE_DONE holds the pid of a gated run that is this process or a live ancestor:
     a pytest started by a test of that run (or inside it) is part of it."""

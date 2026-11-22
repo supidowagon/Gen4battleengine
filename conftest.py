@@ -24,6 +24,12 @@ _BLOCKER = pytest.StashKey()
 _LOCK = pytest.StashKey()
 
 
+def pytest_configure(config):
+    msg = ramgate.xdist_refusal(config.option, os.environ)
+    if msg:
+        pytest.exit(msg, returncode=3)
+
+
 def pytest_unconfigure(config):
     blocker = config.stash.get(_BLOCKER, None)
     if blocker is not None:
@@ -38,8 +44,6 @@ def pytest_unconfigure(config):
 # trylast: -m and -k have deselected by then, so the gate sees exactly what will run.
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
-    if hasattr(config, "workerinput"):  # an xdist worker: the controller gated the run
-        return
     lock = ramgate.MachineLock()
     config.stash[_LOCK] = lock  # released at unconfigure, whatever the verdict
     verdict, msg = ramgate.pytest_gate(

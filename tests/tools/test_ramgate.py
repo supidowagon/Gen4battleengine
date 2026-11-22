@@ -729,3 +729,15 @@ def test_the_machine_lock_lives_in_the_main_checkout(tmp_path):
     (wt / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'wt'}\n", encoding="utf-8")
     assert rg.lock_path(wt) == (main / "_scratch" / "ramgate.lock").resolve()
     assert rg.lock_path(tmp_path / "plain") == tmp_path / "plain" / "_scratch" / "ramgate.lock"
+
+
+def test_xdist_is_refused_off_the_pod():
+    opt = SimpleNamespace
+    assert rg.xdist_refusal(opt(numprocesses=2, dist="load"), {}, "win32")
+    assert rg.xdist_refusal(opt(numprocesses="auto"), {}, "win32")
+    assert rg.xdist_refusal(opt(dist="loadfile"), {}, "linux")  # Linux without the pod marker
+    assert "pytest-xdist" in rg.xdist_refusal(opt(numprocesses=1), {}, "win32")
+    assert rg.xdist_refusal(opt(numprocesses=2), {rg.ENV_ON_POD: "1"}, "win32")  # ignored on win32
+    assert rg.xdist_refusal(opt(numprocesses=2), {rg.ENV_ON_POD: "1"}, "linux") is None
+    assert rg.xdist_refusal(opt(), {}, "win32") is None  # xdist not installed: no such options
+    assert rg.xdist_refusal(opt(numprocesses=None, dist="no"), {}, "win32") is None
