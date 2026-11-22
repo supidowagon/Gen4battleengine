@@ -2862,6 +2862,55 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     own changes. Against the train tip, every difference is batch H's.
   - Should-fix `REVEALS_ON` (Insomnia / Vital Spirit / Limber on `STATUS_CURE`) is batch I group I-6 (`_scratch/e1/i-next/sheets/ability-status-cure-reveals.md`).
 
+## Batch I
+
+First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratch/e1/i-next/family.md`). Branch
+`claude/e1-batch-i`, cut from batch H's tip 3b814681. I-1 (Weather Ball's AI type, needs `ai_ptr_class`) waits for E2.
+
+- I-9 (00be0535) `hooks.order_swaps`: the line `second = where(down[0] != down[1], down[0], second)` is deleted.
+  `order.compare_speed` already applies the dead-battler short-circuit (battle_lib.c:1204-1211: a fainted battler
+  is SLOWER than a living one), so the line was dead. Test `test_order_swaps_puts_a_fainted_battler_last`
+  (tests/engine/test_e1_batch_i.py): both fainted cases give ALL_SWAPS / 0 for every speed order.
+- I-2 (e17698dc) the AI's switch-trap gate reads `damage.battler_decomp_ability(tables, state, 0)`, not the raw
+  ability: `TrainerAI_ShouldSwitch` (trainer_ai.c:3906-3913) counts Shadow Tag, Arena Trap and Magnet Pull with
+  `CountAbility` (battle_lib.c:2896-2903, :2933-2940), which compares `Battler_Ability` (:3088-3106: none under
+  Gastro Acid unless Multitype, :3090-3093). Wonder Guard (trainer_ai.c:3298) and the party-data reads stay raw
+  (sheet's table). Tests: tests/ai/test_switching.py `test_gastro_acid_lifts_the_trap_gate` (Wobbuffet, Diglett,
+  Magnemite with a Steel active; gated raw, open suppressed), `test_gastro_acid_keeps_multitype_out_of_the_trap_gate`;
+  tests/ai/test_kaizo_switching.py `_loose_reads` applies `Battler_Ability`, `_switch_states` draws
+  `ability_suppressed[0]` (the sheet said it did already; it did not), `test_gastro_acid_trap_gate_matches_loose`.
+- I-1a (cee0ae88) `KAIZO_SWITCH_SITES` 60 -> 69 = guard 20 (trainer_ai.c:3315-3344) + keep 4 (:3576-3592) +
+  absorb 5 (:3681-3708) + passes 40 (:3756-3804). The `count > sites` refusal, its `_refusals` branch and the
+  docstrings (switching.py module doc, layout.py, outcome.py, coverage.py, docs/ai/kaizo_roark.md) are gone.
+  Tests: `test_kaizo_switch_sites_are_the_six_party_maximum` (69), `..._reach_sixty` (60 padded with NONE),
+  `test_kaizo_switch_sites_reach_sixty_five` (20 + 5 + 40 without Weather Ball). Deleted with the refusal:
+  `test_too_many_sites_are_refused` (vanilla, 12 > 9), `test_six_bench_under_vanilla_is_still_refused`, and the
+  switch half of `test_factored_distribution_refused_states_nan`. NOTE: the vanilla layout (9 sites) now drops
+  draws beyond 9 silently; only artificial vanilla states exceed 9 (roark.md 11.1). Snapshot: `AiOutcome.switch_stop`
+  for Kaizo has 69 as its "none" value (was 60): expect a layout-shape difference in a compare.
+- I-6 (4661ddd4) the STATUS_CURE reveals of Insomnia, Vital Spirit and Limber are removed:
+  `RecoverStatusByAbility` (battle_lib.c:4378-4452) tags `BTLSCR_MSG_TEMP` in subscript_ability_forbids_status.s:6,
+  which never reaches `BattleAI_SetAbility` (battle_script.c:11801-11802). `REVEALS_ON`: INSOMNIA / VITAL_SPIRIT
+  `{SLEEP_BLOCKED}`, LIMBER `{PARALYSIS_BLOCKED}`; `STATUS_CURE` only for Shed Skin and Hydration. The reveal at the end
+  of `hooks.recover_status_by_ability` and the reference `_know_ability` are deleted (stays in I-6, per E2). Flipped:
+  test_e1_batch_c vital spirit, test_k3b_abilities (Limber x2), test_m4_abilities (Insomnia x3). Added: pinned
+  `REVEALS_ON`, three cure cases, Shed Skin still reveals. Snapshot: `ai_ability_known` differs on boards with these cures.
+- I-3 (d6304843) Sketch (effect 95), player side. New state field `sketch_move` int16[B] = `moveSketched`
+  (written by UpdateMoveBuffers when the attack message shows, bcp.c:3952-3954, kept otherwise; VOLATILE, cleared at
+  switch-in and faint, lib.c:2130, :2208; not Baton-passed). `EffectId.SKETCH` = 143, `MOVE_SKETCH`,
+  `SKETCH_FORBIDDEN` (Struggle, Sketch, Chatter; bs:4848-4850), `tools/effect_map.py` 95, `MANIFEST_VERSION` 44.
+  `effects._sketch` (bs:4839-4884, subscript_sketch.s): substitute, Transformed user, none / forbidden / known move
+  fail; else the first Sketch slot takes the move with its table PP, Last Resort zeroes its count, permanent (no shadow,
+  no `mimic_slots`). Reference engine mirrors it. AI: effect 95 in `KAIZO_TRANSCRIBED` ("no Basic or Expert entry; no
+  Tag Strategy entry"; E4's cite checked: script.s:6637-6652 and TagStrategy_CheckSpecialScoring :6733-6752 name
+  neither effect 95 nor move 166 nor a Normal-type status, no score changes). Not added to a vanilla set: vanilla's
+  `transcribed` is keyed by Roark's move ids. Coverage: `coverage.sketch_calls` grades every foe move a Sketch holder can
+  copy (move effect, player-move AI refusal, halved Defense, Gyro, terrain, ROM changes through `extra`). Struggle:
+  checked outside the effect table (bcp.c:432-435, :1866-1867; engine actions.py / order.py / step.py `MOVE_STRUGGLE`
+  reads), complete, nothing to build. E3's B4-4 `carry_out` needs no change.
+  Tests: tests/engine/test_e1_batch_i.py (mapping, forbidden-id pin vs bs, copy with table PP and permanence, kept
+  with no message, failures, Last Resort, Sleep Talk calling Sketch, switch clears). Snapshot allow-new: `sketch_move`.
+
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
