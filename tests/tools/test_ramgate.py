@@ -467,3 +467,15 @@ def test_no_wait_env_skips_the_ram_wait_but_not_the_refusal():
     assert clock.sleeps == []
     assert gate([ENG], free=0.0, modules=ENGINE, env=env)[0] == "REFUSE"
     assert gate([PLAIN], free=0.0, env={rg.ENV_NO_WAIT: "0", rg.ENV_TIMEOUT: "0"})[0] == "TIMEOUT"
+
+
+def test_the_committed_rom_weights_file_parses():
+    lines = [
+        ln.split()
+        for ln in rg.ROM_WEIGHTS.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.startswith("#")
+    ]
+    assert lines and all(len(p) == 3 and float(p[1]) > 0 and p[2] for p in lines)
+    table = rg.load_rom_weights()
+    assert len(table) == len(lines) and all(k.startswith("tests/") for k in table)
+    assert rg.lookup("tests/tools/rom/test_text.py::test_x[1]", table) == 3.0
