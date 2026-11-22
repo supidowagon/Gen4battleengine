@@ -228,7 +228,12 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
 from nuzline.engine import targets
-from nuzline.engine.actions import absent_now, imprisoning_foe, replacement_bench
+from nuzline.engine.actions import (
+    absent_now,
+    imprisoning_foe,
+    move_imprisoned,
+    replacement_bench,
+)
 from nuzline.engine.damage import (
     NUM_TYPES,
     PHYSICAL,
@@ -2890,7 +2895,8 @@ def outcome_laws(
     # reaches the hit whatever the rolls (none of the checks of
     # BattleControllerPlayer_CheckStatusDisruption, bcp.c:2417-2728, can stop it: no
     # sleep, freeze, paralysis, confusion, flinch, Disable on it, Taunt on a power-0 move,
-    # infatuation or Bide; the first mover cannot fall in love before its own check),
+    # Imprison on it, infatuation or Bide; Gravity and Heal Block ban no flinching move,
+    # battle_lib.c:3385-3392, :3409-3425; recharging is reserved, no move sets it; the first mover cannot fall in love before its own check),
     # deals damage at every crit and roll (play_hit's ``effective``: the flinch needs it),
     # and the target, the foe's active Pokemon using a move, has no Inner
     # Focus as the attacker sees it (effects._flinch, effects._fang). Fake Out also needs its
@@ -2906,6 +2912,13 @@ def outcome_laws(
         & (state.flinched == 0)
         & ~((state.disabled_move != 0) & (state.disabled_move.astype(_I32) == chosen))
         & ~((state.taunt > 0) & (tables.move_power[chosen] == 0))
+        # CHECK_STATUS_STATE_IMPRISON (bcp.c:2572-2583): Move_Imprisoned (battle_lib.c:3316-3338) on
+        # moveCur, ``chosen``. The selection's CheckInvalidMoves keeps a free pick off a sealed
+        # move, but a locked battler picks nothing (bcp.c:334-338) and FightCommand's Encore
+        # (:1869-1883) runs the encored move or the encored slot's over the pick: a Sky Attack
+        # strike sealed by a foe that Imprisoned during the charge (review 10), a locked or Encored
+        # Fake Out or Headbutt. An invoker's call is not checked (moveCur is the invoker then).
+        & ~jnp.stack([move_imprisoned(state, side, chosen[side]) for side in range(fmt.B)])
         & (state.infatuated == 0)
         & (state.bide_turns == 0)
     )

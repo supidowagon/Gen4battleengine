@@ -641,6 +641,32 @@ def test_a_charging_sky_attack_never_flinches_for_sure_in_the_laws(tables):
         assert not bool(laws.reads.flinch_sure[1]), label
 
 
+def _striking_sky_attack(s, sealed: bool):
+    """u_027's board with the foe locked into Sky Attack (``locked_move`` 143, its slot 0), its
+    second turn; ``sealed``: the player knows Sky Attack (slot 3) and has Imprisoned (a foe that
+    Imprisoned during the charge, review 10)."""
+    locked = np.array(s.locked_move)
+    locked[1] = 143
+    s = s._replace(locked_move=locked)
+    if sealed:
+        moves, imprison = np.array(s.moves), np.array(s.imprison)
+        moves[0, int(s.active[0]), 3] = 143
+        imprison[0] = 1
+        s = s._replace(moves=moves, imprison=imprison)
+    return s
+
+
+def test_a_striking_sky_attack_flinches_for_sure_unless_imprisoned(tables):
+    """The narrowing's other side: Sky Attack's second turn (VOLATILE_CONDITION_MOVE_LOCKED,
+    effect_script_0075.s:5 jumps to the strike) moving first is a sure flinch on u_027's board;
+    sealed by the player's Imprison it fails at CHECK_STATUS_STATE_IMPRISON (bcp.c:2572-2583:
+    Move_Imprisoned on moveCur; the locked foe picked no command, bcp.c:334-338), so it is not."""
+    acts = np.zeros(2, np.int32)
+    s = stored("u027_state.txt")
+    assert bool(laws_of(tables, _striking_sky_attack(s, False), acts).reads.flinch_sure[1])
+    assert not bool(laws_of(tables, _striking_sky_attack(s, True), acts).reads.flinch_sure[1])
+
+
 @pytest.mark.slow
 def test_mask_sound_on_a_sourceless_uproar_lock(tables):
     """u_027's falsifying example, pinned: no undrawn Outcome element changes the step on the
@@ -651,7 +677,7 @@ def test_mask_sound_on_a_sourceless_uproar_lock(tables):
         try:
             _assert_mask_sound(tables, s, acts, arbitrary, 0)
         except pytest.fail.Exception as failure:
-            pytest.fail(f"board {label}: {failure}")
+            raise pytest.fail.Exception(f"board {label}: {failure}") from failure
 
 
 # Every bag item whose BattleSystem_UseBagItem branch (battle_system.c:435-758) the engine
