@@ -1230,7 +1230,13 @@ def _lib(call: str) -> str:
 
 
 def test_the_body_env_holds_only_the_shape_knobs_set_on_the_pc():
-    assert _bash(_lib("pack_body_env")).stdout == ""
+    none = _bash(_lib("pack_body_env"))
+    assert none.stdout == "" and "WARNING" not in none.stderr
+    # a knob exported in the shell reaches normal bodies too: it is named on stderr
+    assert (
+        "WARNING pack.sh: MAXP:5 from the environment"
+        in _bash(_lib("pack_body_env"), {"MAXP": "5"}).stderr
+    )
     knobs = {"GATE_GB": "200", "KILL_GB": "236", "MAXP": "18"}
     assert (
         _bash(_lib("pack_body_env"), knobs).stdout
