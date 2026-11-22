@@ -9,9 +9,12 @@
 # too long for a body, so it travels in sweep.tar with start.sh by a detached `runpodctl send`
 # ($RENT/podcheck/, as stop_body.sh) and the body checks the tar's sha256 before it unpacks
 # (send_body.sh tool_body: RECEIVE_FAILED, PAYLOAD_SHA_MISMATCH, UNPACK_FAILED, PENDING). start.sh
-# copies the jobs to /work/<run>/sweep_jobs.txt, starts the sweep and returns at once. Its last
-# line: SWEEP_STARTED <run> | SWEEP_REFUSED <reason> (no run folder, no bin/sweep.sh, no repo,
-# a sweep of this run still running).
+# copies the jobs to /work/<run>/sweep_jobs.txt (a later sweep of the same run: sweep_jobs_<epoch>.txt),
+# starts `bin/sweep.sh <that absolute path> <out dir>` and returns at once. The out dir is
+# /work/<run>/sweep_out, or sweep_out_<epoch> when sweep_out already holds a sweep (a rerun keeps
+# the first sweep's files); sweep.outdir names the newest. Its last line: SWEEP_STARTED <run>
+# out=<out dir name> jobs=<n> | SWEEP_REFUSED <reason> (no run folder, no bin/sweep.sh, no repo, a
+# sweep of this run still running).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"; . "$HERE/send_body.sh"
 [ $# -eq 2 ] || { echo "usage: sweep_body.sh <run> <jobs file>"; exit 2; }
@@ -30,11 +33,14 @@ tr -d '\r' < "$2" | grep -v '^[[:space:]]*\(#\|$\)' > "$T/sweep_jobs.txt"
 [ -d "$R" ] || { echo "SWEEP_REFUSED no folder $R"; exit 1; }
 [ -f "$R/bin/sweep.sh" ] || { echo "SWEEP_REFUSED no $R/bin/sweep.sh (the run was packed before sweep.sh)"; exit 1; }
 [ -x "$R/repo/.venv/bin/python" ] || { echo "SWEEP_REFUSED no $R/repo/.venv (setup.sh not finished?)"; exit 1; }
-p=$(cat "$R/sweep.pid" 2>/dev/null); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null && [ ! -f "$R/sweep_out/SWEEP_DONE" ]; then echo "SWEEP_REFUSED a sweep of this run is running (pid $p)"; exit 1; fi
-cp sweep_jobs.txt "$R/sweep_jobs.txt" && cd "$R" || exit 1
-setsid nohup bash bin/sweep.sh sweep_jobs.txt > sweep.log 2>&1 < /dev/null &
+p=$(cat "$R/sweep.pid" 2>/dev/null); o=$(cat "$R/sweep.outdir" 2>/dev/null)
+case "$p" in ''|*[!0-9]*|0|1) ;; *) if kill -0 "$p" 2>/dev/null && [ ! -f "$R/${o:-sweep_out}/SWEEP_DONE" ]; then echo "SWEEP_REFUSED a sweep of this run is running (pid $p)"; exit 1; fi;; esac
+o=sweep_out; J=sweep_jobs.txt; [ -e "$R/$o" ] && { e=$(date +%s); o=sweep_out_$e; J=sweep_jobs_$e.txt; }
+cp sweep_jobs.txt "$R/$J" && cd "$R" || exit 1
+echo "$o" > sweep.outdir
+setsid nohup bash bin/sweep.sh "$R/$J" "$R/$o" > sweep.log 2>&1 < /dev/null &
 echo $! > sweep.pid
-echo "SWEEP_STARTED ${R##*/} jobs=$(grep -c . sweep_jobs.txt)"
+echo "SWEEP_STARTED ${R##*/} out=$o jobs=$(grep -c . "$J")"
 START
 } > "$T/start.sh"
 tar -cf "$T/sweep.tar" -C "$T" start.sh sweep_jobs.txt
