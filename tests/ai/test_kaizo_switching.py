@@ -618,7 +618,6 @@ def test_absorb_bench_matches_loose(
     _assert_switch_equals_loose(t, s)
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("suppressed", [False, True])
 def test_gastro_acid_trap_gate_matches_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party, suppressed
@@ -628,6 +627,9 @@ def test_gastro_acid_trap_gate_matches_loose(
     :3088-3106). The loose reference applies ``Battler_Ability`` too."""
     t, n = kaizo_tables, kaizo_names
     s = _six_bench(t, n, kaizo_roark_party)
+    # Two living bench Pokemon keep the open gate's exact enumeration small (a full bench of five
+    # ran for over 40 minutes); the gate itself reads only the player's ability.
+    s = s._replace(hp=s.hp.at[1, 3:].set(0))
     slot = n.species_abilities(n.species("Wobbuffet")).index(n.ability("Shadow Tag"))
     types = s.types[0, 0]
     s = as_species(t, s, 0, 0, n.species("Wobbuffet"), slot)
