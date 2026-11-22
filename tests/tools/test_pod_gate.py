@@ -507,27 +507,9 @@ def test_podcheck_reports_other_weights_on_their_own_line_not_as_mixed(tmp_path)
 
 
 BODY = ROOT / "tools" / "ops" / "day" / "podcheck_body.sh"
-
-
-def _exec_body_files(body: dict) -> tuple[str, dict[str, bytes]]:
-    """common.sh exec_body: the argv is ["sh","-c",<script>,"_","=<name>",<chunk>,...]; every item
-    at most 4000 characters (exec-pod refuses one over 4096), at most 256 items. Returns the script
-    and the decoded files."""
-    import base64
-    cmd = body["command"]
-    assert cmd[:2] == ["sh", "-c"] and cmd[3] == "_"
-    assert len(cmd) <= 256
-    assert max(len(x) for x in cmd) <= 4000
-    files: dict[str, str] = {}
-    name = None
-    for a in cmd[4:]:
-        if a.startswith("="):
-            name = a[1:]
-            files[name] = ""
-        else:
-            assert name is not None
-            files[name] += a
-    return cmd[2], {n: base64.b64decode(b64) for n, b64 in files.items()}
+# The most characters of a printed pod-tool body (podcheck_body.sh, stop_body.sh): an agent
+# reproduces it in a tool call, so it stays a short script (send_body.sh BODY_LIM is 1000).
+TOOL_BODY_MAX = 850
 
 
 def _head(name: str) -> bytes:
@@ -535,69 +517,149 @@ def _head(name: str) -> bytes:
     return out.replace(b"\r", b"")
 
 
-def test_podcheck_body_carries_heads_gate_and_podcheck_and_their_sum():
+def _posix(path: Path) -> str:
+    """A path bash takes (Git Bash: /g/...)."""
+    if sys.platform != "win32":
+        return str(path)
+    return subprocess.run([BASH, "-c", 'cygpath -u "$0"', str(path)], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _tool_body(tmp_path: Path, script: str, *args: str) -> tuple[subprocess.CompletedProcess, dict, Path]:
+    """Run <script> (podcheck_body.sh or stop_body.sh) with a fake `runpodctl send` (prints a code
+    word) and a scratch folder under <tmp_path>. Returns the run, the printed body and the folder
+    of the send (payload tar and send.log)."""
     import json
+    fake = tmp_path / "pcbin"
+    fake.mkdir(exist_ok=True)
+    (fake / "rpc").write_text('#!/bin/sh\necho "code is: 1234-word-word-word"\n', encoding="utf-8", newline="\n")
+    os.chmod(fake / "rpc", 0o755)
+    (tmp_path / "scratch").mkdir(exist_ok=True)
+    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1", "RUNPODCTL": _posix(fake / "rpc"),
+           "NUZLINE_SCRATCH": str(tmp_path / "scratch")}   # this checkout may be an ops branch
+    r = subprocess.run([BASH, script, *args], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
+    if "REFUSED: uncommitted changes" in r.stdout:
+        pytest.skip("tools/ops/day/pod has uncommitted changes")
+    if r.returncode != 0:
+        return r, {}, tmp_path
+    time.sleep(0.5)   # the detached send writes SEND_RC
+    sends = sorted((tmp_path / "scratch" / "rent" / "podcheck").iterdir())
+    return r, json.loads(r.stdout.strip().splitlines()[-1]), sends[-1]
+
+
+def _pod_receive(tmp_path: Path, src: Path, rc: int = 0, sleep: int = 0) -> str:
+    """A fake pod `runpodctl` in a folder of its own: `receive <code>` sleeps <sleep> s, copies
+    <src> into the working folder and exits <rc>. Returns the folder (for PATH)."""
+    d = tmp_path / f"podbin-{rc}-{sleep}-{src.parent.name}"
+    d.mkdir(exist_ok=True)
+    (d / "runpodctl").write_text(f"#!/bin/sh\nsleep {sleep}\ncp '{_posix(src)}' .\nexit {rc}\n", encoding="utf-8", newline="\n")
+    os.chmod(d / "runpodctl", 0o755)
+    return _posix(d)
+
+
+def _run_tool_body(script: str, folder: Path, path: str, dirname: str, shell: list[str], **subst: str) -> subprocess.CompletedProcess:
+    """The body's script under <shell> with its folder /work/_podcheck/<dirname> at <folder>, its
+    runpodctl the one in <path>, and <subst> applied (old text: new text)."""
+    script = script.replace(f"d=/work/_podcheck/{dirname};", f"d='{_posix(folder)}';").replace("/work/_bin/runpodctl", "runpodctl")
+    for old, new in subst.items():
+        assert old in script, old
+        script = script.replace(old, new)
+    return subprocess.run([*shell, f"PATH='{path}':$PATH; {script}"], check=False, capture_output=True, text=True,
+                          env=_clean_env(), timeout=60)
+
+
+def test_podcheck_body_receives_heads_gate_and_podcheck_and_their_sum(tmp_path):
+    """The body is one short script; the scripts travel in podcheck.tar (a send, not the body),
+    byte for byte HEAD's, with check.sh: the map check, then podcheck.sh with HEAD's sums."""
+    import io
     import re
-    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1"}   # this checkout may be an ops branch
-    r = subprocess.run([BASH, BODY.as_posix()], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
-    if "REFUSED: uncommitted changes" in r.stdout:
-        pytest.skip("tools/ops/day/pod has uncommitted changes")
+    import tarfile
+    r, body, send = _tool_body(tmp_path, BODY.as_posix())
     assert r.returncode == 0, r.stdout + r.stderr
-    script, files = _exec_body_files(json.loads(r.stdout.strip().splitlines()[-1]))
-    assert list(files) == ["gate.sh", "podcheck.sh"]
-    for name, data in files.items():
-        assert data == _head(name)
-    assert re.search(r"; bash \$W/podcheck.sh /work [0-9a-f]{64} [0-9a-f]{64} 30 3$", script)
-    assert script.startswith("W=/work/_podcheck;")
+    cmd = body["command"]
+    assert cmd[:2] == ["sh", "-c"] and len(cmd) == 3
+    assert len(r.stdout.strip().splitlines()[-1]) <= TOOL_BODY_MAX
+    assert "1234-word-word-word" in cmd[2] and "base64" not in cmd[2]
+    with tarfile.open(fileobj=io.BytesIO((send / "podcheck.tar").read_bytes())) as t:
+        files = {m.name: t.extractfile(m).read() for m in t.getmembers()}
+    assert sorted(files) == ["check.sh", "gate.sh", "podcheck.sh"]
+    for name in ("gate.sh", "podcheck.sh"):
+        assert files[name] == _head(name)
+    check = files["check.sh"].decode().splitlines()
+    assert check[0].startswith("m=$(tr -dc 0-9 < /proc/sys/vm/max_map_count);")
+    assert re.fullmatch(r"exec bash podcheck.sh /work [0-9a-f]{64} [0-9a-f]{64} 30 3", check[1])
+    assert "SEND_RC=0" in (send / "send.log").read_text()
 
 
-def test_exec_body_script_writes_the_files_byte_for_byte(tmp_path):
-    import json
-    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1"}
-    r = subprocess.run([BASH, BODY.as_posix()], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
-    if "REFUSED: uncommitted changes" in r.stdout:
-        pytest.skip("tools/ops/day/pod has uncommitted changes")
-    cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"]
+def test_podcheck_body_runs_only_a_received_tar_whose_sha_matches(tmp_path):
+    """A good receive unpacks the tar into a fresh folder (an earlier copy is removed first) and
+    runs check.sh; a changed tar ends PAYLOAD_SHA_MISMATCH, a failed receive RECEIVE_FAILED, each
+    exit 1 with nothing run; a receive still going after the body's wait prints PENDING <out>."""
+    r, body, send = _tool_body(tmp_path, BODY.as_posix())
+    assert r.returncode == 0, r.stdout + r.stderr
+    script = body["command"][2]
+    good = send / "podcheck.tar"
+    bad = tmp_path / "bad" / "podcheck.tar"
+    bad.parent.mkdir()
+    bad.write_bytes(good.read_bytes()[:-1] + b"x")
+    run_cmd = {"bash check.sh": "echo RAN; ls"}
     for i, sh in enumerate(_posix_shells()):
-        w = tmp_path / str(i)
+        w = tmp_path / f"w{i}"
         w.mkdir()
-        (w / "map_count").write_text("1048576\n")
-        # W=. in the folder: the script leaves $W unquoted (the pod's /work/_podcheck has no
-        # space), and the test folder's path may have one
-        script = cmd[2].replace("W=/work/_podcheck;", "W=.;").replace("bash $W/podcheck.sh", "echo RAN")
-        script = script.replace("/proc/sys/vm/max_map_count", f"'{(w / 'map_count').as_posix()}'")
-        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env(),
-                             cwd=w)  # fmt: skip
-        assert run.returncode == 0, (sh, run.stderr)
-        assert run.stdout.startswith("RAN /work "), sh
-        assert sorted(p.name for p in w.iterdir()) == ["gate.sh", "map_count", "podcheck.sh"], sh
+        (w / "old.sh").write_text("stale\n")
+        out = _run_tool_body(script, w, _pod_receive(tmp_path, good), "check", sh, **run_cmd)
+        assert out.returncode == 0, (sh, out.stdout, out.stderr)
+        lines = out.stdout.split()
+        assert lines[0] == "RAN" and "old.sh" not in lines, (sh, out.stdout)
         for n in ("gate.sh", "podcheck.sh"):
             assert (w / n).read_bytes() == _head(n), sh
+        out = _run_tool_body(script, w, _pod_receive(tmp_path, bad), "check", sh, **run_cmd)
+        assert out.returncode == 1 and out.stdout.startswith("PAYLOAD_SHA_MISMATCH "), (sh, out.stdout)
+        assert "RAN" not in out.stdout and not (w / "podcheck.tar").exists() and not (w / "gate.sh").exists()
+        out = _run_tool_body(script, w, _pod_receive(tmp_path, good, rc=1), "check", sh, **run_cmd)
+        assert out.returncode == 1 and out.stdout.startswith("RECEIVE_FAILED rc=1"), (sh, out.stdout)
+        assert "RAN" not in out.stdout
+    slow = tmp_path / "slow"
+    out = _run_tool_body(script, slow, _pod_receive(tmp_path, good, sleep=4), "check", _posix_shells()[0],
+                         **run_cmd, **{"[ $i -lt 20 ]": "[ $i -lt 1 ]"})
+    assert out.returncode == 0 and out.stdout.strip().splitlines()[-1] == "PENDING /work/_podcheck/check/out", out.stdout
+    for _ in range(40):
+        if (slow / "rc").exists():
+            break
+        time.sleep(0.5)
+    assert (slow / "out").read_text().startswith("RAN")
+
+
+def test_tool_body_receive_times_out_with_receive_failed(tmp_path):
+    r, body, send = _tool_body(tmp_path, BODY.as_posix())
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = _run_tool_body(body["command"][2], tmp_path / "w", _pod_receive(tmp_path, send / "podcheck.tar", sleep=30), "check",
+                         _posix_shells()[0], **{"bash check.sh": "echo RAN", "timeout -k 10 120 ": "timeout -k 1 1 "})
+    assert out.returncode == 1 and out.stdout.startswith("RECEIVE_FAILED rc=124"), out.stdout
+    assert "RAN" not in out.stdout
 
 
 @pytest.mark.parametrize("value", ["65530", "1048575", ""])
-def test_podcheck_body_refuses_a_low_or_unreadable_max_map_count(tmp_path, value):
+def test_podcheck_check_sh_refuses_a_low_or_unreadable_max_map_count(tmp_path, value):
     """A pod with vm.max_map_count under 1048576 (65530 aborts JAX units, rc 134), or none to
     read, ends PODCHECK REFUSED with exit 1 before podcheck.sh runs."""
-    import json
-    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1"}
-    r = subprocess.run([BASH, BODY.as_posix()], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
-    if "REFUSED: uncommitted changes" in r.stdout:
-        pytest.skip("tools/ops/day/pod has uncommitted changes")
-    cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"]
+    import io
+    import tarfile
+    r, _, send = _tool_body(tmp_path, BODY.as_posix())
+    assert r.returncode == 0, r.stdout + r.stderr
+    with tarfile.open(fileobj=io.BytesIO((send / "podcheck.tar").read_bytes())) as t:
+        check = t.extractfile("check.sh").read().decode()
     mc = tmp_path / "map_count"
     if value:
         mc.write_text(value + "\n")
-    for i, sh in enumerate(_posix_shells()):
-        w = tmp_path / str(i)
-        w.mkdir()
-        script = cmd[2].replace("W=/work/_podcheck;", "W=.;").replace("bash $W/podcheck.sh", "echo RAN")
-        script = script.replace("/proc/sys/vm/max_map_count", f"'{mc.as_posix()}'")
-        run = subprocess.run([*sh, script, *cmd[3:]], check=False, capture_output=True, text=True, env=_clean_env(),
-                             cwd=w)  # fmt: skip
+    script = check.replace("/proc/sys/vm/max_map_count", f"'{_posix(mc)}'").replace("exec bash podcheck.sh", "echo RAN")
+    for sh in _posix_shells():
+        run = subprocess.run([*sh, script], check=False, capture_output=True, text=True, env=_clean_env(), cwd=tmp_path)
         assert run.returncode == 1, (sh, run.stdout, run.stderr)
         assert run.stdout.strip().splitlines()[-1].startswith("PODCHECK REFUSED vm.max_map_count="), sh
         assert "RAN" not in run.stdout, sh
+    mc.write_text("1048576\n")
+    run = subprocess.run([BASH, "-c", script], check=False, capture_output=True, text=True, env=_clean_env(), cwd=tmp_path)
+    assert run.returncode == 0 and run.stdout.startswith("RAN /work "), run.stdout
 
 
 def _posix_shells() -> list[list[str]]:
@@ -606,30 +668,16 @@ def _posix_shells() -> list[list[str]]:
     return [[BASH, "--posix", "-c"]] + ([[dash, "-c"]] if dash else [])
 
 
-def test_exec_body_writes_a_multi_chunk_file_and_an_empty_file_byte_for_byte(tmp_path):
+def test_body_json_refuses_a_script_over_the_limit():
     import json
-    import random
-    big = random.Random(0).randbytes(7001)   # base64 9336 characters: chunks 4000, 4000 and a partial 1336
-    (tmp_path / "big.bin").write_bytes(big)
-    (tmp_path / "empty.bin").write_bytes(b"")
-    common = (ROOT / "tools" / "ops" / "common.sh").as_posix()
-    r = subprocess.run([BASH, "-c", f". '{common}'; cd '{tmp_path.as_posix()}' && exec_body 'echo RAN' big=big.bin empty=empty.bin"],
-                       check=False, capture_output=True, text=True, env=_clean_env())
-    assert r.returncode == 0, r.stdout + r.stderr
-    script, files = _exec_body_files(json.loads(r.stdout.strip().splitlines()[-1]))
-    assert files == {"big": big, "empty": b""}
-    cmd = json.loads(r.stdout.strip().splitlines()[-1])["command"]
-    assert [len(x) for x in cmd[4:]] == [4, 4000, 4000, 1336, 6]
-    for i, sh in enumerate(_posix_shells()):
-        w = tmp_path / f"w{i}"
-        w.mkdir()
-        run = subprocess.run([*sh, script.replace("W=/work/_podcheck;", "W=.;"), *cmd[3:]],
-                             check=False, capture_output=True, text=True, env=_clean_env(), cwd=w)  # fmt: skip
-        assert run.returncode == 0, (sh, run.stderr)
-        assert run.stdout.strip() == "RAN", sh
-        assert sorted(p.name for p in w.iterdir()) == ["big", "empty"], sh
-        assert (w / "big").read_bytes() == big, sh
-        assert (w / "empty").read_bytes() == b"", sh
+    send_body = (ROOT / "tools" / "ops" / "day" / "send_body.sh").as_posix()
+    ok, big = "a" * 998 + '"\\', "a" * 1001
+    r = subprocess.run([BASH, "-c", f". '{send_body}'; body_json '{ok}'"], check=False, capture_output=True, text=True,
+                       env=_clean_env())
+    assert r.returncode == 0 and json.loads(r.stdout)["command"] == ["sh", "-c", ok], r.stdout + r.stderr
+    r = subprocess.run([BASH, "-c", f". '{send_body}'; body_json '{big}'; echo rc $?"], check=False, capture_output=True,
+                       text=True, env=_clean_env())
+    assert r.stdout.splitlines() == ["REFUSED: exec body script is 1001 characters, over 1000", "rc 3"], r.stdout
 
 
 # pack.sh's main check, in a throwaway repo holding only the scripts it needs before that check.
@@ -841,18 +889,19 @@ def test_stop_refuses_bad_names_and_missing_runs(tmp_path):
 
 
 
-def test_stop_body_carries_heads_stop_sh_and_the_run_name():
-    import json
-    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1"}   # this checkout may be an ops branch
+def test_stop_body_receives_heads_stop_sh_and_runs_it_with_the_run_name(tmp_path):
     body_sh = (ROOT / "tools" / "ops" / "day" / "stop_body.sh").as_posix()
-    r = subprocess.run([BASH, body_sh, "run-x"], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
-    if "REFUSED: uncommitted changes" in r.stdout:
-        pytest.skip("tools/ops/day/pod has uncommitted changes")
+    r, body, send = _tool_body(tmp_path, body_sh, "run-x")
     assert r.returncode == 0, r.stdout + r.stderr
-    script, files = _exec_body_files(json.loads(r.stdout.strip().splitlines()[-1]))
-    assert files == {"stop.sh": _head("stop.sh")}
-    assert script.startswith("W=/work/_podcheck;") and script.endswith("; bash $W/stop.sh run-x")
-    bad = subprocess.run([BASH, body_sh, "Bad/name"], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
+    assert len(r.stdout.strip().splitlines()[-1]) <= TOOL_BODY_MAX
+    script = body["command"][2]
+    assert "bash stop.sh run-x);" in script and "base64" not in script
+    w = tmp_path / "w"
+    out = _run_tool_body(script, w, _pod_receive(tmp_path, send / "stop.tar"), "stop", _posix_shells()[0],
+                         **{"bash stop.sh run-x": "echo RAN"})
+    assert out.returncode == 0 and out.stdout.strip() == "RAN", out.stdout + out.stderr
+    assert (w / "stop.sh").read_bytes() == _head("stop.sh")
+    bad, _, _ = _tool_body(tmp_path, body_sh, "Bad/name")
     assert bad.returncode == 2
 
 
