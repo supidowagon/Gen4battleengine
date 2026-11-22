@@ -509,7 +509,7 @@ def test_podcheck_reports_other_weights_on_their_own_line_not_as_mixed(tmp_path)
 BODY = ROOT / "tools" / "ops" / "day" / "podcheck_body.sh"
 # The most characters of a printed pod-tool body (podcheck_body.sh, stop_body.sh): an agent
 # reproduces it in a tool call, so it stays a short script (send_body.sh BODY_LIM is 1000).
-TOOL_BODY_MAX = 850
+TOOL_BODY_MAX = 950  # 886 with the tests' 19-character code word; a real one is about 30
 
 
 def _head(name: str) -> bytes:
@@ -524,47 +524,69 @@ def _posix(path: Path) -> str:
     return subprocess.run([BASH, "-c", 'cygpath -u "$0"', str(path)], check=True, capture_output=True, text=True).stdout.strip()
 
 
-def _tool_body(tmp_path: Path, script: str, *args: str) -> tuple[subprocess.CompletedProcess, dict, Path]:
-    """Run <script> (podcheck_body.sh or stop_body.sh) with a fake `runpodctl send` (prints a code
-    word) and a scratch folder under <tmp_path>. Returns the run, the printed body and the folder
-    of the send (payload tar and send.log)."""
-    import json
-    fake = tmp_path / "pcbin"
-    fake.mkdir(exist_ok=True)
-    (fake / "rpc").write_text('#!/bin/sh\necho "code is: 1234-word-word-word"\n', encoding="utf-8", newline="\n")
+def _fake_send(tmp_path: Path, sleep: int = 0) -> str:
+    """A fake PC `runpodctl send`: prints a code word unique to the call, sleeps <sleep> s."""
+    fake = tmp_path / f"pcbin{sleep}"
+    fake.mkdir(parents=True, exist_ok=True)
+    (fake / "rpc").write_text(f'#!/bin/sh\necho "code is: 1234-$$-word"\nsleep {sleep}\n', encoding="utf-8", newline="\n")
     os.chmod(fake / "rpc", 0o755)
-    (tmp_path / "scratch").mkdir(exist_ok=True)
-    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1", "RUNPODCTL": _posix(fake / "rpc"),
+    return _posix(fake / "rpc")
+
+
+def _tool_body(tmp_path: Path, script: str, *args: str) -> tuple[subprocess.CompletedProcess, dict, Path]:
+    """Run <script> (podcheck_body.sh or stop_body.sh) with a fake `runpodctl send` and a scratch
+    folder under <tmp_path>. Returns the run, the printed body and the folder of the send (payload
+    tar and send.log)."""
+    import json
+    (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
+    env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1", "RUNPODCTL": _fake_send(tmp_path),
            "NUZLINE_SCRATCH": str(tmp_path / "scratch")}   # this checkout may be an ops branch
     r = subprocess.run([BASH, script, *args], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
     if "REFUSED: uncommitted changes" in r.stdout:
         pytest.skip("tools/ops/day/pod has uncommitted changes")
     if r.returncode != 0:
         return r, {}, tmp_path
-    time.sleep(0.5)   # the detached send writes SEND_RC
-    sends = sorted((tmp_path / "scratch" / "rent" / "podcheck").iterdir())
-    return r, json.loads(r.stdout.strip().splitlines()[-1]), sends[-1]
+    body = json.loads(r.stdout.strip().splitlines()[-1])
+    code = body["command"][2].split(" receive ", 1)[1].split()[0]
+    sends = [p for p in (tmp_path / "scratch" / "rent" / "podcheck").iterdir() if code in (p / "send.log").read_text()]
+    assert len(sends) == 1
+    for _ in range(20):   # the detached send writes SEND_RC
+        if "SEND_RC=" in (sends[0] / "send.log").read_text():
+            break
+        time.sleep(0.25)
+    return r, body, sends[0]
 
 
 def _pod_receive(tmp_path: Path, src: Path, rc: int = 0, sleep: int = 0) -> str:
     """A fake pod `runpodctl` in a folder of its own: `receive <code>` sleeps <sleep> s, copies
     <src> into the working folder and exits <rc>. Returns the folder (for PATH)."""
     d = tmp_path / f"podbin-{rc}-{sleep}-{src.parent.name}"
-    d.mkdir(exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
     (d / "runpodctl").write_text(f"#!/bin/sh\nsleep {sleep}\ncp '{_posix(src)}' .\nexit {rc}\n", encoding="utf-8", newline="\n")
     os.chmod(d / "runpodctl", 0o755)
     return _posix(d)
 
 
-def _run_tool_body(script: str, folder: Path, path: str, dirname: str, shell: list[str], **subst: str) -> subprocess.CompletedProcess:
-    """The body's script under <shell> with its folder /work/_podcheck/<dirname> at <folder>, its
-    runpodctl the one in <path>, and <subst> applied (old text: new text)."""
-    script = script.replace(f"d=/work/_podcheck/{dirname};", f"d='{_posix(folder)}';").replace("/work/_bin/runpodctl", "runpodctl")
+def _run_tool_body(script: str, root: Path, path: str, tool: str, shell: list[str],
+                   **subst: str) -> tuple[subprocess.CompletedProcess, Path]:
+    """The body's script under <shell> with /work/_podcheck at <root>, its runpodctl the one in
+    <path>, and <subst> applied (old text: new text). Returns the run and the job's folder
+    (<root>/<tool>-<code>)."""
+    code = script.split(" receive ", 1)[1].split()[0]
+    script = script.replace(f"t=/work/_podcheck/{tool};", f"t='{_posix(root)}/{tool}';").replace("/work/_bin/runpodctl", "runpodctl")
     for old, new in subst.items():
         assert old in script, old
         script = script.replace(old, new)
-    return subprocess.run([*shell, f"PATH='{path}':$PATH; {script}"], check=False, capture_output=True, text=True,
-                          env=_clean_env(), timeout=60)
+    r = subprocess.run([*shell, f"PATH='{path}':$PATH; {script}"], check=False, capture_output=True, text=True,
+                       env=_clean_env(), timeout=60)
+    return r, root / f"{tool}-{code}"
+
+
+def _wait_rc(folder: Path) -> None:
+    for _ in range(60):
+        if (folder / "rc").exists():
+            return
+        time.sleep(0.5)
 
 
 def test_podcheck_body_receives_heads_gate_and_podcheck_and_their_sum(tmp_path):
@@ -578,7 +600,7 @@ def test_podcheck_body_receives_heads_gate_and_podcheck_and_their_sum(tmp_path):
     cmd = body["command"]
     assert cmd[:2] == ["sh", "-c"] and len(cmd) == 3
     assert len(r.stdout.strip().splitlines()[-1]) <= TOOL_BODY_MAX
-    assert "1234-word-word-word" in cmd[2] and "base64" not in cmd[2]
+    assert re.search(r" receive 1234-[0-9]+-word ", cmd[2]) and "base64" not in cmd[2]
     with tarfile.open(fileobj=io.BytesIO((send / "podcheck.tar").read_bytes())) as t:
         files = {m.name: t.extractfile(m).read() for m in t.getmembers()}
     assert sorted(files) == ["check.sh", "gate.sh", "podcheck.sh"]
@@ -591,9 +613,10 @@ def test_podcheck_body_receives_heads_gate_and_podcheck_and_their_sum(tmp_path):
 
 
 def test_podcheck_body_runs_only_a_received_tar_whose_sha_matches(tmp_path):
-    """A good receive unpacks the tar into a fresh folder (an earlier copy is removed first) and
-    runs check.sh; a changed tar ends PAYLOAD_SHA_MISMATCH, a failed receive RECEIVE_FAILED, each
-    exit 1 with nothing run; a receive still going after the body's wait prints PENDING <out>."""
+    """A good receive unpacks the tar into the job's own folder and runs check.sh; a changed tar
+    ends PAYLOAD_SHA_MISMATCH, a failed receive RECEIVE_FAILED, each exit 1 with nothing run; the
+    same body sent again ends FOLDER_EXISTS; a receive still going after the body's wait prints
+    PENDING <the job's folder>/out."""
     r, body, send = _tool_body(tmp_path, BODY.as_posix())
     assert r.returncode == 0, r.stdout + r.stderr
     script = body["command"][2]
@@ -603,37 +626,76 @@ def test_podcheck_body_runs_only_a_received_tar_whose_sha_matches(tmp_path):
     bad.write_bytes(good.read_bytes()[:-1] + b"x")
     run_cmd = {"bash check.sh": "echo RAN; ls"}
     for i, sh in enumerate(_posix_shells()):
-        w = tmp_path / f"w{i}"
-        w.mkdir()
-        (w / "old.sh").write_text("stale\n")
-        out = _run_tool_body(script, w, _pod_receive(tmp_path, good), "check", sh, **run_cmd)
-        assert out.returncode == 0, (sh, out.stdout, out.stderr)
-        lines = out.stdout.split()
-        assert lines[0] == "RAN" and "old.sh" not in lines, (sh, out.stdout)
+        out, w = _run_tool_body(script, tmp_path / f"ok{i}", _pod_receive(tmp_path, good), "check", sh, **run_cmd)
+        assert out.returncode == 0 and out.stdout.split()[0] == "RAN", (sh, out.stdout, out.stderr)
         for n in ("gate.sh", "podcheck.sh"):
             assert (w / n).read_bytes() == _head(n), sh
-        out = _run_tool_body(script, w, _pod_receive(tmp_path, bad), "check", sh, **run_cmd)
+        out, _ = _run_tool_body(script, tmp_path / f"ok{i}", _pod_receive(tmp_path, good), "check", sh, **run_cmd)
+        assert out.returncode == 1 and out.stdout.strip() == f"FOLDER_EXISTS {_posix(w)}", (sh, out.stdout)
+        out, w = _run_tool_body(script, tmp_path / f"bad{i}", _pod_receive(tmp_path, bad), "check", sh, **run_cmd)
         assert out.returncode == 1 and out.stdout.startswith("PAYLOAD_SHA_MISMATCH "), (sh, out.stdout)
         assert "RAN" not in out.stdout and not (w / "podcheck.tar").exists() and not (w / "gate.sh").exists()
-        out = _run_tool_body(script, w, _pod_receive(tmp_path, good, rc=1), "check", sh, **run_cmd)
+        out, _ = _run_tool_body(script, tmp_path / f"fail{i}", _pod_receive(tmp_path, good, rc=1), "check", sh, **run_cmd)
         assert out.returncode == 1 and out.stdout.startswith("RECEIVE_FAILED rc=1"), (sh, out.stdout)
         assert "RAN" not in out.stdout
-    slow = tmp_path / "slow"
-    out = _run_tool_body(script, slow, _pod_receive(tmp_path, good, sleep=4), "check", _posix_shells()[0],
-                         **run_cmd, **{"[ $i -lt 20 ]": "[ $i -lt 1 ]"})
-    assert out.returncode == 0 and out.stdout.strip().splitlines()[-1] == "PENDING /work/_podcheck/check/out", out.stdout
-    for _ in range(40):
-        if (slow / "rc").exists():
+    out, slow = _run_tool_body(script, tmp_path / "slow", _pod_receive(tmp_path, good, sleep=4), "check",
+                               _posix_shells()[0], **run_cmd, **{"[ $i -lt 20 ]": "[ $i -lt 1 ]"})
+    assert out.returncode == 0 and out.stdout.strip().splitlines()[-1] == f"PENDING {_posix(slow)}/out", out.stdout
+    _wait_rc(slow)
+    assert (slow / "out").read_text().startswith("RAN")
+
+
+def test_two_interleaved_tool_jobs_keep_their_own_folders_and_results(tmp_path):
+    """Job A still receiving (PENDING) while job B runs on the same pod: each job writes and reads
+    only its own folder, so A's out holds A's result and B's B's. A sibling whose job ended over
+    10 minutes ago is removed; one that ended recently, or still runs (no rc), is kept."""
+    root = tmp_path / "pod"
+    root.mkdir()
+    old_done, new_done, running = root / "check-1-old", root / "check-2-new", root / "check-3-run"
+    for f in (old_done, new_done, running):
+        f.mkdir()
+    (old_done / "rc").write_text("0\n")
+    (new_done / "rc").write_text("0\n")
+    t = time.time() - 3600
+    os.utime(old_done / "rc", (t, t))
+    (_, a, send_a), (_, b, send_b) = _tool_body(tmp_path / "a", BODY.as_posix()), _tool_body(tmp_path / "b", BODY.as_posix())
+    sa, sb = a["command"][2], b["command"][2]
+    assert sa.split(" receive ", 1)[1].split()[0] != sb.split(" receive ", 1)[1].split()[0]
+    sh = _posix_shells()[0]
+    out_a, da = _run_tool_body(sa, root, _pod_receive(tmp_path / "a", send_a / "podcheck.tar", sleep=4), "check", sh,
+                               **{"bash check.sh": "echo RESULT-A", "[ $i -lt 20 ]": "[ $i -lt 1 ]"})
+    assert out_a.stdout.strip().splitlines()[-1] == f"PENDING {_posix(da)}/out", out_a.stdout
+    out_b, db = _run_tool_body(sb, root, _pod_receive(tmp_path / "b", send_b / "podcheck.tar"), "check", sh,
+                               **{"bash check.sh": "echo RESULT-B"})
+    assert out_b.returncode == 0 and out_b.stdout.strip() == "RESULT-B", out_b.stdout
+    _wait_rc(da)
+    assert (da / "out").read_text().strip() == "RESULT-A" and (db / "out").read_text().strip() == "RESULT-B"
+    assert sorted(p.name for p in root.iterdir()) == sorted([da.name, db.name, new_done.name, running.name])
+
+
+def test_send_start_ends_a_send_never_received_after_its_timeout(tmp_path):
+    """The PC-side send runs under timeout: a body never sent still ends it, send.log SEND_RC=124."""
+    (tmp_path / "scratch").mkdir()
+    d = tmp_path / "send"
+    d.mkdir()
+    (d / "f").write_text("x")
+    common, send_body = (ROOT / "tools" / "ops" / "common.sh").as_posix(), (ROOT / "tools" / "ops" / "day" / "send_body.sh").as_posix()
+    env = {**_clean_env(), "RUNPODCTL": _fake_send(tmp_path, sleep=60), "NUZLINE_SCRATCH": str(tmp_path / "scratch")}
+    r = subprocess.run([BASH, "-c", f". '{common}'; . '{send_body}'; send_start '{_posix(d)}' f 2 && echo CODE=$CODE"],
+                       check=False, capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 0 and r.stdout.startswith("CODE=1234-"), r.stdout + r.stderr
+    for _ in range(60):
+        if "SEND_RC=" in (d / "send.log").read_text():
             break
         time.sleep(0.5)
-    assert (slow / "out").read_text().startswith("RAN")
+    assert (d / "send.log").read_text().strip().splitlines()[-1] == "SEND_RC=124"
 
 
 def test_tool_body_receive_times_out_with_receive_failed(tmp_path):
     r, body, send = _tool_body(tmp_path, BODY.as_posix())
     assert r.returncode == 0, r.stdout + r.stderr
-    out = _run_tool_body(body["command"][2], tmp_path / "w", _pod_receive(tmp_path, send / "podcheck.tar", sleep=30), "check",
-                         _posix_shells()[0], **{"bash check.sh": "echo RAN", "timeout -k 10 120 ": "timeout -k 1 1 "})
+    out, _ = _run_tool_body(body["command"][2], tmp_path / "w", _pod_receive(tmp_path, send / "podcheck.tar", sleep=30), "check",
+                            _posix_shells()[0], **{"bash check.sh": "echo RAN", "timeout -k 10 120 ": "timeout -k 1 1 "})
     assert out.returncode == 1 and out.stdout.startswith("RECEIVE_FAILED rc=124"), out.stdout
     assert "RAN" not in out.stdout
 
@@ -896,9 +958,8 @@ def test_stop_body_receives_heads_stop_sh_and_runs_it_with_the_run_name(tmp_path
     assert len(r.stdout.strip().splitlines()[-1]) <= TOOL_BODY_MAX
     script = body["command"][2]
     assert "bash stop.sh run-x);" in script and "base64" not in script
-    w = tmp_path / "w"
-    out = _run_tool_body(script, w, _pod_receive(tmp_path, send / "stop.tar"), "stop", _posix_shells()[0],
-                         **{"bash stop.sh run-x": "echo RAN"})
+    out, w = _run_tool_body(script, tmp_path / "w", _pod_receive(tmp_path, send / "stop.tar"), "stop", _posix_shells()[0],
+                            **{"bash stop.sh run-x": "echo RAN"})
     assert out.returncode == 0 and out.stdout.strip() == "RAN", out.stdout + out.stderr
     assert (w / "stop.sh").read_bytes() == _head("stop.sh")
     bad, _, _ = _tool_body(tmp_path, body_sh, "Bad/name")
@@ -942,15 +1003,29 @@ def test_a_module_that_skips_itself_at_collection_fails_the_run(tmp_path):
         (d / sub).mkdir(parents=True)
     for n in ("weights.py", "weights.txt", "agg.sh", "gate.sh"):
         (d / "bin" / n).write_bytes((GATE.parent / n).read_bytes().replace(b"\r", b""))
-    skip = "SKIPPED [1] tests/rom/test_a.py:7: could not import 'ndspy': No module named 'ndspy'"
-    lines = [("tests/rom/test_a.py 1", "5", f"\n{skip}\nno tests collected in 0.04s\n"),
-             ("tests/rom 1", "0", "tests/rom/test_b.py::test_x\n\nSKIPPED [1] tests\\rom\\test_c.py:5: could not import 'capstone'\n"),
-             ("tests/test_d.py 1", "5", "\nno tests collected (3 deselected) in 0.1s\n")]
-    (d / "col" / "list.txt").write_text("".join(f"{x}\n" for x, _, _ in lines), encoding="utf-8", newline="\n")
-    for k, (_, rc, out) in enumerate(lines, 1):
-        (d / "col" / f"{k}.rc").write_text(rc + "\n")
-        (d / "col" / f"{k}.out").write_text(out, encoding="utf-8", newline="\n")
-        (d / "col" / f"{k}.ids").write_text("".join(x + "\n" for x in out.splitlines() if "::" in x), encoding="utf-8", newline="\n")
+    # Real collect output: setup.sh's collect_one command on a throwaway project (its own
+    # pytest.ini, so no project conftest), with the -m filter of an in-work run.
+    proj = tmp_path / "proj"
+    (proj / "tests" / "rom").mkdir(parents=True)
+    (proj / "pytest.ini").write_text("[pytest]\nmarkers =\n    slow: slow\n", encoding="utf-8", newline="\n")
+    skip_mod = "import pytest\n\npytest.importorskip('a_package_that_does_not_exist')\n\n\ndef test_x():\n    pass\n"
+    (proj / "tests" / "rom" / "test_a.py").write_text(skip_mod, encoding="utf-8", newline="\n")
+    (proj / "tests" / "rom" / "test_b.py").write_text("def test_x():\n    pass\n", encoding="utf-8", newline="\n")
+    (proj / "tests" / "rom" / "test_c.py").write_text(skip_mod, encoding="utf-8", newline="\n")
+    (proj / "tests" / "test_d.py").write_text("import pytest\n\n\n@pytest.mark.slow\ndef test_y():\n    pass\n",
+                                              encoding="utf-8", newline="\n")
+    lines = ["tests/rom/test_a.py 1", "tests/rom 1", "tests/test_d.py 1"]
+    (d / "col" / "list.txt").write_text("".join(f"{x}\n" for x in lines), encoding="utf-8", newline="\n")
+    for k, line in enumerate(lines, 1):
+        c = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-rs", "-m", "not slow and not fullset",
+                            "-p", "no:cacheprovider", line.split()[0]], cwd=proj, check=False, capture_output=True, text=True,
+                           env=_clean_env())  # fmt: skip
+        (d / "col" / f"{k}.rc").write_text(f"{c.returncode}\n")
+        (d / "col" / f"{k}.out").write_text(c.stdout + c.stderr, encoding="utf-8", newline="\n")
+        (d / "col" / f"{k}.ids").write_text("".join(x + "\n" for x in c.stdout.splitlines() if "::" in x), encoding="utf-8",
+                                            newline="\n")  # fmt: skip
+    skip = next(x for x in (d / "col" / "1.out").read_text().splitlines() if x.startswith("SKIPPED "))
+    assert skip.replace("\\", "/").startswith("SKIPPED [1] tests/rom/test_a.py:3: could not import 'a_package_that_does_not_exist'")
     setup = (GATE.parent / "setup.sh").read_text(encoding="utf-8").replace("\r", "")
     py = setup[setup.index("<<'PY'\n") + 7 : setup.index("\nPY\n")]
     subprocess.run([sys.executable, "-", str(d)], input=py, text=True, check=True, capture_output=True)

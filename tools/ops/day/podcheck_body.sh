@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PC SIDE (Git Bash). Usage: podcheck_body.sh
 # Prints the exec-pod body of DAYBOX.md "Send a run" step 3: it receives tools/ops/day/pod/gate.sh
-# and podcheck.sh, as committed at this checkout's HEAD, into a fresh /work/_podcheck/check/ on the
+# and podcheck.sh, as committed at this checkout's HEAD, into its own /work/_podcheck/check-<code word>/ on the
 # pod and runs podcheck.sh /work <POD_SCRIPTS> <POD_WEIGHTS> <quota GB> <warn GB> of HEAD (common.sh pod_bin, pod_sum, pod_wsum: the
 # same files and sums pack.sh writes into meta.env). Its last line is PODCHECK OK or PODCHECK
 # MIXED old=... other=... (pod/podcheck.sh), or PODCHECK REFUSED vm.max_map_count=<value> (see
@@ -34,7 +34,7 @@ printf '%s
 ' "$MAPCHECK" "exec bash podcheck.sh /work $SUM $WSUM $QGB $FWG" > "$T/bin/check.sh"
 tar -cf "$T/podcheck.tar" -C "$T/bin" gate.sh podcheck.sh check.sh
 PSUM=$(sha256sum "$T/podcheck.tar" | cut -c1-64)
-send_start "$T" podcheck.tar || { CODE=""; exit 4; }
+send_start "$T" podcheck.tar 600 || { CODE=""; exit 4; }
 BODY=$(body_json "$(tool_body check podcheck.tar "$PSUM" "$CODE" "bash check.sh")") || { kill "$SPID" 2>/dev/null || true; echo "$BODY"; exit 3; }
 echo "== exec-pod body (pod scripts of HEAD $(git -C "$TOP" rev-parse --short HEAD), POD_SCRIPTS ${SUM:0:12}, ${#BODY} characters):"
 echo "$BODY"
