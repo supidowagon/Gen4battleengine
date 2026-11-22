@@ -86,6 +86,17 @@ runnerpid() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -qE 'runner[0-
 pidlive() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac
   ps -eo pid=,stat= | awk -v p="$1" '$1 == p && $2 !~ /^Z/ {f = 1} END {exit !f}'; }
 
+# grouplive <pgid>: the process group has a member that is not a zombie (podgate's rule).
+grouplive() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac
+  ps -eo pgid=,stat= | awk -v g="$1" '$1 == g && $2 !~ /^Z/ {f = 1} END {exit !f}'; }
+
+# sweeplive <run folder>: a job or the replay of a soundness sweep of that run lives: a group named
+# in <run>/sweep/out/run/* (sweep.sh's unit run files) is live. The jobs run in their own sessions
+# (setsid), so they outlive a sweep driver that was killed (SIGKILL, the OOM killer): status.sh and
+# podcheck.sh list such a run by this, as the driver's sweep.pid alone would miss it.
+sweeplive() { local f; for f in "$1"/sweep/out/run/*; do [ -f "$f" ] || continue
+  grouplive "$(cat "$f" 2>/dev/null)" && return 0; done; return 1; }
+
 # Pod-wide claims (CLAIMS dir, default /work/.claims): a unit held CLAIM_S s gets a claim file
 # <run>.<unit> = "<epoch> <weight> <runner pid>"; the oldest live claim (epoch, then name) wins and
 # while it exists every runner starts only units that fit beside it (choose). Callers hold the pod lock.

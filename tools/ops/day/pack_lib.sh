@@ -104,14 +104,38 @@ pack_sent_key() { local f k
     echo "$k" | grep -qE '^[0-9a-f]{16}$' && { echo "$k"; return 0; };
   done < <(ls -t "$RENT"/out/*/meta.env 2>/dev/null); return 0; }
 
-# pack_body_env: the exec-pod body's env field (',"env":{...}') holding GATE_GB, KILL_GB and MAXP
-# as set on the PC for pack.sh (the shape's values, docs/process.md section 5), only those set;
-# nothing when none is. Refuses a value that is not a whole number; warns on stderr when it sets any.
+# pack_sent_chash <full sha>: as pack_sent_key, for TABLES_CHASH (64 hex): the content hash an
+# earlier send of that commit recorded.
+pack_sent_chash() { local f k
+  while IFS= read -r f; do
+    grep -qx "COMMIT=$1" "$f" || continue
+    k=$(sed -n 's/^TABLES_CHASH=//p' "$f" | tail -1 | tr -d '\r')
+    echo "$k" | grep -qE '^[0-9a-f]{64}$' && { echo "$k"; return 0; };
+  done < <(ls -t "$RENT"/out/*/meta.env 2>/dev/null); return 0; }
+
+# pack_body_env: the exec-pod body's env field (',"env":{...}') holding the knobs set on the PC for
+# pack.sh, only those set (PACK_ENV_NAMES): GATE_GB, KILL_GB, MAXP (the shape's values,
+# docs/process.md section 5), SPACING (the runner's pause between unit starts) and the sweep's
+# SWEEP_P, SWEEP_W, SWEEP_CAP, SWEEP_NICE, SWEEP_JOB_S, SWEEP_SPACING, SWEEP_POLL, SWEEP_REPLAY_S
+# (tools/ops/day/pod/sweep.sh; setup.sh writes them to run.env, sweep_body.sh's start.sh reads them
+# from there when the PC's environment of sweep_body.sh does not set them). Nothing when none is
+# set. Refuses a value that is not a whole number; warns on stderr when it sets any.
+PACK_ENV_NAMES="GATE_GB KILL_GB MAXP SPACING SWEEP_P SWEEP_W SWEEP_CAP SWEEP_NICE SWEEP_JOB_S SWEEP_SPACING SWEEP_POLL SWEEP_REPLAY_S"
 pack_body_env() { local n v out=""
-  for n in GATE_GB KILL_GB MAXP; do v=${!n-}; [ -n "$v" ] || continue
+  for n in $PACK_ENV_NAMES; do v=${!n-}; [ -n "$v" ] || continue
     case "$v" in *[!0-9]*) refuse "$n '$v' is not a whole number" "";; esac
     out="$out${out:+,}\"$n\":\"$v\""; done
   [ -z "$out" ] && return 0
   # A knob exported in the shell reaches every body, normal runs included: say so on stderr.
   echo "WARNING pack.sh: ${out//\"/} from the environment go into this body's env" >&2
   printf ',"env":{%s}' "$out"; }
+
+# pack_sweep_tools <checkout> <commit> <bin dir>: tools/ops/sweep/*.py (extract.py, replay.py,
+# collect.py, seeds.py, nodes.txt) as committed at <commit> of <checkout>, LF, into <bin dir>/sweep/.
+# sweep.sh takes them from there when the run's repo has no tools/ops/sweep (a sweep of a commit
+# older than the sweep tools). Same source rule as the pod scripts: HEAD of the checkout that runs pack.sh.
+pack_sweep_tools() { local s f; s=$(mktemp -d "$RENT/sweepsrc.XXXXXX") || return 1; mkdir -p "$3/sweep"
+  git -C "$1" -c core.autocrlf=false archive --format=tar "$2" tools/ops/sweep 2>/dev/null | tar -xf - -C "$s" || { rm -rf "$s"; return 1; }
+  for f in "$s"/tools/ops/sweep/*.py "$s"/tools/ops/sweep/nodes.txt; do
+    [ -f "$f" ] || continue; tr -d '\r' < "$f" > "$3/sweep/$(basename "$f")" || { rm -rf "$s"; return 1; }; done
+  rm -rf "$s"; [ -f "$3/sweep/replay.py" ] && [ -f "$3/sweep/extract.py" ]; }

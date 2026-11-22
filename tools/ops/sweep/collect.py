@@ -16,8 +16,11 @@ count is unknown)", "jobs.txt has no job line", "0 processes in summary.txt", "<
 summary.txt". <k> counts the classes the replay gave (a CLASS KEY with its diverging fields); <u>
 counts the failed processes and falsifiers in the fallback groups below, which the replay did not
 classify (one such group can hold several different bugs).
-The night and tip default to the out folder's name (`...-<yyyymmdd>-<sha>`), else its parent's
-(`<run>/sweep_out`, the fetched layout), else "?".
+The night and tip default to the run's meta.env (pack.sh writes it: NIGHT=<yyyymmdd>, the packing
+date or SWEEP_NIGHT, and COMMIT=<full sha>, whose first 8 characters are the tip), read from
+<out dir>/meta.env, else <out dir>/../meta.env (`<run>/sweep_out`, the fetched layout); a value
+meta.env lacks (a run packed before NIGHT) comes from the out folder's name
+(`...-<yyyymmdd>-<sha>`), else its parent's, else "?".
 A log with more falsifying examples than @reproduce_failure lines gives the extra examples
 "(repro line not matched)".
 
@@ -46,6 +49,21 @@ except ImportError:  # run as a script: this folder is on sys.path
 FALLBACK = ("(UNREPLAYED, ", "(NOT-REPRODUCED, ", "(NO-FALSIFIER ", "(LOST, ")
 LOG = re.compile(r"(test_\w+?)_(\d+)")
 REPRO = re.compile(r"(@reproduce_failure\(.*?\))(?: as a decorator|\s*$)")
+
+
+def read_meta(out: Path) -> dict[str, str]:
+    """KEY=VALUE lines of the run's meta.env (in the out dir, else in its parent), {} without one.
+    The beacon codes (WATCH_*) are never read."""
+    here = out.resolve()
+    for f in (here / "meta.env", here.parent / "meta.env"):
+        if f.is_file():
+            meta = {}
+            for line in f.read_text(errors="replace").splitlines():
+                k, sep, v = line.strip().partition("=")
+                if sep and re.fullmatch(r"[A-Z_]+", k) and not k.startswith("WATCH_"):
+                    meta[k] = v.strip().strip("\"'")
+            return meta
+    return {}
 
 
 def read_summary(out: Path) -> list[tuple[str, str, str, str]] | None:
@@ -198,8 +216,11 @@ def main(argv: list[str]) -> int:
     for name in (here.name, here.parent.name):  # <run>/sweep_out: the run folder has the name
         if m := re.search(r"(\d{8})-([0-9a-f]{7,40})", name):
             break
-    night = opts.get("--night") or (m.group(1) if m else "?")
-    tip = (opts.get("--tip") or (m.group(2) if m else "?"))[:8]
+    meta = read_meta(out)
+    mnight = meta.get("NIGHT", "") if re.fullmatch(r"\d{8}", meta.get("NIGHT", "")) else ""
+    mtip = meta.get("COMMIT", "") if re.fullmatch(r"[0-9a-f]{7,40}", meta.get("COMMIT", "")) else ""
+    night = opts.get("--night") or mnight or (m.group(1) if m else "?")
+    tip = (opts.get("--tip") or mtip or (m.group(2) if m else "?"))[:8]
     rows = read_summary(out)
     secs, why = replay_sections(out)
     fals = falsifiers(out, secs, why, rows)

@@ -395,10 +395,11 @@ def _marker(
     stream: str = "e4",
     env: dict[str, str] | None = None,
     stubs: tuple[str, ...] = ("flock", "ps", "uv"),
+    chash: str = "",
 ) -> subprocess.CompletedProcess:
     e = _lane_env(tmp_path, stubs) | (env or {})
     return _bash(
-        f". '{_p(POD / 'lane.sh')}'; lane_write_marker {stream} {commit} '{_p(repo)}' '{key}' '{tree}'",
+        f". '{_p(POD / 'lane.sh')}'; lane_write_marker {stream} {commit} '{_p(repo)}' '{key}' '{tree}' '{chash}'",
         e,
         check=False,
     )
@@ -462,6 +463,8 @@ def _make_run(
     tables: bool = False,
     deletions: str | None = None,
     weights: str = "",
+    ochash: str = "",
+    nchash: str = "",
 ) -> Path:
     d = tmp_path / "work" / name
     assert _build_delta(src["repo"], old, new, d).returncode == 0
@@ -486,7 +489,7 @@ def _make_run(
         d / "meta.env",
         f"MODE=delta\nOLD={old}\nNEW={new}\nOLD_TREE={_tree(tmp_path, src, old)}\nNEW_TREE={new_tree or _tree(tmp_path, src, new)}\n"
         f"OLD_TABLES_KEY={okey}\nTABLES_KEY={nkey}\nCOMMIT={new}\nDECOMP={decomp}\nGATE_VERSION=2\nPOD_SCRIPTS=ps1\n"
-        "POD_WEIGHTS=pw1\nWATCH_F=secretf\nWATCH_D=secretd\n",
+        f"POD_WEIGHTS=pw1\nOLD_TABLES_CHASH={ochash}\nTABLES_CHASH={nchash}\nWATCH_F=secretf\nWATCH_D=secretd\n",
     )
     if tables:
         (d / "t").mkdir()
@@ -548,10 +551,10 @@ def _digest(root: Path) -> dict[str, str]:
     }
 
 
-def _setup_lane(tmp_path, src, commit: str | None = None) -> Path:
+def _setup_lane(tmp_path, src, commit: str | None = None, chash: str = "") -> Path:
     commit = commit or src["c1"]
     repo = _run_repo(tmp_path, src, commit=commit)
-    assert _marker(tmp_path, repo, commit, _tree(tmp_path, src, commit)).returncode == 0
+    assert _marker(tmp_path, repo, commit, _tree(tmp_path, src, commit), chash=chash).returncode == 0
     return repo
 
 
@@ -1308,3 +1311,125 @@ def test_only_committed_content_gets_into_a_send(src, tmp_path):
         ), names
         with tarfile.open(tar) as t:
             assert t.extractfile("a.txt").read() == b"a3\n"
+
+
+# --- the content hash: "the same tables" (quick-lane-3) -------------------------------------------
+
+
+def _meta(rent: Path, key64: str, chash: str) -> None:
+    _w(rent / f"tables/tables_k{key64[:16]}.meta", f"KEY={key64}\nCONTENT_HASH={chash}\n")
+
+
+def test_the_delta_ships_tables_only_when_the_content_hash_differs(src, tmp_path):
+    rent = tmp_path / "scratch" / "rent"
+    ka, kb, h1, h2 = "a" * 64, "b" * 64, "1" * 64, "2" * 64
+    _w(rent / "tables/index.txt", f"{src['c1']} {ka}\n{src['c2']} {kb}\n")
+    _w(tmp_path / "ids.txt", "tests/a.py\n")
+    ids = _p(tmp_path / "ids.txt")
+    # two builds with different keys and the same content: nothing to ship, no refusal for tables
+    _meta(rent, ka, h1)
+    _meta(rent, kb, h1)
+    r = _pack(src, tmp_path, src["c1"], src["c2"], "q-e4-aaaaaaa", ids)
+    assert "tables key changed" not in r.stdout and "tables content changed" not in r.stdout, r.stdout
+    # another content: the tables must travel, and without --tables the delta is refused
+    (rent / f"tables/tables_k{kb[:16]}.meta").unlink()
+    _meta(rent, kb, h2)
+    r = _pack(src, tmp_path, src["c1"], src["c2"], "q-e4-bbbbbbb", ids)
+    assert r.returncode == 3 and (
+        "tables content changed (old 1111111111111111, new 2222222222222222) and no --tables" in r.stdout
+    ), r.stdout
+    # the old hash unknown: the key decides, as before the meta files
+    (rent / f"tables/tables_k{ka[:16]}.meta").unlink()
+    r = _pack(src, tmp_path, src["c1"], src["c2"], "q-e4-ccccccc", ids)
+    assert r.returncode == 3 and "tables key changed (old aaaaaaaaaaaaaaaa, new bbbbbbbbbbbbbbbb)" in r.stdout
+    # ... unless an earlier send of the old commit recorded its hash in its kept meta.env
+    _w(rent / "out/e4-a0m-1111111/meta.env", f"COMMIT={src['c1']}\nTABLES_KEY={ka[:16]}\nTABLES_CHASH={h2}\n")
+    r = _pack(src, tmp_path, src["c1"], src["c2"], "q-e4-ddddddd", ids)
+    assert "tables key changed" not in r.stdout and "tables content changed" not in r.stdout, r.stdout
+
+
+def test_a_meta_file_beside_another_archive_gives_no_content_hash(src, tmp_path):
+    rent = tmp_path / "rent"
+    k, h = "c" * 64, "3" * 64
+    _meta(rent, k, h)
+    arch = tmp_path / "x" / f"tables_k{k[:16]}.tar.xz"
+    _w(arch, "archive bytes\n")
+    _w(rent / f"tables/tables_k{k[:16]}.tar.xz", "other bytes\n")  # the build the name points at
+    script = f". '{_p(ROOT / 'tools/ops/common.sh')}'; . '{_p(DAY / 'table_key16.sh')}'; table_chash capture {src['c1']} '{_p(arch)}'"
+    env = {"NUZLINE_REPO": _p(src["repo"]), "NUZLINE_SCRATCH": _p(tmp_path)}
+    # not byte for byte the build of that key: no key, so no hash
+    assert _bash(script, env).stdout.strip() == ""
+    # the same bytes: the build's meta file gives the hash
+    _w(rent / f"tables/tables_k{k[:16]}.tar.xz", "archive bytes\n")
+    assert _bash(script, env).stdout.strip() == h
+    # a meta whose KEY is another build's is not read
+    _w(rent / f"tables/tables_k{k[:16]}.meta", f"KEY={'d' * 64}\nCONTENT_HASH={h}\n")
+    assert _bash(script, env).stdout.strip() == ""
+
+
+@needs_setsid
+def test_tables_stay_when_the_content_hash_matches_whatever_the_key(src, tmp_path):
+    h1, h2 = "1" * 64, "2" * 64
+    _setup_lane(tmp_path, src, chash=h1)
+    cg = _cgroup(tmp_path)
+    # no tables.tar.xz; the keys differ, the content does not: the delta applies, the marker takes the new key
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"], okey="z" * 16, nkey="n" * 16,
+                    ochash=h1, nchash=h1)  # fmt: skip
+    assert _quick(tmp_path, run, cg).returncode == 0, _log(run)
+    m = _kv(tmp_path / "work/_lane/e4.sha")
+    assert m["TABLES_KEY"] == "n" * 16 and m["TABLES_CHASH"] == h1 and m["COMMIT"] == src["c2"]
+    assert (tmp_path / "work/_lane/e4/repo/data/gen4_platinum_kaizo/manifest.json").read_text(encoding="utf-8") == "old tables\n"
+    # the lane holds content h1 but the delta's old content is h2: a fallback, nothing changes
+    run2 = _make_run(tmp_path, src, "q-e4-ccccccc", src["c2"], src["c3"], okey="n" * 16, nkey="n" * 16,
+                     ochash=h2, nchash=h2)  # fmt: skip
+    assert _quick(tmp_path, run2, cg).returncode == 3
+    assert "FALLBACK_FULL tables content of the lane (1111111111111111) is not the delta's OLD content (2222222222222222)" in _log(run2)
+    assert _kv(tmp_path / "work/_lane/e4.sha")["COMMIT"] == src["c2"]
+    # tables that travel carry their hash into the marker
+    run3 = _make_run(tmp_path, src, "q-e4-ddddddd", src["c2"], src["c3"], okey="n" * 16, nkey="m" * 16,
+                     ochash=h1, nchash=h2, tables=True)  # fmt: skip
+    assert _quick(tmp_path, run3, cg).returncode == 0, _log(run3)
+    m = _kv(tmp_path / "work/_lane/e4.sha")
+    assert m["TABLES_KEY"] == "m" * 16 and m["TABLES_CHASH"] == h2
+
+
+@needs_setsid
+def test_without_a_content_hash_the_key_decides_as_before(src, tmp_path):
+    _setup_lane(tmp_path, src, chash="1" * 64)
+    cg = _cgroup(tmp_path)
+    # the delta knows no old hash (a commit packed before the meta files): the marker's key must be OLD's
+    run = _make_run(tmp_path, src, "q-e4-bbbbbbb", src["c1"], src["c2"], okey="z" * 16, nkey="n" * 16, nchash="1" * 64)
+    assert _quick(tmp_path, run, cg).returncode == 3
+    assert "FALLBACK_FULL tables key of the lane" in _log(run)
+
+
+def test_the_marker_keeps_the_content_hash_and_setup_passes_it(src, tmp_path):
+    repo = _run_repo(tmp_path, src)
+    tree = _tree(tmp_path, src, src["c1"])
+    h = "9" * 64
+    assert _marker(tmp_path, repo, src["c1"], tree, chash=h).returncode == 0
+    assert _kv(tmp_path / "work/_lane/e4.sha")["TABLES_CHASH"] == h
+    # a marker written without one (an old caller) has an empty TABLES_CHASH
+    assert _marker(tmp_path, repo, src["c1"], tree).returncode == 0
+    assert _kv(tmp_path / "work/_lane/e4.sha")["TABLES_CHASH"] == ""
+    setup = (POD / "setup.sh").read_text(encoding="utf-8")
+    assert '"${TABLES_KEY:-}" "${TREE:-}" "${TABLES_CHASH:-}"' in setup
+
+
+def test_the_body_env_carries_spacing_and_the_sweep_knobs_and_setup_records_them():
+    knobs = {"SPACING": "5", "SWEEP_P": "3", "SWEEP_W": "13", "SWEEP_JOB_S": "900", "SWEEP_REPLAY_S": "60"}
+    out = _bash(_lib("pack_body_env"), knobs).stdout
+    assert out == ',"env":{"SPACING":"5","SWEEP_P":"3","SWEEP_W":"13","SWEEP_JOB_S":"900","SWEEP_REPLAY_S":"60"}'
+    r = _bash(_lib("pack_body_env"), {"SWEEP_CAP": "9x"}, check=False)
+    assert r.returncode == 3 and "SWEEP_CAP '9x' is not a whole number" in r.stdout
+    # every knob pack.sh passes is one setup.sh writes to run.env (a restart and sweep_body.sh read it there)
+    names = _bash(_lib('echo "$PACK_ENV_NAMES"')).stdout.split()
+    line = next(x for x in (POD / "setup.sh").read_text(encoding="utf-8").splitlines() if x.startswith("RUN_ENV_NAMES="))
+    assert set(names) <= set(line.split("=", 1)[1].strip('"').split())
+    assert {"SPACING", "SWEEP_P", "SWEEP_REPLAY_S"} <= set(names)
+
+
+def test_pack_puts_night_and_the_tables_hash_into_meta_env():
+    text = (DAY / "pack.sh").read_text(encoding="utf-8")
+    assert text.count("TABLES_CHASH=%s") == 2 and "OLD_TABLES_CHASH=%s" in text
+    assert text.count("NIGHT=%s") == 2 and "SWEEP_NIGHT" in text
