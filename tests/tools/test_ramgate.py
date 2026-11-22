@@ -85,12 +85,12 @@ class FreeLock:
         return True
 
     def holder(self):
-        return None, ""
+        return None, "", None
 
     def held_by_lineage(self, kind=None):
         return False
 
-    def in_lineage(self, pid):
+    def in_lineage(self, pid, start=None):
         return pid == 4242  # the fake gated parent run
 
 
@@ -188,12 +188,10 @@ def test_gate_mixed_run_is_refused_naming_the_quick_lane():
     assert "test_nds" not in msg  # the ROM-only test is not listed
 
 
-def test_gate_override_allows_but_still_waits():
-    env = {rg.ENV_ROM_GATE: "1"}
-    assert gate([ENG], modules=ENGINE, env=env)[0] == "GO"
-    assert gate([ENG], modules=ENGINE, env={rg.ENV_ROM_GATE: "0"})[0] == "REFUSE"
-    verdict, _ = gate([ENG], free=7.0, modules=ENGINE, env={**env, rg.ENV_TIMEOUT: "1"})
-    assert verdict == "TIMEOUT"  # weight 5 needs > 11 free
+def test_rom_gate_lifts_nothing_in_the_pytest_gate():
+    for value in ("1", "0"):  # ROM-only items need no override; engine tests are refused anyway
+        assert gate([ENG], modules=ENGINE, env={rg.ENV_ROM_GATE: value})[0] == "REFUSE"
+    assert gate([ROM], modules=ENGINE, env={rg.ENV_ROM_GATE: "1"})[0] == "GO"
 
 
 def test_gate_collect_only_allowed_without_waiting():
@@ -217,11 +215,11 @@ def test_the_env_switches_do_not_turn_the_gate_off_on_the_pc():
 
 
 def test_gate_weight_is_the_heaviest_collected_item_not_the_args():
-    unknown = item("tests/zzz.py::t", "tmp_path")  # no key: 20 with the engine loaded
-    env = {rg.ENV_TIMEOUT: "0", rg.ENV_ROM_GATE: "1"}
-    assert gate([PLAIN, unknown], free=25.9, modules=ENGINE, env=env)[0] == "TIMEOUT"
-    assert gate([PLAIN, unknown], free=26.1, modules=ENGINE, env=env)[0] == "GO"
+    unknown = item("tests/zzz.py::t", "tmp_path")  # no key: 20 with the engine loaded, else 6
+    assert rg.item_weight(unknown, TABLE, {}) == 20.0
     env = {rg.ENV_TIMEOUT: "0"}
+    assert gate([PLAIN, unknown], free=11.9, env=env)[0] == "TIMEOUT"  # 6 > 5: needs > 12
+    assert gate([PLAIN, unknown], free=12.1, env=env)[0] == "GO"
     assert gate([PLAIN], free=11.5)[0] == "GO"  # weight 5 -> needs > 11
     assert gate([PLAIN], free=10.9, env=env)[0] == "TIMEOUT"
 
@@ -321,7 +319,10 @@ def test_cli_pod_rom_gate_and_build(monkeypatch, tmp_path):
 
     def run(argv, free=100.0):
         lock = rg.MachineLock(tmp_path / "ramgate.lock")
-        return rg.main(argv, free=lambda: free, sleep=lambda s: None, say=out.append, lock=lock)
+        return rg.main(
+            argv, free=lambda: free, sleep=lambda s: None, say=out.append, lock=lock,
+            platform="win32",
+        )  # fmt: skip
 
     assert run(["tests/a/test_x.py"]) == 0 and out[-1] == "GO 5"
     assert run(["tests/heavy.py"]) == 13 and out[-1] == "POD 30"
@@ -333,7 +334,7 @@ def test_cli_pod_rom_gate_and_build(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "load_weights", lambda: {**TABLE, "tools/build_tables.py": 11.0})
     assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 11"  # the measured line
     assert run(["--build", "--weight", "12", "--", *OK_CHILD]) == 0 and out[-1] == "GO 12"
-    assert not (tmp_path / "ramgate.lock").exists()  # released after each build
+    assert rg.MachineLock(tmp_path / "ramgate.lock").holder()[0] is None  # released each time
 
 
 def test_cli_weight_without_a_value_is_a_usage_error():
@@ -356,7 +357,7 @@ def test_cli_honours_the_timeout_env(monkeypatch, tmp_path):
     out = []
     code = rg.main(
         ["--build", "--", *OK_CHILD], free=lambda: 1.0, sleep=clock.sleep, clock=clock.now,
-        say=out.append, lock=rg.MachineLock(tmp_path / "l"),
+        say=out.append, lock=rg.MachineLock(tmp_path / "l"), platform="win32",
     )  # fmt: skip
     assert code == 14 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 14"
 
@@ -368,7 +369,7 @@ def test_cli_build_waits_for_ram(monkeypatch, tmp_path):
     out = []
     code = rg.main(
         ["--build", "--", *OK_CHILD], free=lambda: next(seq), sleep=sleeps.append,
-        say=out.append, lock=rg.MachineLock(tmp_path / "l"),
+        say=out.append, lock=rg.MachineLock(tmp_path / "l"), platform="win32",
     )  # fmt: skip
     assert code == 0 and sleeps == [60.0, 60.0] and out[-1] == "GO 14"
     assert not any(m.startswith("POD") for m in out)
@@ -385,31 +386,61 @@ def test_cli_build_runs_the_command_as_its_child_under_the_lock(monkeypatch, tmp
     ]  # fmt: skip
     code = rg.main(
         ["--build", "--", *child], free=lambda: 100.0, say=lambda m: None,
-        lock=rg.MachineLock(lock_file),
+        lock=rg.MachineLock(lock_file), platform="win32",
     )  # fmt: skip
     assert code == 7  # the child's exit code
     import os
 
-    assert seen.read_text().split() == [str(os.getpid()), "build"]  # it ran under my lock
-    assert not lock_file.exists()
+    assert seen.read_text().split()[:2] == [str(os.getpid()), "build"]  # it ran under my lock
+    assert rg.MachineLock(lock_file).holder()[0] is None and not rg.MachineLock(lock_file)._busy()
 
 
 def test_cli_build_waits_for_the_lock_within_the_timeout(monkeypatch, tmp_path):
     monkeypatch.setenv(rg.ENV_TIMEOUT, "1")
     monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
     lock_file = tmp_path / "ramgate.lock"
-    lock_file.write_text("4242 pytest\n", encoding="utf-8")
-    procs = {1: 0, 4242: 1, 100: 1}  # 4242 is alive and not an ancestor of 100
+    procs, born = {1: 0, 4242: 1, 100: 1}, {1: 0.0, 4242: 1.0, 100: 2.0}  # 4242: no ancestor
+    other = rg.MachineLock(lock_file, procs=lambda: procs, started=born.get, me=4242)
+    assert other.acquire("pytest")
     clock = Clock()
     out = []
     code = rg.main(
         ["--build", "--", *OK_CHILD], free=lambda: 100.0, sleep=clock.sleep, clock=clock.now,
-        say=out.append, lock=rg.MachineLock(lock_file, procs=lambda: procs, me=100),
+        say=out.append, platform="win32",
+        lock=rg.MachineLock(lock_file, procs=lambda: procs, started=born.get, me=100),
     )  # fmt: skip
     assert code == 14 and out[-1] == "TIMEOUT 14"
     assert clock.sleeps == [10.0] * 6  # 10 s polls, up to the 1 minute timeout
-    assert sum("holds" in m and "4242" in m for m in out) == 1  # told once per holder
-    assert lock_file.read_text(encoding="utf-8") == "4242 pytest\n"  # never touched
+    told = [m for m in out if "holds the lock" in m]
+    assert len(told) == 1 and "pid 4242" in told[0] and str(lock_file) in told[0]
+    assert "end pid 4242" in told[0]  # how to clear it
+    assert other.owned and other.holder()[:2] == (4242, "pytest")  # never touched
+    other.release()
+
+
+def test_cli_build_on_the_pod_or_off_windows_runs_the_command_directly(monkeypatch, tmp_path):
+    def no_ram():
+        raise AssertionError("free RAM read")
+
+    lock_file = tmp_path / "_scratch" / "ramgate.lock"
+    child = [sys.executable, "-c", "import sys; sys.exit(5)"]
+    monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
+    for platform, pod in (("linux", "1"), ("linux", ""), ("darwin", "")):
+        monkeypatch.setenv(rg.ENV_ON_POD, pod)
+        out = []
+        code = rg.main(
+            ["--build", "--", *child], free=no_ram, say=out.append, platform=platform,
+            lock=rg.MachineLock(lock_file),
+        )  # fmt: skip
+        assert code == 5 and out == []  # no GO line: no wait, no lock, no watchdog
+        assert not lock_file.exists() and not lock_file.parent.exists()
+    monkeypatch.setenv(rg.ENV_ON_POD, "1")  # ignored on win32: the gate applies
+    out = []
+    code = rg.main(
+        ["--build", "--", *child], free=lambda: 100.0, say=out.append, platform="win32",
+        lock=rg.MachineLock(lock_file),
+    )  # fmt: skip
+    assert code == 5 and out[-1].startswith("GO ")
 
 
 @pytest.mark.parametrize("name", ["unit.sh", "setup.sh", "quick.sh"])
@@ -455,11 +486,10 @@ def test_blocker_in_a_fake_run_stops_the_import_and_is_removed(monkeypatch):
     rg.remove_blocker(b, path)  # twice is harmless
 
 
-def test_blocker_wanted_only_for_engine_free_runs_without_override():
+def test_blocker_wanted_only_for_engine_free_runs():
     assert rg.blocker_wanted([PLAIN, ROM], {})
-    assert rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "0"})
+    assert rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "1"})  # no override any more
     assert not rg.blocker_wanted([ROM, ROM], {})
-    assert not rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "1"})
 
 
 def test_blocker_sets_the_child_env_and_removal_unsets_it(monkeypatch):
@@ -573,9 +603,10 @@ def test_timeout_message_names_the_env_and_the_weights_files():
     assert rg.ENV_TIMEOUT in msg and "weights.txt" in msg and "rom_weights.txt" in msg
 
 
-def test_refusal_says_ids_never_a_file_path_and_rom_gate_is_a_last_resort():
+def test_refusal_says_ids_never_a_file_path_and_names_no_override():
     _, msg = gate([ENG], modules=ENGINE)
-    assert "never a file path" in msg and "--rom-ids" in msg and "last resort" in msg
+    assert "never a file path" in msg and "--rom-ids" in msg
+    assert rg.ENV_ROM_GATE not in msg and "last resort" not in msg
 
 
 def test_rom_ids_group_by_file_and_print_ready_commands():
@@ -597,23 +628,25 @@ def test_rom_ids_group_by_file_and_print_ready_commands():
 
 def test_no_wait_counts_only_under_the_measuring_harness_lock(tmp_path):
     procs = {1: 0, 50: 1, 51: 50, 60: 1}  # 50 = harness, 51 = its pytest; 60 unrelated
+    born = {1: 0.0, 50: 1.0, 51: 2.0, 60: 3.0}.get
     path = tmp_path / "ramgate.lock"
-    harness = rg.MachineLock(path, procs=lambda: procs, me=50)
+    harness = rg.MachineLock(path, procs=lambda: procs, started=born, me=50)
     assert harness.acquire("measure")
     clock = Clock()
     env = {rg.ENV_NO_WAIT: "1"}
-    child = rg.MachineLock(path, procs=lambda: procs, me=51)
+    child = rg.MachineLock(path, procs=lambda: procs, started=born, me=51)
     assert gate([PLAIN], free=0.0, env=env, clock=clock, lock=child)[0] == "GO"
     assert clock.sleeps == []
     assert gate([ENG], free=0.0, modules=ENGINE, env=env, lock=child)[0] == "REFUSE"
-    stranger = rg.MachineLock(path, procs=lambda: procs, me=60)  # NO_WAIT alone: ignored
+    stranger = rg.MachineLock(path, procs=lambda: procs, started=born, me=60)  # NO_WAIT: ignored
     lines = []
     env_t = {**env, rg.ENV_TIMEOUT: "0"}
     assert gate([PLAIN], free=0.0, env=env_t, lock=stranger, lines=lines)[0] == "TIMEOUT"
     assert any("ignored" in m for m in lines)
     harness.release()
     assert harness.acquire("pytest")  # a plain run's lock is not the harness's
-    assert gate([PLAIN], free=0.0, env=env_t, lock=rg.MachineLock(path, procs=lambda: procs, me=51))[0] == "TIMEOUT"
+    child2 = rg.MachineLock(path, procs=lambda: procs, started=born, me=51)
+    assert gate([PLAIN], free=0.0, env=env_t, lock=child2)[0] == "TIMEOUT"
     harness.release()
 
 
@@ -630,28 +663,32 @@ def test_the_committed_rom_weights_file_parses():
 
 
 PROCS = {1: 0, 10: 1, 11: 10, 12: 11, 20: 1, 30: 1}  # 12 -> 11 -> 10 -> 1; 20 and 30 unrelated
+BORN = {1: 0.0, 10: 1.0, 11: 2.0, 12: 3.0, 20: 1.5, 30: 1.5}  # every parent started first
 
 
-def _lock(tmp_path, me, procs=PROCS, **kw):
-    return rg.MachineLock(tmp_path / "_scratch" / "ramgate.lock", procs=lambda: procs, me=me, **kw)
+def _lock(tmp_path, me, procs=PROCS, born=BORN):
+    return rg.MachineLock(
+        tmp_path / "_scratch" / "ramgate.lock", procs=lambda: procs, started=born.get, me=me
+    )
 
 
 def test_lock_is_exclusive_and_released(tmp_path):
     a, b = _lock(tmp_path, 10), _lock(tmp_path, 20)
     assert a.acquire() and a.owned
-    assert a.path.read_text(encoding="utf-8") == "10 pytest\n"
-    assert not b.acquire() and not b.held  # 10 is alive
+    assert a.holder() == (10, "pytest", 1.0)
+    assert not b.acquire() and not b.held  # an OS lock held by another open file
     a.release()
-    assert not a.path.exists()
-    assert b.acquire("build") and b.holder() == (20, "build")
+    assert a.holder() == (None, "", None) and a.path.exists()  # the file stays, empty
+    assert b.acquire("build") and b.holder() == (20, "build", 1.5)
     b.release()
 
 
-def test_lock_is_stale_when_its_pid_is_gone(tmp_path):
+def test_a_line_naming_a_dead_holder_is_no_lock(tmp_path):
     a = _lock(tmp_path, 10)
     a.path.parent.mkdir(parents=True)
-    a.path.write_text("999 pytest\n", encoding="utf-8")  # 999 is not running
-    assert a.acquire() and a.holder() == (10, "pytest")
+    a.path.write_text("999 pytest 7.0\n", encoding="utf-8")  # its writer died: no OS lock
+    assert a.acquire() and a.owned and a.holder() == (10, "pytest", 1.0)
+    a.release()
 
 
 def test_lock_held_by_an_ancestor_is_inherited_and_left_alone(tmp_path):
@@ -661,58 +698,89 @@ def test_lock_held_by_an_ancestor_is_inherited_and_left_alone(tmp_path):
     assert child.held_by_lineage() and child.held_by_lineage("pytest")
     assert not child.held_by_lineage("measure")
     child.release()
-    assert parent.path.exists()  # the child never removes its ancestor's lock
-    assert not _lock(tmp_path, 30).held_by_lineage()
+    assert parent.owned and parent.holder()[0] == 10  # the child leaves its ancestor's lock alone
+    assert not _lock(tmp_path, 30).acquire() and not _lock(tmp_path, 30).held_by_lineage()
+    parent.release()
+    assert not child.held_by_lineage()  # a line alone is no hold: the OS lock is free
+
+
+def test_a_live_pid_with_another_start_time_counts_as_gone(tmp_path):
+    born = dict(BORN)
+    parent = _lock(tmp_path, 10, born=born)
+    assert parent.acquire()  # its line: 10 pytest 1.0
+    born[10] = 9.0  # pid 10 now belongs to a process that started later (a reused pid)
+    child = _lock(tmp_path, 12, born=born)
+    assert not child.acquire() and not child.held and not child.held_by_lineage()
+    assert not child.in_lineage(10) and rg.lineage(12, PROCS, born.get) == [12, 11]
     parent.release()
 
 
-def test_an_empty_lock_file_waits_then_goes_stale(tmp_path):
-    now = [0.0]
-    a = _lock(tmp_path, 10, now=lambda: now[0])
-    a.path.parent.mkdir(parents=True)
-    a.path.write_text("", encoding="utf-8")
-    mtime = a.path.stat().st_mtime
-    now[0] = mtime + 1
-    assert not a.acquire()  # its writer may be between create and write
-    now[0] = mtime + rg.LOCK_EMPTY_STALE_S + 1
-    assert a.acquire() and a.owned
+def test_lineage_checks_start_times():
+    assert rg.lineage(12, PROCS, BORN.get) == [12, 11, 10, 1]
+    late = {**BORN, 11: 5.0}  # 11 started after its child 12: a reused parent pid
+    assert rg.lineage(12, PROCS, late.get) == [12]
+    unknown = {**BORN, 10: None}
+    assert rg.lineage(12, PROCS, unknown.get) == [12, 11]
+    assert rg.lineage(1, {1: 2, 2: 1}, lambda p: 0.0) == [1, 2]  # a pid cycle ends
 
 
-def test_a_lock_of_another_pid_is_never_released_by_me(tmp_path):
-    a = _lock(tmp_path, 10)
-    assert a.acquire()
-    a.path.write_text("20 pytest\n", encoding="utf-8")  # someone replaced it
-    a.release()
-    assert a.path.read_text(encoding="utf-8") == "20 pytest\n"
+def test_inside_gated_run_needs_a_start_time_checked_ancestor(tmp_path):
+    born = dict(BORN)
+    child = _lock(tmp_path, 12, born=born)
+    assert rg.inside_gated_run({rg.ENV_DONE: "10"}, child)
+    born[11] = 8.0  # the recorded parent of 12 is a reused pid now
+    assert not rg.inside_gated_run({rg.ENV_DONE: "10"}, child)
+
+
+def test_the_lock_is_freed_when_its_holder_dies_without_unconfigure(tmp_path):
+    import subprocess
+
+    path = tmp_path / "_scratch" / "ramgate.lock"
+    code = (
+        "import importlib.util, sys, time; "
+        f"s = importlib.util.spec_from_file_location('r', {str(ROOT / 'tools/ops/ramgate.py')!r}); "
+        "r = importlib.util.module_from_spec(s); s.loader.exec_module(r); "
+        f"lk = r.MachineLock({str(path)!r}); assert lk.acquire('build'); "
+        "print('LOCKED', flush=True); time.sleep(120)"
+    )
+    holder = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "LOCKED"
+        mine = rg.MachineLock(path)
+        assert not mine.acquire() and mine.holder()[1] == "build"
+        assert "holds the lock" in mine.busy_message()
+    finally:
+        holder.kill()  # no release, no unconfigure: a crash
+        holder.wait(30)
+    assert mine.acquire() and mine.owned  # the kernel freed it at once
+    mine.release()
 
 
 def test_gate_waits_for_the_lock_then_goes_and_holds_it(tmp_path):
-    lock = _lock(tmp_path, 12, procs=dict(PROCS))
-    lock.path.parent.mkdir(parents=True)
-    lock.path.write_text("20 pytest\n", encoding="utf-8")
-    procs = lock._procs()
+    other, lock = _lock(tmp_path, 20), _lock(tmp_path, 12)
+    assert other.acquire()
     clock = Clock()
 
     def sleep(s):
         clock.sleep(s)
-        procs.pop(20, None)  # the other run ends during the first wait
+        other.release()  # the other run ends during the first wait
 
     lines = []
     verdict, _ = rg.pytest_gate(
-        [PLAIN], modules=NO_ENGINE, env={}, table=TABLE, rom_table={}, lock=lock,
+        [PLAIN], modules=NO_ENGINE, env={}, table=TABLE, rom_table={}, pod_only=(), lock=lock,
         free=lambda: 100.0, sleep=sleep, clock=clock.now, say=lines.append,
     )  # fmt: skip
-    assert verdict == "GO" and lock.owned and lock.holder() == (12, "pytest")
-    assert clock.sleeps == [10.0] and "holds" in lines[0]
+    assert verdict == "GO" and lock.owned and lock.holder() == (12, "pytest", 3.0)
+    assert clock.sleeps == [10.0] and "holds the lock" in lines[0] and "pid 20" in lines[0]
     lock.release()
 
 
 def test_gate_lock_wait_times_out_with_a_message_naming_the_lock(tmp_path):
-    lock = _lock(tmp_path, 12)
-    lock.path.parent.mkdir(parents=True)
-    lock.path.write_text("20 pytest\n", encoding="utf-8")
+    other, lock = _lock(tmp_path, 20), _lock(tmp_path, 12)
+    assert other.acquire()
     verdict, msg = gate([PLAIN], env={rg.ENV_TIMEOUT: "0"}, lock=lock)
     assert verdict == "TIMEOUT" and "ramgate.lock" in msg and not lock.held
+    other.release()
 
 
 def test_process_table_and_lineage_of_this_process():
@@ -721,7 +789,6 @@ def test_process_table_and_lineage_of_this_process():
     procs = rg.process_table()
     me = rg.lineage(os.getpid(), procs)
     assert me[0] == os.getpid() and len(me) >= 2  # at least the process that started pytest
-    assert rg.lineage(1, {1: 2, 2: 1}) == [1, 2]  # a pid cycle ends
 
 
 def test_the_machine_lock_lives_in_the_main_checkout(tmp_path):
@@ -793,7 +860,7 @@ def test_an_unreadable_free_ram_figure_is_an_error_not_a_crash(monkeypatch, tmp_
     out = []
     code = rg.main(
         ["--build", "--", *OK_CHILD], free=broken, say=out.append,
-        lock=rg.MachineLock(tmp_path / "l"),
+        lock=rg.MachineLock(tmp_path / "l"), platform="win32",
     )  # fmt: skip
     assert code == rg.EXIT_NO_RAM_READ and out[-1].startswith("ERROR")
 
@@ -904,7 +971,7 @@ MINI_FILES = {
         "    assert os.environ['NUZLINE_ENGINE_BLOCKED'] == '1'\n"
         "    assert os.environ['NUZLINE_RAMGATE_DONE'] == str(os.getpid())\n"
         "    lock = Path(__file__).parents[1] / '_scratch' / 'ramgate.lock'\n"
-        "    assert lock.read_text().split() == [str(os.getpid()), 'pytest']\n"
+        "    assert lock.read_text().split()[:2] == [str(os.getpid()), 'pytest']\n"
     ),
     "tests/test_podonly.py": "def test_jit():\n    pass\n",
 }
@@ -913,7 +980,8 @@ AFTER = (
     "import os, sys, pytest; rc = pytest.main(sys.argv[1:]); "
     "print('AFTER', any(type(f).__name__ == 'EngineBlocker' for f in sys.meta_path), "
     "os.environ.get('NUZLINE_ENGINE_BLOCKED'), os.environ.get('NUZLINE_RAMGATE_DONE'), "
-    "os.path.exists(os.path.join('_scratch', 'ramgate.lock'))); sys.exit(int(rc))"
+    "open(os.path.join('_scratch', 'ramgate.lock')).read().strip() or 'EMPTY'); "
+    "sys.exit(int(rc))"
 )
 
 
@@ -962,7 +1030,7 @@ def test_hook_sees_only_what_minus_m_selected(mini):
 def test_hook_installs_the_blocker_and_lock_and_removes_them_at_the_end(mini):
     rc, out = _run(mini, "tests/test_free.py", code=AFTER)
     assert rc == 0 and "1 passed" in out, out
-    assert "AFTER False None None False" in out
+    assert "AFTER False None None EMPTY" in out
 
 
 def test_hook_refuses_a_pod_only_test(mini):
@@ -970,23 +1038,30 @@ def test_hook_refuses_a_pod_only_test(mini):
     assert rc == rg.EXIT_REFUSE and "pod_only.txt" in out, out
 
 
-def test_hook_waits_for_a_live_lock_and_times_out(mini):
+def test_hook_waits_for_a_live_lock_and_runs_once_its_holder_is_killed(mini):
     import subprocess
 
-    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    lock = mini / "_scratch" / "ramgate.lock"
+    code = (
+        "import importlib.util, sys, time; "
+        "s = importlib.util.spec_from_file_location('r', 'tools/ops/ramgate.py'); "
+        "r = importlib.util.module_from_spec(s); s.loader.exec_module(r); "
+        "lk = r.MachineLock(); assert lk.acquire('pytest'); print('LOCKED', flush=True); "
+        "time.sleep(120)"
+    )
+    other = subprocess.Popen(
+        [sys.executable, "-c", code], cwd=mini, stdout=subprocess.PIPE, text=True
+    )  # a gated run of another session
     try:
-        lock = mini / "_scratch" / "ramgate.lock"
-        lock.parent.mkdir()
-        lock.write_text(f"{other.pid} pytest\n", encoding="utf-8")
+        assert other.stdout.readline().strip() == "LOCKED"
         rc, out = _run(mini, "tests/test_free.py")
         assert rc == rg.EXIT_TIMEOUT and "ramgate.lock" in out, out
-        assert lock.read_text(encoding="utf-8") == f"{other.pid} pytest\n"
     finally:
-        other.kill()
+        other.kill()  # dies without unconfigure
         other.wait(30)
-    rc, out = _run(mini, "tests/test_free.py")  # its pid is gone now: stale, removed, run goes
+    rc, out = _run(mini, "tests/test_free.py")  # the kernel freed the lock: the run goes
     assert rc == 0 and "1 passed" in out, out
-    assert not lock.exists()
+    assert lock.read_text(encoding="utf-8").strip() == ""
 
 
 def test_rom_ids_prints_one_command_with_the_rom_only_ids(mini):

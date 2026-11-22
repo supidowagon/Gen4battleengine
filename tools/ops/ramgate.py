@@ -7,9 +7,9 @@ dispatcher's quick lane. An allowed run waits for free RAM > 6 GB + its weight (
 longest key matching an id; no key = 6 GB in an engine-free run, else 20 GB). The root conftest.py
 applies it at collection.
 
-One local run at a time on the PC: after the RAM check a gated run takes the machine lock
-(`<main checkout>/_scratch/ramgate.lock`, MachineLock) and holds it until it ends; waiting on it
-counts toward the same timeout. While it runs a watchdog thread kills its child processes and
+One local run at a time on the PC: after the RAM check a gated run takes the machine lock, an OS
+lock on `<main checkout>/_scratch/ramgate.lock` (MachineLock), and holds it until it ends; the
+kernel frees it when the holder dies. Waiting on it counts toward the same timeout. While it runs a watchdog thread kills its child processes and
 stops it when free RAM drops below 4 GB (exit 15).
 
 CLI:
@@ -17,6 +17,7 @@ CLI:
         a local job that is not pytest (table builds, `tools.kaizo.*` runs): waits for free RAM >
         6 GB + weight (--weight, else the weights.txt line `tools/build_tables.py`, else 14), takes
         the machine lock, runs the command as its child under the lock and exits with its code.
+        On the pod or off Windows it runs the command directly (no wait, lock or watchdog).
     python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]
         a check only (no lock): `GO <w>` (exit 0) after any wait, `POD <w>` (weight >= 8).
     python tools/ops/ramgate.py --rom-ids [file ...]   (collect only; one ready command per file)
@@ -59,7 +60,7 @@ WATCHDOG_GB = 4.0
 WATCHDOG_POLL_S = 0.5
 LOCK_POLL_S = 10.0  # free RAM is enough but another local run holds the machine lock
 LOCK_NAME = "ramgate.lock"  # under the main checkout's _scratch/: one local run on the PC at a time
-LOCK_EMPTY_STALE_S = 10.0  # a lock file without a pid (its writer died between create and write)
+LOCK_OFFSET = 1 << 20  # Windows: the byte msvcrt.locking holds, far past the holder line
 DEFAULT_TIMEOUT_MIN = 30.0
 
 # Fixtures that need a local input the pod never gets (ROM, patch, linker map, saves, docs sheet,
@@ -104,7 +105,7 @@ MAX_LISTED = 5
 
 ENV_ON_POD = "NUZLINE_ON_POD"
 ENV_TIMEOUT = "NUZLINE_RAMGATE_TIMEOUT"
-ENV_ROM_GATE = "NUZLINE_RAMGATE_ROM_GATE"
+ENV_ROM_GATE = "NUZLINE_RAMGATE_ROM_GATE"  # CLI only: lifts the POD cut-off for ROM-only ids
 ENV_ENGINE_BLOCKED = "NUZLINE_ENGINE_BLOCKED"  # src/nuzline/engine/__init__.py refuses on it
 # Honoured only while a live ancestor holds the machine lock as kind "measure" (the measuring
 # harness, tools/ops/ramgate_measure.py, which checks RAM and runs a watchdog itself).
@@ -270,124 +271,6 @@ def process_table() -> dict[int, int]:
     return out
 
 
-def lineage(pid: int, procs: Mapping[int, int]) -> list[int]:
-    """The pid and its live ancestors, nearest first (a pid cycle or a dead parent ends it)."""
-    out: list[int] = []
-    while pid in procs and pid not in out and pid > 0:
-        out.append(pid)
-        pid = procs[pid]
-    return out
-
-
-def main_checkout(root: Path = ROOT) -> Path:
-    """The main checkout of a git worktree (its .git file -> gitdir -> commondir), else root."""
-    try:
-        dot = root / ".git"
-        if dot.is_file():
-            text = dot.read_text(encoding="utf-8").strip()
-            if text.startswith("gitdir:"):
-                gitdir = Path(text[len("gitdir:") :].strip())
-                gitdir = gitdir if gitdir.is_absolute() else root / gitdir
-                common = (gitdir / "commondir").read_text(encoding="utf-8").strip()
-                common_dir = Path(common) if Path(common).is_absolute() else gitdir / common
-                return common_dir.resolve().parent
-    except OSError:
-        pass
-    return root
-
-
-def lock_path(root: Path = ROOT) -> Path:
-    return main_checkout(root) / "_scratch" / LOCK_NAME
-
-
-class MachineLock:
-    """One local gated run on the PC at a time: `<main checkout>/_scratch/ramgate.lock`, created
-    with O_EXCL, holding `<pid> <kind>`. Stale (removed, then retried) when that pid is gone.
-    A process whose ancestor (or itself) holds it runs under that hold: `inherited`, no file."""
-
-    def __init__(
-        self,
-        path: str | Path | None = None,
-        *,
-        procs: Callable[[], Mapping[int, int]] = process_table,
-        me: int | None = None,
-        now: Callable[[], float] = time.time,
-    ):
-        self.path = Path(path) if path is not None else lock_path()
-        self._procs = procs
-        self.me = os.getpid() if me is None else me
-        self._now = now
-        self.owned = False
-        self.inherited = False
-
-    def in_lineage(self, pid: int) -> bool:
-        """pid is this process or one of its live ancestors."""
-        return pid in lineage(self.me, self._procs())
-
-    @property
-    def held(self) -> bool:
-        return self.owned or self.inherited
-
-    def holder(self) -> tuple[int | None, str]:
-        """(pid, kind) written in the file; (None, "") when absent, empty or unreadable."""
-        try:
-            parts = self.path.read_text(encoding="utf-8").split()
-            return int(parts[0]), (parts[1] if len(parts) > 1 else "")
-        except (OSError, ValueError, IndexError):
-            return None, ""
-
-    def held_by_lineage(self, kind: str | None = None) -> bool:
-        """This process or a live ancestor holds the file (of that kind, when given)."""
-        pid, k = self.holder()
-        if pid is None or (kind is not None and k != kind):
-            return False
-        return self.in_lineage(pid)
-
-    def acquire(self, kind: str = "pytest") -> bool:
-        """Take the lock once (no waiting). True when it is now held by this process or its line."""
-        if self.held:
-            return True
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(3):
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                pass
-            else:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(f"{self.me} {kind}\n")
-                self.owned = True
-                return True
-            pid, _ = self.holder()
-            procs = self._procs()
-            if pid is not None and pid in lineage(self.me, procs):
-                self.inherited = True
-                return True
-            if pid is None:
-                try:
-                    age = self._now() - self.path.stat().st_mtime
-                except OSError:
-                    continue  # removed meanwhile: try again
-                if age < LOCK_EMPTY_STALE_S:
-                    return False  # being written right now
-            elif pid in procs:
-                return False
-            self._remove_if_holder(pid)
-        return False
-
-    def _remove_if_holder(self, pid: int | None) -> None:
-        if self.holder()[0] == pid:
-            try:
-                os.remove(self.path)
-            except OSError:
-                pass
-
-    def release(self) -> None:
-        if self.owned:
-            self._remove_if_holder(self.me)
-        self.owned = self.inherited = False
-
-
 def start_time(pid: int) -> float | None:
     """When the process started (seconds, platform clock), None when it cannot be read."""
     if sys.platform == "win32":
@@ -414,6 +297,194 @@ def start_time(pid: int) -> float | None:
         return float(stat.rsplit(")", 1)[1].split()[19])  # field 22, starttime in clock ticks
     except (OSError, IndexError, ValueError):
         return None
+
+
+def lineage(
+    pid: int,
+    procs: Mapping[int, int],
+    started: Callable[[int], float | None] = start_time,
+) -> list[int]:
+    """The pid and its live ancestors, nearest first. Windows keeps a dead parent's pid as the
+    recorded parent and hands pids out again, so a link counts only when the parent started no
+    later than the child (both start times readable); a pid cycle or a dead parent ends it too."""
+    out: list[int] = []
+    born = started(pid) if pid in procs else None
+    while pid in procs and pid not in out and pid > 0:
+        out.append(pid)
+        parent = procs[pid]
+        if parent not in procs or parent in out or parent <= 0:
+            break
+        parent_born = started(parent)
+        if born is None or parent_born is None or parent_born > born:
+            break
+        pid, born = parent, parent_born
+    return out
+
+
+def main_checkout(root: Path = ROOT) -> Path:
+    """The main checkout of a git worktree (its .git file -> gitdir -> commondir), else root."""
+    try:
+        dot = root / ".git"
+        if dot.is_file():
+            text = dot.read_text(encoding="utf-8").strip()
+            if text.startswith("gitdir:"):
+                gitdir = Path(text[len("gitdir:") :].strip())
+                gitdir = gitdir if gitdir.is_absolute() else root / gitdir
+                common = (gitdir / "commondir").read_text(encoding="utf-8").strip()
+                common_dir = Path(common) if Path(common).is_absolute() else gitdir / common
+                return common_dir.resolve().parent
+    except OSError:
+        pass
+    return root
+
+
+def lock_path(root: Path = ROOT) -> Path:
+    return main_checkout(root) / "_scratch" / LOCK_NAME
+
+
+def _os_lock(fd: int) -> bool:
+    """Exclusive, non-blocking OS lock on the open file; False when another open file holds it.
+    Windows: msvcrt.locking of one byte at LOCK_OFFSET (far past the holder line, which others
+    must still read); elsewhere fcntl.flock. The kernel drops it when the process ends."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        os.lseek(fd, LOCK_OFFSET, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _os_unlock(fd: int) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        os.lseek(fd, LOCK_OFFSET, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+class MachineLock:
+    """One local gated run on the PC at a time: an OS lock (msvcrt.locking on Windows, fcntl.flock
+    elsewhere) on `<main checkout>/_scratch/ramgate.lock`, held for the run. The kernel releases it
+    when the holder ends, however it ends, so there is no stale lock. The file's line
+    `<pid> <kind> <start time>` only names the holder: a process whose live ancestor (pid and
+    start time both matching, so a reused pid never counts) holds the lock runs under that hold
+    (`inherited`). The file itself is never deleted."""
+
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        procs: Callable[[], Mapping[int, int]] = process_table,
+        started: Callable[[int], float | None] = start_time,
+        me: int | None = None,
+    ):
+        self.path = Path(path) if path is not None else lock_path()
+        self._procs = procs
+        self._started = started
+        self.me = os.getpid() if me is None else me
+        self._fd: int | None = None
+        self.inherited = False
+
+    @property
+    def owned(self) -> bool:
+        return self._fd is not None
+
+    @property
+    def held(self) -> bool:
+        return self.owned or self.inherited
+
+    def in_lineage(self, pid: int, start: float | None = None) -> bool:
+        """pid is this process or a live ancestor (start-time checked links); with `start`, that
+        process must also have started at exactly that time."""
+        if pid not in lineage(self.me, self._procs(), self._started):
+            return False
+        return start is None or self._started(pid) == start
+
+    def holder(self) -> tuple[int | None, str, float | None]:
+        """(pid, kind, start time) of the line in the file; (None, "", None) when there is none."""
+        try:
+            parts = self.path.read_text(encoding="utf-8").split()
+            return int(parts[0]), parts[1], float(parts[2])
+        except (OSError, ValueError, IndexError):
+            return None, "", None
+
+    def _open(self) -> int:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0))
+
+    def _busy(self) -> bool:
+        """Some open file holds the OS lock right now (probed with a second open, then let go)."""
+        fd = self._open()
+        try:
+            if _os_lock(fd):
+                _os_unlock(fd)
+                return False
+            return True
+        finally:
+            os.close(fd)
+
+    def held_by_lineage(self, kind: str | None = None) -> bool:
+        """The lock is held now, and its line names this process or a live ancestor (pid and start
+        time), of that kind when given."""
+        pid, k, start = self.holder()
+        if pid is None or start is None or (kind is not None and k != kind):
+            return False
+        return self.in_lineage(pid, start) and (self.owned or self._busy())
+
+    def acquire(self, kind: str = "pytest") -> bool:
+        """Take the lock once (no waiting). True when it is now held by this process or its line."""
+        if self.held:
+            return True
+        fd = self._open()
+        if _os_lock(fd):
+            start = self._started(self.me)
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, f"{self.me} {kind} {start!r}\n".encode())
+            self._fd = fd
+            return True
+        os.close(fd)
+        pid, _, start = self.holder()
+        if pid is not None and start is not None and self.in_lineage(pid, start):
+            self.inherited = True
+            return True
+        return False
+
+    def release(self) -> None:
+        fd, self._fd = self._fd, None
+        self.inherited = False
+        if fd is None:
+            return
+        try:
+            os.ftruncate(fd, 0)  # the line names no one once the lock is free
+            _os_unlock(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+    def busy_message(self) -> str:
+        pid, kind, _ = self.holder()
+        who = f"pid {pid} ({kind})" if pid is not None else "an unnamed process"
+        return (
+            f"ramgate: another local run, {who}, holds the lock on {self.path}; waiting. The OS "
+            f"frees it the moment that process ends; to clear it, end {who} if it is no pytest "
+            "or build of yours (deleting the file does not free it)"
+        )
 
 
 def kill_tree(
@@ -540,10 +611,10 @@ def wait_for_ram(
                 return True
             if clock() >= deadline:
                 return False
-            pid, _ = lock.holder()
-            if pid != told:
-                say(f"ramgate: another local run (pid {pid}) holds {lock.path}; waiting")
-                told = pid
+            pid = lock.holder()[0]
+            if pid != told or told is None:
+                say(lock.busy_message())
+                told = pid if pid is not None else -1
             sleep(LOCK_POLL_S)
             continue
         if clock() >= deadline:
@@ -639,8 +710,8 @@ class EngineBlocker(importlib.abc.MetaPathFinder):
 
 
 def blocker_wanted(items: Iterable, env: Mapping[str, str]) -> bool:
-    """An engine-free run (not all ROM-only, no override) gets the finder."""
-    return not _flag(env, ENV_ROM_GATE) and not all(is_rom_only(i) for i in items)
+    """An engine-free run (not all ROM-only) gets the finder."""
+    return not all(is_rom_only(i) for i in items)
 
 
 def install_blocker(meta_path: list | None = None) -> EngineBlocker:
@@ -687,7 +758,7 @@ def pytest_gate(
         return "GO", "ramgate: collect-only"
     items = list(items)
     pod = pod_only_ids(items, load_pod_only() if pod_only is None else pod_only)
-    if pod:  # even with NUZLINE_RAMGATE_ROM_GATE=1
+    if pod:
         more = f" and {len(pod) - MAX_LISTED} more" if len(pod) > MAX_LISTED else ""
         return "REFUSE", (
             f"ramgate: pod-only tests (tools/ops/day/pod_only.txt) are never run on the PC: "
@@ -696,15 +767,14 @@ def pytest_gate(
         )
     modules = sys.modules if modules is None else modules
     engine_free = not engine_loaded(modules)
-    bad = [] if _flag(env, ENV_ROM_GATE) else disallowed(items, modules)
+    bad = disallowed(items, modules)  # NUZLINE_RAMGATE_ROM_GATE lifts nothing here
     if bad:
         more = f" and {len(bad) - MAX_LISTED} more" if len(bad) > MAX_LISTED else ""
         return "REFUSE", (
             f"ramgate: no engine tests on the PC: {len(bad)} selected test(s) are neither ROM-only "
             f"nor engine-free, first: {', '.join(bad[:MAX_LISTED])}{more}. "
             f"{QUICK_LANE_HINT[0].upper() + QUICK_LANE_HINT[1:]}. "
-            "Pass ROM-only node ids, never a file path (python tools/ops/ramgate.py --rom-ids <file>). "
-            f"{ENV_ROM_GATE}=1 is a last resort: it also lets engine tests run on the PC."
+            "Pass ROM-only node ids, never a file path (python tools/ops/ramgate.py --rom-ids <file>)."
         )
     if _flag(env, ENV_NO_WAIT):
         if lock.held_by_lineage("measure"):
@@ -745,8 +815,9 @@ def xdist_refusal(option, env: Mapping[str, str], platform: str = sys.platform) 
 
 
 def inside_gated_run(env: Mapping[str, str], lock: "MachineLock") -> bool:
-    """NUZLINE_RAMGATE_DONE holds the pid of a gated run that is this process or a live ancestor:
-    a pytest started by a test of that run (or inside it) is part of it."""
+    """NUZLINE_RAMGATE_DONE holds the pid of a gated run that is this process or a live ancestor
+    (lineage: every link start-time checked, so a reused pid is no ancestor): a pytest started by
+    a test of that run (or inside it) is part of it."""
     try:
         pid = int(env.get(ENV_DONE, ""))
     except ValueError:
@@ -803,6 +874,7 @@ def main(
     clock: Callable[[], float] = time.monotonic,
     say: Callable[[str], None] = lambda m: print(m, flush=True),
     lock: MachineLock | None = None,
+    platform: str = sys.platform,
 ) -> int:
     """CLI. `--build ... -- <command>`: a local job that cannot go to the pod: it waits for RAM
     and the machine lock, then runs the command as its child under the lock."""
@@ -819,6 +891,8 @@ def main(
     if build != bool(command):
         say(usage + "; --build needs a command after --, and only --build takes one")
         return 2
+    if build and (on_pod(os.environ, platform) or platform != "win32"):
+        return subprocess.call(command)  # the gate guards the PC only: no wait, lock or watchdog
     w = None
     if "--weight" in argv:
         i = argv.index("--weight")
