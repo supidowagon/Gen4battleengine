@@ -715,12 +715,27 @@ def test_committed_facts_recorded():
     assert raw["gauntlet"] and all("rules" not in g for g in raw["gauntlet"])
     o = load_overrides()
     assert all(g.facts is not None for g in o.gauntlets)
-    # Elite Four + Champion is not a gauntlet group until batch 4 (B4-19).
-    assert not any(t in g.trainers for g in o.gauntlets for t in range(866, 871))
     wayward = next(g for g in o.gauntlets if g.name == "Wayward Cave")
     assert len(wayward.facts.orders) == 2 and wayward.facts.partner.trainer == 612
     route = next(g for g in o.gauntlets if g.name == "Route 213")
     assert len(route.facts.orders) == 120
+
+
+def test_elite_four_and_champion_run_through_coverage(kaizo_names, kaizo_trainers):
+    # Elite Four + Champion (866-870) run as single fights until batch 4 adds their group with the
+    # chain (B4-19; manager ruling 21 Nov, docs/gauntlet-design.md:18) and enter it with no new
+    # blocker (:331): coverage refuses none of them, whether or not the group is recorded.
+    from nuzline.data.tables import load_tables
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
+    from nuzline.engine.coverage import Support, check_opponent, start_weather
+    from tests.conftest import KAIZO_INTERMEDIATE, KAIZO_TABLES_DIR
+
+    tables, inter = load_tables(KAIZO_TABLES_DIR), IntermediateData(KAIZO_INTERMEDIATE)
+    for tid in range(866, 871):
+        trainer = kaizo_trainers[tid]
+        opp = build_trainer_party(trainer, inter)
+        report = check_opponent(tables, kaizo_names, trainer, opp, start_weather(trainer))
+        assert (report.missing, report.level) == ([], Support.EXACT), (tid, report.missing)
 
 
 def test_real_mapping_with_overrides(pkcalc, kaizo_rom_trainers, species):

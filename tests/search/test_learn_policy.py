@@ -13,7 +13,8 @@ import pytest
 from nuzline.engine.levelup import GIVE_UP, advance_learns, needs_learn
 from nuzline.search.learn import learn_answer_array, learn_policy, resolve_learns
 from tests.engine.helpers import roark_real_state
-from tests.search.test_learn import _moves, _with_prompt
+from tests.engine.test_levelup import _with
+from tests.search.test_learn import _FOREIGN, _moves, _with_prompt
 
 
 @pytest.fixture
@@ -88,3 +89,27 @@ def test_a_bad_answer_is_refused(tables, prompt):
     _, _, (species, form), offer = prompt
     with pytest.raises(ValueError, match="move slot"):
         learn_answer_array(tables, [(species, form, {offer: 4})])
+
+
+def test_the_answer_is_read_from_the_learners_slot(tables, names):
+    # The learner in party slot 1 (Prinplup, sample party): its row of the answers is read
+    # (``learn_level``'s lowest slot with learn work, needs_learn), not slot 0's.
+    s = roark_real_state(tables, names)
+    slot = 1
+    ids = jnp.asarray([names.move(m) for m in _FOREIGN], s.moves.dtype)
+    pp = jnp.asarray([int(tables.move_pp[int(m)]) for m in ids], s.pp.dtype)
+    s = s._replace(moves=s.moves.at[0, slot].set(ids), pp=s.pp.at[0, slot].set(pp))
+    s = advance_learns(tables, _with(s, learn_level={slot: 2}, learn_cursor={slot: 0}))
+    assert bool(needs_learn(s)) and int(np.argmax(np.asarray(s.learn_level) > 0)) == slot
+    species, form = int(s.species[0, slot]), int(s.form[0, slot])
+    row = int(tables.species_form_row[species, form])
+    offer = (int(s.learn_level[slot]), int(tables.learnset_move[row, int(s.learn_cursor[slot])]))
+    lead = (int(s.species[0, 0]), int(s.form[0, 0]))
+    mine = learn_answer_array(tables, [(*lead, {}), (species, form, {offer: 3})])
+    assert int(learn_policy(tables, s, jnp.asarray(mine))) == 3
+    out = resolve_learns(tables, s, jnp.asarray(mine))
+    assert int(out.moves[0, slot, 3]) == offer[1]
+    np.testing.assert_array_equal(np.asarray(out.moves[0, 0]), np.asarray(s.moves[0, 0]))
+    # The same answer in slot 0's row only (slot 1 unanswered) gives the move up.
+    other = learn_answer_array(tables, [(species, form, {offer: 3}), None])
+    assert int(learn_policy(tables, s, jnp.asarray(other))) == GIVE_UP

@@ -793,7 +793,6 @@ def test_wayward_fights_and_facts_in_the_real_table(resolved_trainers):
     assert [len(o) for o in facts["orders"]] == [6, 7]
     assert facts["partner"]["trainer"] == 612
     assert facts["partner"]["join_before"] == [1] and facts["leave_gaps"] == [[], []]
-    assert all(resolved_trainers[t]["gauntlet"] is None for t in range(866, 871))  # B4-19
     for t in resolved_trainers.values():
         for order in (t["gauntlet_facts"] or {}).get("orders", ()):
             for fight in order:
