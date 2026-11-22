@@ -414,8 +414,16 @@ def test_cli_build_waits_for_the_lock_within_the_timeout(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("name", ["unit.sh", "setup.sh", "quick.sh"])
 def test_pod_entry_points_export_the_pod_marker(name):
-    text = (ROOT / "tools/ops/day/pod" / name).read_text(encoding="utf-8")
-    assert rg.ENV_ON_POD + "=1" in text
+    """On a line that runs (not a comment, not after a `#`), so a commented-out marker fails."""
+    lines = (ROOT / "tools/ops/day/pod" / name).read_text(encoding="utf-8").splitlines()
+    code = [ln.split(" #")[0] for ln in lines if not ln.lstrip().startswith("#")]
+    assert any(rg.ENV_ON_POD + "=1" in ln for ln in code)
+
+
+def test_the_pod_marker_check_sees_a_commented_out_line():
+    lines = ["#!/bin/bash", "# export NUZLINE_ON_POD=1", "echo x  # NUZLINE_ON_POD=1"]
+    code = [ln.split(" #")[0] for ln in lines if not ln.lstrip().startswith("#")]
+    assert not any(rg.ENV_ON_POD + "=1" in ln for ln in code)
 
 
 def test_blocker_blocks_engine_imports_only():
@@ -543,13 +551,8 @@ def test_a_literal_getfixturevalue_of_a_rom_fixture_is_rom_only():
 
 
 def test_the_dynamic_getfixturevalue_tests_are_listed():
-    for name in (
-        "tests/test_cli.py::test_kaizo_save_export_checks_kaizo_tables",
-        "tests/test_cli.py::test_kaizo_roark_coverage_on_the_saves_is_exact",
-        "tests/kaizo/test_roark_ai_audit.py::test_roark_ai_against_the_pool",
-        "tests/kaizo/test_roark_widths.py::test_roark_pairs_fit_the_width_cap",
-    ):
-        assert name in rg.ROM_ONLY_IDS
+    assert len(rg.ROM_ONLY_IDS) == 6
+    for name in sorted(rg.ROM_ONLY_IDS):  # every listed id names a real test
         file, _, test = name.partition("::")
         assert f"def {test}(" in (ROOT / file).read_text(encoding="utf-8")
 
@@ -865,3 +868,134 @@ def test_the_measuring_harness_figures_and_reads_rss():
     assert harness.START_FREE_GB - rg.RESERVE_GB == 14.0
     text = (ROOT / "tools/ops/ramgate_measure.py").read_text(encoding="utf-8")
     assert 'kind="measure"' in text and "rg.ENV_NO_WAIT" in text
+
+
+def test_free_gb_reads_this_machine():
+    assert 0.0 < rg.free_gb() < 10_000.0
+
+
+def test_meminfo_available():
+    text = "MemTotal:  131072000 kB\nMemFree: 1000 kB\nMemAvailable:   97656250 kB\n"
+    assert rg.meminfo_available_gb(text) == pytest.approx(100.0)
+    with pytest.raises(OSError, match="MemAvailable"):
+        rg.meminfo_available_gb("MemTotal: 1 kB\n")
+
+
+# A throwaway project with copies of the root conftest.py and ramgate.py: real child pytest runs
+# through the real hook. Its "engine" is a fake module entry, so nothing heavy loads; its ROM
+# fixture `docs` is defined in its own tests/conftest.py (module tests.conftest).
+MINI_FILES = {
+    "pytest.ini": "[pytest]\nmarkers =\n    rom: a ROM-only test\n",
+    "tools/ops/day/pod/weights.txt": "tests 0.5 mini\n",
+    "tools/ops/day/rom_weights.txt": "tests 0.5 mini\n",
+    "tools/ops/day/pod_only.txt": "tests/test_podonly.py mini\n",
+    "tests/__init__.py": "",
+    "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef docs():\n    return 1\n",
+    "tests/test_mix.py": (
+        "import sys\nimport types\n\nimport pytest\n\n"
+        "sys.modules.setdefault('nuzline.engine', types.ModuleType('nuzline.engine'))\n\n\n"
+        "@pytest.mark.rom\ndef test_rom(docs):\n    assert docs == 1\n\n\n"
+        "def test_eng():\n    pass\n"
+    ),
+    "tests/test_free.py": (
+        "import os\nimport sys\nfrom pathlib import Path\n\n\n"
+        "def test_blocker_env_and_lock_while_running():\n"
+        "    assert any(type(f).__name__ == 'EngineBlocker' for f in sys.meta_path)\n"
+        "    assert os.environ['NUZLINE_ENGINE_BLOCKED'] == '1'\n"
+        "    assert os.environ['NUZLINE_RAMGATE_DONE'] == str(os.getpid())\n"
+        "    lock = Path(__file__).parents[1] / '_scratch' / 'ramgate.lock'\n"
+        "    assert lock.read_text().split() == [str(os.getpid()), 'pytest']\n"
+    ),
+    "tests/test_podonly.py": "def test_jit():\n    pass\n",
+}
+
+AFTER = (
+    "import os, sys, pytest; rc = pytest.main(sys.argv[1:]); "
+    "print('AFTER', any(type(f).__name__ == 'EngineBlocker' for f in sys.meta_path), "
+    "os.environ.get('NUZLINE_ENGINE_BLOCKED'), os.environ.get('NUZLINE_RAMGATE_DONE'), "
+    "os.path.exists(os.path.join('_scratch', 'ramgate.lock'))); sys.exit(int(rc))"
+)
+
+
+@pytest.fixture
+def mini(tmp_path):
+    import shutil
+
+    for rel, text in MINI_FILES.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    shutil.copy(ROOT / "conftest.py", tmp_path / "conftest.py")
+    shutil.copy(ROOT / "tools/ops/ramgate.py", tmp_path / "tools/ops/ramgate.py")
+    return tmp_path
+
+
+def _run(mini, *args, code=None):
+    import subprocess
+
+    env = _child_env(**{rg.ENV_TIMEOUT: "0"})
+    head = [sys.executable, "-c", code] if code else [sys.executable, "-m", "pytest"]
+    run = subprocess.run(
+        [*head, "-q", "-p", "no:cacheprovider", *args],
+        cwd=mini, env=env, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    return run.returncode, run.stdout + run.stderr
+
+
+def test_hook_refuses_a_mixed_run_with_the_engine_loaded(mini):
+    rc, out = _run(mini, "tests/test_mix.py")
+    assert rc == rg.EXIT_REFUSE, out
+    assert "no engine tests on the PC" in out and "tests/test_mix.py::test_eng" in out
+    assert not (mini / "_scratch" / "ramgate.lock").exists()
+
+
+def test_hook_allows_collect_only(mini):
+    rc, out = _run(mini, "--collect-only", "tests/test_mix.py")
+    assert rc == 0, out
+    assert "test_eng" in out and "test_rom" in out
+
+
+def test_hook_sees_only_what_minus_m_selected(mini):
+    rc, out = _run(mini, "-m", "rom", "tests/test_mix.py")  # test_eng deselected: all ROM-only
+    assert rc == 0 and "1 passed" in out, out
+
+
+def test_hook_installs_the_blocker_and_lock_and_removes_them_at_the_end(mini):
+    rc, out = _run(mini, "tests/test_free.py", code=AFTER)
+    assert rc == 0 and "1 passed" in out, out
+    assert "AFTER False None None False" in out
+
+
+def test_hook_refuses_a_pod_only_test(mini):
+    rc, out = _run(mini, "tests/test_podonly.py")
+    assert rc == rg.EXIT_REFUSE and "pod_only.txt" in out, out
+
+
+def test_hook_waits_for_a_live_lock_and_times_out(mini):
+    import subprocess
+
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        lock = mini / "_scratch" / "ramgate.lock"
+        lock.parent.mkdir()
+        lock.write_text(f"{other.pid} pytest\n", encoding="utf-8")
+        rc, out = _run(mini, "tests/test_free.py")
+        assert rc == rg.EXIT_TIMEOUT and "ramgate.lock" in out, out
+        assert lock.read_text(encoding="utf-8") == f"{other.pid} pytest\n"
+    finally:
+        other.kill()
+        other.wait(30)
+    rc, out = _run(mini, "tests/test_free.py")  # its pid is gone now: stale, removed, run goes
+    assert rc == 0 and "1 passed" in out, out
+    assert not lock.exists()
+
+
+def test_rom_ids_prints_one_command_with_the_rom_only_ids(mini):
+    import subprocess
+
+    run = subprocess.run(
+        [sys.executable, "tools/ops/ramgate.py", "--rom-ids", "tests/test_mix.py"],
+        cwd=mini, env=_child_env(), capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert run.returncode == 0, run.stdout + run.stderr
+    cmds = [ln for ln in run.stdout.splitlines() if ln.startswith("python -m pytest")]
+    assert cmds == ["python -m pytest -p no:cacheprovider -q tests/test_mix.py::test_rom"]

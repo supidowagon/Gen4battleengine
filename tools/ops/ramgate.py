@@ -190,7 +190,12 @@ def free_gb() -> float:
         if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
             raise OSError("GlobalMemoryStatusEx failed")
         return st.ullAvailPhys / 1e9
-    for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+    return meminfo_available_gb(Path("/proc/meminfo").read_text(encoding="utf-8"))
+
+
+def meminfo_available_gb(text: str) -> float:
+    """MemAvailable of a /proc/meminfo text, in GB (10^9 bytes)."""
+    for line in text.splitlines():
         if line.startswith("MemAvailable:"):
             return int(line.split()[1]) * 1024 / 1e9
     raise OSError("MemAvailable not found in /proc/meminfo")
