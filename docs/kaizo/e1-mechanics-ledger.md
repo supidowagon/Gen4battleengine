@@ -1848,10 +1848,17 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   overworld weather (field_battle_data_transfer.c:267). Weather 16 has no battle effect (the field-weather switch's
   default, battle_lib.c:3700; Kaizo keeps it, rom_diff.md:368): the 24 dark-flash rows (Sunyshore Gym, Wayward Cave)
   leave the refusal on that source (manager ruling 4). Weather 14: `AreaCondition.fog_headers` (sorted header ids;
-  `fog_clearable`) lists a fog fight's headers of weather 14 (`OVERWORLD_WEATHER_FOG`, data/trainer.py); Kaizo:
+  `fog_clearable`) is the fog that field Defog can clear: a fog fight's headers of weather 14 (`OVERWORLD_WEATHER_FOG`,
+  data/trainer.py). Weathers 14 and 15 both start a battle in fog (battle_lib.c:3684-3685), but only 14 turns clear
+  with the Defog flag (field_map_change.c:273-277), so deep fog (15) is left out on both sides (decomp and ROM); a
+  seasonal header cannot become 14 (FieldSystem_GetWeather, field_overworld_weather.c:399-422: `sYearlyWeather` holds
+  no fog in the decomp, and `trainer_fog_headers` refuses a ROM table that holds one; vanilla and Kaizo hold none). Kaizo:
   `tools/kaizo/resolve.py` `fog_headers` over `rom_trainer_maps.json` and `rom_map_weather.json` (`Sources.
   map_weather`), into `area_condition`; vanilla: `tools/extract_decomp.py` writes `fog_headers` beside the start
-  condition (header ids from `tools.terrain.header_names`). Kaizo: Byron Split's Route 210 North rows (66-69, 71-76,
+  condition (header ids from `tools.terrain.header_names`); the ROM side (`tools/rom/readers/maps.py`
+  `trainer_fog_headers`: the trainer -> map join and each header's ROM weather byte, `read_trainers` keeps them
+  on fog starts) writes the same field for both games, compared with the decomp in
+  tests/tools/rom/test_trainers.py, and resolve checks it against its own join. Kaizo: Byron Split's Route 210 North rows (66-69, 71-76,
   78, 79, 81, 441, 442, 489, 490), 913 Cyrus #1 (449) and the unplaced-split 636, 637, 659, 660, 748, 774, 776;
   Wake 695 / 696 (start none) and Candice 610 (rain, overrides) are on 363 / 247 without a fog start; deep fog (15:
   Hearthome Gym, Coronet) is never cleared (fmc:275 tests 14 only). MANIFEST_VERSION 37 (table inputs changed:
