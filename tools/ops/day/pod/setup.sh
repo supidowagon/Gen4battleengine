@@ -68,7 +68,7 @@ grep -vE '^[[:space:]]*(#|$)' files.txt > col/list.txt   # the one list both ste
 awk '{print NR "|" $1 "|" ($3 == "A" ? "A" : "N")}' col/list.txt > col/jobs.txt
 collect_one() { IFS='|' read -r n f mk <<< "$1"; cd "$R"; ma=(-m "$MARK"); [ "$mk" = A ] && ma=()
   while b=$(cgmem current) || return 1; [ $(( b / 1000000000 )) -ge "$GATE_GB" ]; do sleep 10; done
-  uv run --frozen pytest --collect-only -q "${ma[@]}" -p no:cacheprovider "$f" > "$D/col/$n.out" 2>&1
+  NUZLINE_ON_POD=1 uv run --frozen pytest --collect-only -q "${ma[@]}" -p no:cacheprovider "$f" > "$D/col/$n.out" 2>&1
   echo $? > "$D/col/$n.rc"; grep '::' "$D/col/$n.out" > "$D/col/$n.ids" || true; }
 export -f collect_one cgmem; export D R MARK GATE_GB="${GATE_GB:-88}"
 xargs -d '\n' -P "${COLLECTP:-4}" -I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt

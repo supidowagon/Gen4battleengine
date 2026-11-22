@@ -108,6 +108,24 @@ per day is the rate used for estimates.
 
 ## 5. Rented test pods (Runpod CPU)
 
+- **No engine tests on the PC.** The root `conftest.py` (`tools/ops/ramgate.py`) enforces it
+  after collection. A local pytest run is allowed only when every selected test is ROM-only (its
+  fixture closure holds a local-input fixture, `ROM_FIXTURES` in `ramgate.py`) or when
+  `nuzline.engine` was not imported by the collected modules (a tool test). Any other run exits
+  at once, naming the first disallowed ids: send them to the quick lane below. An allowed run
+  waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
+  20 GB), a message every 60 s, giving up after `NUZLINE_RAMGATE_TIMEOUT` minutes (default 30).
+  `--collect-only` is allowed without a wait. `NUZLINE_RAMGATE_ROM_GATE=1` lets a refused run
+  through, the RAM wait stays; only the merge gate's ROM-only run sets it. The pod sets
+  `NUZLINE_ON_POD=1` (`unit.sh`, `setup.sh`), which skips the gate. `tools.kaizo.*` runs:
+  `python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]` first (weight 8 or more prints
+  POD, exit 3). Table builds: `python tools/ops/ramgate.py --build [--weight GB]` (default 20)
+  only waits for RAM and never prints POD.
+- **Quick lane (engine tests, a few ids):** send the managing session a request of at most 5
+  test ids at your tip; run name `q-<stream>-<sha7>`. It starts at once on any pod with memory
+  room, ahead of in-work lists, behind push gates only when memory is short. The result you
+  get back is pass or fail plus the first failure lines. Larger lists go on the normal pod
+  list.
 - **What may leave the PC:** source code at a commit (`git archive`) and the built tables
   listed by `TABLE_ALLOW` in `tools/ops/common.sh`. Never the ROM, save files, the calc
   archive or its extraction, the docs sheet or its extraction, or anything personal.
