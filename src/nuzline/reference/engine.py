@@ -8712,12 +8712,29 @@ def _command(action: int) -> str:
     return SWITCH if action >= MOVE_ACTIONS else FIGHT
 
 
+# MAX_MOVES (generated/moves.txt: MOVE_SHADOW_FORCE = 467, then MAX_MOVES), ``moveTable``'s size
+# (ai_context.h:45; ``order.MAX_MOVES``).
+MAX_MOVES = 468
+
+
+def _past_moves_word(mon) -> int:
+    """``BattleMon.moves[4]``: the low 16 bits of the IV bitfield after the four move slots
+    (battle_mon.h:64-72, from bit 0); an id past the move table reads as MOVE_NONE, a stated
+    assumption (``order.past_moves_word``)."""
+    hp, atk, dfn, spe = (int(mon.ivs[k]) for k in (Stat.HP, Stat.ATK, Stat.DEF, Stat.SPE))
+    word = hp | atk << 5 | dfn << 10 | (spe & 1) << 15
+    return word if word < MAX_MOVES else 0
+
+
 def _selected_move(s: RefState, b: int) -> int:
     """``Battler_SelectedMove`` (battle_lib.c:2858-2868) of battler ``b`` choosing FIGHT (the
-    caller's test): ``moves[selected_temp - 1]``, MOVE_NONE for 0 (E2-ML-8;
-    ``order.battler_selected_move``)."""
+    caller's test): ``moves[selected_temp - 1]``, MOVE_NONE for 0; 5 (a carried switch to party
+    slot 5) reads ``moves[4]`` (``_past_moves_word``) (E2-ML-8; ``order.battler_selected_move``)."""
     temp = s.battlers[b].selected_temp
-    return _active(s, b).moves[temp - 1] if temp else 0
+    if not temp:
+        return 0
+    mon = _active(s, b)
+    return mon.moves[temp - 1] if temp <= MOVE_ACTIONS else _past_moves_word(mon)
 
 
 def _order_move(s: RefState, b: int, choices) -> int:
@@ -8860,15 +8877,14 @@ def _ref_step(
                 sd.encore_slot if sd.encore_move else min(actions[side], MOVE_ACTIONS - 1)
             )
         # battlerActions[b][TEMP_VALUE] (E2-ML-8; order.selection_temps): 1 + the FIGHT's slot, 0
-        # under an Encore (bcp.c:447, :525); a party pick's slot where it names a move slot
-        # (:595); a bag item's BattleItemUse (:565) and a party slot 0 or 5 read no move: 0.
+        # under an Encore (bcp.c:447, :525); a party pick's slot, 0-5 (:595; 5 reads moves[4],
+        # _past_moves_word); a bag item's BattleItemUse (:565): 0, a stated assumption.
         if locked or _absent_now(s, side):
             continue
         if commands[side] == FIGHT and not struggling:
             sd.selected_temp = 0 if sd.encore_move else min(actions[side], MOVE_ACTIONS - 1) + 1
         elif commands[side] == SWITCH:
-            pick = actions[side] - MOVE_ACTIONS
-            sd.selected_temp = pick if 1 <= pick <= MOVE_ACTIONS else 0
+            sd.selected_temp = actions[side] - MOVE_ACTIONS
         elif commands[side] == ITEM:
             sd.selected_temp = 0
     # TrainerAI_RecordLastMove (trainer_ai.c:2705-2717) runs on the AI's FIGHT path

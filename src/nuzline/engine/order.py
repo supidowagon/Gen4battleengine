@@ -145,9 +145,10 @@ def fight_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
 def selection_slots(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     """``int32[B]``: ``BattleContext.moveSlot`` after this turn's command selection (E2-ML-5). A
     battler whose action is a move and that picks a command (not absent, bcp.c:330-333; not locked,
-    :333-337) writes it unless it Struggles (STRUGGLING_ALL, :433-434): the Encore slot under an
-    Encore (:440-446), else the chosen slot (:526). Every other battler keeps ``state.move_slot``,
-    and a paused state kept the selection's. Idempotent: a state the selection already wrote
+    :333-337, Battler_CanPickCommand, battle_lib.c:6224-6232, whose RECHARGING no move sets:
+    ``recharge`` is reserved) writes it unless it Struggles (STRUGGLING_ALL, :433-434): the Encore
+    slot under an Encore (:440-446), else the chosen slot (:526). Every other battler keeps
+    ``state.move_slot``, and a paused state kept the selection's. Idempotent: a state the selection already wrote
     gives the same slots."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
@@ -171,11 +172,15 @@ def selection_temps(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     reads it (battle_lib.c:2858-2868: ``moves[TEMP_VALUE - 1]`` when it is nonzero and the
     SELECTED_COMMAND is FIGHT), after this turn's command selection (E2-ML-8): ``1 + slot`` for a
     FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447); a party pick writes the party
-    slot (:595), kept where it names a move slot (1..4; slot 0 reads none, slot 5 reads past the
-    moves, battle_mon.h:64: kept as 0); a bag item writes its BattleItemUse (:565), past the moves
-    too: 0. A Struggling FIGHT (:433-434), a locked battler (:333-337) and an absent one keep it;
-    nothing resets it (BattleContext_Init, battle_lib.c:1974-2017). A paused state kept the
-    selection's. Idempotent on a state the selection wrote."""
+    slot (:595), 0-5 (slot 5 reads ``moves[4]``, past the four slots: ``battler_selected_move``);
+    a bag item writes its BattleItemUse (:565), a struct of the item id, category and target
+    (message_defs.h:15-19) whose ``moves[TEMP_VALUE - 1]`` lies far past the BattleMon: kept as
+    0 (MOVE_NONE), a stated assumption (STATE.md, ledger E2-ML-8). A Struggling FIGHT (:433-434),
+    a battler that picks no command (Battler_CanPickCommand, battle_lib.c:6224-6232: a locked one,
+    bcp.c:333-337; RECHARGING counts too, but no move sets it, ``recharge`` is reserved, so
+    ``locked_slot`` is the whole test) and an absent one keep it; nothing resets it
+    (BattleContext_Init, battle_lib.c:1974-2017). A paused state kept the selection's. Idempotent
+    on a state the selection wrote."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     paused = (state.pivot_battler != 0) | (state.learn_site != 0)
@@ -187,8 +192,7 @@ def selection_temps(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
         fight_temp = jnp.where(
             state.encore_move[b] != 0, 0, jnp.clip(action, 0, MOVE_ACTIONS - 1) + 1
         )
-        party_slot = action - MOVE_ACTIONS
-        party_temp = jnp.where((party_slot >= 1) & (party_slot <= MOVE_ACTIONS), party_slot, 0)
+        party_temp = action - MOVE_ACTIONS  # 0-5 where the action is a switch (actions 4-9)
         new = jnp.where(fight, fight_temp, jnp.where(is_switch(action), party_temp, 0))
         writes = picks_command & (fight | is_switch(action) | is_item(action)) & ~paused
         out.append(jnp.where(writes, new, state.selected_temp[b].astype(_I32)))
@@ -205,15 +209,35 @@ def with_selection(tables: Tables, state: BattleState, actions) -> BattleState:
     )
 
 
+# MAX_MOVES (generated/moves.txt: MOVE_NONE = 0 .. MOVE_SHADOW_FORCE = 467, then MAX_MOVES = 468),
+# the size of the move table ``MOVE_DATA`` reads (ai_context.h:45, ``moveTable[MAX_MOVES]``).
+MAX_MOVES = 468
+
+
+def past_moves_word(state: BattleState, b) -> jnp.ndarray:
+    """``int32``: ``BattleMon.moves[4]`` of battler ``b``, the u16 after the four move slots: the
+    low 16 bits of the IV bitfield (battle_mon.h:64-72, allocated from bit 0 as the ARM ABI does):
+    ``hpIV | attackIV << 5 | defenseIV << 10 | (speedIV & 1) << 15`` (``state.ivs``, the BattleMon's
+    own: a Transform's copy). An id past the move table (``>= MAX_MOVES``) would make
+    ``MOVE_DATA`` read past ``moveTable``: read as MOVE_NONE, a stated assumption (STATE.md,
+    ledger E2-ML-8)."""
+    fmt = format_of(state)
+    iv = state.ivs[party(fmt, b), state.active[b]].astype(_I32)
+    word = iv[Stat.HP] | (iv[Stat.ATK] << 5) | (iv[Stat.DEF] << 10) | ((iv[Stat.SPE] & 1) << 15)
+    return jnp.where(word < MAX_MOVES, word, 0).astype(_I32)
+
+
 def battler_selected_move(state: BattleState, b, fights) -> jnp.ndarray:
     """``int32``: ``Battler_SelectedMove`` (battle_lib.c:2858-2868) of battler ``b`` on a state the
     selection wrote (``with_selection``): ``moves[selected_temp - 1]`` when its SELECTED_COMMAND is
     FIGHT (``fights``: its action this turn is a move, a locked battler's included) and
-    ``selected_temp`` is nonzero, else MOVE_NONE (E2-ML-8)."""
+    ``selected_temp`` is nonzero, else MOVE_NONE (E2-ML-8). ``selected_temp`` 5 (a switch to party
+    slot 5, carried) reads ``moves[4]``: ``past_moves_word``."""
     fmt = format_of(state)
     temp = state.selected_temp[b].astype(_I32)
     slot = jnp.clip(temp - 1, 0, MOVE_ACTIONS - 1)
     move = state.moves[party(fmt, b), state.active[b], slot].astype(_I32)
+    move = jnp.where(temp > MOVE_ACTIONS, past_moves_word(state, b), move)
     return jnp.where(jnp.asarray(fights, bool) & (temp > 0), move, 0)
 
 
@@ -222,7 +246,7 @@ def order_moves(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     (battle_lib.c:1375-1397): Struggle where the selection set ``turnFlags.struggling`` (a battler
     that picked a command, never a locked one, bcp.c:335, :433), else ``moves[moveSlot]`` as it
     stands now (``selection_slots``): a locked battler's last selected slot, which a level-up or
-    a lock its slot does not hold (a called Bide or Thrash) makes differ from ``locked_move``
+    a lock its slot does not hold (a called Bide or Rollout) makes differ from ``locked_move``
     (E2-ML-5)."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
