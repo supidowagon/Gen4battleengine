@@ -158,3 +158,22 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   of the `shadow_*` under Mimic / Transform, battle_io_command.c:579-586), for this command and
   `IfAnyPartyMemberUsedPP` (:1999). Tests: tests/ai/test_commands_four.py `test_used_pp_reads_the_party_copy`,
   `test_party_copy_values`, `test_party_member_deals_more_reads_the_party_copy`.
+
+- **E4-16. B = 4 read bounds and the width of the real split fights** (E4-A W2, A-10 sections 2.7-2.9,
+  A-15 section 5). `tools/ai_read_bounds.py` walks script.s at B = 4 with the target kind in the key
+  (`READ_BOUNDS_B4`, `DRAWN_READ_BOUNDS_B4` in `ai/read_bounds.py`): `IfTargetIsPartner` is decided by the
+  kind (trainer_ai.c:2630-2639), an ally path ends at the nine Terminate lines and enters
+  `TagStrategy_Partner` at script.s:6638 and :7697 (bit 8 counts the part again), every partner read is
+  open (the B = 2 constants of the zeroed partners do not apply), and each `LoadBattlerSpeedRank` call counts
+  2 reads (four ranks, two pattern bits). The walk is an upper bound: partner-dependent branches are not
+  decided by the actual partner. Measurement (`_scratch/e4/width/report.md`, walker `measure_b4.py`):
+  the most reads per slot over the split B = 4 fights (DOUBLES, TWO_TRAINERS, MULTI per partner variant,
+  every AI battler with its own flags | Tag Strategy, its party's moves, the whole fight's moves deciding
+  the drawing rows) is **14** = 65597 scorings, half `WIDTH_CAP`, set by non-rank paths (trainers 79, 435,
+  583). One read per tied compare (6 per call) would put 22 nodes over the cap. Pinned by
+  `tests/ai/test_layout.py::test_b4_split_width` (`fullset`). Copied moves (A-10 section 2.8,
+  `fight_tables(.., fellow_moves=..)`): the pool at B = 4 is every battler the copier can target; a copied
+  Future Sight reads 14 (exact); under 0x7ff (trainer 455) a Mimicked Sand Attack, Smoke Screen, Flash or Double
+  Team passes the cap and the layout is sampled and marked (`AiLayout.sampled`, `sample_n`, `sample_seed`;
+  `BEYOND_CAP_REFUSE` raises instead). Open: the cost of `WIDTH_CAP` 18 (pod measurement); if cheap the cap
+  may be raised and 455 is exact. The cap constant is unchanged.

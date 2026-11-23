@@ -41,6 +41,21 @@ Branches whose outcome is fixed by the move are decided, so the bound follows th
   decided (Expert_StatusEvasionUp's :2204 needs 90 % or more, its :2215 50 % or less: never
   both on one path).
 
+**B = 4 (E4-A W2, A-15 section 5, a_plan decision 10).** ``READ_BOUNDS_B4`` and
+``DRAWN_READ_BOUNDS_B4`` are keyed by one more field, the target kind ``ally`` (the scored target
+is the AI battler's partner: ``IfTargetIsPartner``, trainer_ai.c:2630-2639, decided by the key
+instead of never jumping). The B = 2 constants of the zeroed partners (``_HP_START``) do not
+apply: the partners exist, so their HP percent (0-100), ``IfBattlerFainted``,
+``IfMoveKnown AI_BATTLER_ATTACKER_PARTNER`` (:1650-1664), ``CheckBattlerAbility``,
+``FlagBattlerIsType``, ``IfStatus`` / ``IfNotStatus`` / ``IfMoveEffect`` on them are open. An ally path
+ends at the nine ``IfTargetIsPartner Terminate`` lines (script.s:54, :1625, :6355, :6418, :6501,
+:6523, :6565, :7980, :8022; Terminate is ``PopOrEnd``, :8105-8106) and enters
+``TagStrategy_Partner`` at :6638 (bit 7) and :7697 (bit 8, ``CheckHP_Main``: the part runs twice,
+each flag its own walk, A-9 section 0.4). ``LoadBattlerSpeedRank`` counts 2 reads per call (its
+rank has four values: two pattern bits, A-10 section 2.7). ``CheckIfHighestDamageWithPartner`` is
+one read at the compare of its result (both sweeps' draws fold into the result's law, A-7). The
+B = 2 walk (``kind=None``) is unchanged.
+
 Every other branch is taken both ways, so the table is an upper bound: a path never makes more
 reads than its row says (a layout bound that is never exceeded is never a refusal).
 
@@ -133,12 +148,21 @@ class Script:
 
 
 def flag_reads(
-    script: Script, bit: int, effect: int, damaging: bool, can_quad: bool, drawn: int = 0
+    script: Script,
+    bit: int,
+    effect: int,
+    damaging: bool,
+    can_quad: bool,
+    drawn: int = 0,
+    kind: str | None = None,
 ) -> int:
     """The most reads flag ``bit``'s script makes on one path for a move of ``effect``;
     ``drawn``: 0 no move of the fight draws in ``TrainerAI_CalcDamage``, 1 some does, 2 the
-    scored move does (module docstring)."""
+    scored move does (module docstring). ``kind``: None for the B = 2 walk, "enemy" or
+    "ally" (the target kind) for the B = 4 walk."""
     lines = script.lines
+    b4 = kind is not None
+    rank_reads = 2 if b4 else 1
 
     @cache
     def most(i: int, calc: tuple, hp: tuple = (), eff: tuple = ()) -> int:
@@ -162,7 +186,9 @@ def flag_reads(
             elif cmd == "IfSpeedCompareEqualTo":
                 reads = int(args[0] != "COMPARE_SPEED_SLOWER")  # the tie (E1 Ruling R8)
             elif cmd == "LoadBattlerSpeedRank":
-                reads = 1  # the one tied compare of a single battle (E4-A0; B = 4: 2)
+                # B = 2: the one tied compare of a single battle (E4-A0); B = 4: the rank has four
+                # values, two pattern bits per call (A-10 section 2.7, a_plan decision 6).
+                reads = rank_reads
             elif cmd == "IfBattlerDealsMoreDamage":
                 reads = 1
             elif cmd == "IfPartyMemberDealsMoreDamage":
@@ -172,14 +198,14 @@ def flag_reads(
             target = args[-1] if args and args[-1] in script.labels else None
             if cmd == "GoTo":
                 return reads + most(script.labels[target], calc, hp, eff)
-            taken = _decided(script, cmd, args, calc, effect, damaging, can_quad)
+            taken = _decided(script, cmd, args, calc, effect, damaging, can_quad, kind)
             hp_jump = hp_stay = hp
             if cmd in _HP_COMPARES and target is not None:
-                taken, hp_jump, hp_stay = _hp_branch(cmd, args, hp)
+                taken, hp_jump, hp_stay = _hp_branch(cmd, args, hp, b4)
             eff_jump = eff_stay = eff
             if cmd == "IfMoveEffectivenessEquals" and taken is None:
                 taken, eff_jump, eff_stay = _effectiveness_branch(args[0], eff)
-            nxt = _next_calc(cmd, calc, effect, damaging, drawn, args)
+            nxt = _next_calc(cmd, calc, effect, damaging, drawn, args, b4)
             if calc[0] == "compared" and calc[2] and cmd.startswith("IfLoaded") and taken is None:
                 reads += 1  # FlagMoveDamageScore's pending read: its result is read here
                 nxt = (calc[0], calc[1], False)
@@ -226,7 +252,7 @@ _HP_COMPARES = {
 }
 
 
-def _hp_branch(cmd: str, args, hp: tuple) -> tuple[bool | None, tuple, tuple]:
+def _hp_branch(cmd: str, args, hp: tuple, b4: bool = False) -> tuple[bool | None, tuple, tuple]:
     """An HP-percent compare on the path's ranges ``hp`` (sorted ``(battler, lo, hi)``; a
     battler not in it has 0-100): whether it jumps (None when both ways are open) and the
     ranges after the jump and after falling through (trainer_ai.c:588-646)."""
@@ -235,7 +261,7 @@ def _hp_branch(cmd: str, args, hp: tuple) -> tuple[bool | None, tuple, tuple]:
         return None, hp, hp
     v = int(value)
     ranges = {b: (lo, hi) for b, lo, hi in hp}
-    lo, hi = ranges.get(battler, _HP_START.get(battler, (0, 100)))
+    lo, hi = ranges.get(battler, (0, 100) if b4 else _HP_START.get(battler, (0, 100)))
 
     def narrowed(*keep):
         # keep: the percents the branch allows, as (lo, hi) pieces; the range is their hull.
@@ -276,13 +302,13 @@ def _effectiveness_branch(expected: str, eff: tuple) -> tuple[bool | None, tuple
 
 
 def _next_calc(
-    cmd: str, calc: tuple, effect: int, damaging: bool, drawn: int = 0, args=()
+    cmd: str, calc: tuple, effect: int, damaging: bool, drawn: int = 0, args=(), b4: bool = False
 ) -> tuple:
     if cmd == "LoadCurrentMoveEffect":
         return ("effect", effect)
-    if cmd == "CheckBattlerAbility" and args[0] in _HP_START:
+    if cmd == "CheckBattlerAbility" and args[0] in _HP_START and not b4:
         return ("value", _AI_VALUES["AI_UNKNOWN"])
-    if cmd == "FlagBattlerIsType" and args[0] in _HP_START:
+    if cmd == "FlagBattlerIsType" and args[0] in _HP_START and not b4:
         return ("value", int(args[1] == "TYPE_NORMAL"))
     if cmd in ("FlagMoveDamageScore", "CheckIfHighestDamageWithPartner"):
         return ("compared", damaging, drawn >= 1 and damaging)
@@ -291,19 +317,26 @@ def _next_calc(
     return ("unknown",)
 
 
-def _decided(script, cmd, args, calc, effect, damaging, can_quad) -> bool | None:
-    """True / False when the jump of ``cmd`` is fixed by the move, else None."""
+def _decided(
+    script, cmd, args, calc, effect, damaging, can_quad, target: str | None = None
+) -> bool | None:
+    """True / False when the jump of ``cmd`` is fixed by the move, else None. ``target``: None
+    for B = 2 (the partners are the zeroed battlers 2 and 3), else the B = 4 target kind,
+    "enemy" or "ally" (module docstring)."""
     if cmd == "IfTargetIsPartner":
-        return False
-    if cmd == "IfBattlerFainted" and args[0] in _HP_START:
+        # (attacker & 1) == (defender & 1), trainer_ai.c:2630-2639; never at B = 2.
+        return target == "ally"
+    if target is not None:
+        pass  # B = 4: every partner read is open (living partners exist)
+    elif cmd == "IfBattlerFainted" and args[0] in _HP_START:
         return (
             True  # battlersSwitchingMask has the bits of battlers 2 and 3 (battle_lib.c:2031-2034)
         )
-    if cmd == "IfMoveKnown" and args[0] == "AI_BATTLER_ATTACKER_PARTNER":
+    elif cmd == "IfMoveKnown" and args[0] == "AI_BATTLER_ATTACKER_PARTNER":
         return False  # curHP 0: no jump (trainer_ai.c:1650-1653)
-    if cmd in ("IfStatus", "IfMoveEffect") and args[0] in _HP_START:
+    elif cmd in ("IfStatus", "IfMoveEffect") and args[0] in _HP_START:
         return False  # status / moveEffectsMask & mask is 0 (trainer_ai.c:648-660, :704-716)
-    if cmd == "IfNotStatus" and args[0] in _HP_START:
+    elif cmd == "IfNotStatus" and args[0] in _HP_START:
         return True  # (status & mask) == FALSE (trainer_ai.c:662-674)
     if cmd in ("IfCurrentMoveEffectEqualTo", "IfCurrentMoveEffectNotEqualTo"):
         same = script.effect_id(args[0]) == effect
@@ -365,9 +398,53 @@ def drawn_read_bounds(
     return out
 
 
-def render(bounds, drawn=None) -> str:
+def read_bounds_b4(script: Script, effects) -> dict[tuple[int, bool, bool, bool], tuple[int, ...]]:
+    """The B = 4 table: ``read_bounds`` with the target kind (``ally``) as a fourth key field."""
+    return {
+        (e, damaging, can_quad, ally): tuple(
+            flag_reads(script, bit, e, damaging, can_quad, 0, "ally" if ally else "enemy")
+            for bit in FLAG_LABELS
+        )
+        for e in sorted(effects)
+        for damaging in (False, True)
+        for can_quad in (False, True)
+        for ally in (False, True)
+    }
+
+
+def drawn_read_bounds_b4(
+    script: Script, effects, base
+) -> dict[tuple[int, bool, bool, bool, bool], tuple[int, ...]]:
+    """The B = 4 rows of a fight with a drawing move that differ from ``base``
+    (``read_bounds_b4``), keyed ``(effect, damaging, can be quadruple, current, ally)``."""
+    out = {}
+    for e in sorted(effects):
+        for damaging in (False, True):
+            for can_quad in (False, True):
+                for current in (False, True):
+                    for ally in (False, True):
+                        row = tuple(
+                            flag_reads(
+                                script,
+                                bit,
+                                e,
+                                damaging,
+                                can_quad,
+                                2 if current else 1,
+                                "ally" if ally else "enemy",
+                            )
+                            for bit in FLAG_LABELS
+                        )
+                        if row != base[(e, damaging, can_quad, ally)]:
+                            out[(e, damaging, can_quad, current, ally)] = row
+    return out
+
+
+def render(bounds, drawn=None, bounds_b4=None, drawn_b4=None) -> str:
     rows = "\n".join(f"    {key!r}: {value!r}," for key, value in bounds.items())
     drawn_rows = "\n".join(f"    {key!r}: {value!r}," for key, value in (drawn or {}).items())
+    rows_b4 = "\n".join(f"    {key!r}: {value!r}," for key, value in (bounds_b4 or {}).items())
+    drawn_rows_b4 = "\n".join(f"    {key!r}: {value!r}," for key, value in (drawn_b4 or {}).items())
     return f'''"""Generated by tools/ai_read_bounds.py (E1 Ruling R6); do not edit by hand.
 
 The most random reads (``IfRandomLessThan`` and defender-ability guesses) each transcribed
@@ -381,6 +458,11 @@ one read too: ``READ_BOUNDS`` is for a fight none of whose moves draws (its
 ``IfBattlerDealsMoreDamage`` still counts one: the player's move may draw), and in a fight with
 such a move ``DRAWN_READ_BOUNDS[(battle effect, damaging, can be quadruple effective, the move
 itself draws)]`` replaces the rows that differ.
+
+B = 4 (E4-A W2, tools/ai_read_bounds.py module docstring): ``READ_BOUNDS_B4`` and
+``DRAWN_READ_BOUNDS_B4`` add the target kind: ``(effect, damaging, can be quadruple, ally)`` and
+``(effect, damaging, can be quadruple, the move itself draws, ally)``; ``ally`` is a target on the
+AI battler's own side. The B = 2 tables above are unchanged.
 """
 
 READ_BOUND_BITS = {tuple(FLAG_LABELS)!r}
@@ -391,6 +473,14 @@ READ_BOUNDS: dict[tuple[int, bool, bool], tuple[int, ...]] = {{
 
 DRAWN_READ_BOUNDS: dict[tuple[int, bool, bool, bool], tuple[int, ...]] = {{
 {drawn_rows}
+}}
+
+READ_BOUNDS_B4: dict[tuple[int, bool, bool, bool], tuple[int, ...]] = {{
+{rows_b4}
+}}
+
+DRAWN_READ_BOUNDS_B4: dict[tuple[int, bool, bool, bool, bool], tuple[int, ...]] = {{
+{drawn_rows_b4}
 }}
 '''
 
@@ -406,7 +496,9 @@ def main() -> int:
     script = Script(DECOMP, np.asarray(tables.move_ai_effect))
     base = read_bounds(script, KAIZO_TRANSCRIBED)
     drawn = drawn_read_bounds(script, KAIZO_TRANSCRIBED, base)
-    OUT.write_text(render(base, drawn), "utf-8", newline="\n")
+    base_b4 = read_bounds_b4(script, KAIZO_TRANSCRIBED)
+    drawn_b4 = drawn_read_bounds_b4(script, KAIZO_TRANSCRIBED, base_b4)
+    OUT.write_text(render(base, drawn, base_b4, drawn_b4), "utf-8", newline="\n")
     print(f"wrote {OUT.relative_to(ROOT)}")
     return 0
 

@@ -104,3 +104,79 @@ def test_fight_slot_reads(kaizo_tables, kaizo_roark_party):
     assert fight_slot_reads(rows, KAIZO.flags) == KAIZO.slot_reads == 7
     assert fight_slot_reads(rows, 0x7) == 6  # without RISKY's :6530
     assert fight_slot_reads(move_read_rows(t, []), 0x17) == 1
+
+
+# --- E4-A W2: the B = 4 tables (A-15 section 5, a_plan decision 10) ---
+
+# The nine flags whose script starts with ``IfTargetIsPartner Terminate`` (script.s:54, :1625, :6355,
+# :6418, :6501, :6523, :6565, :7980, :8022): Basic, Expert, EvalAttack, SetupFirstTurn, Risky,
+# PrioritizeExtremes, BatonPass, Weather, Harrassment.
+TERMINATE_BITS = (0, 1, 2, 3, 4, 5, 6, 9, 10)
+
+
+@pytest.mark.fullset
+def test_b4_table_equals_file(kaizo_tables):
+    """The committed B = 4 tables are the generator's output, row for row, with the target kind in
+    the key; the B = 2 tables stay what ``test_read_bounds_are_the_decomps`` pins."""
+    import sys
+
+    from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS_B4, READ_BOUNDS_B4
+    from tools.ai_read_bounds import Script, drawn_read_bounds_b4, read_bounds_b4
+
+    if not (DECOMP / "src/battle/trainer_ai/script.s").exists():
+        pytest.skip("decomp not present")
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), 100000))
+    script = Script(DECOMP, np.asarray(kaizo_tables.move_ai_effect))
+    base = read_bounds_b4(script, KAIZO_TRANSCRIBED)
+    assert base == READ_BOUNDS_B4
+    assert drawn_read_bounds_b4(script, KAIZO_TRANSCRIBED, base) == DRAWN_READ_BOUNDS_B4
+    assert len(READ_BOUNDS_B4) == 2 * len(READ_BOUNDS)
+    assert {(e, d, q) for e, d, q, _ in READ_BOUNDS_B4} == set(READ_BOUNDS)
+
+
+def test_ally_paths_terminate():
+    """An ally target ends the nine ``IfTargetIsPartner Terminate`` flags at once (0 reads, every
+    row, drawn rows too) and walks only TagStrategy_Partner in bits 7 and 8; an enemy target keeps
+    its own reads (the enemy rows are the B = 2 walk with the partner reads open, at least the
+    B = 2 value except where the zeroed partners had decided a branch away)."""
+    from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS_B4, READ_BOUNDS_B4
+
+    rows = [(k, v) for k, v in (*READ_BOUNDS_B4.items(), *DRAWN_READ_BOUNDS_B4.items()) if k[-1]]
+    assert rows
+    for _, row in rows:
+        by_bit = dict(zip(READ_BOUND_BITS, row, strict=True))
+        assert all(by_bit[b] == 0 for b in TERMINATE_BITS), row
+    assert any(row[READ_BOUND_BITS.index(7)] > 0 for _, row in rows)
+    enemy = [v for k, v in READ_BOUNDS_B4.items() if not k[-1]]
+    assert any(row[READ_BOUND_BITS.index(0)] > 0 for row in enemy)
+
+
+def test_check_hp_double_bound():
+    """A-9 section 0.4: CHECK_HP's ally path enters TagStrategy_Partner (s:7697) as well as Tag's
+    (s:6638), so on an ally target bit 8's reads equal bit 7's and a fight with both flags counts
+    the part twice."""
+    from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS_B4, READ_BOUNDS_B4
+
+    tag, hp = READ_BOUND_BITS.index(7), READ_BOUND_BITS.index(8)
+    ally = [v for k, v in (*READ_BOUNDS_B4.items(), *DRAWN_READ_BOUNDS_B4.items()) if k[-1]]
+    assert all(row[tag] == row[hp] for row in ally)
+    best = max(ally, key=lambda row: row[tag])
+    assert best[tag] > 0
+    rows = np.asarray([[[0] * len(READ_BOUND_BITS), list(best)]], np.int8)
+    assert fight_slot_reads(rows, 1 << 7, b4=True) == best[tag]
+    assert fight_slot_reads(rows, 1 << 7 | 1 << 8, b4=True) == 2 * best[tag]
+
+
+def test_b4_speed_rank_reads_two_per_call():
+    """A-10 section 2.7: ``LoadBattlerSpeedRank`` counts 2 reads per call. Hand-checked column 7
+    rows (enemy target): Trick Room (effect 259) 5 = two calls (4) + R@7012-7022's one more
+    (A-8 2.11), Future Sight (148) 7 = three calls (6) + R@7173's (A-8 2.16); the B = 2 column is 0
+    for both (cleared partners decide them away). Helping Hand (176) on an ally: 3 = one call (2)
+    + the partner's rolls (s:7582-7599)."""
+    from nuzline.ai.read_bounds import READ_BOUNDS_B4
+
+    col = READ_BOUND_BITS.index(7)
+    assert READ_BOUNDS_B4[(259, False, False, False)][col] == 5
+    assert READ_BOUNDS_B4[(148, False, False, False)][col] == 7
+    assert READ_BOUNDS_B4[(176, False, False, True)][col] == 3
+    assert READ_BOUNDS[(259, False, False)][col] == READ_BOUNDS[(148, False, False)][col] == 0
