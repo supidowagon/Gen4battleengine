@@ -482,7 +482,7 @@ rate used for estimates.
   (left out when the list is empty). Never compare a merge candidate against an older base
   once `main` was merged into the branch.
 - **Capture identity.** The capture a candidate compares against has the candidate's base
-  engine and packed tables. Check that by sha and packed-table content, never by table key:
+  engine and packed tables. Check that by sha and packed-table content hash (`tools/ops/content_hash.py`, the `CONTENT_HASH` of `tables_k<key16>.meta`), never by table key:
   the key hashes tool code and tree state, so it differs across machines and after tool-only
   changes. After every landing that changes the engine or tables the new `main` capture
   becomes the standing capture (stored on the volume).

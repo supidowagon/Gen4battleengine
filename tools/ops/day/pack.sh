@@ -4,12 +4,16 @@
 # --delta is the quick lane (DAYBOX.md "Quick lane"): the files that changed between the stream's
 # last synced commit <old-sha> and <new-sha> (delta.tar, deletions.txt), at most 5 test ids, run name
 # q-<stream>-<label>; bin/quick.sh applies it to the stream's lane repo on the pod and runs the ids.
-# tables.tar.xz travels only when the tables key of <new-sha> differs from <old-sha>'s (key read
-# as snap.sh's table_key16 does: <archive>.key beside it, the tables_k<key16> name, index.txt for
-# the old one); then --tables is required. Without --tables the new key is read from
-# $RENT/tables_<short new>.tar.xz. A key no archive or index.txt line gives comes from an earlier
-# send of that commit (pack_lib.sh pack_sent_key: its kept meta.env), so the old commit's key is
-# known whenever the marker's commit was sent from this PC. Everything below holds for both modes except where it says delta.
+# tables.tar.xz travels only when the tables content hash of <new-sha> differs from <old-sha>'s
+# (CONTENT_HASH of the build's meta file, tools/ops/content_hash.py; table_key16.sh table_chash, or
+# an earlier send's kept meta.env TABLES_CHASH); when either content hash is unknown it travels only
+# when the tables key differs (key read as snap.sh's table_key16 does: <archive>.key beside it, the
+# tables_k<key16> name, index.txt for the old one). A tables send needs --tables. Without --tables
+# the new key and hash are read from $RENT/tables_<short new>.tar.xz and its meta. A key no archive
+# or index.txt line gives comes from an earlier send of that commit (pack_lib.sh pack_sent_key: its
+# kept meta.env), so the old commit's key is known whenever the marker's commit was sent from this
+# PC. The key stays the cache identity (meta.env TABLES_KEY, the lane marker); it is still needed
+# for the new commit. Everything below holds for both modes except where it says delta.
 # Bundles the git archive of <commit> + built tables + the test list + the pod scripts of
 # tools/ops/day/pod (*.sh, weights.py, weights.txt; from git at HEAD of the checkout that runs
 # pack.sh, LF, not from <commit>) into $RENT/out/<run>/payload.tar,
@@ -25,10 +29,14 @@
 # any check (the checks fail closed). Any failure after $RENT/out/<run> is created removes it.
 # Env: MARK (pytest -m for lines without A; default "not slow and not fullset": the per-tip run;
 # MARK=fullset for the merge-candidate run, DAYBOX.md "Merge candidate"); GATE_GB, KILL_GB, MAXP
-# (the pod shape's values): each one set goes into the printed body's env (pack_body_env), in both
-# modes; unset, a normal run's runner uses its defaults and quick.sh finds them on the pod. Other
-# runner knobs go in the exec body by hand.
-# meta.env also gets GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
+# (the pod shape's values), SPACING and the sweep knobs SWEEP_P, SWEEP_W, SWEEP_CAP, SWEEP_NICE,
+# SWEEP_JOB_S, SWEEP_SPACING, SWEEP_POLL, SWEEP_REPLAY_S (pack_lib.sh PACK_ENV_NAMES): each one set
+# goes into the printed body's env (pack_body_env), in both modes; unset, a normal run's runner
+# uses its defaults and quick.sh finds them on the pod. Other runner knobs go in the exec body by hand.
+# The payload's bin/ also holds sweep/ (tools/ops/sweep/*.py from git at HEAD of the checkout that
+# runs pack.sh, pack_lib.sh pack_sweep_tools): sweep.sh uses it for a repo without tools/ops/sweep.
+# meta.env also gets NIGHT (yyyymmdd: SWEEP_NIGHT, else the packing date; the sweep's collect.py takes
+# the tip from COMMIT and the night from it when the run name has no date), TABLES_CHASH (and a delta's OLD_TABLES_CHASH) with TABLES_CHASH_V (table_key16.sh TABLE_CHASH_V; pack_sent_chash and the pod's marker compare need it) and GATE_VERSION (2: weights, reserves, gate lock, claims), POD_SCRIPTS (common.sh
 # pod_sum: the packed *.sh and weights.py) and POD_WEIGHTS (pod_wsum: weights.txt); setup.sh copies
 # them to gate.env for podcheck.sh, which podcheck_body.sh runs before every pack,
 # and WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
@@ -78,7 +86,14 @@ if [ "$DELTA" = 1 ]; then
   else NKEY=$(table_key16 compare "$NEW" "$RENT/tables_${NEW:0:8}.tar.xz"); NSRC="archive or index.txt"
     [ -n "$NKEY" ] || { NKEY=$(pack_sent_key "$NEW"); NSRC="an earlier send's meta.env"; }
     [ -n "$NKEY" ] || refuse "no table key for ${NEW:0:8} (no $RENT/tables_${NEW:0:8}.tar.xz, index.txt line or earlier send); pass --tables <archive>" ""; fi
-  SHIP=0; if [ -z "$OKEY" ] || [ "$OKEY" != "$NKEY" ]; then SHIP=1
+  # Content hash: the identity of "the same tables" (build_tables.sh meta, tools/ops/content_hash.py).
+  OCH=$(table_chash compare "$OLD" "$RENT/tables_${OLD:0:8}.tar.xz"); [ -n "$OCH" ] || OCH=$(pack_sent_chash "$OLD")
+  if [ -n "$TBS" ]; then NCH=$(table_chash capture "$NEW" "$TBS")
+  else NCH=$(table_chash compare "$NEW" "$RENT/tables_${NEW:0:8}.tar.xz"); [ -n "$NCH" ] || NCH=$(pack_sent_chash "$NEW"); fi
+  SHIP=0; if [ -n "$OCH" ] && [ -n "$NCH" ]; then   # both known: the content decides, the key does not
+    if [ "$OCH" != "$NCH" ]; then SHIP=1
+      [ -n "$TBS" ] || refuse "the tables content changed (old ${OCH:0:16}, new ${NCH:0:16}) and no --tables was given: the delta must carry the new tables" ""; fi
+  elif [ -z "$OKEY" ] || [ "$OKEY" != "$NKEY" ]; then SHIP=1
     [ -n "$TBS" ] || refuse "the tables key changed (old ${OKEY:-unknown}, new $NKEY) and no --tables was given: the delta must carry the new tables" ""; fi
 fi
 
@@ -100,6 +115,7 @@ if [ "$DELTA" = 0 ]; then
   deny "files.txt lines outside the format '<tests path or id> <ids per chunk> [A] [<GB>G]'" "$(cat "$P/files.txt")" -vE "$LINE"
   COMMIT=$(git -C "$REPO" rev-parse --verify "$C^{commit}")
   TREE=$(git -C "$REPO" rev-parse "$COMMIT^{tree}"); TKEY=$(table_key16 capture "$COMMIT" "$TB")   # TKEY: empty without a key
+  TCH=$(table_chash capture "$COMMIT" "$TB")   # TCH: the content hash, empty without a meta file
   pack_code_tar "$REPO" "$COMMIT" "$P/code.tar"
   cp "$TB" "$P/tables.tar.xz"
 else
@@ -109,13 +125,16 @@ else
   [ "$SHIP" = 0 ] || cp "$TBS" "$P/tables.tar.xz"
 fi
 pod_bin "$TOP" "$OPS" "$P/bin" || refuse "could not extract tools/ops/day/pod at $OPS" ""
+pack_sweep_tools "$TOP" "$OPS" "$P/bin" || refuse "could not extract tools/ops/sweep (extract.py, replay.py) at $OPS" ""
 pack_draw_beacons   # WF, WD
+NIGHT="${SWEEP_NIGHT:-$(date +%Y%m%d)}"   # meta.env NIGHT: tools/ops/sweep/collect.py falls back to it when the run name has no date
+echo "$NIGHT" | grep -qE '^[0-9]{8}$' || refuse "SWEEP_NIGHT is not yyyymmdd" "$NIGHT"
 PODSUM=$(pod_sum "$P/bin"); PODW=$(pod_wsum "$P/bin")
 if [ "$DELTA" = 0 ]; then
-  printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nTREE=%s\nTABLES_KEY=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$PODW" "$TREE" "$TKEY" "$WF" "$WD" > "$P/meta.env"
+  printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nTREE=%s\nTABLES_KEY=%s\nTABLES_CHASH_V=%s\nTABLES_CHASH=%s\nNIGHT=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$PODSUM" "$PODW" "$TREE" "$TKEY" "$TABLE_CHASH_V" "$TCH" "$NIGHT" "$WF" "$WD" > "$P/meta.env"
   CT=$(tar -tf "$P/code.tar")
 else
-  printf 'MODE=delta\nOLD=%s\nNEW=%s\nOLD_TREE=%s\nNEW_TREE=%s\nOLD_TABLES_KEY=%s\nTABLES_KEY=%s\nCOMMIT=%s\nDECOMP=%s\nOPS=%s\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$OLD" "$NEW" "$OLD_TREE" "$NEW_TREE" "$OKEY" "$NKEY" "$COMMIT" "$DECOMP" "$OPS" "$PODSUM" "$PODW" "$WF" "$WD" > "$P/meta.env"
+  printf 'MODE=delta\nOLD=%s\nNEW=%s\nOLD_TREE=%s\nNEW_TREE=%s\nOLD_TABLES_KEY=%s\nTABLES_KEY=%s\nTABLES_CHASH_V=%s\nOLD_TABLES_CHASH=%s\nTABLES_CHASH=%s\nCOMMIT=%s\nDECOMP=%s\nOPS=%s\nGATE_VERSION=2\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\nNIGHT=%s\nWATCH_F=%s\nWATCH_D=%s\n' "$OLD" "$NEW" "$OLD_TREE" "$NEW_TREE" "$OKEY" "$NKEY" "$TABLE_CHASH_V" "$OCH" "$NCH" "$COMMIT" "$DECOMP" "$OPS" "$PODSUM" "$PODW" "$NIGHT" "$WF" "$WD" > "$P/meta.env"
   CT=$(tar -tf "$P/delta.tar")
 fi
 TALL=""; T=""
@@ -130,7 +149,7 @@ if [ "$DELTA" = 0 ]; then tar -cf "$P/payload.tar" -C "$P" code.tar tables.tar.x
 else tar -cf "$P/payload.tar" -C "$P" delta.tar deletions.txt $([ "$SHIP" = 1 ] && echo tables.tar.xz) meta.env ids.txt bin; fi
 echo "== payload.tar"; tar -tvf "$P/payload.tar"
 if [ "$DELTA" = 0 ]; then echo "== code.tar $(echo "$CT" | wc -l) entries; tables $(echo "$T" | wc -l) files:"
-else echo "== delta ${OLD:0:8}..${NEW:0:8}: $DELTA_ADD files changed, $DELTA_DEL deleted; tables $([ "$SHIP" = 1 ] && echo "sent ($(echo "$T" | wc -l) files, key $NKEY)" || echo "kept (key $NKEY; old key from $OSRC, new from $NSRC)"):"; fi
+else echo "== delta ${OLD:0:8}..${NEW:0:8}: $DELTA_ADD files changed, $DELTA_DEL deleted; tables $([ "$SHIP" = 1 ] && echo "sent ($(echo "$T" | wc -l) files, key $NKEY, content ${NCH:-unknown})" || echo "kept (key $NKEY; old key from $OSRC, new from $NSRC; content ${NCH:-unknown, the key decided})"):"; fi
 echo "$T" | sed 's/^/  /'; grep -v '^WATCH_' "$P/meta.env"
 pack_send   # CODE
 echo "== exec-pod body:"

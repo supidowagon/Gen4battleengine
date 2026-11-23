@@ -2,8 +2,10 @@
 # POD SIDE, sourced by setup.sh and quick.sh (DAYBOX.md "Quick lane"). Functions only.
 # The lane state of a stream lives in LANE_ROOT (default /work/_lane):
 #   <stream>.sha        marker: KEY=VALUE lines COMMIT (full sha last synced), TREE (its git tree
-#                       hash), TABLES_KEY (key16 of its built tables, empty when unknown), REPO
-#                       (the repo that holds that state) and TIME (epoch). Written atomically.
+#                       hash), TABLES_KEY (key16 of its built tables, empty when unknown),
+#                       TABLES_CHASH (64-hex content hash of those tables, tools/ops/content_hash.py,
+#                       empty when unknown), TABLES_CHASH_V (that hash's definition version, meta.env's), REPO (the repo that holds that state) and TIME (epoch).
+#                       Written atomically.
 #   <stream>.lock       the flock one quick run of the stream holds from its apply to its end
 #   <stream>/repo       the lane repo: a clone of a run's repo that quick.sh moves from commit to commit
 #   <stream>/BROKEN     the lane repo failed its tree check and was removed; quick.sh treats it as missing
@@ -41,13 +43,14 @@ lane_tree() { local r="$1" idx t
     || { rm -f "$idx"; return 1; }
   rm -f "$idx"; echo "$t"; }
 
-# lane_marker_put <stream> <commit> <tree> <tables key> <repo>: writes the marker through a temp
-# file and mv. The caller holds the stream's lock (quick.sh) or goes through lane_write_marker.
+# lane_marker_put <stream> <commit> <tree> <tables key> <repo> [<tables content hash> [<its version>]]: writes the
+# marker through a temp file and mv. The caller holds the stream's lock (quick.sh) or goes through
+# lane_write_marker.
 lane_marker_put() { local t="$LANE_ROOT/.$1.sha.$$"
-  mkdir -p "$LANE_ROOT" && printf 'COMMIT=%s\nTREE=%s\nTABLES_KEY=%s\nREPO=%s\nTIME=%s\n' "$2" "$3" "$4" "$5" "$(date +%s)" > "$t" \
+  mkdir -p "$LANE_ROOT" && printf 'COMMIT=%s\nTREE=%s\nTABLES_KEY=%s\nTABLES_CHASH=%s\nTABLES_CHASH_V=%s\nREPO=%s\nTIME=%s\n' "$2" "$3" "$4" "${6:-}" "${7:-}" "$5" "$(date +%s)" > "$t" \
     && mv -f "$t" "$LANE_ROOT/$1.sha"; }
 
-# lane_write_marker <stream> <commit> <repo> <tables key> <tree>: setup.sh, at the end of a setup
+# lane_write_marker <stream> <commit> <repo> <tables key> <tree> [<tables content hash> [<its version>]]: setup.sh, at the end of a setup
 # (just before SETUP_END). <tree> is meta.env's TREE (the commit's tree on the PC). The marker is
 # written only when the repo's HEAD tree is <tree> (the snapshot is exactly the commit) and the
 # working tree's is HEAD's (the built tables are git-ignored there); else a later delta's tree
@@ -55,7 +58,7 @@ lane_marker_put() { local t="$LANE_ROOT/.$1.sha.$$"
 # stream's lock at most LANE_LOCK_S (default 5) s: a quick run of the stream holds it through its
 # pytest; on a timeout the old marker stays and names another commit, so the next quick check of
 # that tip falls back to a full run.
-lane_write_marker() { local s="$1" c="$2" r="$3" k="${4:-}" want="${5:-}" head work
+lane_write_marker() { local s="$1" c="$2" r="$3" k="${4:-}" want="${5:-}" ch="${6:-}" chv="${7:-}" head work
   [ -n "$want" ] || { echo "LANE_MARKER_SKIPPED no TREE in meta.env"; return 1; }
   head=$(git -C "$r" rev-parse 'HEAD^{tree}') || return 1
   [ "$head" = "$want" ] || { echo "LANE_MARKER_SKIPPED the snapshot tree ${head:0:8} is not the commit's tree ${want:0:8}"; return 1; }
@@ -64,4 +67,4 @@ lane_write_marker() { local s="$1" c="$2" r="$3" k="${4:-}" want="${5:-}" head w
   mkdir -p "$LANE_ROOT" || return 1
   ( flock -w "${LANE_LOCK_S:-5}" 9 || { echo "LANE_MARKER_SKIPPED lock of stream $s busy"; exit 1; }
     rm -f "$LANE_ROOT/$s/BROKEN"
-    lane_marker_put "$s" "$c" "$head" "$k" "$r" ) 9> "$LANE_ROOT/$s.lock"; }
+    lane_marker_put "$s" "$c" "$head" "$k" "$r" "$ch" "$chv" ) 9> "$LANE_ROOT/$s.lock"; }

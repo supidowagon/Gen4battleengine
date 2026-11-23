@@ -407,7 +407,7 @@ def test_sweep_body_ships_the_jobs_in_a_tar_and_stays_short(tmp_path):
     assert 'setsid nohup bash bin/sweep.sh "$R/$J" "$R/$o"' in start
     assert "o=sweep_out_$e" in start  # a second sweep of the run gets a new out dir
     assert "*[!0-9]*|0|1)" in start  # a pid of 0 or 1 in sweep.pid is never signalled
-    assert "SWEEP_CAP" not in start  # unset: sweep.sh takes the cap from the pod's limit
+    assert "export SWEEP_CAP" not in start  # unset: sweep.sh takes the cap from the pod's limit
     bad = tmp_path / "bad.txt"
     bad.write_text("tests/x.py::t only_two\n", encoding="utf-8")
     r2, _, _ = _tool_body(
@@ -430,7 +430,7 @@ esac
 for a in "$@"; do case "$a" in --hypothesis-seed=*) seed=${a#*=};; esac; done
 T="$FAKE_TRACE"
 echo "start $seed $(date +%s.%N) $NUZLINE_HYPOTHESIS_PROFILE $*" >> "$T"
-if [ "$seed" = "${FAKE_HANG_SEED:-}" ]; then sleep 600; fi
+if [ "$seed" = "${FAKE_HANG_SEED:-}" ]; then sleep "${FAKE_HANG_S:-600}"; fi
 sleep "${FAKE_JOB_S:-1}"
 echo "end $seed" >> "$T"
 if [ "$seed" = "${FAKE_FAIL_SEED:-}" ]; then echo "E       Failing test case: t("; exit 1; fi
@@ -473,6 +473,15 @@ def _jobs(tmp_path: Path, seeds_: list[int]) -> Path:
         newline="\n",
     )
     return j
+
+
+def _live(pgid: str, args: str) -> list[str]:
+    """The processes that live (state not Z) in the group <pgid> or with exactly the command line
+    <args>. Never a text search over the pod: other runs' processes are on it too."""
+    ps = subprocess.run(["ps", "-ww", "-eo", "pgid=,stat=,args="], check=True, capture_output=True, text=True)  # fmt: skip
+    rows = [ln.split(None, 2) for ln in ps.stdout.splitlines()]
+    return [" ".join(r) for r in rows
+            if not r[1].startswith("Z") and (r[0] == pgid or r[2:] == [args])]  # fmt: skip
 
 
 def _max_concurrent(trace: Path) -> int:
@@ -669,7 +678,7 @@ def test_sweep_term_stops_the_jobs_without_sweep_done(tmp_path):
     out = d / "sweep_out"
     assert (out / "SWEEP_STOPPED").is_file() and not (out / "SWEEP_DONE").exists()
     assert "STOPPED by TERM" in (out / "driver.log").read_text()
-    left = subprocess.run(["ps", "-eo", "args="], check=True, capture_output=True, text=True).stdout
+    left = subprocess.run(["ps", "-ww", "-eo", "args="], check=True, capture_output=True, text=True).stdout
     assert _posix(d / "repo") not in left  # the fake pytest processes are gone
     assert "end" not in trace.read_text().split()
 
@@ -886,12 +895,12 @@ def test_sweep_jobs_are_gate_units_while_they_run(tmp_path):
         g = unit.read_text().strip()
         assert (d / "sweep" / "out" / f"{SHORT_A}_1.w").read_text().strip() == "13"
         ps = subprocess.run(
-            ["ps", "-eo", "pgid=,args="], check=True, capture_output=True, text=True
-        )
+            ["ps", "-ww", "-eo", "pgid=,args="], check=True, capture_output=True, text=True
+        )  # -ww: a piped ps cuts args at 80 columns, before the seed of a long tmp path
         assert any(
             ln.split(None, 1)[0] == g and "--hypothesis-seed=1" in ln
             for ln in ps.stdout.splitlines()
-        )  # the pytest process is in the recorded group
+        ), (g, ps.stdout)  # the pytest process is in the recorded group
         work = _posix(tmp_path / "work")
         gate = subprocess.run(
             [BASH, "-c", (f'. "{_posix(d / "bin/gate.sh")}"; NO_W_FILE_GB=12 podgate '
@@ -938,9 +947,9 @@ def test_sweep_refuses_an_out_dir_that_holds_a_sweep(tmp_path):
 @linux
 def test_sweep_a_job_over_its_time_limit_fails_and_the_sweep_goes_on(tmp_path):
     d = _run_folder(tmp_path)
-    env = _env(
-        tmp_path, 10 * 10**9, FAKE_JOB_S="0", FAKE_HANG_SEED="2", SWEEP_JOB_S="2", SWEEP_P="3"
-    )
+    hang = f"600.{os.getpid()}"  # this process's own duration: no other `sleep` of the pod has it
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0", FAKE_HANG_SEED="2", FAKE_HANG_S=hang,
+               SWEEP_JOB_S="2", SWEEP_P="3")  # fmt: skip
     r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1, 2, 3]))], check=False,
                        capture_output=True, text=True, env=env, timeout=60)  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
@@ -953,10 +962,41 @@ def test_sweep_a_job_over_its_time_limit_fails_and_the_sweep_goes_on(tmp_path):
     ]
     assert (out / "SWEEP_DONE").is_file()
     assert not list((d / "sweep" / "out" / "run").iterdir())
-    left = subprocess.run(["ps", "-eo", "args="], check=True, capture_output=True, text=True).stdout
-    assert "sleep 600" not in left  # the hung job's leftovers were killed
+    m = re.search(rf"START {SHORT_A}_2 pgid=(\d+) ", (out / "driver.log").read_text())
+    assert m, (out / "driver.log").read_text()
+    # the hung job's leftovers were killed (under the pod's PID 1 they stay as zombies: dead)
+    assert _live(m[1], f"sleep {hang}") == []
     assert collect.main([str(out), "--night", "20261122", "--tip", "abcdef01"]) == 0
     assert f"(NO-FALSIFIER rc=124, {SHORT_A}, -)" in (out / "sweep_failures.txt").read_text()
+
+
+@linux
+def test_a_zombie_of_a_hung_job_counts_as_dead():
+    hang = f"601.{os.getpid()}"
+    proc = subprocess.Popen(["sleep", hang], start_new_session=True)  # its own group, as a job
+    g, args = str(proc.pid), f"sleep {hang}"
+    grouplive = [BASH, "-c", f'. "{_posix(POD / "gate.sh")}"; grouplive {g}']  # reap's check
+    try:
+        for _ in range(100):  # the child's exec
+            if _live("", args):
+                break
+            time.sleep(0.05)
+        assert len(_live("", args)) == len(_live(g, "")) == 1  # both ways find the live one
+        assert subprocess.run(grouplive, check=False).returncode == 0
+        proc.kill()  # not waited for: a zombie, as under the pod's PID 1, which never reaps
+        for _ in range(100):
+            st = subprocess.run(
+                ["ps", "-o", "stat=", "-p", g], check=False, capture_output=True, text=True
+            ).stdout
+            if st.startswith("Z"):
+                break
+            time.sleep(0.05)
+        assert st.startswith("Z"), st
+        assert _live(g, args) == []
+        assert subprocess.run(grouplive, check=False).returncode == 1
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 # --- the driver-alive checks: a zombie or dead driver is not a running sweep --------------------
@@ -1083,3 +1123,293 @@ def test_podcheck_lists_a_live_sweep_run_with_its_units(tmp_path):
         job.kill()
         driver.wait()
         job.wait()
+
+
+# --- quick-lane-3: fixed seeds, meta.env, the replay tools, run.env knobs, a dead driver ---------
+
+
+def test_fixed_seeds_give_every_node_the_same_seeds_whatever_the_night(capsys):
+    assert seeds.parse_seeds("1..3") == [1, 2, 3]
+    assert seeds.parse_seeds("7") == [7]
+    assert seeds.parse_seeds("1,4,9") == [1, 4, 9]
+    assert seeds.parse_seeds("1..2,9") == [1, 2, 9]
+    assert len(seeds.parse_seeds(f"1..{seeds.MAX_SEEDS}")) == seeds.MAX_SEEDS
+    for bad in ("", "a", "3..1", "1,1", "1..2,2", "-1", "4294967296", "1..", "1,,2",
+                "1..99999999999999999999", "1..4294967295", "1..1001", "1..600,601..1001"):
+        # refused before the range is built: a seed of 2**32 or more, more than MAX_SEEDS seeds
+        with pytest.raises(ValueError):
+            seeds.parse_seeds(bad)
+    assert seeds.main(["--seeds", "1..15"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == [f"{n} {s} {i}" for n, s in seeds.nodes() for i in range(1, 16)]
+    # the printed lines are what sweep_body.sh accepts: '<node id> <short name> <seed>'
+    assert all(re.fullmatch(r"[^ ]+ [^ ]+ [0-9]+", ln) for ln in lines)
+    # no night and no --n beside --seeds; a bad list is refused (rc 2, nothing on stdout)
+    for argv in (["20261122", "--seeds", "1"], ["--seeds", "1", "--n", "3"], ["--seeds", "x"]):
+        assert seeds.main(argv) == 2
+    assert capsys.readouterr().out == ""
+
+
+def _meta_run(tmp_path: Path, meta: str, run_name: str = "run-without-a-date") -> Path:
+    run = tmp_path / run_name
+    run.mkdir()
+    (run / "meta.env").write_text(meta, encoding="utf-8", newline="\n")
+    return _sweep_out(run, "sweep_out")
+
+
+def _first(out: Path) -> str:
+    assert collect.main([str(out)]) == 0
+    return (out / "sweep_failures.txt").read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_collect_reads_night_and_tip_from_the_runs_meta_env(tmp_path):
+    full = "0123456789abcdef0123456789abcdef01234567"
+    out = _meta_run(tmp_path, f'COMMIT={full}\nMARK="not slow"\nNIGHT=20261123\nWATCH_F=secret\n')
+    assert _first(out).startswith("SWEEP 20261123 01234567: 6 processes")
+    assert "secret" not in (out / "sweep_failures.txt").read_text(encoding="utf-8")
+    assert collect.read_meta(out) == {"COMMIT": full, "MARK": "not slow", "NIGHT": "20261123"}
+
+
+def test_collect_night_from_the_run_name_tip_from_meta_and_the_options_beat_both(tmp_path):
+    # the name's date is the jobs file's night: it wins over NIGHT (a pack that slipped past midnight)
+    out = _meta_run(tmp_path, "COMMIT=aaaaaaaa11111111\nNIGHT=20261123\n", "sweep-20261101-bbbbbbbb")
+    assert _first(out).startswith("SWEEP 20261101 aaaaaaaa: ")
+    assert collect.main([str(out), "--night", "20261124", "--tip", "cccccccc99"]) == 0
+    head = (out / "sweep_failures.txt").read_text(encoding="utf-8").splitlines()[0]
+    assert head.startswith("SWEEP 20261124 cccccccc: ")
+
+
+def test_collect_takes_a_value_meta_lacks_from_the_name_and_ignores_a_bad_one(tmp_path):
+    # a run packed before NIGHT: the night comes from the name, the tip from COMMIT
+    out = _meta_run(tmp_path, "COMMIT=aaaaaaaa11111111\n", "sweep-20261101-bbbbbbbb")
+    assert _first(out).startswith("SWEEP 20261101 aaaaaaaa: ")
+    # a malformed NIGHT and COMMIT are not used
+    other = tmp_path / "other"
+    other.mkdir()
+    out = _meta_run(other, "COMMIT=zz\nNIGHT=tomorrow\n")
+    assert _first(out).startswith("SWEEP ? ?: ")
+    # meta.env inside the out dir counts too (its COMMIT; the out dir's name sweep-20261122-... has the night)
+    third = tmp_path / "third"
+    third.mkdir()
+    out3 = _clean_out(third)
+    (out3 / "meta.env").write_text("COMMIT=feedface0000\nNIGHT=20260101\n", encoding="utf-8")
+    assert _first(out3).startswith("SWEEP 20261122 feedface: ")
+
+
+def test_logfields_zero_fills_a_state_field_an_old_log_lacks():
+    import collections
+
+    from tools.ops.sweep.logfields import keep
+
+    State = collections.namedtuple("State", ["hp", "sketch_move", "gone"])
+    said: list[tuple] = []
+    zero = {"sketch_move": 0, "hp": -1}  # 'gone' has no layout entry
+
+    def zero_of(name):
+        return zero[name]  # KeyError for a field the layout does not know
+
+    make = keep(State, zero_of, lambda *a: said.append(a))
+    # an old log without sketch_move, and with a field this repo dropped
+    s = make(hp=5, gone=7, retired=9)
+    assert s == State(hp=5, sketch_move=0, gone=7)
+    assert any("dropped" in a[0] and a[1] == ["retired"] for a in said)
+    assert any("zero-filled" in a[0] and a[1] == ["sketch_move"] for a in said)
+    # a missing field the layout cannot fill is still an error, and named
+    with pytest.raises(ValueError, match=r"State fields missing from the log: \['gone'\]"):
+        make(hp=5)
+    # without a zero maker (Outcome) a missing field is an error as before
+    with pytest.raises(ValueError, match=r"fields missing from the log: \['sketch_move'\]"):
+        keep(State)(hp=1, gone=2)
+    # replay.py wires it: BattleState is zero-filled from LAYOUT, Outcome is not
+    text = (ROOT / "tools/ops/sweep/replay.py").read_text(encoding="utf-8")
+    assert '"BattleState": keep(BattleState, zero_state_field)' in text
+    assert '"Outcome": keep(Outcome),' in text and "LAYOUT[name]" in text
+    assert text.index("from logfields import keep") < text.index("sys.path[:0]")
+
+
+def test_sweep_tools_ship_with_the_pod_scripts(tmp_path):
+    rent = tmp_path / "rent"
+    rent.mkdir()
+    dest = tmp_path / "bin"
+    script = (
+        f"set -euo pipefail; HERE='{_posix(ROOT / 'tools/ops/day')}'; . \"$HERE/pack_lib.sh\"; "
+        f"pack_sweep_tools '{_posix(ROOT)}' HEAD '{_posix(dest)}'"
+    )
+    r = subprocess.run([BASH, "-c", script], check=False, capture_output=True, text=True,
+                       env={**_clean_env(), "RENT": _posix(rent)})  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    got = {p.name for p in (dest / "sweep").iterdir()}
+    assert {"extract.py", "replay.py", "collect.py", "seeds.py", "nodes.txt"} <= got
+    assert not list(rent.iterdir())  # its temp folder is gone
+    assert b"\r" not in (dest / "sweep" / "replay.py").read_bytes()  # LF, as on the pod
+    # pack.sh calls it after the pod scripts, and sweep.sh looks in bin/sweep
+    pack = (ROOT / "tools/ops/day/pack.sh").read_text(encoding="utf-8")
+    assert pack.index("pod_bin ") < pack.index('pack_sweep_tools "$TOP" "$OPS" "$P/bin"')
+    assert '"$D/bin/sweep"' in (POD / "sweep.sh").read_text(encoding="utf-8")
+
+
+@linux
+def test_sweep_of_a_commit_without_sweep_tools_uses_the_copy_in_bin(tmp_path):
+    d = _run_folder(tmp_path)
+    (d / "bin" / "sweep").mkdir()
+    for n in ("extract.py", "replay.py"):  # the fake python answers by the script's name
+        (d / "bin" / "sweep" / n).write_text("", encoding="utf-8")
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0", FAKE_FAIL_SEED="2")
+    env.pop("SWEEP_TOOLS")  # the default: <repo>/tools/ops/sweep, which this repo lacks
+    r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1, 2]))], check=False,
+                       capture_output=True, text=True, env=env, timeout=60)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = d / "sweep_out"
+    assert (out / "replay_in" / "extract.ok").is_file()
+    assert "== replayed" in (out / "replay.txt").read_text(encoding="utf-8")
+
+
+@linux
+def test_sweep_uses_the_repos_own_tools_when_it_has_both(tmp_path):
+    d = _run_folder(tmp_path)
+    for n in ("extract.py", "replay.py"):
+        (d / "repo" / "tools" / "ops" / "sweep").mkdir(parents=True, exist_ok=True)
+        (d / "repo" / "tools" / "ops" / "sweep" / n).write_text("", encoding="utf-8")
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0")
+    env.pop("SWEEP_TOOLS")  # no bin/sweep exists: only the repo's copy can satisfy the check
+    r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1]))], check=False,
+                       capture_output=True, text=True, env=env, timeout=60)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (d / "sweep_out" / "SWEEP_DONE").is_file()
+
+
+@linux
+def test_sweep_refuses_at_the_start_when_neither_tool_copy_exists(tmp_path):
+    d = _run_folder(tmp_path)
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0")
+    env.pop("SWEEP_TOOLS")
+    r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1]))], check=False,
+                       capture_output=True, text=True, env=env, timeout=60)  # fmt: skip
+    assert r.returncode == 1 and "no extract.py and replay.py in the repo's tools/ops/sweep" in r.stderr
+    assert not (d / "sweep_out" / "SWEEP_DONE").exists()
+
+
+@linux
+def test_start_reads_the_sweep_knobs_the_pc_did_not_set_from_run_env(tmp_path):
+    d = _run_folder(tmp_path)
+    (d / "run.env").write_text("export SWEEP_NICE='5'\nexport SWEEP_JOB_S='1234'\n", encoding="utf-8", newline="\n")
+    send = tmp_path / "send"
+    send.mkdir()
+    (send / "start.sh").write_text(_start_sh(d), encoding="utf-8", newline="\n")
+    (send / "sweep_jobs.txt").write_text(f"{NODE_A} {SHORT_A} 1\n", encoding="utf-8", newline="\n")
+    # SWEEP_JOB_S set where start.sh runs (the PC's value, baked in) beats run.env
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0", SWEEP_JOB_S="99")
+    r = subprocess.run([BASH, "start.sh"], cwd=send, check=False, capture_output=True, text=True,
+                       timeout=30, env=env)  # fmt: skip
+    assert r.stdout.strip().splitlines()[-1].startswith("SWEEP_STARTED"), r.stdout + r.stderr
+    out = d / (d / "sweep.outdir").read_text().strip()
+    for _ in range(200):
+        if (out / "SWEEP_DONE").exists():
+            break
+        time.sleep(0.1)
+    assert (out / "SWEEP_DONE").is_file(), (d / "sweep.log").read_text()
+    start = next(ln for ln in (out / "driver.log").read_text().splitlines() if "DRIVER_START" in ln)
+    assert "nice=5 job_s=99" in start, start  # NICE from run.env, JOB_S from the environment
+
+
+def test_sweep_body_bakes_the_pcs_knobs_and_refuses_a_bad_one(tmp_path):
+    jobs = tmp_path / "jobs.txt"
+    jobs.write_text(f"{NODE_A} {SHORT_A} 1\n", encoding="utf-8", newline="\n")
+    body = (ROOT / "tools/ops/day/sweep_body.sh").as_posix()
+
+    def start(n: int, **knobs: str) -> tuple[subprocess.CompletedProcess, str]:
+        sub = tmp_path / f"s{n}"
+        sub.mkdir()
+        r, _, send = _tool_body(sub, body, "sweep-20261122-abc", _posix(jobs), env=knobs)
+        if r.returncode != 0:
+            return r, ""
+        tar = ["tar", "-xOf", _posix(send / "sweep.tar"), "start.sh"]
+        return r, subprocess.run(tar, check=True, capture_output=True, text=True).stdout
+
+    r, text = start(1, SWEEP_NICE="3", SWEEP_POLL="0.5", SWEEP_REPLAY_S="60")
+    assert r.returncode == 0, r.stdout + r.stderr
+    head = text.split("for n in", 1)[0]  # what the PC baked in; the rest reads run.env
+    assert "export SWEEP_NICE=3\n" in head and "export SWEEP_POLL=0.5\n" in head
+    assert "export SWEEP_REPLAY_S=60\n" in head
+    assert "export SWEEP_P=" not in head and "export SWEEP_CAP" not in head
+    assert "export SWEEP_P=${SWEEP_P:-5} SWEEP_W=${SWEEP_W:-13}" in text and "run.env" in text
+    r, _ = start(2, SWEEP_NICE="x")
+    assert r.returncode == 3 and "SWEEP_NICE 'x' is not a whole number" in r.stdout
+    r, _ = start(3, SWEEP_SPACING="1.2.3")
+    assert r.returncode == 3 and "SWEEP_SPACING '1.2.3' is not a number" in r.stdout
+
+
+@linux
+def test_podcheck_lists_a_sweep_whose_driver_died_while_its_job_group_lives(tmp_path):
+    root = tmp_path / "work"
+    d = root / "sweep-x"
+    (d / "sweep" / "out" / "run").mkdir(parents=True)
+    driver = subprocess.Popen(["true"])
+    driver.wait()  # the driver is gone; sweep.pid names a dead process
+    # a job as sweep.sh starts it: its own group, the run's repo among its arguments
+    job = subprocess.Popen(["setsid", "bash", "-c", "sleep 60; true", "j1", _posix(d / "repo")])
+    want = "run sweep-x gate=old scripts=old runner=sweep live=1 pending=0"
+
+    def check() -> str:
+        return subprocess.run([BASH, _posix(POD / "podcheck.sh"), _posix(root)], check=False, capture_output=True,
+                              text=True, timeout=60, env={**_clean_env(), "CGROOT": _posix(tmp_path / "nocg")}).stdout  # fmt: skip
+
+    try:
+        (d / "sweep.pid").write_text(f"{driver.pid}\n", encoding="utf-8")
+        # the unit's run file holds the group id; setsid made the job its own group leader
+        (d / "sweep" / "out" / "run" / "j1").write_text(f"{job.pid}\n", encoding="utf-8")
+        (d / "sweep" / "out" / "j1.w").write_text("13\n", encoding="utf-8")
+        assert want in check()
+        # no sweep.pid at all: the live group alone still lists the run
+        (d / "sweep.pid").unlink()
+        assert want in check()
+        # once the group is gone the run is not listed
+        job.kill()
+        job.wait()
+        for _ in range(50):
+            if "runner=sweep" not in check():
+                break
+            time.sleep(0.1)
+        assert "runner=sweep" not in check()
+    finally:
+        job.kill()
+        job.wait()
+
+
+@linux
+def test_sweeplive_in_gate_sh_counts_a_live_group_and_not_a_dead_or_malformed_one(tmp_path):
+    run = tmp_path / "r"
+    (run / "sweep" / "out" / "run").mkdir(parents=True)
+    f = run / "sweep" / "out" / "run" / "j1"
+    job = subprocess.Popen(["setsid", "bash", "-c", "sleep 60; true", "j1", _posix(run / "repo")])
+    # a live group that is not this run's (its id reused after the job ended): no run path in its args
+    other = subprocess.Popen(["setsid", "bash", "-c", "sleep 60; true", "x", _posix(tmp_path / "r2" / "repo")])
+    gate = _posix(POD / "gate.sh")
+
+    def live(content: str) -> bool:
+        f.write_text(content, encoding="utf-8")
+        cmd = f". '{gate}'; sweeplive '{_posix(run)}'"
+        return subprocess.run([BASH, "-c", cmd], check=False).returncode == 0
+
+    try:
+        assert live(f"{job.pid}\n")
+        for bad in ("", "abc\n", "0\n", "1\n"):
+            assert not live(bad)
+        assert not live(f"{other.pid}\n")  # r2/ is not r/: another run's group does not count
+        job.kill()
+        job.wait()
+        assert not live(f"{job.pid}\n")
+    finally:
+        for p in (job, other):
+            p.kill()
+            p.wait()
+    # status.sh and podcheck.sh both call it
+    assert "sweeplive" in (POD / "status.sh").read_text(encoding="utf-8")
+    assert "sweeplive" in (POD / "podcheck.sh").read_text(encoding="utf-8")
+
+
+def test_daybox_names_every_runner_value_podcheck_prints():
+    text = (ROOT / "tools/ops/day/DAYBOX.md").read_text(encoding="utf-8")
+    assert "runner=alive|setup|quick|sweep live=" in text
+    pod = (POD / "podcheck.sh").read_text(encoding="utf-8")
+    assert "runner=<alive|setup|quick|sweep>" in pod

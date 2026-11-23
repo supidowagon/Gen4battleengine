@@ -100,7 +100,7 @@ flock -w "${QUICK_LOCK_S:-600}" 9 || fallback "lane busy: another quick run of s
 # (a) the lane repo: the marker's REPO is the truth. A run repo (a normal run of the stream wrote
 # the marker) gets cloned into the lane; the lane repo itself is used as it is.
 [ -f "$MK" ] || fallback "no marker"
-M_COMMIT=$(lane_get "$MK" COMMIT); M_TREE=$(lane_get "$MK" TREE); M_KEY=$(lane_get "$MK" TABLES_KEY); M_REPO=$(lane_get "$MK" REPO)
+M_COMMIT=$(lane_get "$MK" COMMIT); M_TREE=$(lane_get "$MK" TREE); M_KEY=$(lane_get "$MK" TABLES_KEY); M_CH=$(lane_get "$MK" TABLES_CHASH); M_CHV=$(lane_get "$MK" TABLES_CHASH_V); M_REPO=$(lane_get "$MK" REPO)
 case "$M_REPO" in *..*) fallback "marker REPO holds '..'";; "$WORK"/*) ;; *) fallback "marker REPO is outside the work folder";; esac
 # (b) the marker names the commit the repo holds: OLD, and the tree OLD_TREE.
 [ -n "$M_COMMIT" ] && [ "$M_COMMIT" = "$OLD" ] || fallback "marker commit ${M_COMMIT:0:8} is not OLD ${OLD:0:8}"
@@ -136,9 +136,15 @@ T=$(git -C "$LR" rev-parse 'HEAD^{tree}' 2> /dev/null) || fallback "git failed i
 # The decomp: the worktree of this run's DECOMP commit, as setup.sh links it.
 [ -d "$WORK/_decomp/$DECOMP" ] || fallback "decomp ${DECOMP:0:8} is not on the pod"
 mkdir -p "$LR/external" && ln -sfn "$WORK/_decomp/$DECOMP" "$LR/external/pokeplatinum" || fallback "cannot link the decomp"
-# The tables: a delta without tables.tar.xz needs the marker's key to be OLD_TABLES_KEY (both known).
-if [ ! -f tables.tar.xz ] && { [ -z "${OLD_TABLES_KEY:-}" ] || [ "$M_KEY" != "$OLD_TABLES_KEY" ]; }; then
-  fallback "tables key of the lane (${M_KEY:-unknown}) is not the delta's OLD key (${OLD_TABLES_KEY:-unknown}) and no tables travel"; fi
+# The tables: a delta without tables.tar.xz needs the marker's tables to be the old ones: by content
+# hash when both the marker and the delta know it under the same definition (OLD_TABLES_CHASH, the
+# marker's TABLES_CHASH_V = meta.env's; two builds of equal tables have different keys), else by key
+# (OLD_TABLES_KEY, both known).
+if [ ! -f tables.tar.xz ]; then
+  if [ -n "${OLD_TABLES_CHASH:-}" ] && [ -n "$M_CH" ] && [ -n "${TABLES_CHASH_V:-}" ] && [ "$M_CHV" = "${TABLES_CHASH_V:-}" ]; then
+    [ "$M_CH" = "$OLD_TABLES_CHASH" ] || fallback "tables content of the lane (${M_CH:0:16}) is not the delta's OLD content (${OLD_TABLES_CHASH:0:16}) and no tables travel"
+  elif [ -z "${OLD_TABLES_KEY:-}" ] || [ "$M_KEY" != "$OLD_TABLES_KEY" ]; then
+    fallback "tables key of the lane (${M_KEY:-unknown}) is not the delta's OLD key (${OLD_TABLES_KEY:-unknown}) and no tables travel"; fi; fi
 
 # (c) apply. Every path is checked first, so a refused delta changes nothing in the lane repo.
 # The listing: names literal (delta.names), types from the long listing in the same order;
@@ -174,7 +180,7 @@ T=$(lane_tree "$LR" "$D/delta.files") || broken "git failed in the lane repo"
 [ "$T" = "$NEW_TREE" ] || broken "tree mismatch"
 { lane_stage "$LR" "$D/delta.files" \
   && git -C "$LR" -c user.name=ci -c user.email=ci@localhost commit -q --allow-empty -m "quick $NEW"; } > /dev/null || broken "commit failed"
-lane_marker_put "$STREAM" "$NEW" "$NEW_TREE" "$TABLES_KEY" "$LR" || broken "marker not written"
+lane_marker_put "$STREAM" "$NEW" "$NEW_TREE" "$TABLES_KEY" "$LR" "${TABLES_CHASH:-}" "${TABLES_CHASH_V:-}" || broken "marker not written"
 echo "QUICK_APPLIED $(grep -c . deletions.txt) deleted, $(grep -c . "$D/delta.files") files, tables $([ -f tables.tar.xz ] && echo sent || echo kept)"
 # New dependencies: uv run syncs the venv itself; node packages only when their lock changed.
 if grep -qx 'tools/smogon_calc/package-lock.json' "$D/delta.files" && command -v npm > /dev/null; then

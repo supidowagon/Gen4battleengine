@@ -546,14 +546,14 @@ def _fake_send(tmp_path: Path, sleep: int = 0) -> str:
     return _posix(fake / "rpc")
 
 
-def _tool_body(tmp_path: Path, script: str, *args: str) -> tuple[subprocess.CompletedProcess, dict, Path]:
+def _tool_body(tmp_path: Path, script: str, *args: str, env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, dict, Path]:
     """Run <script> (podcheck_body.sh or stop_body.sh) with a fake `runpodctl send` and a scratch
     folder under <tmp_path>. Returns the run, the printed body and the folder of the send (payload
     tar and send.log)."""
     import json
     (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
     env = {**_clean_env(), "PACK_OFF_MAIN_POD": "1", "RUNPODCTL": _fake_send(tmp_path),
-           "NUZLINE_SCRATCH": str(tmp_path / "scratch")}   # this checkout may be an ops branch
+           "NUZLINE_SCRATCH": str(tmp_path / "scratch"), **(env or {})}   # this checkout may be an ops branch
     r = subprocess.run([BASH, script, *args], check=False, capture_output=True, text=True, cwd=ROOT, env=env)
     if "REFUSED: uncommitted changes" in r.stdout:
         pytest.skip("tools/ops/day/pod has uncommitted changes")

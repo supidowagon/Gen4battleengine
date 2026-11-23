@@ -7,7 +7,9 @@
 # bin/notify.sh (notify.pid) is alive and whose results are not taken yet (no notify/taken_d) is
 # listed as <name>(beacon): its results are still on offer. A run whose soundness sweep driver
 # (sweep.pid, bin/sweep.sh; tools/ops/day/sweep_body.sh) is alive is listed as <name>(sweep): its
-# jobs run `.venv/bin/python -m pytest`, which the pytest count below does not match.
+# jobs run `.venv/bin/python -m pytest`, which the pytest count below does not match. A run whose
+# driver died while a job or replay group named in sweep/out/run/* lives (gate.sh sweeplive) is
+# listed the same way.
 # setup=alive|done|gone: setup.pid's process alive | dead with runner.pid written | dead (or no
 # setup.pid) without runner.pid, a failed setup whether or not the log says SETUP_FAILED.
 # runner=alive|gone|starting|none: runner.pid's process alive | dead | not alive yet while setup
@@ -35,6 +37,7 @@ active=""; for d in /work/*/ /work/*/*/; do r=${d%/}
   elif alive "$r/setup.pid" "$r"; then active="$active $n(setup)"
   elif alive "$r/quick.pid" "$r" 'quick\.sh'; then active="$active $n(quick)"
   elif alive "$r/sweep.pid" "$r" 'sweep\.sh'; then active="$active $n(sweep)"
+  elif sweeplive "$r"; then active="$active $n(sweep)"   # the driver died, its job groups live (setsid)
   elif [ ! -f "$r/notify/taken_d" ] && alive "$r/notify.pid" "$r" 'notify\.sh'; then active="$active $n(beacon)"; fi; done
 # Live pytest processes whose working folder is outside this run (pgrep skips zombies: no cmdline).
 np=0; for p in $(pgrep -f '/\.venv/bin/pytest'); do

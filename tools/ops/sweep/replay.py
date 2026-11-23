@@ -17,6 +17,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from logfields import keep  # this script's folder is sys.path[0]: the repo under test may predate it
+
 root = Path(sys.argv[1]).resolve()
 sys.path[:0] = [str(root / "src"), str(root)]
 
@@ -35,7 +37,7 @@ from nuzline.engine.actions import (
 from nuzline.engine.enumerate import SamplingOnly, enumerate_drawn
 from nuzline.engine.ids import EffectId, Status
 from nuzline.engine.outcome import Outcome
-from nuzline.engine.state import BattleState
+from nuzline.engine.state import LAYOUT, BattleState
 
 TABLES = root / "data" / "gen4_platinum"
 tables = load_tables(TABLES)
@@ -47,17 +49,11 @@ def Array(x, dtype=None, shape=None):
     return jnp.asarray(a.reshape(shape) if shape is not None else a)
 
 
-def keep(cls):
-    def make(**kw):
-        extra = sorted(set(kw) - set(cls._fields))
-        missing = sorted(set(cls._fields) - set(kw))
-        if extra:
-            print("  dropped fields not in this repo:", extra)
-        if missing:
-            raise ValueError(f"{cls.__name__} fields missing from the log: {missing}")
-        return cls(**{k: v for k, v in kw.items() if k in cls._fields})
-
-    return make
+def zero_state_field(name):
+    """The zero of a BattleState field an old log lacks, as tools/snap_compare.py rebuild_state
+    fills it (0 = no move, no status): a KeyError for a name LAYOUT does not know."""
+    shape, dtype = LAYOUT[name]
+    return Array(np.zeros(shape, dtype))
 
 
 ENV = {
@@ -66,7 +62,7 @@ ENV = {
     "int16": np.int16,
     "int32": np.int32,
     "bool": bool,
-    "BattleState": keep(BattleState),
+    "BattleState": keep(BattleState, zero_state_field),
     "Outcome": keep(Outcome),
 }
 

@@ -25,7 +25,7 @@ printf 'GATE_VERSION=%s\nPOD_SCRIPTS=%s\nPOD_WEIGHTS=%s\n' "${GATE_VERSION:-}" "
 # live in meta.env only), as "export NAME=<value>" lines, so a runner restart repeats them
 # (DAYBOX.md, Housekeeping, "Restart a runner"). A knob left unset is not written. Values are in
 # POSIX single quotes (a ' as '\''), so sh (dash, the restart body's shell) and bash read them alike.
-RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_S RUNNER_LOCK CLAIM_S CLAIMS CLAIM_MAX_S UNIT_MAX_S RESERVE_TOP RESERVE_FULL_GB RESERVE_PCT WORK DUR COLLECTP WATCH_HOURS WARMUP WARMUP_S NUZLINE_TEST_COMPILE_CACHE NUZLINE_HYPOTHESIS_PROFILE NUZLINE_REQUIRE_NODE CGROOT CACHE_SEED_TIMEOUT CACHE_PUBLISH_TIMEOUT"
+RUN_ENV_NAMES="GATE_GB MAXP RUNMAXP SPACING SWEEP_P SWEEP_W SWEEP_CAP SWEEP_NICE SWEEP_JOB_S SWEEP_SPACING SWEEP_POLL SWEEP_REPLAY_S KILL_GB DEFAULT_WEIGHT_GB IDLE_WAIT_S RUNNER_LOCK CLAIM_S CLAIMS CLAIM_MAX_S UNIT_MAX_S RESERVE_TOP RESERVE_FULL_GB RESERVE_PCT WORK DUR COLLECTP WATCH_HOURS WARMUP WARMUP_S NUZLINE_TEST_COMPILE_CACHE NUZLINE_HYPOTHESIS_PROFILE NUZLINE_REQUIRE_NODE CGROOT CACHE_SEED_TIMEOUT CACHE_PUBLISH_TIMEOUT"
 for n in $RUN_ENV_NAMES; do if [ -n "${!n+x}" ]; then
   printf "export %s='%s'\n" "$n" "$(printf '%s' "${!n}" | sed "s/'/'\\\\''/g")"; fi; done > "$D/run.env"
 . "$D/bin/gate.sh"   # cgmem: container memory, cgroup v2 or v1
@@ -111,7 +111,7 @@ PY
 cat collected.txt
 # Quick lane marker (DAYBOX.md "Quick lane"): this run's repo is now the stream's last synced state.
 RUNNAME=$(basename "$D")
-if STREAM=$(lane_stream "$RUNNAME"); then lane_write_marker "$STREAM" "$COMMIT" "$R" "${TABLES_KEY:-}" "${TREE:-}" || echo "WARNING: lane marker of stream $STREAM not written"
+if STREAM=$(lane_stream "$RUNNAME"); then lane_write_marker "$STREAM" "$COMMIT" "$R" "${TABLES_KEY:-}" "${TREE:-}" "${TABLES_CHASH:-}" "${TABLES_CHASH_V:-}" || echo "WARNING: lane marker of stream $STREAM not written"
 else echo "WARNING: no stream in the run name $RUNNAME; no lane marker"; fi
 echo "SETUP_END $(date +%s)"
 nohup bash "$D/bin/runner.sh" > "$D/runner.log" 2>&1 < /dev/null &

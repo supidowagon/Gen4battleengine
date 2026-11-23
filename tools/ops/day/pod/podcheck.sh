@@ -4,7 +4,8 @@
 # /work/_podcheck/ and runs it with the POD_SCRIPTS and POD_WEIGHTS of the checkout's HEAD
 # (DAYBOX.md "Send a run" step 3). Lists every active run under <root>/*/ and <root>/*/*/ (folders starting with _
 # skipped; active: a setup.pid, runner.pid, quick.pid (a quick lane run, bin/quick.sh) or sweep.pid
-# (a soundness sweep, bin/sweep.sh) process alive and not a zombie):
+# (a soundness sweep, bin/sweep.sh) process alive and not a zombie, or a sweep whose driver died while
+# a job or replay group in sweep/out/run/* lives (gate.sh sweeplive; shown as runner=sweep)):
 #   run <name> gate=<GATE_VERSION|old> scripts=<first 12 of POD_SCRIPTS|old> runner=<alive|setup|quick|sweep> live=<units> pending=<units>
 # (live: the units of out/run/, and of sweep/out/run/ for a sweep)
 # GATE_VERSION, POD_SCRIPTS (the *.sh and weights.py) and POD_WEIGHTS (weights.txt) come from the
@@ -39,11 +40,12 @@ DUT="${PODCHECK_DU_TIMEOUT:-10}"; [[ "$DUT" =~ ^[1-9][0-9]*$ ]] || DUT=10; [ "$D
 old=""; other=""; wother=""
 for d in "$R"/*/ "$R"/*/*/; do d=${d%/}; n=${d#"$R"/}
   case "$n" in _*) continue;; esac
-  [ -d "$d/out" ] || [ -f "$d/setup.pid" ] || [ -f "$d/quick.pid" ] || [ -f "$d/sweep.pid" ] || continue
+  [ -d "$d/out" ] || [ -f "$d/setup.pid" ] || [ -f "$d/quick.pid" ] || [ -f "$d/sweep.pid" ] || [ -d "$d/sweep/out/run" ] || continue
   rs=""; pidlive "$(cat "$d/runner.pid" 2>/dev/null)" && rs=alive
   [ -z "$rs" ] && pidlive "$(cat "$d/setup.pid" 2>/dev/null)" && rs=setup
   [ -z "$rs" ] && pidlive "$(cat "$d/quick.pid" 2>/dev/null)" && rs=quick
   [ -z "$rs" ] && pidlive "$(cat "$d/sweep.pid" 2>/dev/null)" && rs=sweep
+  [ -z "$rs" ] && sweeplive "$d" && rs=sweep
   [ -n "$rs" ] || continue
   gv=$(sed -n 's/^GATE_VERSION=//p' "$d/gate.env" 2>/dev/null); ps_=$(sed -n 's/^POD_SCRIPTS=//p' "$d/gate.env" 2>/dev/null)
   if [ -z "$gv" ]; then gv=old; ps_=old; old="$old $n"

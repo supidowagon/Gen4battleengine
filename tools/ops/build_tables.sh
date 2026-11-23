@@ -9,7 +9,13 @@
 # node, the decomp, the symbols map, the local inputs by content). When
 # $RENT/tables/tables_k<key16>.tar.xz exists the build is skipped; a new one is made read-only.
 # Either way $RENT/tables_<short>.tar.xz is a copy of it, $RENT/tables_<short>.key holds <key>,
-# and $RENT/tables/index.txt gets the line "<full sha> <key>".
+# and $RENT/tables/index.txt gets the line "<full sha> <key>". The archive's meta file
+# $RENT/tables/tables_k<key16>.meta (read-only, rewritten when its CONTENT_HASH_V is not the current one;
+# copied to $RENT/tables_<short>.meta) holds KEY=<key>,
+# CONTENT_HASH_V=<content_hash.py VERSION> and CONTENT_HASH=<64 hex> (tools/ops/content_hash.py: sha256 over the sorted per-file digests of the
+# archive's table files, by content as tools/snap_compare.py reads a file). Two builds with equal
+# table files have equal content hashes and different keys; the quick lane's delta (pack.sh --delta)
+# ships tables only when the content hash differs. The key stays the cache identity.
 # Inputs from the main checkout ($REPO): data/local.toml (paths to the ROM, patch, calc zip,
 # docs sheet; copied into the build checkout when it has none), .cache/decomp/<commit>/main.nef.xMAP
 # (symbols) and external/pokeplatinum (linked when the build checkout has none or an empty folder there;
@@ -70,7 +76,7 @@ else
   C=$(git -C "$REPO" rev-parse --short "$ARG^{commit}"); MODE=commit
   B="$RENT/wt_$C"; JC="$RENT/wt-cache_$C"; mkdir -p "$RENT"
   cleanup() {  # unlink first; delete the worktree only once no link is left in it
-    [ -n "${KA:-}" ] && rm -f "$KA.tmp.$$"   # a failed or interrupted tar leaves no partial archive
+    [ -n "${KA:-}" ] && rm -f "$KA.tmp.$$" "${KA%.tar.xz}.meta.tmp.$$"   # a failed or interrupted tar leaves no partial archive
     cd "$RENT"; unlink_decomp || return 1
     [ -e "$B/external/pokeplatinum" ] && [ -z "$LINKED" ] && { echo "ERROR: $B/external/pokeplatinum still present; not deleting $B"; return 1; }
     if [ -e "$B" ]; then git -C "$REPO" worktree remove --force "$B" 2>/dev/null || rm -rf "$B"; fi
@@ -104,10 +110,22 @@ if [ "$MODE" = commit ]; then
     --symbols "$(wp "$SYM")" --config "$(wp "$B/data/local.toml")" | tr -d '\r')
   echo "$KEY" | grep -qE '^[0-9a-f]{64}$' || { echo "ERROR: table_key.py printed no key: $KEY"; exit 2; }
   FULL=$(git -C "$REPO" rev-parse "$C^{commit}"); TD="$RENT/tables"; KA="$TD/tables_k${KEY:0:16}.tar.xz"; mkdir -p "$TD"
+  meta() {  # the key's meta file (KEY, CONTENT_HASH_V, CONTENT_HASH), written once per hash version (one of
+    # another or no CONTENT_HASH_V is rewritten); tables_<short>.meta is a copy
+    local M="${KA%.tar.xz}.meta" ch v
+    v=$("${PY[@]}" "$(wp "$OPS_DIR/content_hash.py")" --version | tr -d '\r')
+    echo "$v" | grep -qE '^[0-9]+$' || { echo "ERROR: content_hash.py printed no version: $v"; exit 2; }
+    if [ ! -f "$M" ] || [ "$(sed -n 's/^CONTENT_HASH_V=//p' "$M" | tail -1 | tr -d '\r')" != "$v" ]; then
+      ch=$("${PY[@]}" "$(wp "$OPS_DIR/content_hash.py")" "$(wp "$KA")" | tr -d '\r')
+      echo "$ch" | grep -qE '^[0-9a-f]{64}$' || { echo "ERROR: content_hash.py printed no hash: $ch"; exit 2; }
+      printf 'KEY=%s\nCONTENT_HASH_V=%s\nCONTENT_HASH=%s\n' "$KEY" "$v" "$ch" > "$M.tmp.$$" && { [ ! -f "$M" ] || chmod u+w "$M"; } \
+        && mv -f "$M.tmp.$$" "$M"; chmod a-w "$M"; fi
+    rm -f "$RENT/tables_$C.meta"; cp "$M" "$RENT/tables_$C.meta"; chmod u+w "$RENT/tables_$C.meta"; }
   record() {  # tables_<short>.tar.xz is the key's archive; the key and the sha -> key line are kept
+    meta
     rm -f "$RENT/tables_$C.tar.xz"; cp "$KA" "$RENT/tables_$C.tar.xz"; chmod u+w "$RENT/tables_$C.tar.xz"
     echo "$KEY" > "$RENT/tables_$C.key"; echo "$FULL $KEY" >> "$TD/index.txt"; }
-  if [ -f "$KA" ]; then record; echo "BUILD_OK $RENT/tables_$C.tar.xz (reused $KA, key ${KEY:0:16})"; exit 0; fi
+  if [ -f "$KA" ]; then record; echo "BUILD_OK $RENT/tables_$C.tar.xz (reused $KA, key ${KEY:0:16}, content $(sed -n 's/^CONTENT_HASH=//p' "$RENT/tables_$C.meta" | cut -c1-16))"; exit 0; fi
 fi
 
 # The steps, as one bash child of the RAM gate: $1 = symbols map, the rest = the python command.
@@ -127,4 +145,4 @@ L="$RENT/tables_$C.list"
 grep -q '^data/gen4_platinum_kaizo/manifest.json$' "$L"
 tar -cJf "$KA.tmp.$$" -T "$L"; mv -f "$KA.tmp.$$" "$KA"; chmod a-w "$KA"; record
 cd "$RENT"
-echo "BUILD_OK $RENT/tables_$C.tar.xz ($(wc -l < "$L") files, key ${KEY:0:16})"
+echo "BUILD_OK $RENT/tables_$C.tar.xz ($(wc -l < "$L") files, key ${KEY:0:16}, content $(sed -n 's/^CONTENT_HASH=//p' "$RENT/tables_$C.meta" | cut -c1-16))"

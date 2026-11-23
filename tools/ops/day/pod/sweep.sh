@@ -48,7 +48,8 @@
 # Knobs (env): SWEEP_P (5), SWEEP_W (13, GB one job is expected to peak at), SWEEP_CAP (unset: from
 # the limit, above), SWEEP_NICE (10), SWEEP_JOB_S (3600, one job's time limit), SWEEP_SPACING (20 s
 # after each start), SWEEP_POLL (15 s between gate readings while waiting), SWEEP_REPLAY_S (3600,
-# replay timeout), SWEEP_TOOLS (<repo>/tools/ops/sweep), and as runner.sh: RUNNER_LOCK
+# replay timeout), SWEEP_TOOLS (<repo>/tools/ops/sweep when it holds extract.py and replay.py, else
+# <run>/bin/sweep, the copy packed with the pod scripts), and as runner.sh: RUNNER_LOCK
 # (/work/.runner.lock), CLAIMS (/work/.claims), CLAIM_MAX_S (3600), DEFAULT_WEIGHT_GB (12), WORK
 # (/work), RESERVE_TOP, RESERVE_FULL_GB, RESERVE_PCT (gate.sh defaults), CGROOT.
 set -u
@@ -59,7 +60,11 @@ JOBS="${1:-}"; OUT="${2:-$D/sweep_out}"; REPO="$D/repo"; U="$D/sweep/out"
 case "$JOBS" in ''|/*) ;; *) JOBS="$PWD/$JOBS";; esac
 case "$OUT" in /*) ;; *) OUT="$PWD/$OUT";; esac
 P="${SWEEP_P:-5}"; W="${SWEEP_W:-13}"; CAP="${SWEEP_CAP:-}"; NICE="${SWEEP_NICE:-10}"; SPACING="${SWEEP_SPACING:-20}"; POLL="${SWEEP_POLL:-15}"
-JOB_S="${SWEEP_JOB_S:-3600}"; REPLAY_S="${SWEEP_REPLAY_S:-3600}"; TOOLS="${SWEEP_TOOLS:-$REPO/tools/ops/sweep}"
+JOB_S="${SWEEP_JOB_S:-3600}"; REPLAY_S="${SWEEP_REPLAY_S:-3600}"; TOOLS="${SWEEP_TOOLS:-}"; TOOLS_SET=${SWEEP_TOOLS:+y}
+# The sweep tools (extract.py, replay.py): the commit's own, else the copy that travels with the pod
+# scripts (<run>/bin/sweep, pack.sh pack_sweep_tools) for a commit without tools/ops/sweep/.
+if [ -z "$TOOLS" ]; then TOOLS="$REPO/tools/ops/sweep"
+  [ -f "$TOOLS/replay.py" ] && [ -f "$TOOLS/extract.py" ] || TOOLS="$D/bin/sweep"; fi
 LOCK="${RUNNER_LOCK:-/work/.runner.lock}"; CLAIMS="${CLAIMS:-/work/.claims}"; NO_W_FILE_GB="${DEFAULT_WEIGHT_GB:-12}"; WORK="${WORK:-/work}"
 [ -n "$JOBS" ] && [ -f "$JOBS" ] || { echo "usage: sweep.sh <jobs file> [<out dir>]" >&2; exit 1; }
 for n in P W NICE JOB_S; do case "${!n}" in ''|*[!0-9]*) echo "ERROR: SWEEP_$n '${!n}' is not a whole number" >&2; exit 1;; esac; done
@@ -73,12 +78,11 @@ rm -f "$OUT/SWEEP_DONE"
 LOG="$OUT/driver.log"; say() { echo "$(date +%s) $*" >> "$LOG"; }
 . "$D/bin/gate.sh"   # cgmem, podgate, claim_state (pidlive, runnerpid)
 fail() { say "ERROR: $*; driver stops"; echo "ERROR: $*" >&2; exit 1; }
-# grouplive <pgid>: the process group has a member that is not a zombie (podgate's rule).
-grouplive() { case "$1" in ''|*[!0-9]*|0|1) return 1;; esac
-  ps -eo pgid=,stat= | awk -v g="$1" '$1 == g && $2 !~ /^Z/ {f = 1} END {exit !f}'; }
+# grouplive <pgid> (gate.sh): the process group has a member that is not a zombie.
 for f in "$U"/run/*; do [ -f "$f" ] || continue
   grouplive "$(cat "$f" 2>/dev/null)" && fail "a job of another sweep of this run is live ($f)"
   rm -f "$f"; done
+[ -n "$TOOLS_SET" ] || { [ -f "$TOOLS/replay.py" ] && [ -f "$TOOLS/extract.py" ]; } || fail "no extract.py and replay.py in the repo's tools/ops/sweep or in $D/bin/sweep"
 reserve_knobs || fail "bad RESERVE_ knob"
 b=$(cgmem current) || fail "no cgroup memory file"
 # The cap: the shape's GATE_GB from the container limit (docs/process.md section 5).
