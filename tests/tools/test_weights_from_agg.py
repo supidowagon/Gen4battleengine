@@ -107,6 +107,21 @@ def test_tracked_table_has_the_marker_and_loads():
     wfa.weights.load_lines(lines)
 
 
+def test_a_refresh_keeps_the_build_line_and_its_note_above_the_marker(tmp_path):
+    """tools/build_tables.py (the local build gate's line, tools/ops/ramgate.py BUILD_KEY) is hand-kept:
+    a refresh of the tracked table leaves it, its comment and the rest of the head as they are."""
+    lines = (ROOT / "tools/ops/day/pod/weights.txt").read_text(encoding="utf-8").splitlines()
+    head = lines[: lines.index(wfa.MARK) + 1]
+    entry = next(i for i, ln in enumerate(head) if ln.split()[:1] == ["tools/build_tables.py"])
+    assert head[entry - 1].startswith("# matches it") and head[entry - 2].startswith("# Not a test")
+    w = tmp_path / "weights.txt"
+    w.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    a = _agg(tmp_path / "out", "run-a", ["u_001 1 20000 10 0 tests/brand_new.py::test_1"])
+    out = wfa.render(w, [a], [], report=[]).splitlines()
+    assert out[: len(head)] == head
+    assert not any(ln.startswith("tools/build_tables.py") for ln in out[len(head):])
+
+
 def test_warnings_for_kernel_kills_triple_kills_and_hand_kept_overruns(tmp_path):
     w = _table(tmp_path, "tests/h.py::test_big 10 r0\n", "tests/a.py 70 old\n")
     agg = _agg(tmp_path / "out", "run-a", [
