@@ -196,3 +196,6 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   Light Screen, is a named refusal `policy._doubles_damage`
   ("doubles damage factor (E2 D45-8)", `_Refused.doubles_damage`; battle_lib.c:6982-6990, :7023-7044), with a
   `fullset` test. The step that rebases on D45-8 deletes both and uses the factors.
+  A third consumer of the factor: the post-KO replacement pick `BattleAI_PostKOSwitchIn` (battle_lib.c:8054,
+  reached from trainer_ai.c:4005) estimates the bench moves with `BattleSystem_CalcMoveDamage`; `ai/replacement.py` is
+  singles-only today, and its B = 4 form (W4, A-13) needs the D45-8 factors or the same refusal.

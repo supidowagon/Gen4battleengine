@@ -5274,9 +5274,11 @@ def _doubles_damage(tables: Tables, state: BattleState) -> jnp.ndarray:
     - ``movePrevByBattler`` of every battler (``IfBattlerDealsMoreDamage``, :2228-2237, the
       defender's last move, enemy or ally, with no damaging test): any move with power > 0 or a
       damaging one (``CalcMoveDamage`` of power 0 is 0 before its ``+ 2``, :7078).
-    No other AI estimate goes through ``CalcMoveDamage`` (its callers in trainer_ai.c: :3082 inside
-    ``TrainerAI_CalcDamage``, reached from :1041, :1560, :1611, :2130, :2156, :2210, :2228,
-    :2402)."""
+    No other scoring estimate goes through ``CalcMoveDamage`` (its callers in trainer_ai.c: :3082
+    inside ``TrainerAI_CalcDamage``, reached from :1041, :1560, :1611, :2130, :2156, :2210, :2228,
+    :2402). The post-KO replacement pick also calls it (``BattleAI_PostKOSwitchIn``,
+    battle_lib.c:8054, reached from trainer_ai.c:4005), with the spread factor: ``ai/replacement.py``
+    is singles-only, and its B = 4 form takes the same factor (ledger E4-17)."""
     fmt = format_of(state)
     if fmt.B != 4:
         return jnp.asarray(False)
