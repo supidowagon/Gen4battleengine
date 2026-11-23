@@ -19,11 +19,13 @@ from nuzline.data.gauntlet import (
     GauntletFacts,
     GauntletSettingsError,
     Layer,
+    LiveRow,
     Origin,
     RunInput,
     SettingsError,
     Swap,
     check_swap_gap,
+    forced_rows,
     load_local,
     load_rules_file,
     missing_transitions,
@@ -32,6 +34,7 @@ from nuzline.data.gauntlet import (
     parse_members,
     resolve,
     resolve_settings,
+    wild_lines,
 )
 from nuzline.data.trainer import Trainer
 
@@ -720,3 +723,131 @@ def test_skips_refused(skips, match):
 def test_skips_need_their_source():
     with pytest.raises(ValueError, match="need skips_source"):
         GauntletFacts.from_dict(facts_dict(skips=[_skip()]))
+
+
+# --- C8: wild battles, catching, eggs (design section 3, "Wild battles, catching, eggs") ------
+
+
+def _wild_facts(roaming=False, max_level=12):
+    """The synthetic group with ``wild`` as its one field move: the case without it (wild =
+    avoid) keeps only the second order."""
+    level = {
+        "header": 199,
+        "kind": "grass",
+        "rate": 10,
+        "max_level": max_level,
+        "tiles": 5,
+        "examples": [[1, 2], [1, 3], [2, 3]],
+    }
+    if roaming:
+        level["roaming"] = True
+    case = {
+        "moves": [],
+        "orders": [[[11, 12], [10], [13]]],
+        "leave_gaps": [[]],
+        "pc_gaps": [2],
+        "heal_gaps": [],
+        "locked_gaps": [2],
+    }
+    return GauntletFacts.from_dict(
+        facts_dict(
+            field_moves=["wild"],
+            field_moves_source="rom:test wild",
+            cases=[case],
+            wild_levels=[level],
+            wild_levels_source="rom:test wild levels",
+        )
+    )
+
+
+def test_wild_and_catch_options_default_to_the_strict_value():
+    assert OPTIONS["wild"].values == ("avoid", "repel", "accept")
+    assert OPTIONS["catch"].values == ("forbidden", "allowed")
+    assert OPTIONS["wild"].default == "avoid" and OPTIONS["catch"].default == "forbidden"
+    assert OPTIONS["wild"].scope == OPTIONS["catch"].scope == "gauntlet"
+
+
+def test_wild_levels_round_trip_and_need_the_wild_move():
+    f = _wild_facts()
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+    assert f.wild_max_level == 12
+    with pytest.raises(ValueError, match="wild_levels exactly when wild"):
+        GauntletFacts.from_dict({**f.to_dict(), "wild_levels": []})
+    with pytest.raises(ValueError, match="wild_levels exactly when wild"):
+        GauntletFacts.from_dict(facts_dict(wild_levels=f.to_dict()["wild_levels"]))
+
+
+def test_walk_moves_follow_the_wild_setting():
+    f = _wild_facts()
+    party = ("rock_smash",)
+    assert f.walk_moves(party, "avoid") == party
+    assert f.walk_moves(party, "accept") == (*party, "wild")
+    # repel: a Repel in the bag and the first live member above every wild level (strict >)
+    assert f.walk_moves(party, "repel", first_live_level=13, repel_in_bag=True) == (
+        *party,
+        "wild",
+    )
+    assert f.walk_moves(party, "repel", first_live_level=12, repel_in_bag=True) == party
+    assert f.walk_moves(party, "repel", first_live_level=50, repel_in_bag=False) == party
+    # a roamer's route: the active roamers' levels must be known and below too
+    r = _wild_facts(roaming=True)
+    assert r.walk_moves(party, "repel", first_live_level=50, repel_in_bag=True) == party
+    kw = {"first_live_level": 50, "repel_in_bag": True}
+    assert r.walk_moves(party, "repel", roamer_levels={}, **kw) == (*party, "wild")
+    assert r.walk_moves(party, "repel", roamer_levels={199: 50}, **kw) == party
+    with pytest.raises(SettingsError):
+        f.walk_moves(party, "sometimes")
+
+
+def test_the_avoid_case_is_a_case_and_its_refusal_names_the_tiles():
+    f = _wild_facts()
+    assert f.case(f.walk_moves((), "avoid")).orders == (((11, 12), (10,), (13,)),)
+    assert f.case(f.walk_moves((), "accept")).orders == f.orders
+    blocked = GauntletFacts.from_dict(
+        {
+            **f.to_dict(),
+            "cases": [
+                {
+                    "moves": [],
+                    "orders": [],
+                    "leave_gaps": [],
+                    "pc_gaps": [],
+                    "heal_gaps": [],
+                    "locked_gaps": [],
+                }
+            ],
+        }
+    )
+    with pytest.raises(ValueError, match=r"wild = repel or accept.*header 199 grass.*\(1, 2\)"):
+        blocked.case(())
+
+
+def test_catch_needs_wild_battles(facts):
+    e = refused(facts, ["catch=allowed"])
+    assert e.key == "catch" and "wild" in str(e)
+    assert setup(facts, ["catch=allowed", "wild=accept"]).settings["catch"].value == "allowed"
+
+
+def test_an_egg_forces_both_counts():
+    rows = (
+        LiveRow(fought=((10,),), live=1, next=((11, 12),), gap=("leave",)),
+        LiveRow(fought=((10,),), live=2, next=((11, 12),), gap=("leave",)),
+        LiveRow(fought=((10,),), live=1, next=((11, 12),), to=2, at="bag"),
+    )
+    plain, rise = rows[0], rows[2]
+    assert forced_rows(rows, ((10,),), 1, egg=False) == (plain,)
+    assert forced_rows(rows, ((10,),), 1, egg=True) == (plain, rise)
+    assert forced_rows(rows, ((10,),), 2, egg=True) == (rows[1],)
+    # a gap without a bag row (locked): the plain row of count 2
+    assert forced_rows(rows[:2], ((10,),), 1, egg=True) == (plain, rows[1])
+
+
+def test_wild_lines_name_value_and_origin():
+    f = _wild_facts()
+    lines = wild_lines(f, setup(f, ["wild=repel"]).settings, egg=True)
+    assert lines[0] == "wild = repel (flag: --rule/--gap-rule)"
+    assert lines[1] == "catch = forbidden (default: default)"
+    assert "above level 12" in lines[2] and "both live counts" in lines[3]
+    assert wild_lines(f, setup(f, ["wild=accept"]).settings)[2] == (
+        "wild battles on the path are not modelled"
+    )

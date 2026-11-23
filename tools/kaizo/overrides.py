@@ -41,7 +41,9 @@ Tables (keys are ROM trainer ids unless said otherwise):
   table per other subset of them, in order (``moves``, then ``orders``, ``leave_gaps``,
   ``pc_gaps``, ``heal_gaps``, ``locked_gaps``, ``fight_headers``, ``live_next`` as above, under
   the same rules; ``orders = []`` and no other key: the case has no full sequence;
-  ``GauntletFacts.cases``, ``MoveCase``). Gap k follows
+  ``GauntletFacts.cases``, ``MoveCase``). Optional ``wild_levels`` (a list of tables
+  ``header``, ``kind``, ``rate``, ``max_level``, ``tiles``, ``examples``, optional ``roaming``:
+  ``WildLevel``; exactly when ``wild`` is a field move) with ``wild_levels_source``. Gap k follows
   the k-th fight of an order. Each fact has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
   read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
@@ -82,7 +84,15 @@ from dataclasses import dataclass, field
 from itertools import permutations
 from pathlib import Path
 
-from nuzline.data.gauntlet import FLAT_GAP_FIELDS, GauntletFacts, LiveRow, MoveCase, Partner, Skip
+from nuzline.data.gauntlet import (
+    FLAT_GAP_FIELDS,
+    GauntletFacts,
+    LiveRow,
+    MoveCase,
+    Partner,
+    Skip,
+    WildLevel,
+)
 from tools.kaizo.trainer_map import (
     Mapping,
     MappingError,
@@ -348,6 +358,11 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
         _fact_source(entry, t, "field_moves_source", "") if "field_moves_source" in t else ""
     )
     cases = _cases(entry, t.get("case"), trainers)
+    wild = t.get("wild_levels", [])
+    if not isinstance(wild, list) or not all(isinstance(w, dict) for w in wild):
+        raise OverridesError(f"{entry}: wild_levels must be a list of tables")
+    if "wild_levels" in t and "wild_levels_source" not in t:
+        raise OverridesError(f"{entry}: wild_levels needs wild_levels_source")
     try:
         return GauntletFacts(
             name=name,
@@ -377,6 +392,10 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
             else (),
             requires_beaten_source=_fact_source(entry, t, "requires_beaten_source", "")
             if "requires_beaten" in t
+            else "",
+            wild_levels=tuple(WildLevel.from_dict(w) for w in wild),
+            wild_levels_source=_fact_source(entry, t, "wild_levels_source", "")
+            if "wild_levels" in t
             else "",
         )
     except ValueError as e:
@@ -593,6 +612,8 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
                 "skips_source",
                 "requires_beaten",
                 "requires_beaten_source",
+                "wild_levels",
+                "wild_levels_source",
                 *FACT_KEYS,
                 *FACT_SOURCES,
             ),

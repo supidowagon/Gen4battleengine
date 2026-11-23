@@ -23,7 +23,8 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-# 48: E3 batch 3 merged main c479effc (main's 44: Sketch (move effect 95) is EffectId.SKETCH 143, I-3; E3's 44-47 below).
+# 48: E3 batch 3 merged main c479effc (main's 44: Sketch (move effect 95) is EffectId.SKETCH 143, I-3; E3's 44-47 below);
+# C8: GauntletFacts carry wild_levels and FIELD_MOVES the pseudo-move wild (the avoid case).
 # 44 (E3): E3 batch 3 GT-2: trainers carry gauntlet_facts (the group orders, gaps, escape, partner) in place of
 # gauntlet_rules; fight ids from the orders (Elite Four + Champion joins in batch 4, B4-19).
 # 47: E3 B3 fix 3 C6: GauntletFacts carry field_moves, field_moves_source and the field-move cases

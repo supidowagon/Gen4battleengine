@@ -223,6 +223,35 @@ BRIDGE_OVER_WATER = frozenset({0x73, 0x78, 0x7C})  # TileBehavior_IsBridgeOverWa
 SURFABLE = frozenset(
     {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x19, 0x22, 0x2A, 0x50, 0x51, 0x52, 0x53, 0x73, 0x78, 0x7C}
 )
+# TILE_BEHAVIOR_FLAG_ENCOUNTER in sTileBehaviorFlags (src/map_tile_behavior.c:6-263, read by
+# ``TileBehavior_HasEncounters`` :611-614; the test re-reads the table from the decomp). The
+# bridges over encounter tiles carry it too: a step that ends on one counts as an encounter
+# tile whether or not the player is up on the bridge (at least as strict as the game).
+ENCOUNTER = frozenset(
+    {0x02, 0x03, 0x05, 0x06, 0x08, 0x0B, 0x10, 0x11, 0x12, 0x15, 0x22, 0x24, 0x25, 0x2A}
+    | {0x72, 0x77, 0x7B, 0xA6, 0xA7}
+)
+# wildEncountersArchiveID, u16 at 14 of the map header (include/map_header.h:19; Kaizo reads it
+# from the d_test.narc member, docs/kaizo/rom_diff.md MapHeader_HasWildEncounters); 0xFFFF: the
+# header has no wild data (``MapHeader_HasWildEncounters``, src/map_header.c:72-76).
+HEADER_WILD = 14
+NO_WILD = 0xFFFF
+# The member the field loads (``MapHeaderData_LoadWildEncounters``, src/map_header_data.c:218-226,
+# Platinum: pl_enc_data; platinum.us/filesys.csv:262). ``WildEncounters``
+# (include/overlay006/wild_encounters.h:8-49): grass rate s32 at 0, 12 grass slots of 8 bytes
+# (level s8, species s32 at +4) from 4; then swarm 2, day 2, night 2, radar 4, forms 5, Unown 1
+# and dual-slot 5 x 2 s32 species-only tables (100..204); surf rate s32 at 204, 5 surf slots of 8
+# bytes (maxLevel s8, minLevel s8, species s32 at +4) from 208.
+ENC_NARC = "fielddata/encountdata/pl_enc_data.narc"
+ENC_GRASS_RATE, ENC_GRASS, GRASS_SLOTS = 0, 4, 12
+ENC_SURF_RATE, ENC_SURF, SURF_SLOTS = 204, 208, 5
+ENC_SLOT = 8
+# The roamers' routes (``RoamingPokemonRoutes``, src/roaming_pokemon.c:150-180; the header ids,
+# generated/map_headers.txt, 0-based), checked by the test against the decomp.
+ROAMING_HEADERS = frozenset(
+    {342, 343, 344, 345, 346, 347, 349, 350, 353, 354, 356, 362, 363, 365, 366, 367, 371}
+    | {373, 380, 382, 383, 385, 388, 391, 392, 395, 467, 200, 204}
+)
 TABLE = 0x80  # TILE_BEHAVIOR_TABLE, :139
 PC_TILE = 0x83  # TILE_BEHAVIOR_PC, :142
 NO_WARP = 0xFFFF
@@ -397,6 +426,9 @@ class FieldMoves:
     surf: bool = False
     rock_climb: bool = False
     waterfall: bool = False
+    # ``wild`` (``nuzline.data.gauntlet.FIELD_MOVES``): a step may end on an encounter tile.
+    # No badge or move gives it; the case without it is the walk under ``wild = "avoid"``.
+    wild: bool = False
 
     @classmethod
     def from_badges(cls, badges: Collection[int], partner: bool = False) -> FieldMoves:
@@ -408,6 +440,7 @@ class FieldMoves:
             surf=FEN in b and not partner,  # field_control.c:690; :302-303 no partner
             rock_climb=ICICLE in b and not partner,  # :251, :253-254 no partner
             waterfall=BEACON in b,  # field_move_tasks.c:590
+            wild=True,
         )
 
     @classmethod
@@ -540,6 +573,9 @@ class Area:
     map_type: int = 0
     escape_bit: bool = False
     heights: Mapping[tuple[int, int], tuple[int, ...]] = field(default_factory=dict)
+    # kind -> (rate, max level) of the header's wild tables with a non-zero rate
+    # (``RomMaps.wild``); empty: no wild data, or every rate zero
+    wild: Mapping[str, tuple[int, int]] = field(default_factory=dict)
     object_at: dict = field(init=False, repr=False, default_factory=dict)
     _pc: frozenset | None = field(init=False, repr=False, default=None)
     _warp_at: dict = field(init=False, repr=False, default_factory=dict)
@@ -555,6 +591,16 @@ class Area:
         self._by_index = {}
         for o in self.objects:
             self._by_index.setdefault(o.index, o)
+
+    def encounter(self, x: int, z: int) -> str | None:
+        """The encounter kind a step ending on ``(x, z)`` tries (``GetTileEncounterRateAndType``,
+        src/overlay006/wild_encounters.c:782-795: surf on a surfable tile, else grass), or None
+        when the tile has no encounter flag or that kind's rate is zero (:248-252)."""
+        b = self.behaviour(x, z)
+        if b is None or b not in ENCOUNTER:
+            return None
+        kind = "surf" if b in SURFABLE else "grass"
+        return kind if kind in self.wild else None
 
     def behaviour(self, x: int, z: int) -> int | None:
         a = self.tiles.get((x, z))
@@ -735,6 +781,7 @@ class RomMaps:
         self._events = files.narc(EVENTS_NARC)
         self._matrices = files.narc(MATRIX_NARC)
         self._lands = files.narc(LAND_DATA_NARC)
+        self._enc = files.narc(ENC_NARC)
         self._cache: dict[tuple[int, bool], Area] = {}
         self._land_cache: dict[int, tuple[tuple[int, ...], list[tuple[int, ...]]]] = {}
 
@@ -750,6 +797,36 @@ class RomMaps:
         return MapHeader(
             header, matrix, scripts, events, flags & MAP_TYPE_MASK, bool((flags >> ESCAPE_BIT) & 1)
         )
+
+    def wild(self, header: int) -> dict[str, tuple[int, int]]:
+        """``Area.wild`` of a header: per kind with a non-zero rate, the rate and the highest
+        level any slot gives (grass: the slot level, wild_encounters.c:1107-1108; surf: the
+        larger of a slot's two levels, ``GetWildMonLevel`` :1119)."""
+        try:
+            (archive,) = struct.unpack_from("<H", self._headers[header], HEADER_WILD)
+        except (IndexError, struct.error):
+            raise MapReadError(f"no map header {header}") from None
+        if archive == NO_WILD:
+            return {}
+        try:
+            m = self._enc[archive]
+            (grass_rate,) = struct.unpack_from("<i", m, ENC_GRASS_RATE)
+            grass = [
+                struct.unpack_from("<b", m, ENC_GRASS + i * ENC_SLOT)[0] for i in range(GRASS_SLOTS)
+            ]
+            (surf_rate,) = struct.unpack_from("<i", m, ENC_SURF_RATE)
+            surf = [
+                max(struct.unpack_from("<2b", m, ENC_SURF + i * ENC_SLOT))
+                for i in range(SURF_SLOTS)
+            ]
+        except (IndexError, struct.error):
+            raise MapReadError(f"header {header}: wild table {archive} is short") from None
+        out = {}
+        if grass_rate:
+            out["grass"] = (grass_rate, max(grass))
+        if surf_rate:
+            out["surf"] = (surf_rate, max(surf))
+        return out
 
     def _land(self, land: int) -> tuple[tuple[int, ...], list[tuple[int, ...]]]:
         if land not in self._land_cache:
@@ -787,7 +864,17 @@ class RomMaps:
                         heights[p] = plates[i]
         except (IndexError, struct.error, TerrainError) as e:
             raise MapReadError(f"map header {header}: {e}") from e
-        area = Area(header, tiles, objects, warps, coords, h.map_type, h.escape_bit, heights)
+        area = Area(
+            header,
+            tiles,
+            objects,
+            warps,
+            coords,
+            h.map_type,
+            h.escape_bit,
+            heights,
+            self.wild(header),
+        )
         self._cache[key] = area
         return area
 
@@ -976,6 +1063,20 @@ class Walker:
         # the field moves some step, push, talk or sight line of this walker used
         # (``relevant_moves``): a move never used here changes none of its walks
         self.used: set[str] = set()
+        # (header, kind) -> the encounter tiles a step of this walker ended on (``wild`` held)
+        self.wild_tiles: dict[tuple[int, str], set[tuple[int, int]]] = {}
+
+    def _wild_ok(self, area: Area, x: int, z: int) -> bool:
+        """Whether a step may end on ``(x, z)``: not an encounter tile (``Area.encounter``;
+        ``Field_CheckWildEncounter`` runs at the end of every player step,
+        ``field_control.c:227-229``, :543-558), or the walk has ``wild`` (recorded)."""
+        kind = area.encounter(x, z)
+        if kind is None:
+            return True
+        if not self._has("wild"):
+            return False
+        self.wild_tiles.setdefault((area.header, kind), set()).add((x, z))
+        return True
 
     def _has(self, move: str) -> bool:
         """Whether the walk may use ``move`` (``FieldMoves``); a yes is recorded in ``used``."""
@@ -1816,6 +1917,8 @@ class Walker:
                 return [("stay", on, on, False)]
             return []
         here = path[-1]
+        if not door and not self._wild_ok(self.maps.area(here.pos.header), here.pos.x, here.pos.z):
+            return []
         if not door and self._spotted(
             walk, here.pos, here.y, "sight", defeated, removable, here.flags, here.bridge,
             here.moved,
@@ -1824,6 +1927,9 @@ class Walker:
         if not door:
             forced = self._forced(self.maps.area(here.pos.header), here, d, removable)
             if forced:
+                for f in forced:
+                    if not self._wild_ok(self.maps.area(f.pos.header), f.pos.x, f.pos.z):
+                        return []
                 for f in forced[:-1]:
                     walk.seen.setdefault(f.pos, s.pos)
                 walk.seen.setdefault(here.pos, s.pos)
@@ -3077,6 +3183,7 @@ def wayward_facts(
         "partner": {"trainer": partner[0][1], "join_before": join_before},
         "skips": skips,
         "used": sorted(joined.used | alone.used),
+        "wild_levels": wild_levels(maps, (joined, alone)),
     }
 
 
@@ -3400,6 +3507,7 @@ def _facts(orders, leave_gaps, fight_headers, escape_, **more) -> dict:
         "live_next": None,
         "field_moves": [],
         "cases": [],
+        "wild_levels": [],
         **more,
     }
 
@@ -3479,6 +3587,32 @@ def relevant_moves(walkers: Iterable[Walker]) -> set[str]:
     return set().union(*(w.used for w in walkers))
 
 
+def wild_levels(maps, walkers: Iterable[Walker]) -> list[dict]:
+    """The ``wild_levels`` rows (``nuzline.data.gauntlet.WildLevel``) of the walks of
+    ``walkers`` that hold ``wild``: per header and kind the rate and highest level
+    (``Area.wild``), how many encounter tiles the walks ended a step on, the first three of
+    them, and whether the header is a roamer's route (``ROAMING_HEADERS``)."""
+    tiles: dict[tuple[int, str], set[tuple[int, int]]] = {}
+    for w in walkers:
+        for key, ts in w.wild_tiles.items():
+            tiles.setdefault(key, set()).update(ts)
+    out = []
+    for (header, kind), ts in sorted(tiles.items()):
+        rate, level = maps.area(header).wild[kind]
+        row = {
+            "header": header,
+            "kind": kind,
+            "rate": rate,
+            "max_level": level,
+            "tiles": len(ts),
+            "examples": [list(e) for e in sorted(ts)[:3]],
+        }
+        if header in ROAMING_HEADERS:
+            row["roaming"] = True
+        out.append(row)
+    return out
+
+
 def changing_moves(by: Mapping[tuple[str, ...], object], used: Collection[str]) -> tuple[str, ...]:
     """The moves of ``used`` (``relevant_moves``) that change the facts: ``by`` holds the facts
     of every subset T of the held moves; a move m changes them when some T with m has other
@@ -3523,8 +3657,10 @@ def chain_group_facts(
     facts, or empty ``orders`` and gap lists where it has no full sequence."""
     by: dict[tuple[str, ...], dict | None] = {}
     used: set[str] = set()
+    walked: dict[tuple[str, ...], Mapping[int, Walker]] = {}
     for names in move_subsets(held.names):
         walkers = walkers_for(held.restrict(names))
+        walked[names] = walkers
         try:
             facts = chain_facts(maps, walkers[2], spec, group, **kw)
         except NoFullSequence:
@@ -3566,7 +3702,8 @@ def chain_group_facts(
         for names in move_subsets(relevant)
         if names != relevant
     ]
-    return {**top, "field_moves": list(relevant), "cases": cases}
+    wild = wild_levels(maps, walked[relevant].values()) if "wild" in relevant else []
+    return {**top, "field_moves": list(relevant), "cases": cases, "wild_levels": wild}
 
 
 def derive_groups(
@@ -3678,6 +3815,7 @@ def derive_groups(
             live_next=facts["live_next"],
             field_moves=facts["field_moves"],
             cases=facts["cases"],
+            wild_levels=facts["wild_levels"],
             **({"requires_beaten": needs} if needs else {}),
         )
 
@@ -3765,7 +3903,7 @@ def wayward_group_facts(
         raise NoFullSequence("Wayward Cave: no full sequence")
 
     def strip(f: dict | None) -> dict | None:
-        return None if f is None else {**f, "used": ()}
+        return None if f is None else {**f, "used": (), "wild_levels": ()}
 
     used = tuple(m for m in FIELD_MOVES if m in way["used"])
     held = FieldMoves.for_split(WAYWARD_SPLIT, partner=True).names
@@ -3809,6 +3947,7 @@ def wayward_group_facts(
         field_moves=list(relevant),
         cases=cases,
         skips=way["skips"],
+        wild_levels=way["wild_levels"] if "wild" in relevant else [],
     )
 
 

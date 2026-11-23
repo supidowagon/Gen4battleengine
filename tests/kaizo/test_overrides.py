@@ -1090,6 +1090,26 @@ def test_gauntlet_cases_load_and_follow_the_party(tmp_path):
     assert GauntletFacts.from_dict(f.to_dict()) == f
 
 
+WILD_FACTS = CASE_FACTS.replace('field_moves = ["rock_smash"]', 'field_moves = ["wild"]').replace(
+    'orders_source = "rom:header 1 events 2"\n',
+    'orders_source = "rom:header 1 events 2"\n'
+    'wild_levels = [{header = 1, kind = "grass", rate = 10, max_level = 7, tiles = 1, '
+    "examples = [[2, 1]]}]\n"
+    'wild_levels_source = "rom:header 1 wild 5 (pl_enc_data)"\n',
+)
+
+
+def test_gauntlet_wild_levels_load_with_the_wild_case(tmp_path):
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=WILD_FACTS))).gauntlets[0].facts
+    assert f.field_moves == ("wild",) and f.wild_max_level == 7
+    assert f.wild_levels_source == "rom:header 1 wild 5 (pl_enc_data)"
+    assert f.case(f.walk_moves((), "avoid")).orders == (((1,), (2,)),)
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+    text = WILD_FACTS.replace('wild_levels_source = "rom:header 1 wild 5 (pl_enc_data)"\n', "")
+    with pytest.raises(OverridesError, match="needs wild_levels_source"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=text)))
+
+
 def test_a_gauntlet_case_with_no_orders_is_refused_when_picked(tmp_path):
     text = CASE_FACTS.split("[[gauntlet.case]]")[0] + "[[gauntlet.case]]\nmoves = []\norders = []\n"
     f = load_overrides(write(tmp_path, gauntlet_text(facts=text))).gauntlets[0].facts

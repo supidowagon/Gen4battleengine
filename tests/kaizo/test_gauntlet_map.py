@@ -14,7 +14,9 @@ from nuzline.data.gauntlet import MoveCase, Skip
 from tools.kaizo.gauntlet_map import (
     CLOCK_SIDE,
     CLOCK_STATES,
+    ENCOUNTER,
     FOUNTAIN_WIDTH,
+    ROAMING_HEADERS,
     SPLIT_BADGES,
     STRENGTH_ACTIVE,
     SURFABLE,
@@ -51,6 +53,7 @@ from tools.kaizo.gauntlet_map import (
     pc_spots,
     relevant_moves,
     runs,
+    wild_levels,
 )
 from tools.rom.inputs import REPO_ROOT
 
@@ -68,6 +71,8 @@ TILE = {
     "e": 0x30,  # BLOCK_EASTWARD
     "n": 0x42,  # SLIDE_NORTHWARD (a spin tile)
     "i": 0x20,  # ICE
+    "g": 0x02,  # TALL_GRASS (an encounter tile)
+    "c": 0x08,  # CAVE_FLOOR (an encounter tile)
 }
 EAST, SOUTH, WEST, NORTH = 3, 1, 2, 0
 
@@ -837,14 +842,89 @@ def test_the_surfable_set_matches_the_decomp(decomp):
     assert value["TILE_BEHAVIOR_BLOCK_EAST_AND_WEST"] == 0x4A
 
 
+def test_the_encounter_set_matches_the_decomp(decomp):
+    src = (decomp / "src" / "map_tile_behavior.c").read_text(encoding="utf-8")
+    hdr = decomp / "include" / "constants" / "field" / "map_tile_behaviors.h"
+    body = hdr.read_text(encoding="utf-8").split("enum TileBehavior {")[1]
+    names = re.findall(r"^\s+(TILE_BEHAVIOR_\w+)", body, re.MULTILINE)
+    value = {n: i for i, n in enumerate(names)}
+    flags = re.findall(r"\[(TILE_BEHAVIOR_\w+)\]\s*=\s*(TILE_BEHAVIOR_FLAG_\w+)", src)
+    assert {value[n] for n, f in flags if "ENCOUNTER" in f} == ENCOUNTER
+
+
+def test_the_roaming_headers_match_the_decomp(decomp):
+    src = (decomp / "src" / "roaming_pokemon.c").read_text(encoding="utf-8")
+    table = src.split("RoamingPokemonRoutes[RI_MAX] = {")[1].split("};")[0]
+    routes = re.findall(r"= (MAP_HEADER_\w+)", table)
+    lines = (decomp / "generated" / "map_headers.txt").read_text(encoding="utf-8").split()
+    assert len(routes) == 29
+    assert {lines.index(r) for r in routes} == ROAMING_HEADERS  # 0-based: EVERYWHERE is 0
+
+
+def _grass_area(rows, wild=None, objects=()):
+    a = area(1, rows, objects)
+    return Area(1, a.tiles, a.objects, wild={"grass": (10, 7)} if wild is None else wild)
+
+
+def test_an_encounter_tile_needs_wild():
+    # (1, 0) is tall grass; the walk without ``wild`` (wild = avoid) never ends a step on it
+    a = _grass_area([".g."])
+    plain = Walker(StaticMaps([a]))
+    assert Pos(1, 2, 0) not in plain.walk(Pos(1, 0, 0)).seen
+    assert plain.used == set() and plain.wild_tiles == {}  # a yes only is recorded
+    w = Walker(StaticMaps([a]), moves=FieldMoves(wild=True))
+    assert Pos(1, 2, 0) in w.walk(Pos(1, 0, 0)).seen
+    assert w.wild_tiles == {(1, "grass"): {(1, 0)}}
+    # a header without wild data (or a zero rate) has no encounter tile
+    free = Walker(StaticMaps([_grass_area([".g."], wild={})]))
+    assert Pos(1, 2, 0) in free.walk(Pos(1, 0, 0)).seen and free.used == set()
+    # water is the surf table: grass data alone leaves it free for a surfer
+    sea = Area(1, area(1, [".~."]).tiles, wild={"grass": (10, 7)})
+    assert sea.encounter(1, 0) is None
+    assert Area(1, sea.tiles, wild={"surf": (5, 30)}).encounter(1, 0) == "surf"
+
+
+def test_wild_levels_name_the_tables_the_walk_steps_on():
+    a = _grass_area(["gcg"])
+    w = Walker(StaticMaps([a]), moves=FieldMoves(wild=True))
+    w.walk(Pos(1, 0, 0))
+    assert wild_levels(StaticMaps([a]), [w]) == [
+        {
+            "header": 1,
+            "kind": "grass",
+            "rate": 10,
+            "max_level": 7,
+            "tiles": 3,
+            "examples": [[0, 0], [1, 0], [2, 0]],
+        }
+    ]
+
+
+def test_a_chain_through_grass_has_an_avoid_case():
+    # the corridor z 1 reaches both trainers only over the grass at (2, 1); the bypass z 3 has
+    # no encounter tile but passes trainer 2 first
+    rows = ["###.##.", "..g....", ".#####.", "......."]
+    objs = [trainer(1, 3, 0, SOUTH, 1), trainer(2, 6, 0, SOUTH, 1)]
+    maps = StaticMaps([_grass_area(rows, objects=objs)])
+    facts = chain_group_facts(
+        maps, _walkers_for(maps), FieldMoves(wild=True), ROCK_SPEC, (1, 2), ()
+    )
+    assert facts["field_moves"] == ["wild"]
+    assert facts["orders"] == [[[1], [2]], [[2], [1]]]
+    assert facts["wild_levels"][0]["header"] == 1 and facts["wild_levels"][0]["max_level"] == 7
+    (case,) = facts["cases"]
+    assert case["moves"] == [] and case["orders"] == [[[2], [1]]]
+
+
 def test_the_split_badges_follow_the_split_order():
     from tools.extract_kaizo_docs import SPLITS
 
     assert [s for s, _ in SPLIT_BADGES] == list(SPLITS)
-    assert FieldMoves.for_split("Roark") == FieldMoves()
-    assert FieldMoves.for_split("Wake") == FieldMoves(cut=True, rock_smash=True)
+    # ``wild`` needs no badge: every split holds it (the setting decides, C8)
+    assert FieldMoves.for_split("Roark") == FieldMoves(wild=True)
+    assert FieldMoves.for_split("Wake") == FieldMoves(cut=True, rock_smash=True, wild=True)
     assert FieldMoves.for_split("Galactic", partner=True) == FieldMoves(
-        cut=True, rock_smash=True, strength=True
+        cut=True, rock_smash=True, strength=True, wild=True
     )
 
 
@@ -1175,7 +1255,7 @@ def test_relevant_moves_are_the_moves_a_walk_used():
     assert relevant_moves([w]) == {"rock_smash"}
     assert relevant_moves([Walker(maps, (1, 2))]) == set()
     held = FieldMoves.for_split("Wake")
-    assert held.names == ("cut", "rock_smash")
+    assert held.names == ("cut", "rock_smash", "wild")
     assert held.restrict(["rock_smash", "surf"]) == FieldMoves(rock_smash=True)
     assert move_subsets(("rock_smash", "cut")) == [
         (),

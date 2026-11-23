@@ -153,6 +153,9 @@ def _run(name: str, values: tuple[str, ...]) -> Option:
     return Option(name, CHOICE, RUN, False, values, values[0], _one_of(values), name)
 
 
+WILD_VALUES = ("avoid", "repel", "accept")
+CATCH_VALUES = ("forbidden", "allowed")
+
 _OPTION_LIST = (
     _level("heal", ("none", "bag", "full")),
     _level("pc_heal", ("off", "on")),
@@ -177,6 +180,15 @@ _OPTION_LIST = (
     _run("revived_dead", ("stay_dead", "revived")),
     _run("shedinja", ("forbidden", "allowed")),
     _run("field_poison", ("worst_case", "ignore")),
+    # Wild battles on the walk (docs/gauntlet-design.md section 3): avoid = no step ends on an
+    # encounter tile (the field-move case without ``wild``); repel = those tiles are walkable
+    # where every wild level is below the first live member's and the bag holds a Repel;
+    # accept = walkable, wild battles not modelled. Catching needs a wild battle (wild not
+    # avoid) and acts as a count rise (``forced_rows`` gives the optional one too).
+    Option("wild", CHOICE, GAUNTLET, False, WILD_VALUES, "avoid", _one_of(WILD_VALUES), "wild"),
+    Option(
+        "catch", CHOICE, GAUNTLET, False, CATCH_VALUES, "forbidden", _one_of(CATCH_VALUES), "catch"
+    ),
     Option(
         "time",
         CHOICE,
@@ -449,6 +461,28 @@ def prefix_live_rows(
 FLAT_GAP_FIELDS = {"leave_gaps": "leave", "heal_gaps": "heal", "pc_gaps": "pc"}
 
 
+def forced_rows(
+    rows: Sequence[LiveRow], fought: Order, live: int, *, egg: bool
+) -> tuple[LiveRow, ...]:
+    """The rows a gap must answer after ``fought`` under the field count ``live``: the plain
+    row, and with an egg in the party at count 1 also the rise to 2. An egg is no battler
+    (``Pokemon_CanBattle``, src/unk_02054884.c:22-30, counted by ``Party_AliveMonsCount``,
+    :109-122) and hatches on a player step (``Field_ProcessStep`` -> ``Field_UpdateDaycare``,
+    src/overlay005/field_control.c:700, :743, :826-840) whose count the planner does not know,
+    so both counts are forced: the ``bag`` change row (a rise on any tile the walk reaches), or
+    at a gap without one (a locked gap) the plain row of count 2. A catch (``catch =
+    "allowed"``, a wild battle) is the same rise but optional: the planner may take the
+    ``bag`` row as with a revive."""
+    plain = {r.key: r for r in rows}
+    out = [plain[(fought, live, live, "")]]
+    if egg and live == 1:
+        rise = plain.get((fought, 1, 2, "bag")) or plain.get((fought, 2, 2, ""))
+        if rise is None:
+            raise ValueError(f"after {list(fought)}: no row for the egg's rise to 2")
+        out.append(rise)
+    return tuple(out)
+
+
 def flat_gaps(rows: Sequence[LiveRow], kind: str) -> tuple[int, ...] | None:
     """The gaps where ``kind`` (one of ``GAP_KINDS``) holds, read from the plain rows of a
     ``live_next`` table, when that is the same for every path and live count: gap k holds it
@@ -567,7 +601,16 @@ def _check_gap_facts(
 # ``Party_HasMonWithMove`` (src/overlay005/field_control.c:690-692); both skip eggs only, so a
 # fainted member counts (src/scrcmd_party.c:140-164, src/unk_02054884.c:86-105). The player may
 # decline (the yes/no menu, scripts_field_moves.s:31-33), so a case is the moves the walk uses.
-FIELD_MOVES = ("cut", "rock_smash", "strength", "surf", "rock_climb", "waterfall")
+#
+# ``wild`` is a pseudo-move: the walk may end a step on an encounter tile. A wild encounter is
+# tried at the end of every player step (``Field_CheckWildEncounter``,
+# src/overlay005/field_control.c:227-229, :543-558) on a tile whose behaviour has
+# TILE_BEHAVIOR_FLAG_ENCOUNTER (``TileBehavior_HasEncounters``, src/map_tile_behavior.c:611-614)
+# in a header with wild data (``MapHeader_HasWildEncounters``, src/map_header.c:72-76) when the
+# rate of the tile's type (surf on a surfable tile, else grass) is not zero
+# (src/overlay006/wild_encounters.c:248-252, :782-795). The case without it is the walk under
+# ``wild = "avoid"``; ``walk_moves`` adds it under the other values.
+FIELD_MOVES = ("cut", "rock_smash", "strength", "surf", "rock_climb", "waterfall", "wild")
 FIELD_MOVE_NAMES = {
     "cut": "Cut",
     "rock_smash": "Rock Smash",
@@ -575,7 +618,67 @@ FIELD_MOVE_NAMES = {
     "surf": "Surf",
     "rock_climb": "Rock Climb",
     "waterfall": "Waterfall",
+    "wild": "wild-encounter tiles (wild = repel or accept)",
 }
+ENCOUNTER_KINDS = ("grass", "surf")
+
+
+@dataclass(frozen=True)
+class WildLevel:
+    """One encounter table the walk with ``wild`` steps on: ``header``, ``kind`` (grass: the
+    12 grass slots, whose level is the slot's, wild_encounters.c:1107-1108; surf: the 5 surf
+    slots up to ``maxLevel``, :1119, ``GetWildMonLevel``), ``rate`` (the table's non-zero
+    encounter rate), ``max_level`` (the highest level any slot gives: the time-of-day, swarm,
+    radar and dual-slot tables replace species only, include/overlay006/wild_encounters.h:31-49),
+    ``tiles`` (how many encounter tiles of that kind the walk reaches) and ``examples`` (up to
+    three of them, for the refusal). ``roaming``: the header is a roamer's route
+    (``RoamingPokemonRoutes``, src/roaming_pokemon.c:150-180); an active roamer there is tried
+    before the slots and checked against a Repel by its own level (wild_encounters.c:297-311)."""
+
+    header: int
+    kind: str
+    rate: int
+    max_level: int
+    tiles: int
+    examples: tuple[tuple[int, int], ...]
+    roaming: bool = False
+
+    def __post_init__(self):
+        if self.kind not in ENCOUNTER_KINDS:
+            raise ValueError(f"wild level {self.header}: kind {self.kind!r} not {ENCOUNTER_KINDS}")
+        if self.rate <= 0 or self.max_level < 1 or self.tiles < 1 or not self.examples:
+            raise ValueError(f"wild level {self.header} {self.kind}: rate, level, tiles empty")
+
+    def describe(self) -> str:
+        tiles = ", ".join(str(t) for t in self.examples)
+        more = "" if self.tiles <= len(self.examples) else f" of {self.tiles}"
+        head = f"header {self.header} {self.kind} (rate {self.rate}, to level {self.max_level})"
+        return f"{head}: {tiles}{more}"
+
+    @classmethod
+    def from_dict(cls, d: Mapping) -> WildLevel:
+        return cls(
+            header=d["header"],
+            kind=d["kind"],
+            rate=d["rate"],
+            max_level=d["max_level"],
+            tiles=d["tiles"],
+            examples=tuple(_tile(e) for e in d["examples"]),
+            roaming=bool(d.get("roaming", False)),
+        )
+
+    def to_dict(self) -> dict:
+        out = {
+            "header": self.header,
+            "kind": self.kind,
+            "rate": self.rate,
+            "max_level": self.max_level,
+            "tiles": self.tiles,
+            "examples": [list(e) for e in self.examples],
+        }
+        if self.roaming:
+            out["roaming"] = True
+        return out
 
 
 def _subsets(moves: tuple[str, ...]) -> list[tuple[str, ...]]:
@@ -706,8 +809,16 @@ class GauntletFacts:
     # defeated flags from the save (``SaveFile.trainer_defeated``) or refuses.
     requires_beaten: tuple[int, ...] = ()
     requires_beaten_source: str = ""
+    # The encounter tables the walk with ``wild`` steps on (``WildLevel``), exactly when
+    # ``wild`` is in ``field_moves``; ``wild_levels_source`` names the ROM reads.
+    wild_levels: tuple[WildLevel, ...] = ()
+    wild_levels_source: str = ""
 
     def __post_init__(self):
+        if ("wild" in self.field_moves) != bool(self.wild_levels):
+            raise ValueError(f"{self.name}: wild_levels exactly when wild is a field move")
+        if self.wild_levels and not self.wild_levels_source:
+            raise ValueError(f"{self.name}: wild_levels need wild_levels_source")
         _check_gap_facts(
             self.name,
             self.orders,
@@ -768,6 +879,8 @@ class GauntletFacts:
             skips_source=d.get("skips_source", ""),
             requires_beaten=tuple(d.get("requires_beaten") or ()),
             requires_beaten_source=d.get("requires_beaten_source", ""),
+            wild_levels=tuple(WildLevel.from_dict(w) for w in d.get("wild_levels") or ()),
+            wild_levels_source=d.get("wild_levels_source", ""),
         )
 
     def to_dict(self) -> dict:
@@ -814,7 +927,50 @@ class GauntletFacts:
         if self.requires_beaten:
             out["requires_beaten"] = list(self.requires_beaten)
             out["requires_beaten_source"] = self.requires_beaten_source
+        if self.wild_levels:
+            out["wild_levels"] = [w.to_dict() for w in self.wild_levels]
+            out["wild_levels_source"] = self.wild_levels_source
         return out
+
+    @property
+    def wild_max_level(self) -> int:
+        """The highest wild level the walk with ``wild`` can meet (0: no encounter tile)."""
+        return max((w.max_level for w in self.wild_levels), default=0)
+
+    def walk_moves(
+        self,
+        party_moves: Collection[str],
+        wild: str,
+        *,
+        first_live_level: int | None = None,
+        repel_in_bag: bool = False,
+        roamer_levels: Mapping[int, int] | None = None,
+    ) -> tuple[str, ...]:
+        """The moves to pass to ``case``: the party's usable field moves, plus ``wild`` when
+        the ``wild`` setting lets the walk end steps on encounter tiles. ``avoid``: never.
+        ``accept``: always. ``repel``: when the bag holds a Repel and the first live member's
+        level is above every wild level (``RepelPreventsEncounter``, wild_encounters.c:1397-1400,
+        strict ``>``; the first battler, :258-262) and above the level of every active roamer on
+        a roaming header (``roamer_levels``: header -> highest active roamer level there, from
+        the save; None: unknown, so ``repel`` does not hold on a roaming header). Each Repel
+        use is a bag use; the steps a Repel lasts are not counted here (owed)."""
+        _one_of(WILD_VALUES)(wild)
+        moves = tuple(m for m in party_moves if m != "wild")
+        if wild == "avoid" or "wild" not in self.field_moves:
+            return moves
+        if wild == "accept":
+            return (*moves, "wild")
+        if not repel_in_bag or first_live_level is None:
+            return moves
+        for w in self.wild_levels:
+            if first_live_level <= w.max_level:
+                return moves
+            if w.roaming:
+                if roamer_levels is None:
+                    return moves
+                if first_live_level <= roamer_levels.get(w.header, 0):
+                    return moves
+        return (*moves, "wild")
 
     def case(self, moves: Collection[str]) -> MoveCase:
         """The facts of the field-move case of a party whose usable field moves are ``moves``
@@ -841,9 +997,12 @@ class GauntletFacts:
             raise ValueError(f"{self.name}: no field-move case {list(key)} is stored")
         if not found.orders:
             lacking = ", ".join(FIELD_MOVE_NAMES[m] for m in self.field_moves if m not in key)
+            tiles = ""
+            if "wild" in self.field_moves and "wild" not in key:
+                tiles = "; encounter tiles: " + "; ".join(w.describe() for w in self.wild_levels)
             raise ValueError(
                 f"{self.name}: no full sequence with the field moves {list(key)}: the chain "
-                f"needs {lacking} ({self.field_moves_source})"
+                f"needs {lacking} ({self.field_moves_source}{tiles})"
             )
         return found
 
@@ -948,6 +1107,31 @@ class Layer:
     run: Mapping[str, Any] = field(default_factory=dict)
     gauntlet: Mapping[str, Any] = field(default_factory=dict)
     gaps: Mapping[int, Mapping[str, Any]] = field(default_factory=dict)
+
+
+def wild_lines(facts: GauntletFacts, settings: Settings, *, egg: bool = False) -> list[str]:
+    """The report lines of the wild, catch and egg rules of a group: each names its value and
+    origin (``Resolved``); ``accept`` says that wild battles are not modelled; an egg in the
+    party says both live counts are planned at every gap (``forced_rows``)."""
+    out = []
+    for key in ("wild", "catch"):
+        r = settings[key]
+        out.append(f"{key} = {r.value} ({r.origin.value}: {r.source})")
+    wild = settings["wild"].value
+    if "wild" not in facts.field_moves:
+        out.append("no encounter tile on the walk: the wild setting changes nothing")
+    elif wild == "avoid":
+        out.append("the walk never ends a step on an encounter tile")
+    elif wild == "repel":
+        out.append(
+            f"encounter tiles walkable with a Repel while the first live member is above level "
+            f"{facts.wild_max_level} (each Repel is a bag use)"
+        )
+    else:
+        out.append("wild battles on the path are not modelled")
+    if egg:
+        out.append("an egg in the party: both live counts are planned at every gap")
+    return out
 
 
 def _check_gap_value(where: str, k: int, key: str, value) -> Any:
@@ -1556,5 +1740,12 @@ def resolve_settings(
                 if why := _map_refusal(facts, orders, k, need):
                     raise err(f"{value!r}: {why}", key=where, origin=layer.source)
 
+    if settings["catch"].value == "allowed" and settings["wild"].value == "avoid":
+        r = settings["catch"]
+        raise err(
+            "catch = 'allowed' needs a wild battle: set wild to repel or accept",
+            key="catch",
+            origin=r.source,
+        )
     _check_members(run, save, err)
     return GauntletSetup(facts, settings, orders, run, sheet_fallback=order_value == "sheet")
