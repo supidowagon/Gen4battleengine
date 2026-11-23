@@ -5,7 +5,8 @@
 # process ever reads or writes the volume.
 # Usage:
 #   cache_sync.sh seed                  copy volume entries this pod lacks into the local cache
-#   cache_sync.sh publish               copy local entries the volume lacks onto it, then prune
+#   cache_sync.sh publish               copy local entries the volume lacks onto it, then prune (also
+#                                       before the copies when the volume is under CACHE_FREE_WARN_GB left)
 #   cache_sync.sh prune                 prune the volume (under its lock)
 #   cache_sync.sh snap-publish <capture folder> <key>   store a complete capture under <key>
 #   cache_sync.sh snap-fetch <key> <capture folder> [own]  fetch a stored capture into <folder>/snap
@@ -69,7 +70,7 @@
 #   so a seed stopped partway (its timeout) keeps every batch it renamed and the next seed copies
 #   only what is still missing; the marker is written only after a complete pass.
 # prune (also run by publish and snap-publish): under jax/.prune.lock (a lock older than
-#   CACHE_LOCK_STALE_S, 3600 s, is taken over: re-checked to still have the owner and age read
+#   CACHE_LOCK_STALE_S, 3600 s, or, 60 s (CACHE_LOCK_EMPTY_S), one whose owner file is empty or missing, is taken over: re-checked to still have the owner and age read
 #   before it is renamed aside, and the renamed one checked again; a held one skips the prune;
 #   released only while its owner file still names this pod and pid): deletes .tmp-* names whose
 #   newest file is older than CACHE_TMP_STALE_S (3600 s; a copy in progress keeps writing
@@ -96,7 +97,7 @@ VOL="${CACHE_VOL:-/vol}"; LC="${NUZLINE_TEST_COMPILE_CACHE:-/work/_jaxcache/jax-
 PY="${CACHE_PY:-python3}"; POD="${CACHE_POD:-${RUNPOD_POD_ID:-$(hostname 2>/dev/null || echo pod)}}"
 POD=$(printf '%s' "$POD" | tr -c 'A-Za-z0-9_' '_')
 MIN_AGE_S="${CACHE_MIN_AGE_S:-600}"; KEEP_DAYS="${CACHE_KEEP_DAYS:-7}"; CAP_BYTES="${CACHE_CAP_BYTES:-21474836480}"
-LOCK_STALE_S="${CACHE_LOCK_STALE_S:-3600}"; TMP_STALE_S="${CACHE_TMP_STALE_S:-3600}"; SNAP_KEEP="${CACHE_SNAP_KEEP:-10}"
+LOCK_STALE_S="${CACHE_LOCK_STALE_S:-3600}"; LOCK_EMPTY_S="${CACHE_LOCK_EMPTY_S:-60}"; TMP_STALE_S="${CACHE_TMP_STALE_S:-3600}"; SNAP_KEEP="${CACHE_SNAP_KEEP:-10}"
 FREE_WARN_GB="${CACHE_FREE_WARN_GB:-3}"; SEED_LOCK="${CACHE_SEED_LOCK:-/work/.cache_seed.lock}"; SEED_BATCH="${CACHE_SEED_BATCH:-50}"
 [[ "$SEED_BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "cache_sync: CACHE_SEED_BATCH '$SEED_BATCH' is not a whole number above 0"; exit 2; }
 J="$VOL/jax"; S="$VOL/snap"
@@ -313,9 +314,30 @@ seed() {
   say "seed done: $ver $ok entries copied, $bad skipped, $(( $(date +%s) - t0 )) s"
 }
 
+# vol_left <quota GB> <du timeout s>: prints the bytes left on the volume (quota minus du -sk of
+# <vol> in bytes; prune step 5 and publish read it); prints nothing and fails when du fails or
+# times out. A bad quota or timeout falls back silently to 30 / 60.
+vol_left() { local q="$1" dt="$2" k G=1000000000
+  [[ "$q" =~ ^[1-9][0-9]*$ ]] || q=30; [[ "$dt" =~ ^[1-9][0-9]*$ ]] || dt=60
+  k=$(timeout -k 5 "$dt" du -sk "$VOL" 2>/dev/null | awk 'NR == 1 {print $1}')
+  [[ "$k" =~ ^[0-9]+$ ]] || return 1
+  echo $(( q * G - k * 1024 )); }
+
 publish() {
   vol_ok || { say "no volume mounted at $VOL: publish skipped"; return 0; }
-  local d ver out ok bad st n why tmp any=0 ht V t0; t0=$(date +%s)
+  local d ver out ok bad st n why tmp any=0 ht V t0 left fw="$FREE_WARN_GB"; t0=$(date +%s)
+  [[ "$fw" =~ ^[0-9]+$ ]] || fw=3
+  # Over the warning line (under fw GB left): prune before the copies, so a full volume frees
+  # space first; the prune after the copies still runs. This pod's used- markers are touched
+  # first, so the early prune cannot delete this pod's own version folder as unused and have the
+  # copies put it straight back. (The cap step may still delete current entries that the copies
+  # then replace: acceptable.)
+  if left=$(vol_left "${CACHE_VOL_QUOTA_GB:-30}" "${CACHE_PRUNE_DU_TIMEOUT:-60}") && [ "$left" -lt $(( fw * 1000000000 )) ]; then
+    say "publish: volume under $fw GB left: prune before the copies"
+    if ht=$(host_tag); then
+      for d in "$LC"/*/; do ver=${d%/}; ver=${ver##*/}; ver_ok "$ver" || continue
+        mkdir -p "$J/$ver-$ht" && touch "$J/$ver-$ht/used-$(date -u +%Y%m%d)"; done; fi
+    prune; fi
   if ht=$(host_tag); then
   for d in "$LC"/*/; do ver=${d%/}; ver=${ver##*/}; ver_ok "$ver" || continue; d=${d%/}; any=1; V="$J/$ver-$ht"
     mkdir -p "$V" || { say "publish: cannot create $V"; continue; }
@@ -343,13 +365,22 @@ publish() {
 # so only one pod takes it over; right before the rename its owner and mtime are read again and
 # must be the ones that made it stale (else another pod took it over meanwhile: skip), and the
 # renamed folder is checked once more (a fresh lock renamed by a race is put back).
-lock_mine() { echo "$POD $$ $(date +%s)" > "$1/owner"; LOCKED=1; }
+# A lock whose owner file is empty or missing (its pod died between mkdir and the owner write)
+# is stale once it is LOCK_EMPTY_S (60 s) old: a live holder is never inside its mkdir-to-write
+# gap that long, and a pod that took the folder in that gap makes the holder's lock_mine fail.
+# lock_mine fails unless the owner file reads back as this pod and pid: another pod may have
+# taken the folder between mkdir and the write (a write into a missing folder fails too).
+lock_mine() { local o="" p=""
+  echo "$POD $$ $(date +%s)" > "$1/owner" 2>/dev/null || return 1
+  { read -r o p _ < "$1/owner"; } 2>/dev/null
+  [ "$o $p" = "$POD $$" ] || return 1
+  LOCKED=1; }
 lock_take() { local L="$J/.prune.lock" A="$J/.prune.lock.stale.$POD.$$" m own age
   mkdir -p "$J" || return 1
-  if mkdir "$L" 2>/dev/null; then lock_mine "$L"; return 0; fi
+  if mkdir "$L" 2>/dev/null; then lock_mine "$L" && return 0; say "prune: lock $L taken by another pod before its owner file was written: prune skipped"; return 1; fi
   m=$(stat -c %Y "$L" 2>/dev/null) || m=$(date +%s); own=$(cat "$L/owner" 2>/dev/null)
   age=$(( $(date +%s) - m ))
-  if [ "$age" -lt "$LOCK_STALE_S" ]; then say "prune: lock $L held ($age s old): prune skipped"; return 1; fi
+  if [ "$age" -lt "$LOCK_STALE_S" ] && { [ -n "$own" ] || [ "$age" -lt "$LOCK_EMPTY_S" ]; }; then say "prune: lock $L held ($age s old): prune skipped"; return 1; fi
   if [ "$(stat -c %Y "$L" 2>/dev/null)" != "$m" ] || [ "$(cat "$L/owner" 2>/dev/null)" != "$own" ]; then
     say "prune: lock $L changed while being taken over: prune skipped"; return 1; fi
   if mv -T "$L" "$A" 2>/dev/null; then
@@ -357,7 +388,7 @@ lock_take() { local L="$J/.prune.lock" A="$J/.prune.lock.stale.$POD.$$" m own ag
       mv -T "$A" "$L" 2>/dev/null || rm -rf "$A"
       say "prune: lock $L was taken by another pod meanwhile: prune skipped"; return 1; fi
     rm -rf "$A"; say "prune: lock was $age s old (owner ${own:-none}): taken over"; fi
-  if mkdir "$L" 2>/dev/null; then lock_mine "$L"; return 0; fi
+  if mkdir "$L" 2>/dev/null; then lock_mine "$L" && return 0; say "prune: lock $L taken by another pod before its owner file was written: prune skipped"; return 1; fi
   say "prune: lock $L taken by another pod: prune skipped"; return 1; }
 # lock_release: remove the lock only while its owner file still names this pod and pid.
 lock_release() { local L="$J/.prune.lock" o="" p=""
@@ -407,8 +438,7 @@ prune() {
   [[ "$q" =~ ^[1-9][0-9]*$ ]] || { say "prune: CACHE_VOL_QUOTA_GB '$q' is not a whole number: 30 used"; q=30; }
   [[ "$fw" =~ ^[0-9]+$ ]] || { say "prune: CACHE_FREE_WARN_GB '$fw' is not a whole number: 3 used"; fw=3; }
   [[ "$dt" =~ ^[1-9][0-9]*$ ]] || dt=60
-  k=$(timeout -k 5 "$dt" du -sk "$VOL" 2>/dev/null | awk 'NR == 1 {print $1}')
-  if [[ "$k" =~ ^[0-9]+$ ]]; then ub=$(( k * 1024 )); free=$(( q * G - ub ))
+  if free=$(vol_left "$q" "$dt"); then ub=$(( q * G - free ))
     say "prune: volume used $(( (ub + G - 1) / G )) GB of $q GB"
     [ "$free" -lt $(( fw * G )) ] && say "WARNING: volume $VOL has $(( free / G )) GB left of $q GB (under $fw GB): grow it (owner approval)"
   else say "prune: volume used ? (du failed or took over $dt s)"; fi

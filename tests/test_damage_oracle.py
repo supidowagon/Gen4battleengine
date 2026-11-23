@@ -6,7 +6,9 @@ No items. Abilities are the species' own implemented ones (as ``tests.strategies
 damage-relevant ones (Blaze, Torrent, Overgrow, Rivalry, Simple, Unaware, Mold
 Breaker) are exercised through low HP, genders and stat stages, Adaptability and Solid
 Rock by the extra rows of ``_ability_rows``; the others have no damage effect in either
-calculator. Matchups where @smogon/calc departs from the
+calculator. @smogon/calc gets each battler's ability as the engine holds it after the leads'
+switch-in effects: a Trace holder's copied one (``_assemble``; @smogon/calc has no Trace).
+Matchups where @smogon/calc departs from the
 decomp are not generated; each such case is logged in docs/discrepancies.md
 ("Damage oracle") with the decomp lines that settle it. A Cloud Nine battler in weather
 is generated: both calculators drop the weather modifiers (``NO_CLOUD_NINE``,
@@ -49,6 +51,7 @@ from nuzline.engine.damage import (
     _pre_random,
     chart_entry,
     damage_table,
+    decomp_abilities,
     effectiveness,
     fixed_damage,
     hidden_power,
@@ -428,8 +431,19 @@ def _matchup(
     s = make_state(tables, [a], [d])
     # A third of attackers are at or below 1/3 HP (Blaze, Torrent, Overgrow).
     max_hp = int(s.max_hp[0, 0])
-    hp = int(rng.integers(1, max_hp // 3 + 1 if rng.random() < 1 / 3 else max_hp + 1))
-    m["hp"] = hp
+    m["hp"] = int(rng.integers(1, max_hp // 3 + 1 if rng.random() < 1 / 3 else max_hp + 1))
+    return _assemble(tables, names, a, d, m, s)
+
+
+def _assemble(
+    tables: Tables, names: Names, a: PokemonSpec, d: PokemonSpec, m: dict, s=None
+) -> dict | None:
+    """The engine state and @smogon/calc input of the drawn matchup ``m`` (``_matchup``'s
+    keys: def_species, move, crit, weather, reflect, light_screen, burn, atk_stages, def_stages,
+    hp) between ``a`` and ``d``, or None where @smogon/calc departs from the decomp
+    (``_smogon_departs``). ``s``: their ``make_state``, built here when None."""
+    s = make_state(tables, [a], [d]) if s is None else s
+    move, hp = m["move"], m["hp"]
     ability = {0: int(s.ability[0, 0]), 1: int(s.ability[1, 0])}
     m["power"], m["type"] = int(tables.move_power[move]), int(tables.move_type[move])
     effect = int(tables.move_effect[move])
@@ -475,9 +489,16 @@ def _matchup(
     m["crit"] = m["crit"] and not bool(armored(s, 0, 1))
     if _smogon_departs(m, tables, names, ability, move, s):
         return None
+    # Each battler's ability once the leads' switch-in effects ran (make_state ->
+    # hooks.battle_start): a Trace holder holds the foe's ability from then on
+    # (SWITCH_IN_CHECK_STATE_TRACE, battle_lib.c:3711-3737, run at battle start by
+    # BattleControllerPlayer_ShowBattleMon, battle_controller_player.c:256; subscript_trace.s:6-7
+    # writes BATTLEMON_ABILITY), and BattleSystem_CalcMoveDamage reads Battler_Ability
+    # (battle_lib.c:6653-6654). @smogon/calc has no Trace: it gets the copied ability.
+    held = np.asarray(decomp_abilities(tables, s))
     m["smogon"] = {
-        "attacker": _smogon_mon(names, a, m["atk_stages"], hp, m["burn"]),
-        "defender": _smogon_mon(names, d, m["def_stages"], None, False),
+        "attacker": _smogon_mon(names, a, int(held[0, 0]), m["atk_stages"], hp, m["burn"]),
+        "defender": _smogon_mon(names, d, int(held[1, 0]), m["def_stages"], None, False),
         "move": names.move_names[move],
         "overrides": overrides,
         "crit": m["crit"],
@@ -499,7 +520,8 @@ def _trump_card_power(tables: Tables, s, move: int) -> int:
     return int(trump_card_power(max(int(s.pp[0, 0, first]) - cost, 0)))
 
 
-def _smogon_mon(names: Names, mon: PokemonSpec, stages, hp, burn) -> dict:
+def _smogon_mon(names: Names, mon: PokemonSpec, ability: int, stages, hp, burn) -> dict:
+    """``ability``: the decomp id the battler holds in the engine state (``_assemble``)."""
     return {
         "species": names.species_names[mon.species],
         "level": mon.level,
@@ -507,7 +529,7 @@ def _smogon_mon(names: Names, mon: PokemonSpec, stages, hp, burn) -> dict:
         "ivs": dict(zip(_STAT_KEYS, mon.ivs)),
         "evs": dict(zip(_STAT_KEYS, mon.evs)),
         "gender": _GENDER[mon.gender],
-        "ability": names.ability_names[names.species_abilities(mon.species)[mon.ability_slot]],
+        "ability": names.ability_names[ability],
         "boosts": dict(zip(("atk", "def", "spa", "spd"), stages)),
         "status": "brn" if burn else "",
         "curHP": hp,
@@ -580,6 +602,84 @@ def test_damage_table_matches_smogon_calc(tables, names, oracle):
         if ours != r["damage"]:
             mismatches.append(f"{_describe(m)}\n  ours   {ours}\n  smogon {r['damage']}")
     assert not mismatches, f"{len(mismatches)} mismatches:\n" + "\n".join(mismatches[:10])
+
+
+def _pinned_traced_simple(tables: Tables, names: Names) -> tuple[PokemonSpec, PokemonSpec, dict]:
+    """The seeded draw's failing case of nightly-20261122-c9dffa3 and mainfast-22400dd: a Simple
+    Bidoof's critical Ice Ball in sun on a Ralts that traced Simple at battle start (Defense
+    -2, doubled to -4). @smogon/calc got the Ralts's species ability, Trace (ours 105-124,
+    smogon 68-80); ``_assemble`` now hands it the traced Simple."""
+
+    def spec(name, ability, level, nature, ivs, evs, gender):
+        species = names.species(name)
+        slots = [names.ability_names[x] for x in names.species_abilities(species)]
+        return PokemonSpec(
+            species=species,
+            level=level,
+            nature=names.nature_names.index(nature),
+            ivs=ivs,
+            evs=evs,
+            moves=(0, 0, 0, 0),
+            item=0,
+            ability_slot=slots.index(ability),
+            gender=gender,
+            friendship=70,
+        )
+
+    # ivs / evs in ids.Stat order (hp, atk, def, spa, spd, spe); gender 0 M, 1 F.
+    a = spec("Bidoof", "Simple", 17, "Quirky", (29, 10, 18, 8, 31, 11), (33, 9, 5, 29, 57, 42), 0)
+    d = spec("Ralts", "Trace", 20, "Rash", (13, 15, 24, 8, 22, 20), (35, 13, 57, 43, 12, 29), 1)
+    m = {
+        "def_species": d.species,
+        "move": names.move("Ice Ball"),
+        "crit": True,
+        "weather": Weather.SUN,
+        "reflect": False,
+        "light_screen": False,
+        "burn": False,
+        "atk_stages": [6, -4, 3, 1],  # [atk, def, spa, spd]
+        "def_stages": [-1, -2, 0, 4],
+        "hp": 8,
+    }
+    return a, d, m
+
+
+def test_a_traced_simple_doubles_the_defense_stage(tables, names):
+    """A Trace holder that copied Simple at battle start (SWITCH_IN_CHECK_STATE_TRACE,
+    battle_lib.c:3711-3737; subscript_trace.s:6-7) holds it as ``Battler_Ability``
+    (battle_lib.c:6653-6654), so ``BattleSystem_CalcMoveDamage`` doubles its Defense stage and
+    clamps it to -6..+6 (``Battler_IgnorableAbility(..., ABILITY_SIMPLE)``, :6868-6884) before
+    the crit rule, which keeps a stage below neutral (:6963-6973): Defense -2 hits as -4."""
+    a, d, m = _pinned_traced_simple(tables, names)
+    row = _assemble(tables, names, a, d, m)
+    assert row is not None
+    s = row["state"]
+    assert int(s.ability[1, 0]) == AbilityId.SIMPLE
+    assert row["smogon"]["defender"]["ability"] == "Simple"
+    move = m["move"]
+    trace = s._replace(ability=s.ability.at[1, 0].set(AbilityId.TRACE))
+    doubled = trace._replace(stages=trace.stages.at[1, Stat.DEF].set(-4))
+    for crit in (True, False):
+        ours = np.asarray(jit_damage_table(tables, s, 0, move, crit)).tolist()
+        assert ours == np.asarray(jit_damage_table(tables, doubled, 0, move, crit)).tolist()
+        assert ours != np.asarray(jit_damage_table(tables, trace, 0, move, crit)).tolist()
+    # The clamp: Defense -4 doubles to -8 and is held at -6, the stage of an undoubled -6.
+    deep = s._replace(stages=s.stages.at[1, Stat.DEF].set(-4))
+    floor = trace._replace(stages=trace.stages.at[1, Stat.DEF].set(-6))
+    assert (
+        np.asarray(jit_damage_table(tables, deep, 0, move, True)).tolist()
+        == np.asarray(jit_damage_table(tables, floor, 0, move, True)).tolist()
+    )
+
+
+def test_pinned_traced_simple_matches_smogon_calc(tables, names, node):
+    """The pinned failing case (``_pinned_traced_simple``) against @smogon/calc."""
+    a, d, m = _pinned_traced_simple(tables, names)
+    row = _assemble(tables, names, a, d, m)
+    assert row is not None
+    (r,) = _run_smogon(node, [row])
+    ours = np.asarray(jit_damage_table(tables, row["state"], 0, row["move"], row["crit"])).tolist()
+    assert ours == r["damage"], f"{_describe(row)}\n  ours   {ours}\n  smogon {r['damage']}"
 
 
 @pytest.fixture(scope="module")
