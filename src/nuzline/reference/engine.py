@@ -2147,13 +2147,13 @@ def _forget_record(s: RefState, b: int) -> None:
     s.ai_item_known[b] = 0
 
 
-def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
+def _cleanup_fainted(turn: _Turn, s: RefState, side: int, forget: bool = True) -> None:
     """``BattleSystem_CleanupFaintedMon`` (lib.c:2156): the fainted battler's stat
     stages, ``statusVolatile``, ``moveEffectsMask`` and ``moveEffectsData`` are
     cleared, ``fakeOutTurnNumber = totalTurns + 1`` (lib.c:2195), ``moveHit`` and
     ``movePrevByBattler`` reset (lib.c:2199); what it is the source of ends: the Bind it put
     on a foe (lib.c:2179) and the foe's infatuation (:2174-2176); the AI's record of the battler
-    is cleared last (lib.c:2223-2225)."""
+    is cleared last (lib.c:2223-2225; ``forget`` False: ``_pursuit_hit`` did it)."""
     _restore_types(turn.tables, s, side)
     _reset_battler(s.battlers[side])
     _clear_copied(s, side)
@@ -2164,7 +2164,8 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     s.battlers[side].fake_out_turn = turn.entry_turn
     s.battlers[side].truant = turn.entry_turn & 1  # lib.c:2197
     _source_leaves(s, side, faint=True)
-    _forget_record(s, side)  # lib.c:2223-2225
+    if forget:
+        _forget_record(s, side)  # lib.c:2223-2225
 
 
 # What Baton Pass keeps (BattleSystem_UpdateAfterSwitch, lib.c:2078-2079, :2107; condition.h:72,
@@ -2445,14 +2446,21 @@ def _blacked_out(s: RefState, b: int) -> bool:
     )
 
 
-def _faint_check(turn: _Turn, s: RefState, decide: bool = True, won_cure: bool = True) -> None:
+def _faint_check(
+    turn: _Turn,
+    s: RefState,
+    decide: bool = True,
+    won_cure: bool = True,
+    record_cleared: int = -1,
+) -> None:
     """``BattleControllerPlayer_AnyFainted`` (bcp.c:4409) then ``CheckBattleOver``:
     each flagged Pokemon faints (``subscript_faint_mon.s`` -> ``PlayFaintAnimation``,
     script.c:1795, which ends its action and cleans the battler up), then the battle
     ends when a side has no Pokemon with HP left: a whiteout is a loss, a simultaneous last
     opponent faint too (a draw, ``BATTLE_RESULT_DRAW`` plays as a loss: battle.h:78,
     bcp.c:4015-4016, ruling 2); a player faint otherwise only records a death. A fainted Pokemon keeps no status
-    condition (battle_controller.c:1482-1486)."""
+    condition (battle_controller.c:1482-1486). ``record_cleared``: the battler whose AI record
+    ``_pursuit_hit`` cleared at its faint (the contact ability's message wrote it after)."""
     for side, slot in turn.fainted:
         mon = _party_of(s, side).mons[slot]
         turn.battle_status[(side, slot)] = mon.status
@@ -2467,7 +2475,7 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True, won_cure: bool =
         if side_of(side) == 1:  # script.c:1800 flags the payout; CalcExpGain pays a SOLO_ENEMY only
             turn.payout.append((side, slot))
         if s.battlers[side].active == slot:
-            _cleanup_fainted(turn, s, side)
+            _cleanup_fainted(turn, s, side, forget=side != record_cleared)
         if _party(_fmt(s), side) == 0:  # the player's party only (step._faint_check fainted[0])
             player_fainted += 1
             s.deaths[slot] = 1
@@ -7484,7 +7492,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> list[tupl
         p_alive = _active(s, pursuer).hp > 0
         bonded, acid = _pursuit_hit(turn, s, side, pursuer, actions, choices)
         turn.pursued |= 1 << pursuer  # a bitmask of the pursuers (battle_script.c:6884-6935)
-        _faint_check(turn, s, decide=False)
+        _faint_check(turn, s, decide=False, record_cleared=side)
         owed += _owed_pursuer(turn, s, pursuer, p_alive and not bonded)
         _pay_exp(turn, s)
         _acid_rain(s, acid)  # subscript_pursuit.s:115, after the payout (G-12)
@@ -7577,6 +7585,11 @@ def _pursuit_hit(
     else:
         chosen = s.battlers[pursuer].encore_slot
     _try_grudge(s, pursuer, chosen, side, target_hp > 0 and _active(s, side).hp == 0, False)
+    # The same subscript's :36 FAINT_MON cleans the switcher up (PlayFaintAnimation, script.c:1803;
+    # lib.c:2223-2225) before TriggerAbilityOnHit: what the contact ability's message tags
+    # (script.c:11805-11806) stays until the replacement enters (lib.c:2151-2153).
+    if target_hp > 0 and _active(s, side).hp == 0:
+        _forget_record(s, side)
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt, side)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
     # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the

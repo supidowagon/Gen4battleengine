@@ -16,7 +16,7 @@ import jax.numpy as jnp
 
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS
 from nuzline.engine.format import DOUBLES
-from nuzline.engine.ids import AbilityId, Stat
+from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId, Stat
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import ACT_MOVE, next_pursuer, pursuit_fires
@@ -259,6 +259,17 @@ def test_u_turn_is_met_by_both_foes_before_the_list(tables, names):
     assert hp(out, 2) < hp(s, 2)
     assert int(shown["pursuit"]) == 1
     assert int(out.ts_pick_mul) == 20
+
+
+def test_a_felled_u_turn_users_rough_skin_stays_in_its_record(tables, names):
+    """Battler 1's Pursuit fells battler 2 (1 HP, Rough Skin) at its U-turn: FAINT_MON clears its
+    record (subscript_pursuit.s:85, battle_script.c:1803, battle_lib.c:2223-2225), then the Rough
+    Skin message writes it (:86-87, battle_script.c:11805-11806) until the replacement enters."""
+    s = with_moves(pursuers(tables, names, 1, 3), names, 2, ["U-turn"])
+    s = with_hp(with_ability(s, 2, AbilityId.ROUGH_SKIN), 2, 1)
+    out, _ = play(tables, s, [0, 0, 0, 0], (2, 0, 1, 3), targets=(0, 0, 3, 0))
+    assert hp(out, 2) == 0 and int(out.pivot_battler) == 0
+    assert int(out.ai_ability_known[2]) == ABILITY_DECOMP_IDS[AbilityId.ROUGH_SKIN]
 
 
 # --- singles (B = 2): unchanged ------------------------------------------------------------

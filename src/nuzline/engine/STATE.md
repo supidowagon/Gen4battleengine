@@ -495,7 +495,7 @@ three structs has a row.
   `battlerHeldItems[MAX_BATTLERS]`, ai_context.h:27-29; kept where `state.ai_record_kept`: B = 4
   every battler, B = 2 battler 0 (sheet D45-1 rule 6); read through `state.ai_record_moves /
   ability / item(state, b)`, 0 for `b >= B`; cleared on entry and on a faint, battle_lib.c:2151-2153,
-  :2223-2225, `step._forget`). `battlerMoves` (moves the AI has seen, as move ids in first-free order,
+  :2223-2225, `step._forget`; a Pursuit's switcher clears before the contact ability's message, subscript_pursuit.s:85-87). `battlerMoves` (moves the AI has seen, as move ids in first-free order,
   `TrainerAI_RecordLastMove`, trainer_ai.c:2705-2716) -> `ai_seen_moves`,
   `battlerHeldItems` (the held item a message named of any kept battler, E2 batch 7, sheet D45-3; the ally's record is read, trainer_ai.c:1908) -> `ai_item_known`
   (an item id; set by `effects.reveal_item` where an item tag of
