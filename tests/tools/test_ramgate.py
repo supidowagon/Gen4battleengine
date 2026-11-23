@@ -273,17 +273,22 @@ def test_a_non_rom_only_item_of_a_measured_file_weighs_the_file_figure_when_engi
     assert rg.item_weight(plain, TABLE, {"tests/other.py": 3.0}, engine_free=True) == 4.0
 
 
-def test_the_committed_lines_weigh_their_measured_figures():
-    rom, pod = rg.load_rom_weights(), rg.load_weights()
-    for ident, gb in (
-        ("tests/tools/rom/test_terrain.py::test_battle_terrain_code_guard", 4.0),
-        ("tests/tools/rom/test_terrain.py::test_terrain_code_guard", 4.0),
-        ("tests/kaizo/test_overrides.py::test_rules_left_unset_by_draft", 3.0),
-        ("tests/tools/rom/test_code_tables.py::test_tm_moves_match_decomp", 3.0),
-        ("tests/tools/rom/test_extract_rom.py::test_vanilla_round_trip", 3.0),
-        ("tests/tools/rom/test_offsets.py::test_no_field_accepts_another_fields_offset[platinum_us]", 3.0),
-    ):
-        assert rg.item_weight(item(ident, "tmp_path"), pod, rom, engine_free=True) == gb, ident
+def test_engine_free_non_rom_only_item_longest_key_wins_across_both_tables():
+    node = item("tests/b/test_y.py::t", "tmp_path")
+    file_rom = {"tests/b/test_y.py": 3.0}
+    # a node-level pod key beats a file-level rom line (tests/test_cli.py: 3 vs 79)
+    pod = {"tests/b/test_y.py": 6.0, "tests/b/test_y.py::t": 79.0}
+    assert rg.item_weight(node, pod, file_rom, engine_free=True) == 79.0
+    # equal key length: the rom line wins (test_terrain.py: pod 6, rom 4)
+    assert rg.item_weight(node, {"tests/b/test_y.py": 6.0}, file_rom, engine_free=True) == 3.0
+    # a node-level rom key beats a file-level pod key
+    assert rg.item_weight(node, {"tests/b/test_y.py": 6.0}, {"tests/b/test_y.py::t": 2.0}, engine_free=True) == 2.0
+    # an engine-test-pod 14 line on the node keeps 14 over a file-level pod key
+    assert rg.item_weight(node, {"tests/b/test_y.py": 6.0}, {"tests/b/test_y.py::t": 14.0}, engine_free=True) == 14.0
+    # the committed tables: the file-level rom line serves an id with no more specific pod key
+    rom_t, pod_t = rg.load_rom_weights(), rg.load_weights()
+    ident = "tests/tools/rom/test_terrain.py::test_battle_terrain_code_guard"
+    assert rg.item_weight(item(ident, "tmp_path"), pod_t, rom_t, engine_free=True) == rg.lookup(ident, rom_t)
 
 
 def test_an_unmeasured_rom_only_item_weighs_fourteen_once_the_engine_is_loaded():

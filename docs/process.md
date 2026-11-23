@@ -186,7 +186,9 @@ rate used for estimates.
   covers them: run `tests/tools/test_ramgate.py` locally once per change to
   `src/nuzline/engine/__init__.py` or the root `conftest.py`. An allowed run
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
-  6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, then takes the machine lock
+  6 GB in an engine-free run, 20 GB when the engine loads; in an engine-free run a non-ROM-only
+  item takes a `tools/ops/day/rom_weights.txt` match instead when no `weights.txt` key is more
+  specific, equal key length going to the rom line), a message every 60 s, then takes the machine lock
   `<main checkout>/_scratch/ramgate.lock`: an OS lock on that file (`msvcrt.locking` on
   Windows, `fcntl.flock` elsewhere) held until the run ends, so one local run goes at a time.
   The kernel frees it the moment its holder ends, however it ends (a killed tool, the watchdog's

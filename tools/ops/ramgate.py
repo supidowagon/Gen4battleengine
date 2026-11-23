@@ -134,15 +134,21 @@ def load_weights(path: str | Path = WEIGHTS) -> dict[str, float]:
     return out
 
 
-def lookup(ident: str, table: Mapping[str, float]) -> float | None:
-    """Longest key that equals the id or that the id starts with plus "::", "[" or "/"."""
+def lookup_entry(ident: str, table: Mapping[str, float]) -> tuple[str, float] | None:
+    """(key, GB) of the longest key that equals the id or that the id starts with plus "::", "[" or "/"."""
     ident = ident.replace("\\", "/")
     best: tuple[str, float] | None = None
     for key, gb in table.items():
         hit = ident == key or any(ident.startswith(key + s) for s in ("::", "[", "/"))
         if hit and (best is None or len(key) > len(best[0])):
             best = (key, gb)
-    return best[1] if best else None
+    return best
+
+
+def lookup(ident: str, table: Mapping[str, float]) -> float | None:
+    """GB of the longest matching key (lookup_entry), else None."""
+    entry = lookup_entry(ident, table)
+    return entry[1] if entry else None
 
 
 def weight(ident: str, table: Mapping[str, float], default: float = DEFAULT_WEIGHT) -> float:
@@ -736,9 +742,11 @@ def item_weight(
     rom_weights.txt (measured locally), else 6 GB in an engine-free run (14 when the engine is
     loaded), or its pod weight (if it has a key) when higher.
     Any other item weighs its weights.txt key; without one 6 GB in an engine-free run, else 20.
-    Exception: in an engine-free run a non-ROM-only item of a file with a rom_weights.txt line
-    weighs that line (the figure is the peak of one pytest process on that file; the weights.txt
-    nightly line of a ROM-only file counts skipped tests, so its 6 would otherwise outrank it)."""
+    Exception: in an engine-free run a non-ROM-only item takes a rom_weights.txt match when no
+    weights.txt key is more specific (longest key wins across both tables; equal length: rom
+    line). The figure is the measured peak of the file's ROM-only ids; it serves the file's other
+    engine-free ids because the engine blocker keeps the engine out. The weights.txt nightly line
+    of a ROM-only file counts skipped tests, so its 6 would otherwise outrank it."""
     if is_rom_only(item):
         measured = lookup(item.nodeid, rom_table)
         if measured is not None:
@@ -747,9 +755,10 @@ def item_weight(
         pod = lookup(item.nodeid, table)
         return base if pod is None else max(base, pod)
     if engine_free:
-        measured = lookup(item.nodeid, rom_table)
-        if measured is not None:
-            return measured
+        rom = lookup_entry(item.nodeid, rom_table)
+        pod = lookup_entry(item.nodeid, table)
+        if rom is not None and (pod is None or len(rom[0]) >= len(pod[0])):
+            return rom[1]
     return weight(item.nodeid, table, ENGINE_FREE_WEIGHT if engine_free else DEFAULT_WEIGHT)
 
 
