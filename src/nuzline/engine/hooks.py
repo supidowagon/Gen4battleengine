@@ -137,7 +137,15 @@ from nuzline.engine.order import (
     player_second,
     record_speeds,
 )
-from nuzline.engine.state import STAGE_MAX, STARF_UNDRAWN, BattleState, battler_ability, held_item
+from nuzline.engine.state import (
+    STAGE_MAX,
+    STARF_UNDRAWN,
+    BattleState,
+    ai_record_kept,
+    ai_record_write,
+    battler_ability,
+    held_item,
+)
 from nuzline.engine.stats import calc_stats_jnp
 
 _I32 = jnp.int32
@@ -346,30 +354,35 @@ def download(state: BattleState, side, foes, cond=True, staged=True) -> BattleSt
 
 
 def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> BattleState:
-    """``ai_ability_known[slot]`` = the decomp id of party ``slot``'s ability where ``cond``,
-    ``side`` is the player (the AI only tracks the player's Pokemon) and the ability reveals itself
-    at ``phase`` (``REVEALS_ON``): ``BattleAI_SetAbility`` records the id the message names (G-69)."""
+    """``ai_ability_known[side]`` (the row of battler ``side``, written only while it holds party
+    ``slot``) = the decomp id of party ``slot``'s ability where ``cond``, ``side``'s row is kept
+    (``ai_record_kept``: any battler at B = 4, battler 0 at B = 2; sheet D45-2 rule 4) and the
+    ability reveals itself at ``phase`` (``REVEALS_ON``): ``BattleAI_SetAbility`` records the id
+    the message names (G-69)."""
     abilities = jnp.asarray([a for a, p in REVEALS_ON.items() if phase in p], state.ability.dtype)
     side = jnp.asarray(side, _I32)
     row = party(format_of(state), side)
     # It acts as its Battler_Ability; the message tags the raw BattleMon.ability
     # (BattleMessage_AbilityTag, battle_script.c:11805).
-    on = cond & (row == 0) & jnp.isin(battler_ability(state, side, slot), abilities)
+    on = (
+        cond
+        & ai_record_kept(format_of(state), side)
+        & jnp.isin(battler_ability(state, side, slot), abilities)
+    )
     record = decomp_ability_id(state.ability[row, slot])
-    known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
-    return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
+    return ai_record_write(state, "ai_ability_known", side, slot, record, on)
 
 
 def _know(state: BattleState, side, slot, cond) -> BattleState:
-    """``ai_ability_known[slot] = 1`` where ``cond`` and ``side`` is the player: a script
+    """``ai_ability_known[side]`` (the row of battler ``side``) = the ability where ``cond`` and
+    ``side``'s row is kept (``ai_record_kept``, sheet D45-2 rule 4): a script
     wrote or tagged the battler's ability (``BattleAI_SetAbility``, battle_script.c:3074,
     :3403, :11806), whatever the ability."""
     row = party(format_of(state), jnp.asarray(side, _I32))
-    on = jnp.asarray(cond) & (row == 0)
+    on = jnp.asarray(cond) & ai_record_kept(format_of(state), side)
     # Raw: BattleAI_SetAbility records BattleMon.ability (battle_script.c:3074, :3403, :11805).
     record = decomp_ability_id(state.ability[row, slot])
-    known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
-    return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
+    return ai_record_write(state, "ai_ability_known", side, slot, record, on)
 
 
 def trace_coin(state: BattleState, trace_pick, holder):
