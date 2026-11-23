@@ -2003,7 +2003,9 @@ def test_rom_objects_beyond_the_groups_headers_change_no_fact(rom_files):
     # widens a walk (no ice or spin tile in these headers), so any mix gives them too.
     from tools.kaizo.gauntlet_map import (
         ENTER_FLAGS,
+        ENTER_VARS,
         FLAG_WRITERS,
+        GROUP_COORD_RULES,
         GROUP_FLAGS,
         GROUP_SPLITS,
         FieldMoves,
@@ -2018,15 +2020,20 @@ def test_rom_objects_beyond_the_groups_headers_change_no_fact(rom_files):
     doubles = read_double_trainers(rom_files)
     for name, spec, group, kw in _chain_groups():
 
-        def walker(flags, name=name, spec=spec):
+        def walker(flags, name=name, spec=spec, kw=kw):
+            # the walker of derive_groups: its coord rule, lobby var writes and the walking
+            # non-members the group needs beaten (Route 213: 107, 108; C7a)
             return Walker(
                 maps,
                 spec.members,
                 moves=FieldMoves.for_split(GROUP_SPLITS[name]),
-                strict=spec.headers,
+                strict=(*spec.headers, *(h for h, _ in kw.get("healers", ()))),
                 doubles=doubles,
                 flags=flags,
                 on_enter=ENTER_FLAGS,
+                enter_vars=ENTER_VARS,
+                coord_rule=GROUP_COORD_RULES.get(name),
+                beaten=_committed()[name].facts.requires_beaten,
             )
 
         start = GROUP_FLAGS[name]
@@ -2536,8 +2543,10 @@ def test_rom_c9_oreburgh_hand_path(rom_files):
     # 196 (its line, or (2,23) above it: a talk), then from each start (196 beaten, still
     # standing) to 195's line or a tile beside it (a talk); the worst start counts
     dist = _hand_steps(attr, objects, (15, 2), sight196 | sight195)
-    starts196 = [(2, 23), (3, 24)]  # (1,24) and (2,25) beside 196 have the collision bit
-    assert attr(1, 24) & 0x8000 and attr(2, 25) & 0x8000
+    # beside 196 (2,24): (1,24) has the collision bit, (2,25) is not reached before the fight
+    beside196 = [(2, 23), (3, 24), (1, 24), (2, 25)]
+    starts196 = [t for t in beside196 if t in dist]
+    assert starts196 == [(2, 23), (3, 24)] and attr(1, 24) & 0x8000
     assert not {(4, 24), (5, 24)} & set(dist)
     first = 1 + min(dist[t] for t in starts196)
     assert first <= len(path)
