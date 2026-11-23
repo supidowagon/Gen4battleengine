@@ -7,7 +7,7 @@ at B = 2 (attacker 1, defender 0, the script arguments DEFENDER, ATTACKER, DEFEN
 ATTACKER_PARTNER) and returns one JSON-able row per call. ``b2_snapshot.json`` holds the rows the
 engine gave before the context took its battlers (tip 85dd4cd0); ``test_commands_four`` compares
 them: the battler rework must leave every B = 2 output byte-identical. A call that raises (an
-argument the command refuses) records the exception's class name.
+argument the command refuses) has no row: a refusal is coverage, not an output to pin.
 """
 
 from __future__ import annotations
@@ -98,11 +98,14 @@ def _row(ctx):
     return [int(ctx.calc_temp), int(ctx.jump)]
 
 
+_REFUSED = object()
+
+
 def _run(fn):
     try:
         return _row(fn())
-    except Exception as e:  # noqa: BLE001 - the class is the record
-        return type(e).__name__
+    except (AssertionError, NotImplementedError):  # a refusal: no row
+        return _REFUSED
 
 
 def _slot_ctx(tables, s, slot: int):
@@ -256,7 +259,9 @@ def snapshot(tables, names) -> dict[str, object]:
                 }
             )
             for name, fn in calls.items():
-                out[f"{key}/{name}"] = _run(fn)
+                row = _run(fn)
+                if row is not _REFUSED:
+                    out[f"{key}/{name}"] = row
             out[f"{key}/after_speed_compare"] = [
                 bool(c.if_speed_compare_equal_to(ctx, 1).written.any()),
                 int(c.if_speed_compare_equal_to(ctx, 1).first_cmp[slot]),

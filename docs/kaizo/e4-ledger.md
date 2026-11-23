@@ -117,8 +117,13 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
 - **E4-12. B = 2 change: the trainer AI uses no item under Embargo** (E4-A W1). `policy._use_item`
   (`maybe_use_item`) tests the AI battler's `embargo` (ai:4076-4078; Embargo is modelled, E2
   B13-29). Before W1 an Embargoed AI with a usable bag item took the item action; now it takes
-  `NO_ITEM` and scores its moves. Expected in the differential and any snapshot compare of B = 2
-  states with the AI under Embargo and a usable item; outside `tests/ai/b2_snapshot.py` (commands
+  `NO_ITEM` and scores its moves: `TrainerAI_ShouldUseItem` returns FALSE (trainer_ai.c:4075-4078) and
+  `TrainerAI_PickCommand` returns `PLAYER_INPUT_FIGHT` (:4034-4038). So the AI's whole action changes on
+  such a state, from the one-hot item action to its move distribution (`policy._policy_and_context`,
+  `stay = jnp.where(item != NO_ITEM, ...)`), and every output that reads the AI's action law there may
+  differ with it: `ai_action_distribution`, `enumerate_turn`, `decision_actions`, `root_belief`,
+  `rank_actions` (`tools/snap_compare.py`) and the differential's AI lines. Expected in any compare of
+  B = 2 states with the AI under Embargo and a usable item; outside `tests/ai/b2_snapshot.py` (commands
   only). Test: tests/ai/test_policy.py `test_no_item_under_embargo`.
 
 - **E4-13. Snapshot compare of E4-A0.** Against the dd68cd8f capture (snapcmp-e4a0-d1ab9b7): 0 diverged,
@@ -137,6 +142,19 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   before. Its one B = 2 value change is E4-12: an AI battler under Embargo (`MOVE_EFFECT_EMBARGO`,
   trainer_ai.c:4076) with a usable bag item now takes `NO_ITEM` (`policy.py` `state.embargo[b] == 0` in the item
   mask). Its other changes are commands at B = 4 and helpers; `tests/ai/b2_snapshot.py` pins their B = 2 values.
-  Expected against the capture of that main: 0 generator drift; 0 diverged, except parts with a captured state
-  whose AI battler is under Embargo and holds a usable bag item, where only the item choice may differ (E4-12).
-  Any other divergence is a defect. `ai/read_bounds.py` regenerated on this merge equals E4-A0's (79d26b70).
+  Expected against the capture of that main: 0 generator drift; 0 diverged, except two divergence classes, both
+  in the AI's action law and every output downstream of it (`ai_action_distribution`, `enumerate_turn`,
+  `decision_actions`, `root_belief`, `rank_actions`): (a) E4-12, a captured state whose AI battler is under
+  Embargo and has a usable bag item (item action -> move distribution); (b) E4-15, a captured state whose AI
+  party has a living bench member with its side's `knocked_off` bit set, scored by `IfPartyMemberDealsMoreDamage`
+  (Expert scripts) with a Natural Gift or Judgment move or Klutz. Any other divergence is a defect. `ai/read_bounds.py` regenerated on this merge equals E4-A0's (79d26b70).
+
+- **E4-15. B = 2 change: `IfPartyMemberDealsMoreDamage` passes the party's held item** (W1 review fix,
+  review_w1_92eb8c44 MUST 2). The command reads each member's `MON_DATA_HELD_ITEM` (trainer_ai.c:2160); the party
+  keeps a Knock Off victim's item while its side's `knockedOffItemsMask` bit is set (battle_io_command.c:590-592),
+  which `state.party_held_item` models. Before the fix the engine passed `state.item` (the BattleMon's 0). The item
+  reaches only Natural Gift's and Judgment's cases and the Klutz test (`TrainerAI_CalcAllDamage`). At B = 4 the
+  same fix reads the DOUBLES partner's active as its party Pokemon (`commands._party_copy`: moves, PP, IVs, ability
+  of the `shadow_*` under Mimic / Transform, battle_io_command.c:579-586), for this command and
+  `IfAnyPartyMemberUsedPP` (:1999). Tests: tests/ai/test_commands_four.py `test_used_pp_reads_the_party_copy`,
+  `test_party_copy_values`, `test_party_member_deals_more_reads_the_party_copy`.

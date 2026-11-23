@@ -101,6 +101,7 @@ from nuzline.engine.state import (
     ai_record_item,
     ai_record_moves,
     held_item,
+    party_held_item,
     record_seen_move,
 )
 
@@ -1772,13 +1773,12 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     mine = estimates(
         state.moves[_row(state, a), active], state.ivs[_row(state, a), active], held_item(state, a)
     )
-    # The bench's own MON_DATA_ABILITY (trainer_ai.c:2162): raw party data.
-    member_items = jnp.where(
-        state.ability[_row(state, a)] == AbilityId.KLUTZ, 0, state.item[_row(state, a)]
-    )
-    theirs = jax.vmap(estimates)(
-        state.moves[_row(state, a)], state.ivs[_row(state, a)], member_items
-    )  # [SLOTS, 4, C]
+    # The members' party data (MON_DATA_MOVE1 + j, MON_DATA_HP_IV + j, MON_DATA_HELD_ITEM,
+    # MON_DATA_ABILITY; trainer_ai.c:2149-2162): ``_party_copy``, so the DOUBLES partner's active
+    # is read as its party Pokemon (not its Transform or Mimic copy, nor a Knock Off's 0).
+    mons = _party_copy(tables, state, a)
+    member_items = jnp.where(mons.ability == AbilityId.KLUTZ, 0, mons.item)
+    theirs = jax.vmap(estimates)(mons.moves, mons.ivs, member_items)  # [SLOTS, 4, C]
     slots = jnp.arange(state.species.shape[1])
     alive = (state.species[_row(state, a)] > 0) & (state.hp[_row(state, a)] > 0) & (slots != active)
     # A member that is not estimated draws nothing (:2145-2148).
@@ -2194,6 +2194,68 @@ def _row(state: BattleState, battler):
     return party(format_of(state), battler)
 
 
+class PartyCopy(NamedTuple):
+    """The party ``Pokemon`` data of one party row (``[SLOTS, ...]``), as ``Pokemon_GetValue``
+    reads it (``_party_copy``)."""
+
+    moves: jnp.ndarray  # int32[SLOTS, MOVES], MON_DATA_MOVE1 + k
+    pp: jnp.ndarray  # int32[SLOTS, MOVES], MON_DATA_MOVE1_PP + k
+    max_pp: jnp.ndarray  # int32[SLOTS, MOVES], MON_DATA_MOVE1_MAX_PP + k
+    ivs: jnp.ndarray  # int[SLOTS, 6], MON_DATA_HP_IV + k
+    ability: jnp.ndarray  # int[SLOTS], MON_DATA_ABILITY
+    item: jnp.ndarray  # int32[SLOTS], MON_DATA_HELD_ITEM
+
+
+def _party_copy(tables: Tables, state: BattleState, b) -> PartyCopy:
+    """The party Pokemon of battler ``b``'s party row as the AI's party commands read them
+    (``BattleSystem_GetPartyPokemon`` + ``Pokemon_GetValue``; IfAnyPartyMemberUsedPP,
+    trainer_ai.c:1997-2001; IfPartyMemberDealsMoreDamage, :2145-2162).
+
+    A bench slot's engine values are the party's. The active slot of a battler is its
+    ``BattleMon``; ``BattleMon_CopyToParty`` sends it to the party through
+    ``BtlIOCmd_UpdatePartyMon`` (battle_io_command.c:575-603), which writes no move or PP while the
+    battler is Transformed (:579) and none of a ``mimickedMoveSlot`` slot (:581), the held item
+    only without the slot's ``knockedOffItemsMask`` bit (:590-592), and the ability only on a stat
+    recalculation (:601-603, ``party_ability``). The party keeps its own IVs and species under
+    Transform (BtlCmd_Transform writes the BattleMon only, battle_script.c:5342-5370). So for the
+    active slot of the one other battler that sends from ``b``'s row (``b ^ 2`` when the format
+    gives both one party: DOUBLES, and TWO_TRAINERS' player side): moves and PP from
+    ``shadow_moves`` / ``shadow_pp`` where ``mimic_slots`` is set (all four under Transform, G-68 /
+    G-69), IVs from ``shadow_ivs`` and the ability (``step._party_ability``: ``party_ability``, else
+    the species' at its ability slot and form) from the ``shadow_*`` while ``transformed``. The
+    max PP is ``MoveTable_CalcMaxPP`` of the party move with the slot's PP Ups (``hooks.max_pp``).
+    The held item is ``state.party_held_item`` for every slot. ``b``'s own active slot is the
+    caller's to skip (``selectedPartySlot[b]``)."""
+    fmt = format_of(state)
+    row = _row(state, b)
+    slots = jnp.arange(state.species.shape[1])
+    moves = state.moves[row].astype(_I32)
+    pp = state.pp[row].astype(_I32)
+    ivs = state.ivs[row]
+    ability = state.ability[row]
+    if fmt.B == 4:
+        o = b ^ 2
+        mon = state.active[o]
+        at = (slots == mon) & (party(fmt, o) == row)  # [SLOTS]
+        masked = ((state.mimic_slots[o].astype(_I32) >> jnp.arange(MOVES)) & 1) == 1
+        copied = at[:, None] & masked[None, :]
+        moves = jnp.where(copied, state.shadow_moves[o].astype(_I32)[None, :], moves)
+        pp = jnp.where(copied, state.shadow_pp[o].astype(_I32)[None, :], pp)
+        tf = state.transformed[o] != 0
+        ivs = jnp.where((at & tf)[:, None], state.shadow_ivs[o][None, :], ivs)
+        species = jnp.where(tf, state.shadow_species[o], state.species[row, mon])
+        form = jnp.where(tf, state.shadow_ability_form[o], state.ability_form[row, mon])
+        slot = jnp.where(tf, state.shadow_ability_slot[o], state.ability_slot[row, mon])
+        own = tables.species_abilities[tables.species_form_row[species, form], slot]
+        written = state.party_ability[row, mon]
+        party_ab = jnp.where(written != 0, written, own).astype(ability.dtype)
+        ability = jnp.where(at, party_ab, ability)
+    party_moves = state._replace(moves=state.moves.at[row].set(moves.astype(state.moves.dtype)))
+    full = max_pp(tables, party_moves, b, slots)  # [SLOTS, MOVES]
+    item = party_held_item(state, row, slots).astype(_I32)
+    return PartyCopy(moves, pp, full, ivs, ability, item)
+
+
 def _jump(ctx: AiContext, cond) -> AiContext:
     return ctx._replace(jump=jnp.asarray(cond))
 
@@ -2534,11 +2596,8 @@ def _held_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:
     side's ``aiContext.battlerHeldItems`` (``ai_record_item`` of the battler, the item a message
     named, 0 none)."""
     b = _battler(ctx, battler)
-    if int(battler) in (Battler.ATTACKER, Battler.ATTACKER_PARTNER):  # :1925-1926
-        return _true_item(ctx, battler)
-    same_side = (b & 1) == (ctx.attacker & 1)
-    true = _true_item(ctx, battler)
-    return jnp.where(same_side, true, ai_record_item(ctx.state, b).astype(_I32))
+    same_side = (b & 1) == (ctx.attacker & 1)  # :1925, the resolved battler only (rule 7)
+    return jnp.where(same_side, _true_item(ctx, battler), ai_record_item(ctx.state, b).astype(_I32))
 
 
 def if_held_item_equal_to(ctx: AiContext, battler: Battler, item: int) -> AiContext:
@@ -2569,16 +2628,10 @@ def load_held_item_effect(ctx: AiContext, battler: Battler) -> AiContext:
     ally too (the resolved battler, not the argument: DEFENDER_PARTNER under an ally target is the
     attacker)."""
     b = _battler(ctx, battler)
-    if int(battler) == Battler.ATTACKER:
-        item = _true_item(ctx, battler)
-    elif int(battler) == Battler.ATTACKER_PARTNER:  # attacker ^ 2 is never the attacker
-        item = ai_record_item(ctx.state, b).astype(_I32)
-    else:
-        item = jnp.where(
-            b == ctx.attacker,
-            _true_item(ctx, battler),
-            ai_record_item(ctx.state, b).astype(_I32),
-        )
+    # :1908, the resolved battler only (doubles design rule 7)
+    item = jnp.where(
+        b == ctx.attacker, _true_item(ctx, battler), ai_record_item(ctx.state, b).astype(_I32)
+    )
     return ctx._replace(calc_temp=ctx.tables.item_hold_effect[item].astype(_I32))
 
 
@@ -2983,15 +3036,17 @@ def if_any_party_member_used_pp(ctx: AiContext, battler: Battler) -> AiContext:
     """``IfAnyPartyMemberUsedPP`` (trainer_ai.c:1987-2012): a party member of the battler's party
     other than ``selectedPartySlot[battler]`` with a move whose PP is not its max PP
     (``MoveTable_CalcMaxPP`` with the PP Ups, ``hooks.max_pp``); an empty move slot has 0 of 0.
-    The partner's active in a shared party counts, with the engine's PP of it. The
-    ``species != 0`` test stands in for the loop's ``BattleSystem_GetPartyCount`` bound (:1996)
-    and changes nothing: a padded slot has no moves, PP 0 of max PP 0."""
+    The values are the party copy's (``Pokemon_GetValue``, :1999; ``_party_copy``): the
+    partner's active in a shared party counts with its party moves and PP, so a Mimic slot or a
+    Transformed partner reads the ``shadow_*``. The ``species != 0`` test stands in for the loop's
+    ``BattleSystem_GetPartyCount`` bound (:1996) and changes nothing: a padded slot has no moves,
+    PP 0 of max PP 0."""
     state, b = ctx.state, _battler(ctx, battler)
     row = _row(state, b)
     slots = jnp.arange(state.species.shape[1])
-    full = jax.vmap(lambda m: max_pp(ctx.tables, state, b, m))(slots)  # [SLOTS, MOVES]
+    mons = _party_copy(ctx.tables, state, b)
     member = (slots != _selected_slot(state, b)) & (state.species[row] != 0)
-    return _jump(ctx, jnp.any(member & jnp.any(state.pp[row].astype(_I32) != full, axis=1)))
+    return _jump(ctx, jnp.any(member & jnp.any(mons.pp != mons.max_pp, axis=1)))
 
 
 def if_not_volatile_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:

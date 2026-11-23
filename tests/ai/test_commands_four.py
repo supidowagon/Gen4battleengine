@@ -35,11 +35,10 @@ def test_b2_outputs_are_byte_identical(tables, names):
     ``IfMoveEffectNotKnown`` with a partner argument has no case, so never jumps
     (trainer_ai.c:1739-1820; it jumped as the defender's), and ``LoadHeldItem`` of a battler the
     format lacks reads its zeroed ``battleMons`` (it read the AI's own item through a clamped
-    index)."""
+    index). A refused call has no row on either side (``b2_snapshot._run``); a row only ``got``
+    has (a call modelled since, or a LoadType member added since) has no old value to compare."""
     got = json.loads(json.dumps(snapshot(tables, names)))
     want = json.loads(_SNAPSHOT.read_text())
-    # the two LoadType members added since (DEFENDER_PARTNER_TYPE_1 / _2) have no old row
-    assert set(got) - set(want) == {k for k in got if "load_type_DEFENDER_PARTNER_TYPE" in k}
     assert set(want) <= set(got)
     changed = {key: got[key] for key, old in want.items() if got[key] != old}
     for key, new in changed.items():
@@ -485,6 +484,126 @@ def test_wounded_and_used_pp_by_battler(tables, names):
     assert bool(c.absent_now(dead, 1))
     ctx = _party_ctx(t, dead, 3, 0)
     assert bool(c.if_any_party_member_is_wounded(ctx, Battler.ATTACKER_PARTNER).jump)
+
+
+def _with_mimic(s, names, b, slot, copy, party_move, party_pp, copy_pp=5):
+    """Battler ``b`` Mimicked ``copy`` into move ``slot`` (BtlCmd_Mimic, battle_script.c:4500-4512:
+    the BattleMon's slot is the copy at min(5, PP), the slot flagged), its party Pokemon keeping
+    ``party_move`` at ``party_pp`` (BtlIOCmd_UpdatePartyMon skips the slot, battle_io_command.c:581)."""
+    p, mon = _at(s, b)
+    return s._replace(
+        moves=s.moves.at[p, mon, slot].set(names.move(copy)),
+        pp=s.pp.at[p, mon, slot].set(copy_pp),
+        pp_ups=s.pp_ups.at[p, mon, slot].set(0),
+        mimic_slots=s.mimic_slots.at[b].set(1 << slot),
+        shadow_moves=s.shadow_moves.at[b, slot].set(names.move(party_move)),
+        shadow_pp=s.shadow_pp.at[b, slot].set(party_pp),
+    )
+
+
+def _with_transform(s, names, b, copied, party_moves, party_pp):
+    """Battler ``b`` is Transformed (BtlCmd_Transform, battle_script.c:5342-5370): its BattleMon
+    holds ``copied`` at 5 PP; the party Pokemon keeps ``party_moves`` / ``party_pp``, its IVs,
+    species and ability slot (the ``shadow_*``; UpdatePartyMon writes no move under Transform,
+    battle_io_command.c:579)."""
+    p, mon = _at(s, b)
+    own = [names.move(m) for m in party_moves] + [0] * (4 - len(party_moves))
+    s = s._replace(
+        transformed=s.transformed.at[b].set(1),
+        mimic_slots=s.mimic_slots.at[b].set(0xF),
+        shadow_moves=s.shadow_moves.at[b].set(jnp.asarray(own, s.shadow_moves.dtype)),
+        shadow_pp=s.shadow_pp.at[b].set(jnp.asarray(party_pp, s.shadow_pp.dtype)),
+        shadow_species=s.shadow_species.at[b].set(s.species[p, mon]),
+        shadow_ivs=s.shadow_ivs.at[b].set(s.ivs[p, mon]),
+        shadow_ability_slot=s.shadow_ability_slot.at[b].set(s.ability_slot[p, mon]),
+        shadow_ability_form=s.shadow_ability_form.at[b].set(s.ability_form[p, mon]),
+        pp_ups=s.pp_ups.at[p, mon].set(0),
+    )
+    return with_moves(s, names, b, copied, pp=5)
+
+
+def test_used_pp_reads_the_party_copy(tables, names):
+    # MUST 1 of review_w1_92eb8c44: IfAnyPartyMemberUsedPP compares the party Pokemon's
+    # MON_DATA_MOVE1_PP with MON_DATA_MOVE1_MAX_PP (trainer_ai.c:1999), so the DOUBLES partner's
+    # active (not skipped, :1997) counts with its party moves and PP, not its Mimic / Transform copy.
+    # Basic_CheckLunarDance jumps on it (script.s:1561).
+    t = _tables4(tables, DOUBLES)
+    s = four(t, names, DOUBLES)
+    p, mon = _at(s, 3)
+    assert (p, mon) == (1, 1) and not bool(c.if_any_party_member_used_pp(_party_ctx(t, s), 1).jump)
+    used = Battler.ATTACKER
+    # Mimicked Fire Blast: the copy is at 5 of 5 (unused), the party's Mimic at 9 of 10 (used)
+    s1 = _with_mimic(s, names, 3, 2, "Fire Blast", "Mimic", 9)
+    assert int(s1.pp[p, mon, 2]) == int(t.move_pp[names.move("Fire Blast")]) == 5
+    assert bool(c.if_any_party_member_used_pp(_party_ctx(t, s1), used).jump)
+    # the reverse: the copy used (4 of 5), the party's Mimic full (10 of 10)
+    s2 = _with_mimic(s, names, 3, 2, "Fire Blast", "Mimic", 10, copy_pp=4)
+    assert not bool(c.if_any_party_member_used_pp(_party_ctx(t, s2), used).jump)
+    # Transformed: the copy's moves at 5 PP (Tackle's max is 35), the party's own set full, then used
+    own = ("Surf", "Growl")
+    full = [int(t.move_pp[names.move(m)]) for m in own] + [0, 0]
+    s3 = _with_transform(s, names, 3, ("Tackle", "Ember"), own, full)
+    assert not bool(c.if_any_party_member_used_pp(_party_ctx(t, s3), used).jump)
+    s4 = _with_transform(s, names, 3, ("Tackle", "Ember"), own, [full[0] - 1, *full[1:]])
+    assert bool(c.if_any_party_member_used_pp(_party_ctx(t, s4), used).jump)
+    # battler 3 itself skips its own slot: its Mimic party copy is not read
+    assert not bool(c.if_any_party_member_used_pp(_party_ctx(t, s1, 3, 0), used).jump)
+
+
+def test_party_copy_values(tables, names):
+    # _party_copy: IVs and ability of a Transformed partner are its party Pokemon's (the shadow;
+    # BtlCmd_Transform writes the BattleMon only, battle_script.c:5342-5370), the held item of a
+    # knocked-off slot is the party's kept one (battle_io_command.c:590-592), every other slot is
+    # the engine's own value.
+    t = _tables4(tables, DOUBLES)
+    s = four(t, names, DOUBLES)
+    p, mon = _at(s, 3)
+    own_ivs = jnp.asarray([1, 2, 3, 4, 5, 6], s.ivs.dtype)
+    s = s._replace(ivs=s.ivs.at[p, mon].set(own_ivs))
+    s = _with_transform(s, names, 3, ("Tackle",), ("Surf",), [15, 0, 0, 0])
+    own_ability = int(s.ability[p, mon])
+    copied = jnp.asarray([31] * 6, s.ivs.dtype)
+    s = s._replace(
+        ivs=s.ivs.at[p, mon].set(copied),
+        ability=s.ability.at[p, mon].set(own_ability + 1),
+        knocked_off=s.knocked_off.at[1, 4].set(1),
+        knocked_item=s.knocked_item.at[p, 4].set(7),
+        item=s.item.at[p, 4].set(0),
+    )
+    mons = c._party_copy(t, s, 1)
+    assert mons.ivs[mon].tolist() == own_ivs.tolist()
+    assert int(mons.ability[mon]) == own_ability
+    assert mons.moves[mon].tolist() == [names.move("Surf"), 0, 0, 0]
+    assert int(mons.item[4]) == 7
+    for slot in (2, 3, 5):
+        assert mons.moves[slot].tolist() == s.moves[p, slot].tolist()
+        assert mons.ivs[slot].tolist() == s.ivs[p, slot].tolist()
+    # the other side's party: no battler of party 1 is in it
+    assert c._party_copy(t, s, 0).ivs.tolist() == s.ivs[0].tolist()
+
+
+def test_party_member_deals_more_reads_the_party_copy(tables, names):
+    # MUST 2 of review_w1_92eb8c44: IfPartyMemberDealsMoreDamage scores each member's
+    # MON_DATA_MOVE1 + j (trainer_ai.c:2149-2151), so the DOUBLES partner's active is scored with
+    # its party moves, not the Transform or Mimic copy. Only battler 3's slot is a living candidate.
+    t = _tables4(tables, DOUBLES)
+    s = four(t, names, DOUBLES)
+    s = with_moves(s, names, 1, ("Tackle",))
+    for slot in range(2, 6):
+        s = _put(s, 1, slot, hp=0)
+
+    def jumps(state):
+        return bool(
+            c.if_party_member_deals_more_damage(_party_ctx(t, state), c.USE_MAX_DAMAGE).jump
+        )
+
+    weak, strong = ("Growl",), ("Earthquake",)
+    assert jumps(with_moves(s, names, 3, strong)) and not jumps(with_moves(s, names, 3, weak))
+    assert not jumps(_with_transform(s, names, 3, strong, weak, [40, 0, 0, 0]))
+    assert jumps(_with_transform(s, names, 3, weak, strong, [10, 0, 0, 0]))
+    base = with_moves(s, names, 3, weak)
+    assert not jumps(_with_mimic(base, names, 3, 0, "Earthquake", "Growl", 40))
+    assert jumps(_with_mimic(base, names, 3, 1, "Growl", "Earthquake", 10))
 
 
 def test_party_commands_b2_values(tables, names):

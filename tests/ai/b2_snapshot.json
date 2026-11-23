@@ -270,13 +270,10 @@ false,
 ],
 446
 ],
-"busy/0/deals_more_ATTACKER": "AssertionError",
-"busy/0/deals_more_ATTACKER_PARTNER": "AssertionError",
 "busy/0/deals_more_DEFENDER": [
 0,
 0
 ],
-"busy/0/deals_more_DEFENDER_PARTNER": "AssertionError",
 "busy/0/defender_move_class": [
 0,
 0
@@ -761,12 +758,10 @@ false,
 80,
 0
 ],
-"busy/0/fainted_ATTACKER": "AssertionError",
 "busy/0/fainted_ATTACKER_PARTNER": [
 0,
 1
 ],
-"busy/0/fainted_DEFENDER": "AssertionError",
 "busy/0/fainted_DEFENDER_PARTNER": [
 0,
 1
@@ -2610,13 +2605,10 @@ false,
 ],
 88
 ],
-"busy/1/deals_more_ATTACKER": "AssertionError",
-"busy/1/deals_more_ATTACKER_PARTNER": "AssertionError",
 "busy/1/deals_more_DEFENDER": [
 0,
 0
 ],
-"busy/1/deals_more_DEFENDER_PARTNER": "AssertionError",
 "busy/1/defender_move_class": [
 0,
 0
@@ -3101,12 +3093,10 @@ false,
 80,
 0
 ],
-"busy/1/fainted_ATTACKER": "AssertionError",
 "busy/1/fainted_ATTACKER_PARTNER": [
 0,
 1
 ],
-"busy/1/fainted_DEFENDER": "AssertionError",
 "busy/1/fainted_DEFENDER_PARTNER": [
 0,
 1
@@ -4950,13 +4940,10 @@ false,
 ],
 29
 ],
-"cranidos/0/deals_more_ATTACKER": "AssertionError",
-"cranidos/0/deals_more_ATTACKER_PARTNER": "AssertionError",
 "cranidos/0/deals_more_DEFENDER": [
 0,
 0
 ],
-"cranidos/0/deals_more_DEFENDER_PARTNER": "AssertionError",
 "cranidos/0/defender_move_class": [
 0,
 0
@@ -5441,12 +5428,10 @@ false,
 40,
 0
 ],
-"cranidos/0/fainted_ATTACKER": "AssertionError",
 "cranidos/0/fainted_ATTACKER_PARTNER": [
 0,
 1
 ],
-"cranidos/0/fainted_DEFENDER": "AssertionError",
 "cranidos/0/fainted_DEFENDER_PARTNER": [
 0,
 1
@@ -7290,13 +7275,10 @@ false,
 ],
 228
 ],
-"cranidos/1/deals_more_ATTACKER": "AssertionError",
-"cranidos/1/deals_more_ATTACKER_PARTNER": "AssertionError",
 "cranidos/1/deals_more_DEFENDER": [
 0,
 0
 ],
-"cranidos/1/deals_more_DEFENDER_PARTNER": "AssertionError",
 "cranidos/1/defender_move_class": [
 0,
 0
@@ -7781,12 +7763,10 @@ false,
 40,
 0
 ],
-"cranidos/1/fainted_ATTACKER": "AssertionError",
 "cranidos/1/fainted_ATTACKER_PARTNER": [
 0,
 1
 ],
-"cranidos/1/fainted_DEFENDER": "AssertionError",
 "cranidos/1/fainted_DEFENDER_PARTNER": [
 0,
 1
@@ -9630,13 +9610,10 @@ false,
 ],
 446
 ],
-"plain/0/deals_more_ATTACKER": "AssertionError",
-"plain/0/deals_more_ATTACKER_PARTNER": "AssertionError",
 "plain/0/deals_more_DEFENDER": [
 0,
 0
 ],
-"plain/0/deals_more_DEFENDER_PARTNER": "AssertionError",
 "plain/0/defender_move_class": [
 0,
 0
@@ -10121,12 +10098,10 @@ false,
 60,
 0
 ],
-"plain/0/fainted_ATTACKER": "AssertionError",
 "plain/0/fainted_ATTACKER_PARTNER": [
 0,
 1
 ],
-"plain/0/fainted_DEFENDER": "AssertionError",
 "plain/0/fainted_DEFENDER_PARTNER": [
 0,
 1
@@ -11970,13 +11945,10 @@ false,
 ],
 88
 ],
-"plain/1/deals_more_ATTACKER": "AssertionError",
-"plain/1/deals_more_ATTACKER_PARTNER": "AssertionError",
 "plain/1/deals_more_DEFENDER": [
 0,
 0
 ],
-"plain/1/deals_more_DEFENDER_PARTNER": "AssertionError",
 "plain/1/defender_move_class": [
 0,
 0
@@ -12461,12 +12433,10 @@ false,
 60,
 0
 ],
-"plain/1/fainted_ATTACKER": "AssertionError",
 "plain/1/fainted_ATTACKER_PARTNER": [
 0,
 1
 ],
-"plain/1/fainted_DEFENDER": "AssertionError",
 "plain/1/fainted_DEFENDER_PARTNER": [
 0,
 1
