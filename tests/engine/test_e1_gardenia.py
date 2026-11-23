@@ -925,8 +925,10 @@ def test_a_u_turn_chase_by_a_carried_pursuit_reaches_acid_rain(tables, names):
         0,
     )
     plain = fog._replace(selected_temp=fog.selected_temp.at[1].set(0))  # nothing carried
-    chased = np.asarray(future_thresholds(tables, fog, acts, moves)[1][1])
-    unchased = np.asarray(future_thresholds(tables, plain, acts, moves)[1][1])
+    # future_thresholds returns (values bool[B, 101], loose bool[B]): the defender's possible
+    # thresholds (E4 future_values, a3113932). Gravity on with fog off adds the clipped 100.
+    chased = np.asarray(future_thresholds(tables, fog, acts, moves)[0][1])
+    unchased = np.asarray(future_thresholds(tables, plain, acts, moves)[0][1])
     assert bool(np.all(chased | ~unchased)) and bool(np.any(chased & ~unchased))
 
 
