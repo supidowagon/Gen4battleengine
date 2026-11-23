@@ -177,3 +177,10 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   Team passes the cap and the layout is sampled and marked (`AiLayout.sampled`, `sample_n`, `sample_seed`;
   `BEYOND_CAP_REFUSE` raises instead). Open: the cost of `WIDTH_CAP` 18 (pod measurement); if cheap the cap
   may be raised and 455 is exact. The cap constant is unchanged.
+- **E4-17. Doubles damage refusal kept (E4-A W2, W2-16, plan decision 12).** E2's D45-8 doubles factors are not in
+  `main`: `damage._pre_random` halves a screen (singles) and has no spread factor. `CheckIfHighestDamageWithPartner`
+  is exact at B = 4 by battler, but a state where an AI battler's or its partner's damaging move has range
+  RANGE_ADJACENT_OPPONENTS (a side of two living battlers) or RANGE_ALL_ADJACENT (three or more living), or a side
+  of two living battlers has Reflect / Light Screen, is a named refusal `policy._doubles_damage`
+  ("doubles damage factor (E2 D45-8)", `_Refused.doubles_damage`; battle_lib.c:6982-6990, :7023-7044), with a
+  `fullset` test. The step that rebases on D45-8 deletes both and uses the factors.

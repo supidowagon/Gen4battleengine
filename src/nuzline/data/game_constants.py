@@ -177,6 +177,25 @@ _AI_MOVE_IDS = {
     "Discharge": 435,
     "Surf": 57,
     "Lava Plume": 436,
+    # E4-A W2: TagStrategy_Partner (script.s:7339-7694), generated/moves.txt (line - 1).
+    "Will-O-Wisp": 261,
+    "Swagger": 207,
+    "Gastro Acid": 380,
+    "Acupressure": 367,
+    "Fling": 374,
+    "Fire Blast": 126,
+    "Thunder": 87,
+    "Cross Chop": 238,
+    "Hydro Pump": 56,
+    "DynamicPunch": 223,
+    "Zap Cannon": 192,
+    "Megahorn": 224,
+    "Focus Blast": 411,
+    "Gunk Shot": 441,
+    "Magma Storm": 463,
+    "Power Whip": 438,
+    "Seed Flare": 465,
+    "Head Smash": 457,
 }
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
 # model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
@@ -323,6 +342,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Huge Power": 37,
             "Lightningrod": 31,
             "Storm Drain": 114,
+            # E4-A W2: TagStrategy_PartnerSkillSwap_GiveAccuracyIncrease (script.s:7491-7493).
+            "Compoundeyes": 14,
         },
     ),
     *_table(
@@ -654,6 +675,11 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
     # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
     Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
+    # TagStrategy_Partner's IfHeldItemEqualTo items (script.s:7536-7537, :7573, :7603-7604).
+    Constant("nuzline.ai.commands.ITEM_TOXIC_ORB", "item", 272, "Toxic Orb", _E),
+    Constant("nuzline.ai.commands.ITEM_FLAME_ORB", "item", 273, "Flame Orb", _E),
+    Constant("nuzline.ai.commands.ITEM_PERSIM_BERRY", "item", 156, "Persim Berry", _E),
+    Constant("nuzline.ai.commands.ITEM_LUM_BERRY", "item", 157, "Lum Berry", _E),
     *_table("nuzline.ai.commands.NATURAL_GIFT_BERRIES", "item", _E, _NATURAL_GIFT_BERRIES),
     *_table("nuzline.ai.commands.RECYCLE_DESIRABLE_ITEMS", "item", _E, _RECYCLE_DESIRABLE_ITEMS),
     *_table("nuzline.ai.commands.ASSURANCE_RECOIL_BERRIES", "item", _E, _ASSURANCE_RECOIL_BERRIES),
@@ -735,6 +761,12 @@ CONSTANTS: tuple[Constant, ...] = (
     # (ai.c:834-844); Kaizo's 222 is Bulldoze and takes the same block (E4-A0): each policy pins its game's name.
     Constant("nuzline.ai.commands.MOVE_MAGNITUDE", "move", 222, "Magnitude", _P),
     Constant("nuzline.ai.commands.MOVE_MAGNITUDE", "move", 222, "Bulldoze", _K),
+    # TagStrategy_PartnerStatusMove's MOVE_TRICK / MOVE_SWITCHEROO (script.s:7451-7452): ids
+    # 271 / 415, which Kaizo names Hidden Power Psychic / Flying (damaging: never in that block).
+    Constant("nuzline.ai.commands.MOVE_TRICK", "move", 271, "Trick", _P),
+    Constant("nuzline.ai.commands.MOVE_TRICK", "move", 271, "Hidden Power Psychic", _K),
+    Constant("nuzline.ai.commands.MOVE_SWITCHEROO", "move", 415, "Switcheroo", _P),
+    Constant("nuzline.ai.commands.MOVE_SWITCHEROO", "move", 415, "Hidden Power Flying", _K),
     *_table("nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES", "move", _P, _COPYCAT_ENCOURAGED_MOVES),
     # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the
     # decomp tests Levitate a second time, which never matches (quirk).

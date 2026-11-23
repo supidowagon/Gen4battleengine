@@ -14,12 +14,14 @@ repeat ``READ_DRAWS[0]``) and sums the path weights by final score. Battlers: th
 partner ``a ^ 2`` (``ATTACKER_PARTNER``), the target ``d``, the target's partner ``d ^ 2``
 (``DEFENDER_PARTNER``; ``AIScript_Battler``, trainer_ai.c:2765-2782).
 
-``CheckIfHighestDamageWithPartner`` (script.s:6684) is pinned to NOT_HIGHEST by ``_pinned_sweep``: its
-B = 4 sweep is A-7's (``tests/ai/test_doubles_damage.py``), and every damaging move below only needs the
-script to go on through ``TagStrategy_CheckBeforeScoring`` to ``TagStrategy_CheckSpecialScoring``. A
-move that is not damaging reaches ``CheckSpecialScoring`` at script.s:6642 without it. The target is
-Normal / Normal, so every move below is neutral against it (no TryScoreMinus, no CheckBeforeScoring roll).
-The ally-target path (``IfTargetIsPartner``, ``TagStrategy_Partner``) is A-9's and not run here.
+``CheckIfHighestDamageWithPartner`` (script.s:6684) runs for real (A-7, ``tests/ai/test_doubles_damage.py``):
+every damaging move below is the slot 0 move of an attacker whose last slot holds Explosion (``_COMPARATOR``,
+power 250: no move of these tests, nor any Magnitude draw, does more), so the result is NOT_HIGHEST and the
+script goes on through ``TagStrategy_CheckBeforeScoring`` to ``TagStrategy_CheckSpecialScoring``. A move that
+is not damaging reaches ``CheckSpecialScoring`` at script.s:6642 without it. The target is Normal / Normal, so
+every move below is neutral against it (no TryScoreMinus, no CheckBeforeScoring roll) unless a test sets types.
+The ally-target path (``IfTargetIsPartner``, ``TagStrategy_Partner``) is A-9's (``tests/ai/test_tag_partner.py``);
+here only ``test_ally_target_terminate_flags`` runs it.
 
 Every state is Bulbasaur everywhere (``d2_states.four``): an ability is written to the battler's
 ``BattleState.ability`` (a script write, ``damage.decomp_abilities``), a species ability pair of the tables is
@@ -29,7 +31,6 @@ edited only where a test needs the AI to be unsure which of two abilities a defe
 from __future__ import annotations
 
 import functools
-from unittest import mock
 
 import jax
 import jax.numpy as jnp
@@ -38,7 +39,20 @@ import pytest
 
 from nuzline.ai import commands as c
 from nuzline.ai import policy
-from nuzline.ai.layout import TAG_STRATEGY
+from nuzline.ai.layout import (
+    BASIC,
+    BATON_PASS,
+    CHECK_HP,
+    EVAL_ATTACK,
+    EXPERT,
+    HARRASSMENT,
+    PRIORITIZE_EXTREMES,
+    RISKY,
+    SETUP_FIRST_TURN,
+    TAG_STRATEGY,
+    VANILLA,
+    WEATHER,
+)
 from nuzline.ai.outcome import READ_DRAWS, no_calc_draws
 from nuzline.data.tables import BATTLE_TYPES
 from nuzline.engine.field import with_gravity
@@ -56,6 +70,9 @@ GRASS, ELECTRIC, ICE = int(Type.GRASS), int(Type.ELECTRIC), int(Type.ICE)
 SLOT_READS = (
     8  # the draws of one slot: the widest path here makes 7 (Future Sight, two sorts and a roll)
 )
+# the strongest plain damaging move: Explosion (power 250) beats every move these tests score, so the
+# attacker's slot 0 is never the highest-damage move of CheckIfHighestDamageWithPartner
+_COMPARATOR = "Explosion"
 ENGINE_ABILITY = {decomp: engine for engine, decomp in ABILITY_DECOMP_IDS.items()}
 # every ``IfRandomLessThan`` of the Tag script that these tests reach: N, the change is made at 1 - N / 256
 ROLL_64 = 64 / 256  # P(jump) of R@6666, 6678, 6959, 6972, 7012, 7022, 7053, 7075-7095
@@ -65,40 +82,50 @@ ROLL_128 = 128 / 256  # R@6851, 7173, 7181, 7187
 # --- The runner ----------------------------------------------------------------------------
 
 
-def _pinned_sweep(ctx, use_damage_roll):
-    """Stand-in for ``CheckIfHighestDamageWithPartner`` (trainer_ai.c:2369-2436): ``NO_COMPARISON``
-    for a move that is not damaging (its gate, :2393-2394), else NOT_HIGHEST, no read."""
-    damaging = c.is_damaging(ctx.tables, ctx.move)
-    value = jnp.where(damaging, c.AI_NOT_HIGHEST_DAMAGE, c.AI_NO_COMPARISON_MADE)
-    return ctx._replace(calc_temp=value.astype(jnp.int32))
+# the flag scripts the runner can run, by flag bit (``policy._flag_scripts``)
+_SCRIPTS = {
+    BASIC: functools.partial(policy._basic, layout=VANILLA),
+    EVAL_ATTACK: policy._eval_attack,
+    EXPERT: functools.partial(policy._expert, layout=VANILLA),
+    SETUP_FIRST_TURN: policy._setup_first_turn,
+    RISKY: policy._risky,
+    PRIORITIZE_EXTREMES: policy._prioritize_extremes,
+    BATON_PASS: policy._baton_pass,
+    TAG_STRATEGY: policy._tag_strategy,
+    CHECK_HP: policy._check_hp,
+    WEATHER: policy._weather,
+    HARRASSMENT: policy._harrassment,
+}
 
 
-@functools.partial(jax.jit, static_argnames=("a",))
-def _run(t, s, d, rolls, a):
+@functools.partial(jax.jit, static_argnames=("a", "flags"))
+def _run(t, s, d, rolls, a, flags=(TAG_STRATEGY,)):
     """``(score, reads, weight, missing_read)`` of slot 0 for attacker ``a`` (static) against target
-    ``d`` (traced) after ``TagStrategy_Main``, from 100, the slot's reads taking ``rolls`` in order."""
+    ``d`` (traced) after the flag scripts of ``flags`` (static, in the order given: bit order, as
+    ``policy._run_flags``), from 100, the slot's reads taking ``rolls`` in order."""
     ai_outcome = outcome()._replace(script_rolls=rolls, calc_draws=no_calc_draws((), SLOT_READS))
     ctx = c.new_context(t, s, ai_outcome, attacker=a, defender=d)
-    ctx = c.start_run(c.at_slot(ctx, 0), TAG_STRATEGY)
-    with mock.patch.object(c, "check_if_highest_damage_with_partner", _pinned_sweep):
-        out = policy._tag_strategy(ctx)
-    return out.scores[0], out.reads[0], out.weight[0], out.missing_read
+    for bit in flags:
+        ctx = _SCRIPTS[bit](c.start_run(c.at_slot(ctx, 0), bit))
+    return ctx.scores[0], ctx.reads[0], ctx.weight[0], ctx.missing_read
 
 
-def _law(t, s, a=1, d=0):
+def _law(t, s, a=1, d=0, flags=(TAG_STRATEGY,)):
     """``({score: probability}, most reads on a path)``: every canonical pattern of draws, each
-    weighed by the product of its reads' probabilities (``_slot_read``)."""
+    weighed by the product of its reads' probabilities (``_slot_read``); a path of probability 0
+    (a read whose result is certain) is not a path."""
     paths = []
 
     def walk(prefix):
         rolls = np.full((4, SLOT_READS), READ_DRAWS[0], np.uint8)
         rolls[0, : len(prefix)] = [READ_DRAWS[bit] for bit in prefix]
         score, reads, weight, missing = _run(
-            t, s, jnp.asarray(d, jnp.int32), jnp.asarray(rolls), a=a
+            t, s, jnp.asarray(d, jnp.int32), jnp.asarray(rolls), a=a, flags=flags
         )
         assert int(missing) == 0, "the slot's reads ran past SLOT_READS"
         if int(reads) <= len(prefix):
-            paths.append((int(score), int(reads), float(weight)))
+            if float(weight) > 0:
+                paths.append((int(score), int(reads), float(weight)))
         else:  # a read past the prefix: its two draws
             walk((*prefix, 0))
             walk((*prefix, 1))
@@ -111,11 +138,11 @@ def _law(t, s, a=1, d=0):
     return law, max(reads for _, reads, _ in paths)
 
 
-def _check(t, s, want, *, a=1, d=0, reads=None, case=""):
+def _check(t, s, want, *, a=1, d=0, reads=None, case="", flags=(TAG_STRATEGY,)):
     """The law of slot 0 equals ``want`` (a certain score, or ``{score: probability}``); ``reads``: the
     most reads a path makes."""
     want = {want: 1.0} if isinstance(want, int) else want
-    law, most = _law(t, s, a, d)
+    law, most = _law(t, s, a, d, flags)
     assert set(law) == set(want), (case, law, want)
     for score, p in want.items():
         assert law[score] == pytest.approx(p, abs=1e-6), (case, score, law, want)
@@ -227,7 +254,10 @@ class _World:
         self.s = s
 
     def attack(self, s, *moves):
-        """The attacker's move set: ``moves`` (the first is slot 0, the one under test)."""
+        """The attacker's move set: ``moves`` (the first is slot 0, the one under test) and, unless
+        the four slots are full, ``_COMPARATOR`` after them (see the module docstring)."""
+        if len(moves) < 4 and _COMPARATOR not in moves:
+            moves = (*moves, _COMPARATOR)
         return with_moves(s, self.n, self.a, moves)
 
     def moves(self, s, b, *moves):
@@ -805,3 +835,23 @@ def test_multi_partner_attacker_true_reads(w_multi, w_two):
         case="d = 1: battler 1 is not its partner",
     )
     _check(t, _record(bolt, 1, "Lightningrod"), 99, a=2, d=3, case="d = 3: partner 1")
+
+
+# --- A-5: the ally target ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bit",
+    [BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY, PRIORITIZE_EXTREMES, BATON_PASS, WEATHER,
+     HARRASSMENT],
+)  # fmt: skip
+def test_ally_target_terminate_flags(w, bit):
+    # ``IfTargetIsPartner Terminate`` (script.s:54, :1625, :6355, :6418, :6501, :6523, :6565, :7980, :8022;
+    # Terminate = PopOrEnd, :8105-8106): the ally target (attacker 1, target 3) ends the flag's script with
+    # the score unchanged and no read. TAG_STRATEGY is forced on in doubles (trainer_ai.c:253-255) and runs
+    # after them (bit order): the score is the Tag Strategy ally part's alone. A damaging move that no
+    # absorb ladder takes is -30 there (script.s:7349-7350).
+    s = w.attack(w.s, "Tackle")
+    _check(w.t, s, 100, d=3, reads=0, flags=(bit,), case="Terminate")
+    _check(w.t, s, 70, d=3, reads=0, flags=(bit, TAG_STRATEGY), case="then Tag Strategy")
+    _check(w.t, s, 70, d=3, reads=0, flags=(TAG_STRATEGY,), case="Tag Strategy alone")

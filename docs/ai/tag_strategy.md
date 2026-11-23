@@ -153,3 +153,30 @@ no longer reads HAVE).
 
 6666, 6678, 6851, 6972, 7012, 7022, 7075, 7080, 7085, 7173, 7181, 7187 join the B = 2 sites (the table above:
 "never reached" at B = 2). Reads per call of `LoadBattlerSpeedRank`: at most 2 (A-10 section 2, decision 6).
+
+# The ally part at B = 4 (`TagStrategy_Partner`, script.s:7339-7694; `policy._tag_strategy_partner`)
+
+Entered by `IfTargetIsPartner` (s:6638 from bit 7, s:7697 from bit 8, so a CHECK_HP trainer runs it twice, both
+score changes and both draw sets). Never entered at B = 2 (the target is `attacker ^ 1`). The ally is
+`ATTACKER_PARTNER` and `DEFENDER`. Scores from 100; "P" is the probability of the change; every path ends.
+
+| Move at the ally | Law (decomp lines) |
+|---|---|
+| ally down (`IfBattlerFainted`), or a damaging move of no listed type, or any status move not listed, Fling | -30 (:7339-7350, :7455-7456) |
+| Fire move, Flash Fire ally | +3; -30 once Flash Fire is activated; -30 without the ability (:7352-7362) |
+| Electric move, Motor Drive ally | R@7383(160) jump: nothing; else -30 at Speed +6, else +3 (:7380-7386) |
+| Electric move, Volt Absorb ally / Water move, Water Absorb or Dry Skin ally | hp% 100: -10; > 90: nothing; > 75 / > 50 / else R@7395 / 7399 / 7403 (Water 7430 / 7434 / 7438) with N = 64 / 128 / 192, **the jump is +3**; any other ability -30 (:7388-7442) |
+| Skill Swap | ally ability (knowledge branch, one coin per guessing read, 7467 / 7474): Truant, Slow Start +10; attacker Levitate: ally Levitate -30, type 1 not Electric to the accuracy block (so -30), type 1 Electric +1 then (type 2 not Electric) the accuracy block (net -29), both Electric +2; accuracy block: attacker Compound Eyes / No Guard and the ally knows an inaccurate move (14 ids) +3, else -30 (:7458-7511) |
+| Will-O-Wisp | Flash Fire ally: the Fire ladder; else +5 for Guts, no status, no Fire type, no Flame / Toxic Orb, hp% >= 81; else -30 (:7513-7542) |
+| Thunder Wave | Ground ally -30; Motor Drive / Volt Absorb: the Electric ladders; else -30 (:7544-7559) |
+| Toxic / Poison moves | +5 for Poison Heal, ally unstatused, no Toxic Orb, hp% <= 91 (the comment says 81); else -30 (:7561-7580) |
+| Helping Hand | hp% 0 -30; hp% > 50 or the ally's speed rank 0 (one call): R@7596(64) jump -1, else +2; else nothing (:7582-7600) |
+| Swagger | Persim / Lum Berry holder: +3 below Attack +2 (decomp stage <= 7), else nothing; no berry -30 (:7602-7619) |
+| Trick / Switcheroo | nothing (:7621-7622) |
+| Gastro Acid | suppressed -30; Truant / Slow Start +5; else nothing (:7624-7644) |
+| Acupressure | not Simple: a stat at +6 -30; Simple: a stat at +3 or more -10; then hp% < 51: -1; > 90: +2 with 176/256 (R@7682(80)); else R@7679(128) then R@7682: +2 with 88/256 (:7646-7690) |
+
+New roll sites: 7383, 7395, 7399, 7403, 7430, 7434, 7438, 7596, 7679, 7682 (`outcome.SITE_N`, appended; B = 2 outputs
+and the generated tables are unchanged: the flat layout reads them through an unused column). Id rows:
+`MOVE_IDS` (Will-O-Wisp, Swagger, Gastro Acid, Acupressure, Fling and the 14 inaccurate moves), `MOVE_TRICK`,
+`MOVE_SWITCHEROO` (Kaizo names ids 271 / 415 Hidden Power Psychic / Flying), `ABILITY_IDS["Compoundeyes"]`, four item ids.

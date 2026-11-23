@@ -1173,6 +1173,8 @@ ABILITY_IDS = {
     "Huge Power": 37,
     "Lightningrod": 31,
     "Storm Drain": 114,
+    # E4-A W2, TagStrategy_Partner (script.s:7339-7694): Skill Swap's accuracy abilities (:7491-7493).
+    "Compoundeyes": 14,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -1238,7 +1240,39 @@ MOVE_IDS = {
     "Discharge": 435,
     "Surf": 57,
     "Lava Plume": 436,
+    # E4-A W2, TagStrategy_Partner (script.s:7339-7694); generated/moves.txt (line - 1).
+    "Will-O-Wisp": 261,
+    "Swagger": 207,
+    "Gastro Acid": 380,
+    "Acupressure": 367,
+    "Fling": 374,
+    # TagStrategy_PartnerSkillSwap_PartnerHasInaccurateMove (script.s:7497-7510).
+    "Fire Blast": 126,
+    "Thunder": 87,
+    "Cross Chop": 238,
+    "Hydro Pump": 56,
+    "DynamicPunch": 223,
+    "Zap Cannon": 192,
+    "Megahorn": 224,
+    "Focus Blast": 411,
+    "Gunk Shot": 441,
+    "Magma Storm": 463,
+    "Power Whip": 438,
+    "Seed Flare": 465,
+    "Head Smash": 457,
 }
+# TagStrategy_PartnerStatusMove's IfMoveEqualTo MOVE_TRICK / MOVE_SWITCHEROO (script.s:7451-7452)
+# compare ids (trainer_ai.c:834-844); Kaizo's moves on ids 271 and 415 are Hidden Power Psychic
+# and Hidden Power Flying (damaging, so they never reach that block): each policy pins its
+# game's name (data.game_constants).
+MOVE_TRICK = 271
+MOVE_SWITCHEROO = 415
+# TagStrategy_PartnerWillOWisp / _PartnerPoisonStatus / _PartnerSwagger (script.s:7536-7537, :7573,
+# :7603-7604): IfHeldItemEqualTo's items; generated/items.txt (line - 1).
+ITEM_TOXIC_ORB = 272
+ITEM_FLAME_ORB = 273
+ITEM_PERSIM_BERRY = 156
+ITEM_LUM_BERRY = 157
 # TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:6737) compares the id
 # (trainer_ai.c:834-844); Kaizo's move on id 222 is Bulldoze and takes the same block.
 MOVE_MAGNITUDE = 222
@@ -2368,7 +2402,7 @@ def flag_move_damage_score(
 
 
 def check_if_highest_damage_with_partner(ctx: AiContext, use_damage_roll: int) -> AiContext:
-    """``CheckIfHighestDamageWithPartner`` (trainer_ai.c:2369-2436), at B = 2. The gate is
+    """``CheckIfHighestDamageWithPartner`` (trainer_ai.c:2369-2436). The gate is
     ``FlagMoveDamageScore``'s (:2393-2394): a move that is not damaging gives
     ``AI_NO_COMPARISON_MADE``. Two sweeps (``j`` = 0, 1, ``MAX_BATTLERS_PER_SIDE``): the
     ``TrainerAI_CalcAllDamage`` of the attacker's moves, then of ``BattleSystem_GetPartner(
@@ -2377,28 +2411,40 @@ def check_if_highest_damage_with_partner(ctx: AiContext, use_damage_roll: int) -
     ``moveDamage`` is the slot's value of sweep 1 (:2416-2418); the result is HIGHEST iff no value
     of either sweep exceeds it (:2420-2431), NOT_HIGHEST at the first that does.
 
-    Sweep 2 estimates the same four moves again, so each Psywave or Magnitude id (Kaizo's Triple
-    Axel, Bulldoze) draws a second, independent ``RandNext()``: eight estimates, ``_calc_read``
-    one read of the path. Highest with probability ``sum_c P(D_slot = d_c) prod_{i != slot}
-    P(D_i <= d_c) prod_i P(D'_i <= d_c)`` over the slot's sweep-1 classes c. Without a drawing id
-    that is ``FlagMoveDamageScore``'s HIGHEST and no read is made. B = 2 only: at B = 4 sweep 2 is
-    the partner's own moveset, a fainted partner's moves counting too (no HP test), which is
-    E4-A's; the format gate refuses B = 4 until then."""
-    if format_of(ctx.state).B == 4:
-        # Stays a stub in W1: E4-A W2 models the partner sweep (A-10 s3, A-7).
-        raise NotImplementedError("CheckIfHighestDamageWithPartner at B = 4: E4-A-W2's sweep")
+    B = 2: sweep 2 estimates the same four moves again, so each Psywave or Magnitude id
+    (Kaizo's Triple Axel, Bulldoze) draws a second, independent ``RandNext()``: eight estimates,
+    ``_calc_read`` one read of the path. Highest with probability ``sum_c P(D_slot = d_c)
+    prod_{i != slot} P(D_i <= d_c) prod_i P(D'_i <= d_c)`` over the slot's sweep-1 classes c.
+    Without a drawing id that is ``FlagMoveDamageScore``'s HIGHEST and no read is made.
+
+    B = 4 (A-7): sweep 2 is ``GetPartner(attacker)``'s own moveset, ``attacker ^ 2``
+    (battle_system.c:394-411), estimated as that battler (``_slot_damage`` by battler: its level,
+    stats, types, ability, held item and IVs, its own entry of the speed record for Gyro Ball,
+    trainer_ai.c:2398-2411, :2995-3003) against the same defender. There is no HP test
+    (:2398-2432): a fainted partner's ``battleMons`` moves count, and in MULTI the partner of
+    battler 2 is the player's battler 0. The law is the B = 2 one with the second factor over
+    the partner's four estimates (``D'_i``); one read at the result compare, both sweeps' draws
+    folded into it (the sweeps' draws are independent, so the exact law is the product)."""
+    four = format_of(ctx.state).B == 4
     if use_damage_roll == ROLL_FOR_DAMAGE:
-        damage = _slot_damage(
-            ctx.tables, seen_state(ctx), ctx.outcome.sim_roll, ctx.attacker, ctx.defender
-        )
+        rolls = ctx.outcome.sim_roll
+        damage = _slot_damage(ctx.tables, seen_state(ctx), rolls, ctx.attacker, ctx.defender)
     else:
+        rolls = SIM_ROLL_MAX
         damage = seen_damage(ctx)
-    both = jax.tree.map(lambda x: jnp.concatenate([x, x], axis=0), damage)  # sweep 1, sweep 2
+    if four:
+        # sweep 2: the partner's moves (:2414, :2398-2411), in the speeds ``seen_state`` records
+        partner = int(ctx.attacker) ^ 2
+        damage2 = _slot_damage(ctx.tables, seen_state(ctx), rolls, partner, ctx.defender)
+    else:
+        damage2 = damage  # GetPartner(attacker) is the attacker (battle_system.c:400-402)
+    both = jax.tree.map(lambda x, y: jnp.concatenate([x, y], axis=0), damage, damage2)
     mine = jax.tree.map(lambda x: jnp.take(x, ctx.slot, axis=0), damage)
     others = jnp.arange(MOVES) != ctx.slot
-    le = _at_most(damage, mine.value[:, None])  # [C, MOVES]: P(D_i <= d_c), either sweep
+    le = _at_most(damage, mine.value[:, None])  # [C, MOVES]: P(D_i <= d_c), sweep 1
+    le2 = _at_most(damage2, mine.value[:, None])  # sweep 2: every move, the slot's own included
     first = jnp.prod(jnp.where(others[None, :], le, 1.0), axis=1)  # sweep 1, without the slot
-    second = jnp.prod(le, axis=1)  # sweep 2: every move, the slot's own included
+    second = jnp.prod(le2, axis=1)
     p_high = jnp.sum(mine.prob * first * second)
     damaging = is_damaging(ctx.tables, ctx.move)
 
