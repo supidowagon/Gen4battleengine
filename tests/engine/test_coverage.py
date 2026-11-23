@@ -433,7 +433,7 @@ def test_gauntlet_repel_refusal_is_listed(tables, names):
     facts = facts_dict(
         field_moves=["wild"],
         field_moves_source="rom:test wild",
-        cases=[{"moves": [], "orders": []}],
+        cases=[{"moves": [], "orders": [], "locked_gaps": []}],  # locked_gaps: always written
         wild_levels=[level],
         wild_levels_source="rom:test wild levels",
         repel_refusal="steps not counted",

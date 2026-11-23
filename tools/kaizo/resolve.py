@@ -585,13 +585,20 @@ def trainer_context(check: CrossCheck, maps: Mappings, overrides: Overrides,
 
 def gauntlet_context(overrides: Overrides) -> dict[int, tuple[str, int, dict | None, str]]:
     """trainer id -> (group, fight id, the group's facts row or None, source). A trainer's
-    fight id is the first trainer id of its fight in the group's first order (a trainer of a
-    group with no facts is its own fight); the facts are the tracked game facts only."""
+    fight id is the trainer of its fight in the group's first order that the sheet lists
+    first (``trainers`` is in the sheet's order; the derived orders write a pair by id, so
+    Wayward's [383, 443] is fight 443); a trainer of a group with no facts is its own
+    fight. The facts are the tracked game facts only."""
     out: dict[int, tuple[str, int, dict | None, str]] = {}
     for g in overrides.gauntlets:
         fight_of = {}
         if g.facts is not None:
-            fight_of = {tid: fight[0] for fight in g.facts.orders[0] for tid in fight}
+            rank = {tid: k for k, tid in enumerate(g.trainers)}
+            fight_of = {
+                tid: min(fight, key=rank.__getitem__)
+                for fight in g.facts.orders[0]
+                for tid in fight
+            }
         facts = None if g.facts is None else g.facts.to_dict()
         for tid in g.trainers:
             if tid in out:

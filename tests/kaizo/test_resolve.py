@@ -893,6 +893,13 @@ def test_split_pair_takes_the_first_orders_fight_id():
     assert (ctx[5][1], ctx[6][1]) == (5, 5)
 
 
+def test_pair_fight_id_is_its_first_sheet_id_whatever_the_written_order():
+    # trainers is the sheet's order; the orders write the pair by id ([383, 443] in Wayward)
+    g = _group("g", [6, 5], [[[5, 6]], [[6], [5]]])
+    ctx = gauntlet_context(Overrides(gauntlets=(g,)))
+    assert (ctx[5][1], ctx[6][1]) == (6, 6)
+
+
 def _records(*pairs):
     ids = {i for p in pairs for i in p} | {9}
     out = {i: {"id": i, "opponent_2": None} for i in ids}
@@ -933,9 +940,9 @@ def test_wayward_fights_and_facts_in_the_real_table(resolved_trainers):
     assert fights == dict(zip(ids, (443, 443, 380, 380, 459, 459, 450, 450, 454, 454, 749, 749),
                               strict=True))  # fmt: skip
     facts = resolved_trainers[443]["gauntlet_facts"]
-    assert [len(o) for o in facts["orders"]] == [6, 7]
+    assert [len(o) for o in facts["orders"]] == [6, 7, 7, 8]  # C5c: 454, 455 in turn too
     assert facts["partner"]["trainer"] == 612
-    assert facts["partner"]["join_before"] == [1] and facts["leave_gaps"] == [[], []]
+    assert facts["partner"]["join_before"] == [1] and facts["leave_gaps"] == [[]] * 4
     for t in resolved_trainers.values():
         for order in (t["gauntlet_facts"] or {}).get("orders", ()):
             for fight in order:

@@ -51,6 +51,7 @@ def test_show_lines_ascii_and_json(tmp_path, tables, names):
     data = save_json(save, names)
     text = json.dumps(data)
     assert json.loads(text)["party"][0]["species_name"] == "MONFERNO"
+    assert json.loads(text)["flags"] == list(save.flags) and len(save.flags) == 2912 // 8
     assert data["boxes"][0][0] is None and data["bag"]["items"] == []
 
 

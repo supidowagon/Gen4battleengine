@@ -104,6 +104,7 @@ def _mon_json(mon: SaveMon, names) -> dict:
 def save_json(save: SaveFile, names) -> dict:
     """The whole save as JSON-ready data: decomp ids plus English names."""
     d = dataclasses.asdict(save)
+    d["flags"] = list(save.flags)  # VarsFlags.flags, u8 per byte (bytes are not JSON)
     d["party"] = [_mon_json(m, names) for m in save.party]
     d["boxes"] = [[None if m is None else _mon_json(m, names) for m in box] for box in save.boxes]
     d["bag"] = {
