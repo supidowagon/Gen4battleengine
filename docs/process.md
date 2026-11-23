@@ -107,6 +107,12 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
   with the open classes listed as must-fix in the ledger; the rest follows as its own
   candidate (candidates A and B, 22 Nov 2026).
 
+**Differential skip.** A merge run leaves out `tests/test_differential.py 1 A` only under the path
+condition and exclusion list of `CLAUDE.md` (Merges): every path of `git diff --name-only
+main..<train tip>` is under `docs/`, `tools/ops/` or `tests/`, or is a `*.md` file, and none is an
+excluded file. The READY TO LAND message prints the path list and the verdict. The four guards and
+the touched areas always run; the slow tier after each merge wave is the backstop.
+
 **Merge train.** When two or more batches are expected to be merge-ready within one gate run
 of each other (about 3 hours), the managing session names a train order.
 - The first stream merges `main`; each later stream merges the tip of the stream before it
@@ -455,6 +461,9 @@ rate used for estimates.
   test files of every area the change touches, the four guards and `tests/test_differential.py
   1 A`, sized for about one hour on a pod alone (about 120 units). The nightly covers the
   rest. The `fullset` run is unchanged (DAYBOX.md, Merge candidate).
+  The merge-candidate list drops the differential line only under the differential skip of
+  `CLAUDE.md` (Merges; `docs/process.md` section 2, Differential skip); the path list and the
+  verdict go in the READY TO LAND message.
 - **Snapshot capture of `main`.** After every push of `main` that changes the engine or the
   tables the managing session starts one capture of the new tip on the capture pod, in
   `/work/snapmain-<short sha>` (seeds 0-199; commands: `tools/ops/day/snap.sh`, DAYBOX.md,
