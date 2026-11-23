@@ -19,7 +19,8 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
   A stream never pushes, never creates billable resources and never writes to `main`.
 - **Pods in working hours:** the pod count is `docs/decisions.md` section 5, "Pod count"
   (three by default, a fourth only while a gate would wait more than 30 minutes, at most two
-  overnight); delete every pod with nothing running or queued.
+  overnight unless gates are queued that would not finish by morning on two); delete every
+  pod with nothing running or queued.
 - **Run dispatcher.** A Sonnet session that sends, waits on and collects every pod run of the
   streams and the managing session's gate runs (section 5, Run dispatcher session).
 - **Subagents.** Each batch runs the pipeline in section 2.
@@ -110,8 +111,9 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 **Differential skip.** A merge run leaves out `tests/test_differential.py 1 A` only under the
 path condition and exclusion list of `CLAUDE.md` (Merges); this section adds only the
 following. The train tip is the tip the merge run gates; a lone branch's merge-candidate tip
-counts as the train tip. The READY TO LAND message is the managing session's message that a
-gated tip may land; it prints the path list of `git diff --name-only main..<train tip>` and the
+counts as the train tip. The READY TO LAND message is the message to the managing session
+that reports a gated tip as ready to land (the coordinator's, or the stream's step 7 message);
+it prints the path list of `git diff --name-only main..<train tip>` and the
 verdict. "A test helper module that `tests/test_differential.py` imports" is any module under
 `tests/` that it imports, also inside a function or through another such module (today
 `tests/strategies.py`, `tests/engine/helpers.py`, `tests/engine/test_e3_batch2.py` and
@@ -162,8 +164,8 @@ of each other (about 3 hours), the managing session names a train order.
   with the one-line list `tests 8` (DAYBOX.md, Send a run). A red slow tier is fixed before
   new batches start, like a red nightly. Slow tests run in no other gate except
   `tests/test_differential.py`, which every merge run carries whole (list line
-  `tests/test_differential.py 1 A`; except under the differential skip, section 2), the nightly's `tests/test_damage_oracle.py 1000 A`
-  line, and the files a batch lists with the `A` flag.
+  `tests/test_differential.py 1 A`; except under the differential skip, section 2), the
+  nightly's `tests/test_damage_oracle.py 1000 A` line, and the files a batch lists with the `A` flag.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
   At the first split close the managing session also puts the owner question on the five
@@ -328,8 +330,8 @@ rate used for estimates.
   in the 256 GB shape, so `snap.sh` runs with `SNAP_GATE_GB` 176 (on a 128 GB pod: 88). The
   managing session names it and writes it in `_scratch/handoff/MANAGER.md`. For the
   no-idle-pods rule a pending compare counts as queued: a pod holding the capture a sent or
-  expected merge candidate compares against is not idle (`docs/decisions.md`, section 5; this
-  rule wins over the pod count's "delete the one with the least on it").
+  expected merge candidate compares against is not idle (`docs/decisions.md`, section 5; a
+  manager ruling that wins over the pod count).
   Read the shape before sending a body: exec
   `{"command":["sh","-c","cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes"],"timeoutSeconds":25}`
   on the pod (cgroup v2's `memory.max`, else cgroup v1's `memory.limit_in_bytes`: some rented
@@ -344,8 +346,8 @@ rate used for estimates.
   (`MAP_COUNT_LOW` in `times.txt`). Read the ssh user suffix in the create-pod answer: known
   faulty EU-RO-1 hosts (`vm.max_map_count` 65530) are listed in the managing session's state
   file (`_scratch/handoff/MANAGER_START.md`, pod section), not here; a pod on one is deleted
-  at once. Placeholder trick (needs a free slot under the pod count of `docs/decisions.md` section 5, "Pod count"): create a
-  placeholder that takes the faulty host, create the real pod, delete the placeholder
+  at once. Placeholder trick (needs a free slot under the pod count of `docs/decisions.md` section 5, "Pod count"):
+  create a placeholder that takes the faulty host, create the real pod, delete the placeholder
   (DAYBOX.md, Bring-up step 3). Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
@@ -395,8 +397,8 @@ rate used for estimates.
 - **Push gate.** A run that gates a push of `main` gets a pod to itself or the first claim
   (the memory reserve lets a low-priority run block it). It is split across the pods with room
   from the start: parts `<run>`, `<run>-2`, `<run>-3`, ..., `tests/test_differential.py 1 A` as
-  its own part (when carried; section 2, Differential skip). The gate is green when the union of its parts covers every unit with no
-  failure.
+  its own part (when carried; section 2, Differential skip). The gate is green when the union
+  of its parts covers every unit with no failure.
 - **Shell-level ops tests** (`tests/tools` tests that run pod shell scripts) run under WSL in
   a non-reaping PID namespace (`_scratch/offsite/wsl_run_ops_noreap.sh`, a local helper,
   below) before the pod send, as on the pod (PID 1 never reaps). A zombie counts as gone.
