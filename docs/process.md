@@ -171,9 +171,9 @@ rate used for estimates.
 - **No engine tests on the PC.** The root `conftest.py` (`tools/ops/ramgate.py`) enforces it
   after collection. A local pytest run is allowed only when every selected test is ROM-only (its
   fixture closure holds a local-input fixture, `ROM_FIXTURES` in `ramgate.py`) or when
-  `nuzline.engine` was not imported by the collected modules (a tool test; the light modules
-  `nuzline.engine` and `nuzline.engine.ids` alone do not count, `LIGHT_ENGINE_MODULES` in
-  `ramgate.py`: they import only the standard library). Any other run exits
+  no engine module other than `LIGHT_ENGINE_MODULES` in `ramgate.py` (`nuzline.engine`,
+  `nuzline.engine.ids`; standard library imports only) was imported by the collected modules (a
+  tool test). Any other run exits
   at once, naming the first disallowed ids: send them to the quick lane below. The tests listed
   in `tools/ops/day/pod_only.txt` (JAX compiles without the engine: `tests/test_spike_step.py`,
   `tests/test_jaxcache.py`; manager ruling 22 Nov 2026) are refused on the PC the same way,
@@ -186,7 +186,9 @@ rate used for estimates.
   covers them: run `tests/tools/test_ramgate.py` locally once per change to
   `src/nuzline/engine/__init__.py` or the root `conftest.py`. An allowed run
   waits for free RAM > 6 GB + weight (`tools/ops/day/pod/weights.txt`, longest key; no key =
-  6 GB in an engine-free run, 20 GB when the engine loads), a message every 60 s, then takes the machine lock
+  6 GB in an engine-free run, 20 GB when the engine loads; in an engine-free run a non-ROM-only
+  item takes a `tools/ops/day/rom_weights.txt` match instead when no `weights.txt` key is more
+  specific, equal key length going to the rom line), a message every 60 s, then takes the machine lock
   `<main checkout>/_scratch/ramgate.lock`: an OS lock on that file (`msvcrt.locking` on
   Windows, `fcntl.flock` elsewhere) held until the run ends, so one local run goes at a time.
   The kernel frees it the moment its holder ends, however it ends (a killed tool, the watchdog's
