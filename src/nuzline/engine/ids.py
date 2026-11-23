@@ -623,6 +623,11 @@ class EffectId(IntEnum):
     # Reflect, Light Screen, Mist, Safeguard, Spikes, Toxic Spikes and Stealth Rock and the field's
     # deep fog (:21-69, ``effects._defog``) whatever the drop did; no random draw; E3-B2-14.
     DEFOG = 142
+    # Sketch (95, BATTLE_EFFECT_LEARN_MOVE_PERMANENT): zeros. effect_script_0095.s:5 is a direct
+    # ON_HIT subscript_sketch.s: ``BtlCmd_TrySketch`` (battle_script.c:4839-4884) copies the
+    # defender's ``moveSketched`` into the user's first Sketch slot, permanently
+    # (``effects._sketch``, I-3). Player side only: no trainer Pokemon knows it.
+    SKETCH = 143
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -1857,6 +1862,11 @@ MOVE_MIMIC = 102
 # (BattleSystem_TriggerImmunityAbility, battle_lib.c:3519), F-2.
 MOVE_WILL_O_WISP = 261
 MIMIC_FORBIDDEN = (118, 165, 166, MOVE_MIMIC, 448)
+# ``BtlCmd_TrySketch`` fails on a ``moveSketched`` that is Struggle, Sketch or Chatter
+# (battle_script.c:4848-4850; MOVE_NONE is tested apart, :4851), I-3. Struggle 165, Sketch 166,
+# Chatter 448 (generated/moves.txt lines 166, 167, 449).
+MOVE_SKETCH = 166
+SKETCH_FORBIDDEN = (MOVE_STRUGGLE, MOVE_SKETCH, 448)
 # Chatter's confusion (battle_script.c:8397-8436): the attacker must be a Chatot that is not
 # Transformed and the defender have HP; ``effectChance`` is 0 / 10 / 30 for the Chatot cry parameter
 # 0 / 1 / 2 (:8413-8426, sound_chatot.c:193-213) and the confusion comes on ``RandNext() % 100 <=

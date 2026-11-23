@@ -23,9 +23,12 @@ from tests.search.fixtures import shinx_vs_cranidos
 # 493,122,616 B = 17.69 GB; 153dc32d (after H-1 7074311e, Future Sight's hit law per
 # post-Acid-Rain mask) and 01a94ae8 (train/wave3, + e2-lawsbag): temp 17,229,453,328 B + output
 # 953,185,336 B = 18,182,638,664 B = 18.18 GB. The bound moves when state or outcome fields are
-# added (the output is the OutcomeLaws fields per row). E2's sorted speed-tie test (D6-22,
-# ``pair_ties``) lowers the temp to ~2.17 MB per row, the total to ~9.5 GB: lower the bound then.
-LAWS_CALL_BYTES = 20_000_000_000
+# added (the output is the OutcomeLaws fields per row). claude/e4-future-values b5f837eb (on main
+# d2ec0fc1; OutcomeLaws.future_values bool[B, 101] in place of future_thresholds / future_possible):
+# temp 17,229,453,328 B + output 34,190,408 B = 17,263,643,736 B (pod run q-e4-87b9e0a). Bound: that
+# + 5%. E2's sorted speed-tie test (D6-22, ``pair_ties``) lowers the temp to ~2.17 MB per row, the
+# total to ~9 GB: lower the bound then.
+LAWS_CALL_BYTES = 18_126_826_000
 
 
 def _call_size(monkeypatch, n: int) -> int:
