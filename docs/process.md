@@ -17,9 +17,9 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
     two-trainer and multi fight data, search with targets, prep with two actives. E4 does not
     touch E2's mechanic batches.
   A stream never pushes, never creates billable resources and never writes to `main`.
-- **Pods in working hours:** one test pod per active stream plus one for captures and
-  compares (section 5). During a merge wave up to six; back to three or four when the merge
-  line clears. Outside working hours delete every pod with nothing running or queued.
+- **Pods in working hours:** the pod count is `docs/decisions.md` section 5, "Pod count"
+  (three by default, a fourth only while a gate would wait more than 30 minutes, at most two
+  overnight); delete every pod with nothing running or queued.
 - **Run dispatcher.** A Sonnet session that sends, waits on and collects every pod run of the
   streams and the managing session's gate runs (section 5, Run dispatcher session).
 - **Subagents.** Each batch runs the pipeline in section 2.
@@ -107,11 +107,18 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
   with the open classes listed as must-fix in the ledger; the rest follows as its own
   candidate (candidates A and B, 22 Nov 2026).
 
-**Differential skip.** A merge run leaves out `tests/test_differential.py 1 A` only under the path
-condition and exclusion list of `CLAUDE.md` (Merges): every path of `git diff --name-only
-main..<train tip>` is under `docs/`, `tools/ops/` or `tests/`, or is a `*.md` file, and none is an
-excluded file. The READY TO LAND message prints the path list and the verdict. The four guards and
-the touched areas always run; the slow tier after each merge wave is the backstop.
+**Differential skip.** A merge run leaves out `tests/test_differential.py 1 A` only under the
+path condition and exclusion list of `CLAUDE.md` (Merges); this section adds only the
+following. The train tip is the tip the merge run gates; a lone branch's merge-candidate tip
+counts as the train tip. The READY TO LAND message is the managing session's message that a
+gated tip may land; it prints the path list of `git diff --name-only main..<train tip>` and the
+verdict. "A test helper module that `tests/test_differential.py` imports" is any module under
+`tests/` that it imports, also inside a function or through another such module (today
+`tests/strategies.py`, `tests/engine/helpers.py`, `tests/engine/test_e3_batch2.py` and
+`tests/engine/test_levelup.py`, and the modules those import in turn); list them with
+`grep -n "from tests\|import tests"` over `tests/test_differential.py` and each module found.
+The four guards and the touched areas always run; the slow tier after each merge wave is the
+backstop.
 
 **Merge train.** When two or more batches are expected to be merge-ready within one gate run
 of each other (about 3 hours), the managing session names a train order.
@@ -134,8 +141,8 @@ of each other (about 3 hours), the managing session names a train order.
   already copied off-site is never rebuilt under its old name: use a new name
   (`train/<name>2`), or `offsite.sh` rejects it.
 - Ops, tools and docs branches gate on `main` directly, outside the train: review agent, a
-  small gate (the four guards, `tests/test_differential.py 1 A` and the own tool tests of the
-  branch), `git merge --ff-only`.
+  small gate (the four guards, `tests/test_differential.py 1 A` unless the differential skip
+  above applies, and the own tool tests of the branch), `git merge --ff-only`.
   When two such branches touch the same files, the second to land merges `main` and reruns its
   small gate.
 
@@ -155,7 +162,7 @@ of each other (about 3 hours), the managing session names a train order.
   with the one-line list `tests 8` (DAYBOX.md, Send a run). A red slow tier is fixed before
   new batches start, like a red nightly. Slow tests run in no other gate except
   `tests/test_differential.py`, which every merge run carries whole (list line
-  `tests/test_differential.py 1 A`), the nightly's `tests/test_damage_oracle.py 1000 A`
+  `tests/test_differential.py 1 A`; except under the differential skip, section 2), the nightly's `tests/test_damage_oracle.py 1000 A`
   line, and the files a batch lists with the `A` flag.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
@@ -312,9 +319,8 @@ rate used for estimates.
     runner's default; pass `"SPACING":"4"` in every exec-pod body's `env` anyway, so a run
     packed with older pod scripts (another default) gets it too. This is the one SPACING
     rule; DAYBOX.md and `tools/ops/nightly_brief.md` point here.
-  Several test pods may be up at once (approval: `docs/decisions.md`, section 5). In working
-  hours: one pod per active stream plus one capture pod (section 1); during a merge wave up to
-  six, back to three or four when the merge line clears. Pod N's id is in
+  Several test pods may be up at once (approval and count: `docs/decisions.md`, section 5,
+  "Pod count"). Pod N's id is in
   `_scratch/rent/day<N>/POD_ID_<N>` (pod 1's in `_scratch/rent/POD_ID`); a new pod takes the
   next unused N; a deleted pod's id file is renamed with the suffix `.deleted`. Each pod
   gets its own pod check before every pack (DAYBOX.md, Send a run step 3).
@@ -322,7 +328,8 @@ rate used for estimates.
   in the 256 GB shape, so `snap.sh` runs with `SNAP_GATE_GB` 176 (on a 128 GB pod: 88). The
   managing session names it and writes it in `_scratch/handoff/MANAGER.md`. For the
   no-idle-pods rule a pending compare counts as queued: a pod holding the capture a sent or
-  expected merge candidate compares against is not idle (`docs/decisions.md`, section 5).
+  expected merge candidate compares against is not idle (`docs/decisions.md`, section 5; this
+  rule wins over the pod count's "delete the one with the least on it").
   Read the shape before sending a body: exec
   `{"command":["sh","-c","cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes"],"timeoutSeconds":25}`
   on the pod (cgroup v2's `memory.max`, else cgroup v1's `memory.limit_in_bytes`: some rented
@@ -337,7 +344,7 @@ rate used for estimates.
   (`MAP_COUNT_LOW` in `times.txt`). Read the ssh user suffix in the create-pod answer: known
   faulty EU-RO-1 hosts (`vm.max_map_count` 65530) are listed in the managing session's state
   file (`_scratch/handoff/MANAGER_START.md`, pod section), not here; a pod on one is deleted
-  at once. Placeholder trick (needs a free slot under the six-pod ceiling): create a
+  at once. Placeholder trick (needs a free slot under the pod count of `docs/decisions.md` section 5, "Pod count"): create a
   placeholder that takes the faulty host, create the real pod, delete the placeholder
   (DAYBOX.md, Bring-up step 3). Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
@@ -388,7 +395,7 @@ rate used for estimates.
 - **Push gate.** A run that gates a push of `main` gets a pod to itself or the first claim
   (the memory reserve lets a low-priority run block it). It is split across the pods with room
   from the start: parts `<run>`, `<run>-2`, `<run>-3`, ..., `tests/test_differential.py 1 A` as
-  its own part. The gate is green when the union of its parts covers every unit with no
+  its own part (when carried; section 2, Differential skip). The gate is green when the union of its parts covers every unit with no
   failure.
 - **Shell-level ops tests** (`tests/tools` tests that run pod shell scripts) run under WSL in
   a non-reaping PID namespace (`_scratch/offsite/wsl_run_ops_noreap.sh`, a local helper,
@@ -868,14 +875,15 @@ First actions, in order:
 1. Verify git against the state files: `date`; `git log --oneline -10 main`;
    `git rev-parse origin/main`; `git status -sb`; `git branch -v` for every branch the state
    files name. Where git and a file disagree, git wins: note it in `MANAGER.md`.
-2. Sessions: list them with the desktop app's session tools (`list_sessions` with linked
+2. Sessions (Orca tooling replaces the desktop tools: `_scratch/handoff/MANAGER_START.md`
+   part 4b; `docs/decisions.md` section 3, "Orca tooling"): list them with the desktop app's session tools (`list_sessions` with linked
    sessions); check that each stream and the dispatcher is alive; read each one's context use
    (`get_usage` per session) and clear a stream past 30% at its next commit point. Old
    session ids in a file are history: never message a retired managing session.
 3. Pods: one `get-pod` per id file in `_scratch/rent/`; read each with one pod-check exec
    before use (DAYBOX.md, Send a run step 3); outside working hours delete any pod with
-   nothing running or queued (DAYBOX.md, Delete); in working hours keep one per active
-   stream plus the capture pod (section 5, Test pod); count the pods up and their cost per
+   nothing running or queued (DAYBOX.md, Delete); in working hours keep the count of
+   `docs/decisions.md` section 5, "Pod count"; count the pods up and their cost per
    hour.
 4. Recreate what died with the old session: the nightly trigger (section 5, Scheduled tasks;
    check `list_scheduled_tasks` first), the session prompts of section 7, the stall check
