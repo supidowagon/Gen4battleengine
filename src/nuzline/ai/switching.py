@@ -411,7 +411,7 @@ def weather_ball_refused(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 
 def apply_type_chart(
-    tables: Tables, state: BattleState, atk_side, move, value, move_type=None
+    tables: Tables, state: BattleState, atk_side, move, value, move_type=None, def_side=None
 ) -> jnp.ndarray:
     """``int32``: ``BattleSystem_ApplyTypeChart`` (battle_lib.c:2560) on ``value`` for
     ``move`` by ``atk_side``'s active Pokemon against the other side's: STAB x15/10
@@ -425,10 +425,12 @@ def apply_type_chart(
     (Adaptability, Normalize, Tinted Lens, Expert Belt) are not implemented:
     ``policy.ai_refusals`` refuses them.
     ``move_type`` is the caller's type for the move (``party_move_types``); by default the
-    attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
+    attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``). ``def_side``: the defending
+    battler, default the one across (``foe``)."""
     move = jnp.asarray(move, _I32)
     atk_side = jnp.asarray(atk_side, _I32)
-    fmt, def_side = format_of(state), foe(atk_side)
+    fmt = format_of(state)
+    def_side = foe(atk_side) if def_side is None else jnp.asarray(def_side, _I32)
     a_types = state.types[party(fmt, atk_side), state.active[atk_side]].astype(_I32)
     d_types = state.types[party(fmt, def_side), state.active[def_side]]
     if move_type is None:

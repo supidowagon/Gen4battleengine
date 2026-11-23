@@ -694,7 +694,11 @@ def trainer_record(
                 said = ", ".join(f"{c} {_cell_text(v)}" for c, v in values)
                 sources[k] += f" (headers disagree: {said}; unknown)"
     else:
-        out.update(split=None, split_order=None, optional=None, left_side=None)
+        out.update(split=None, split_order=None, optional=None, left_side=None, tag_partner=None)
+        sources["tag_partner"] = (
+            "rom, pkcalc: no sheet-header tag (they give the ally relation, `partner`); "
+            "sheet: no header for this trainer: unknown"
+        )
     for k in ("split", "optional", "left_side"):
         if k in fields:
             out[k] = fields[k]
@@ -805,13 +809,19 @@ def _script_weather(
 def _header_fields(
     cites: list[str], split_rows: dict[str, tuple[int, str, dict, dict]]
 ) -> dict[str, list[tuple[str, object]]]:
-    """``optional`` and ``left_side`` as each of a trainer's sheet headers says them:
-    field -> [(cite, value)] in workbook order."""
-    out: dict[str, list[tuple[str, object]]] = {"optional": [], "left_side": []}
+    """``optional``, ``left_side`` and ``tag_partner`` as each of a trainer's sheet headers
+    says them: field -> [(cite, value)] in workbook order. ``tag_partner``: the header carries
+    a tag/partner tag (``extract_kaizo_docs`` header tags ``tag partner``, ``partner``, and
+    ``tag battle with X``, which enemy tag pairs carry too: an ally only together with the
+    ally relation, ``Trainer.partner``; ``tools/kaizo/backlog.py`` intersects them): a fact about the sheet's own headers, which only the
+    sheet holds (the ROM's scripts and PKCalc's flags.js tag triples give the ally relation,
+    ``partner``, not header tags)."""
+    out: dict[str, list[tuple[str, object]]] = {"optional": [], "left_side": [], "tag_partner": []}
     for c in cites:
         _, _, sec, h = split_rows[c]
         out["optional"].append((c, bool(h["tags"].get("optional") or sec["tags"].get("optional"))))
         out["left_side"].append((c, h.get("left_side") if h.get("ai_known") else None))
+        out["tag_partner"].append((c, bool(h["tags"].get("tag_partner"))))
     return out
 
 
@@ -970,7 +980,7 @@ def resolve_trainers(
     lines += [
         f"sheet headers disagree on {k}: {t['id']} {t['name']}: {t['sources'][k]}"
         for t in out
-        for k in ("optional", "left_side")
+        for k in ("optional", "left_side", "tag_partner")
         if "headers disagree" in t["sources"].get(k, "")
     ]
     unplaced = [

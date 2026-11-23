@@ -75,6 +75,19 @@ def test_layout_per_flag_set(tables, kaizo_tables):
     assert layout_of(tables._replace(ai_flags=jnp.int32(0x17))) is VANILLA
 
 
+def test_tag_strategy_is_a_kaizo_flag_bit(kaizo_tables):
+    """E4-A0: bit 7 is transcribed (``policy._tag_strategy``) and bounded (``read_bounds``); a
+    bit-7 fight has a layout whose read bound is the walk's: a Follow Me and a plain hit read at
+    most 2 (the plain hit's highest roll and effectiveness roll)."""
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_layout
+
+    assert 7 in KAIZO_FLAG_BITS
+    layout = fight_layout(kaizo_tables, 0x87, np.asarray([33, 266, 106]))
+    assert layout.flags == 0x87 and layout.key.startswith("kaizo-0x87-r")
+    only = fight_layout(kaizo_tables, 1 << 7, np.asarray([33, 266, 106]))
+    assert only.slot_reads == 2
+
+
 def test_layout_values():
     # script.s:78 compares Levitate (26) in vanilla, Dry Skin (87) in Kaizo (overlay14 word
     # 0x022249CC, data/kaizo/rom_diff.toml).

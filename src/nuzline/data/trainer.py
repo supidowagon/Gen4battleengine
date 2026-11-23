@@ -230,8 +230,12 @@ class Trainer:
     or partner variant is fought with; ``gauntlet`` is (group, fight_id) in a chain of
     fights, ``fight_id`` the first trainer id of the trainer's fight as the sheet lists it,
     and ``gauntlet_facts`` the tracked game facts of that group (``data/gauntlet.py``;
-    None: not recorded); ``optional`` and ``left_side`` (the split's Left Side AI) come from the
-    spreadsheet; ``area_condition`` is what the fight starts with (built from
+    None: not recorded); ``optional``, ``left_side`` (the split's Left Side AI) and
+    ``tag_partner`` (every sheet header of the trainer carries a tag/partner tag, which enemy
+    tag pairs carry too: with the ally relation, a ``partner`` variant of another row, it
+    marks the player's tag partner, an ally and not a battle; None: headers disagree, no
+    header, or vanilla) come from the spreadsheet; ``area_condition`` is what the fight
+    starts with (built from
     ``start_condition`` when the JSON has none); ``split`` and ``split_order`` (split
     index, line) place the fight in the level-cap splits; ``sources`` cites each field.
 
@@ -267,6 +271,7 @@ class Trainer:
     gauntlet_facts: GauntletFacts | None = None
     optional: bool = False
     left_side: bool = False
+    tag_partner: bool | None = None
     area_condition: AreaCondition = AreaCondition()
     split: str | None = None
     split_order: tuple[int, int] | None = None
@@ -375,6 +380,7 @@ def load_trainers(dir: Path) -> list[Trainer]:
             gauntlet_facts=_facts(t),
             optional=t.get("optional", False),
             left_side=t.get("left_side", False),
+            tag_partner=t.get("tag_partner"),
             area_condition=_area(t),
             split=t.get("split"),
             split_order=_pair(t, "split_order"),

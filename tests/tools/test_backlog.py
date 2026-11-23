@@ -20,7 +20,7 @@ from tools.kaizo.backlog import (
     new_by_split,
     partner_unknown,
     reachable_species,
-    sheet_cites,
+    untagged_partners,
 )
 
 
@@ -186,11 +186,16 @@ def test_ally_ids_are_every_partner_variant():
     assert ally_ids([a, b, c]) == {608, 609}
 
 
-def test_sheet_cites():
-    t = SimpleNamespace(sources={"split": "sheet Galactic Split:1165, Galactic Split:1175"})
-    assert sheet_cites(t) == ["Galactic Split:1165", "Galactic Split:1175"]
-    assert sheet_cites(SimpleNamespace(sources={})) == []
-    assert sheet_cites(SimpleNamespace(sources={"split": "overrides fields.5"})) == []
+def test_untagged_partners_are_split_allies_not_tagged_true():
+    """An ally split row passes only with ``tag_partner`` True; False (an untagged header)
+    and None (headers disagree, no header, or a table built before the field) are listed.
+    Non-allies and allies without a split are never listed."""
+
+    def t(id, split, tag):
+        return SimpleNamespace(id=id, split=split, tag_partner=tag)
+
+    rows = [t(1, "A", True), t(2, "A", False), t(3, "A", None), t(4, None, None), t(5, "A", None)]
+    assert [r.id for r in untagged_partners(rows, {1, 2, 3, 4})] == [2, 3]
 
 
 def test_metronome_unmodelled_counts_the_refused_calls(tables, names):

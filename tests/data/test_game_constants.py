@@ -342,9 +342,17 @@ def test_policy_constants_only_for_their_policy(vanilla_manifest, vanilla_items)
     engine = (
         "engine/ids.py ABILITY_DECOMP_IDS: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'"
     )
-    assert check_constants(VANILLA, renamed, vanilla_items) == [engine]
+    # ai/commands.py ABILITY_IDS holds Dry Skin too since E4-A0 (TagStrategy_Main): engine scope.
+    tag = "ai/commands.py ABILITY_IDS: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'"
+    assert sorted(check_constants(VANILLA, renamed, vanilla_items)) == sorted([engine, tag])
     assert sorted(check_constants(KAIZO, renamed, vanilla_items)) == sorted(
-        [engine, "ai/layout.py KAIZO: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'"]
+        [
+            engine,
+            tag,
+            "ai/layout.py KAIZO: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'",
+            # vanilla's move data under the Kaizo policy: Kaizo's id 222 is Bulldoze
+            "ai/commands.py MOVE_MAGNITUDE: id 222 is 'Magnitude' in this game, expected 'Bulldoze'",
+        ]
     )
 
 

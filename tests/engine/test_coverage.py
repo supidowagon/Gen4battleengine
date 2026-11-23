@@ -330,6 +330,33 @@ def test_kaizo_flag_set_has_no_flag_line(
     assert not [m for m in report.missing if "AI flag" in m]
 
 
+@pytest.mark.parametrize("flags", [0x80, 0x87, 0x187, 0x607])
+def test_kaizo_singles_bit_7_has_no_flag_line(
+    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags
+):
+    # E4-A0: AI_FLAG_TAG_STRATEGY (bit 7) is exact at B = 2: a singles trainer's flags with
+    # bit 7 give no "AI flag" line and no format line.
+    trainer = replace(kaizo_roark, ai_flags=flags, format="single")
+    report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
+    assert IMPLEMENTED_AI_FLAGS["kaizo"][7] == Support.EXACT
+    assert not [m for m in report.missing if "AI flag" in m or "battle format" in m]
+
+
+@pytest.mark.fullset
+@pytest.mark.parametrize("fmt", ["double", "double_two_trainer", "multi"])
+def test_kaizo_bit_7_doubles_row_is_refused_by_the_format_gate(
+    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, fmt
+):
+    # The B = 4 formats stay refused (IMPLEMENTED_FORMATS): bit 7 gives no AI flag line there, the
+    # format line refuses the fight; ai.policy._refused refuses the B = 4 state itself
+    # (tests/ai/test_tag_strategy.py test_tag_strategy_at_b4_is_refused).
+    assert coverage_module.IMPLEMENTED_FORMATS[fmt] == Support.NONE
+    trainer = replace(kaizo_roark, ai_flags=0x87, format=fmt)
+    report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
+    assert any("battle format UNSUPPORTED" in m for m in report.missing)
+    assert report.level == Support.NONE
+
+
 @pytest.mark.fullset
 def test_kaizo_implemented_ai_flags_are_the_transcribed_bits():
     from nuzline.ai.layout import KAIZO_FLAG_BITS
@@ -666,3 +693,49 @@ def test_make_state_takes_the_trainers_terrain(tables, names):
     assert int(make_state(tables, sample_party(names), roark_party(names)).terrain) == -1
     with pytest.raises(ValueError, match="terrain 25"):
         make_state(tables, sample_party(names), roark_party(names), terrain=25)
+
+
+# --- E4-A0: the six bit-7 singles opponents ------------------------------------------
+# Of the 16 Kaizo split singles rows with AI bit 7, ten (607, 608, 609, 610, 612, 619, 620,
+# 861, 863, 865) are tag partners (each a ``partner`` of multi rows in trainers.json; e.g.
+# 608 Cheryl, res/field/scripts/scripts_eterna_forest.s:57) and run Tag Strategy only at
+# B = 4, still refused. These six are opponents.
+BIT_7_OPPONENTS = (49, 50, 187, 646, 725, 898)
+
+
+@pytest.mark.fullset
+def test_bit_7_singles_opponents_pass_coverage(kaizo_names):
+    """The six bit-7 singles opponents are runnable through the backlog's real-fight path
+    (tools/kaizo/backlog.py ``check``): the full Kaizo game (``cli._game``, ``load_game``,
+    ``cli._load_trainers``), ``cli._check_buildable``, ``build_trainer_party``,
+    ``check_opponent`` in the trainer's start weather, and the AI's per-move refusals
+    (``policy.opponent_move_refusals``) under the trainer's own flag set."""
+    import argparse
+
+    from nuzline import cli
+    from nuzline.ai.layout import KAIZO as KAIZO_LAYOUT
+    from nuzline.ai.layout import kaizo_layout
+    from nuzline.ai.policy import opponent_move_refusals
+    from nuzline.data.games import load_game
+    from nuzline.data.trainer import IntermediateData
+
+    game = cli._game(argparse.Namespace(game="kaizo"))
+    tables, names = load_game(game)
+    by_id = {t.id: t for t in cli._load_trainers(game)}
+    inter = IntermediateData(game.intermediate_dir, game.id)
+    for tid in BIT_7_OPPONENTS:
+        t = by_id[tid]
+        assert t.split and t.format == "single" and t.ai_flags & 0x80, tid
+        assert not any(p.trainer == tid for x in by_id.values() for p in x.partner or ()), tid
+        cli._check_buildable(tables, names, t, inter)
+        party = build_trainer_party(t, inter)
+        report = check_opponent(tables, names, t, party, start_weather(t))
+        assert report.missing == [] and report.level == Support.EXACT, (tid, report.missing)
+        layout = kaizo_layout(t.ai_flags, KAIZO_LAYOUT.slot_reads)
+        refused = [
+            (m, opponent_move_refusals(tables, m, layout))
+            for mon in party
+            for m in mon.moves
+            if m and opponent_move_refusals(tables, m, layout)
+        ]
+        assert refused == [], (tid, refused)
