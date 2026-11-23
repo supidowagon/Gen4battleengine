@@ -240,6 +240,31 @@ def test_prune_skips_while_another_pod_holds_the_lock(tmp_path):
     assert (old / "x-cache").is_file() and (jax / ".prune.lock").is_dir()
 
 
+def test_a_lock_with_an_empty_owner_file_is_stale_at_once(tmp_path):
+    jax = tmp_path / "vol" / "jax"
+    for owner in (None, ""):
+        lock = jax / ".prune.lock"
+        shutil.rmtree(lock, ignore_errors=True)
+        lock.mkdir(parents=True)
+        if owner is not None:
+            (lock / "owner").write_text(owner)
+        rc, out = _sync(tmp_path, "prune")
+        assert rc == 0 and "taken over" in out and "owner none" in out and "prune done" in out, out
+        assert not lock.exists()
+
+
+def test_publish_prunes_before_the_copies_when_the_volume_is_over_the_warning_line(tmp_path):
+    loc = tmp_path / "local" / VER
+    _entry(loc, "good-cache", _blob(1))
+    _entry(tmp_path / "vol" / "jax" / VT, "x-cache", _blob(2))
+    rc, out = _sync(tmp_path, "publish", CACHE_VOL_QUOTA_GB="3")     # ~1 GB used by du block rounding: 2 GB left
+    assert rc == 0 and "publish: volume under 3 GB left: prune before the copies" in out, out
+    assert out.index("prune before the copies") < out.index("prune done") < out.index(f"publish {VT}:"), out
+    assert out.count("prune done") == 2, out                          # and the prune after the copies
+    rc, out = _sync(tmp_path, "publish")                              # 30 GB quota: plenty left
+    assert rc == 0 and "prune before the copies" not in out and out.count("prune done") == 1, out
+
+
 def test_prune_takes_over_a_stale_lock_and_prunes_versions_temps_size_and_captures(tmp_path):
     vol = tmp_path / "vol"
     jax = vol / "jax"

@@ -5,7 +5,8 @@
 # process ever reads or writes the volume.
 # Usage:
 #   cache_sync.sh seed                  copy volume entries this pod lacks into the local cache
-#   cache_sync.sh publish               copy local entries the volume lacks onto it, then prune
+#   cache_sync.sh publish               copy local entries the volume lacks onto it, then prune (also
+#                                       before the copies when the volume is under CACHE_FREE_WARN_GB left)
 #   cache_sync.sh prune                 prune the volume (under its lock)
 #   cache_sync.sh snap-publish <capture folder> <key>   store a complete capture under <key>
 #   cache_sync.sh snap-fetch <key> <capture folder> [own]  fetch a stored capture into <folder>/snap
@@ -69,7 +70,7 @@
 #   so a seed stopped partway (its timeout) keeps every batch it renamed and the next seed copies
 #   only what is still missing; the marker is written only after a complete pass.
 # prune (also run by publish and snap-publish): under jax/.prune.lock (a lock older than
-#   CACHE_LOCK_STALE_S, 3600 s, is taken over: re-checked to still have the owner and age read
+#   CACHE_LOCK_STALE_S, 3600 s, or one whose owner file is empty or missing, is taken over: re-checked to still have the owner and age read
 #   before it is renamed aside, and the renamed one checked again; a held one skips the prune;
 #   released only while its owner file still names this pod and pid): deletes .tmp-* names whose
 #   newest file is older than CACHE_TMP_STALE_S (3600 s; a copy in progress keeps writing
@@ -313,9 +314,22 @@ seed() {
   say "seed done: $ver $ok entries copied, $bad skipped, $(( $(date +%s) - t0 )) s"
 }
 
+# vol_left: prints the bytes left on the volume (quota minus du -sk of <vol>, see prune step 5);
+# prints nothing and fails when du fails or times out. Quota and timeout fall back silently.
+vol_left() { local q="${CACHE_VOL_QUOTA_GB:-30}" dt="${CACHE_PRUNE_DU_TIMEOUT:-60}" k G=1000000000
+  [[ "$q" =~ ^[1-9][0-9]*$ ]] || q=30; [[ "$dt" =~ ^[1-9][0-9]*$ ]] || dt=60
+  k=$(timeout -k 5 "$dt" du -sk "$VOL" 2>/dev/null | awk 'NR == 1 {print $1}')
+  [[ "$k" =~ ^[0-9]+$ ]] || return 1
+  echo $(( q * G - k * 1024 )); }
+
 publish() {
   vol_ok || { say "no volume mounted at $VOL: publish skipped"; return 0; }
-  local d ver out ok bad st n why tmp any=0 ht V t0; t0=$(date +%s)
+  local d ver out ok bad st n why tmp any=0 ht V t0 left fw="$FREE_WARN_GB"; t0=$(date +%s)
+  [[ "$fw" =~ ^[0-9]+$ ]] || fw=3
+  # Over the warning line (under fw GB left): prune before the copies, so a full volume frees
+  # space first; the prune after the copies still runs.
+  if left=$(vol_left) && [ "$left" -lt $(( fw * 1000000000 )) ]; then
+    say "publish: volume under $fw GB left: prune before the copies"; prune; fi
   if ht=$(host_tag); then
   for d in "$LC"/*/; do ver=${d%/}; ver=${ver##*/}; ver_ok "$ver" || continue; d=${d%/}; any=1; V="$J/$ver-$ht"
     mkdir -p "$V" || { say "publish: cannot create $V"; continue; }
@@ -343,13 +357,15 @@ publish() {
 # so only one pod takes it over; right before the rename its owner and mtime are read again and
 # must be the ones that made it stale (else another pod took it over meanwhile: skip), and the
 # renamed folder is checked once more (a fresh lock renamed by a race is put back).
+# A lock whose owner file is empty or missing (its pod died between mkdir and the owner write)
+# is stale at once, whatever its age.
 lock_mine() { echo "$POD $$ $(date +%s)" > "$1/owner"; LOCKED=1; }
 lock_take() { local L="$J/.prune.lock" A="$J/.prune.lock.stale.$POD.$$" m own age
   mkdir -p "$J" || return 1
   if mkdir "$L" 2>/dev/null; then lock_mine "$L"; return 0; fi
   m=$(stat -c %Y "$L" 2>/dev/null) || m=$(date +%s); own=$(cat "$L/owner" 2>/dev/null)
   age=$(( $(date +%s) - m ))
-  if [ "$age" -lt "$LOCK_STALE_S" ]; then say "prune: lock $L held ($age s old): prune skipped"; return 1; fi
+  if [ "$age" -lt "$LOCK_STALE_S" ] && [ -n "$own" ]; then say "prune: lock $L held ($age s old): prune skipped"; return 1; fi
   if [ "$(stat -c %Y "$L" 2>/dev/null)" != "$m" ] || [ "$(cat "$L/owner" 2>/dev/null)" != "$own" ]; then
     say "prune: lock $L changed while being taken over: prune skipped"; return 1; fi
   if mv -T "$L" "$A" 2>/dev/null; then
