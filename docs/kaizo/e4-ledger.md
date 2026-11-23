@@ -195,7 +195,7 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   (`IfBattlerDealsMoreDamage`, :2228-2237, no damaging test), or a side of two living battlers has Reflect /
   Light Screen, is a named refusal `policy._doubles_damage`
   ("doubles damage factor (E2 D45-8)", `_Refused.doubles_damage`; battle_lib.c:6982-6990, :7023-7044), with a
-  `fullset` test. The step that rebases on D45-8 deletes both and uses the factors.
+  `fullset` test. The step that rebases on D45-8 deletes all three: the `policy._doubles_damage` refusal (`_Refused.doubles_damage`), the `"_doubles_damage"` entry in `prep/variants.py`, and `tests/ai/test_doubles_damage.py::test_spread_refused_until_d45_8`, and uses the factors (managing-session ruling 23 Nov).
   A third consumer of the factor: the post-KO replacement pick `BattleAI_PostKOSwitchIn` (battle_lib.c:8054,
   reached from trainer_ai.c:4005) estimates the bench moves with `BattleSystem_CalcMoveDamage`; `ai/replacement.py` is
-  singles-only today, and its B = 4 form (W4, A-13) needs the D45-8 factors or the same refusal.
+  singles-only today, and its B = 4 form (W4, A-13) needs the D45-8 factors or the same refusal. W4's B = 4 post-KO replacement is not written on this refusal without asking the managing session (ruling 23 Nov).
