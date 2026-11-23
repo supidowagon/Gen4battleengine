@@ -629,6 +629,51 @@ def test_split_fields_from_the_sheet_or_unknown(resolved_trainers):
     assert unplaced and all(t["optional"] is None and t["left_side"] is None for t in unplaced)
 
 
+def _ally_split_ids(resolved_trainers):
+    return {
+        p["trainer"]
+        for t in resolved_trainers.values()
+        for p in (t["partner"] or ())
+        if resolved_trainers[p["trainer"]]["split"]
+    }
+
+
+def test_tag_partner_on_every_ally_split_row(resolved_trainers):
+    """``tag_partner`` is in every resolved row, and every split row that fights beside the
+    player (a ``partner`` variant) is tagged True from its sheet headers: the fact
+    ``tools/kaizo/backlog.py`` reads instead of the docs extraction."""
+    assert all("tag_partner" in t for t in resolved_trainers.values())
+    allies = _ally_split_ids(resolved_trainers)
+    assert allies
+    for tid in sorted(allies):
+        t = resolved_trainers[tid]
+        assert t["tag_partner"] is True, (tid, t["label"], t["sources"].get("tag_partner"))
+        assert t["sources"]["tag_partner"].startswith("sheet "), tid
+
+
+def test_tag_partner_is_the_sheet_header_tags(resolved_trainers, docs):
+    """ROM-only (the ``docs`` workbook extraction never goes to the pod): ``tag_partner`` is
+    what the trainer's sheet headers (cited in its source) say, None when they disagree or
+    there is none."""
+    tags = {
+        h["cite"]: h["tags"]
+        for sv in docs["splits"].values()
+        for sec in sv["sections"]
+        for h in sec["trainers"]
+    }
+    tagged = 0
+    for tid, t in resolved_trainers.items():
+        src = t["sources"]["tag_partner"]
+        if not src.startswith("sheet "):
+            assert t["tag_partner"] is None, tid
+            continue
+        cites = src.removeprefix("sheet ").split(" (headers disagree")[0].split(", ")
+        said = {bool(tags[c].get("tag_partner")) for c in cites}
+        assert t["tag_partner"] == (said.pop() if len(said) == 1 else None), (tid, cites)
+        tagged += t["tag_partner"] is True
+    assert tagged >= len(_ally_split_ids(resolved_trainers))
+
+
 def test_json_shapes(resolved_trainers):
     for t in resolved_trainers.values():
         assert t["gauntlet"] is None or len(t["gauntlet"]) == 2

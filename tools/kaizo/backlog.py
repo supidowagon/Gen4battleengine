@@ -94,12 +94,11 @@ def ally_ids(trainers):
     return {p.trainer for t in trainers for p in (t.partner or ())}
 
 
-def sheet_cites(t):
-    """The split-sheet cites of trainer ``t`` (its ``sources["split"]``, ``sheet <cite>, ...``)."""
-    src = t.sources.get("split", "")
-    return (
-        [c for c in src.removeprefix("sheet ").split(", ") if c] if src.startswith("sheet ") else []
-    )
+def untagged_partners(trainers, allies):
+    """The split rows among ``allies`` (``ally_ids``) whose sheet headers are not all tagged as
+    the player's tag partner (``Trainer.tag_partner`` not True, built by ``tools.kaizo.resolve``
+    from the sheet's header tags): such a row would be counted as a battle of its own."""
+    return [t for t in trainers if t.id in allies and t.split and t.tag_partner is not True]
 
 
 def battle_split(ids, by_id):
@@ -672,20 +671,14 @@ def main(out_path):
         return ks
 
     by_id = {t.id: t for t in trainers}
-    # Tag partners are allies, not battles: each must be a sheet header tagged as one.
-    docs = json.loads((d / "docs/docs.json").read_text(encoding="utf-8"))
-    tags = {
-        h["cite"]: h["tags"]
-        for sv in docs["splits"].values()
-        for sec in sv["sections"]
-        for h in sec["trainers"]
-    }
     allies = ally_ids(trainers)
-    for t in trainers:
-        if t.id in allies and t.split:
-            untagged = [c for c in sheet_cites(t) if not tags.get(c, {}).get("tag_partner")]
-            if untagged or not sheet_cites(t):
-                raise ValueError(f"partner {t.id} {t.label}: sheet header not a tag partner")
+    untagged = untagged_partners(trainers, allies)
+    if untagged:
+        raise ValueError(
+            "partners whose sheet header is not a tag partner (Trainer.tag_partner; None also"
+            " from a Kaizo table built before the field: rebuild): "
+            + "; ".join(f"{t.id} {t.label} {t.tag_partner}" for t in untagged)
+        )
     split_rows = [t for t in trainers if t.split and t.split_order and t.id not in allies]
     splits = {}
     for t in split_rows:

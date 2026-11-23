@@ -228,7 +228,9 @@ class Trainer:
     every party member must carry them; ``player_starter`` is the starter species a rival
     or partner variant is fought with; ``gauntlet`` is (group, position) in a chain of
     fights with ``gauntlet_rules`` (``heal_between``, ``change_team``; empty: not
-    recorded); ``optional`` and ``left_side`` (the split's Left Side AI) come from the
+    recorded); ``optional``, ``left_side`` (the split's Left Side AI) and ``tag_partner``
+    (every sheet header of the trainer is tagged as the player's tag partner, so its split
+    row is an ally, not a battle; None: headers disagree, no header, or vanilla) come from the
     spreadsheet; ``area_condition`` is what the fight starts with (built from
     ``start_condition`` when the JSON has none); ``split`` and ``split_order`` (split
     index, line) place the fight in the level-cap splits; ``sources`` cites each field.
@@ -260,6 +262,7 @@ class Trainer:
     gauntlet_rules: dict[str, bool] = field(default_factory=dict)
     optional: bool = False
     left_side: bool = False
+    tag_partner: bool | None = None
     area_condition: AreaCondition = AreaCondition()
     split: str | None = None
     split_order: tuple[int, int] | None = None
@@ -358,6 +361,7 @@ def load_trainers(dir: Path) -> list[Trainer]:
             gauntlet_rules=dict(t.get("gauntlet_rules", {})),
             optional=t.get("optional", False),
             left_side=t.get("left_side", False),
+            tag_partner=t.get("tag_partner"),
             area_condition=_area(t),
             split=t.get("split"),
             split_order=_pair(t, "split_order"),
