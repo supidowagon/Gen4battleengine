@@ -49,6 +49,7 @@ from nuzline.engine.actions import (
     gravity_banned,
     locked_slot,
     move_imprisoned,
+    picks_no_command,
     usable_moves,
 )
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
@@ -123,6 +124,143 @@ def selected_move(
     locked = jnp.where(paused, state.ts_locked[side] != 0, locked_slot(state, side) >= 0)
     lock_move = jnp.where(paused, state.ts_move[side], state.locked_move[side]).astype(_I32)
     return jnp.where(locked, lock_move, move), struggling
+
+
+def fight_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
+    """``int32``: the move ``side``'s move action runs (moveTemp), ``selected_move``'s with
+    BattleControllerPlayer_FightCommand's turn-start Encore (bcp.c:1866-1883): an encored battler
+    runs its encored slot's move, the encored move while the slot holds it (:1869-1873), else
+    whatever that slot holds now (:1874-1883, the encore then ends), whatever it chose or is
+    locked into (``moveLockedInto`` comes after, :1885-1888), unless it Struggles (:1866-1868; a
+    locked battler never does unless the pause fixed it, ``step._execute_actions``). The same
+    takeover as ``step._use_move``'s ``encore_runs`` (E2-ML-2, E2-ML-3). The order keeps
+    ``selected_move`` (CalcTurnOrder)."""
+    fmt = format_of(state)
+    move, struggling = selected_move(tables, state, side, action)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    struggles = jnp.where(paused, struggling, struggling & (locked_slot(state, side) < 0))
+    mon = state.active[side]
+    slot_move = state.moves[party(fmt, side), mon, state.encore_slot[side].astype(_I32)]
+    runs = (state.encore_move[side] != 0) & ~struggles
+    return jnp.where(runs, slot_move.astype(_I32), move).astype(_I32)
+
+
+def selection_slots(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``int32[B]``: ``BattleContext.moveSlot`` after this turn's command selection (E2-ML-5). A
+    battler whose action is a move and that picks a command (not absent, bcp.c:330-333; not locked
+    nor recharging, :333-337, Battler_CanPickCommand, battle_lib.c:6224-6235: ``picks_no_command``)
+    writes it unless it Struggles (STRUGGLING_ALL, :433-434): the Encore
+    slot under an Encore (:440-446), else the chosen slot (:526). Every other battler keeps
+    ``state.move_slot``, and a paused state kept the selection's. Idempotent: a state the selection already wrote
+    gives the same slots."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    out = []
+    for b in range(fmt.B):
+        action = actions[b]
+        fight = (action < MOVE_ACTIONS) & (state.over == 0) & ~absent_now(state, b)
+        picks = fight & ~picks_no_command(state, b) & jnp.any(usable_moves(tables, state, b))
+        slot = jnp.where(
+            state.encore_move[b] != 0,
+            state.encore_slot[b].astype(_I32),
+            jnp.clip(action, 0, MOVE_ACTIONS - 1),
+        )
+        out.append(jnp.where(picks & ~paused, slot, state.move_slot[b].astype(_I32)))
+    return jnp.stack(out)
+
+
+def selection_temps(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``int32[B]``: ``battlerActions[b][BATTLE_ACTION_TEMP_VALUE]`` as ``Battler_SelectedMove``
+    reads it (battle_lib.c:2858-2868: ``moves[TEMP_VALUE - 1]`` when it is nonzero and the
+    SELECTED_COMMAND is FIGHT), after this turn's command selection (E2-ML-8): ``1 + slot`` for a
+    FIGHT that picks a move (bcp.c:525), 0 under an Encore (:447); a party pick writes the party
+    slot (:595), 0-5 (slot 5 reads ``moves[4]``, past the four slots: ``battler_selected_move``);
+    a bag item writes its BattleItemUse (:565), a struct of the item id, category and target
+    (message_defs.h:15-19) whose ``moves[TEMP_VALUE - 1]`` lies far past the BattleMon: kept as
+    0 (MOVE_NONE), a stated assumption (STATE.md, ledger E2-ML-8). A Struggling FIGHT (:433-434),
+    a battler that picks no command (Battler_CanPickCommand, battle_lib.c:6224-6235: a locked or
+    recharging one, bcp.c:333-337, ``picks_no_command``) and an absent one keep it; nothing resets it
+    (BattleContext_Init, battle_lib.c:1974-2017). A paused state kept the selection's. Idempotent
+    on a state the selection wrote."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    out = []
+    for b in range(fmt.B):
+        action = actions[b]
+        picks_command = (state.over == 0) & ~absent_now(state, b) & ~picks_no_command(state, b)
+        fight = (action < MOVE_ACTIONS) & jnp.any(usable_moves(tables, state, b))
+        fight_temp = jnp.where(
+            state.encore_move[b] != 0, 0, jnp.clip(action, 0, MOVE_ACTIONS - 1) + 1
+        )
+        party_temp = action - MOVE_ACTIONS  # 0-5 where the action is a switch (actions 4-9)
+        new = jnp.where(fight, fight_temp, jnp.where(is_switch(action), party_temp, 0))
+        writes = picks_command & (fight | is_switch(action) | is_item(action)) & ~paused
+        out.append(jnp.where(writes, new, state.selected_temp[b].astype(_I32)))
+    return jnp.stack(out)
+
+
+def with_selection(tables: Tables, state: BattleState, actions) -> BattleState:
+    """``state`` as this turn's command selection leaves it: ``move_slot`` (``selection_slots``)
+    and ``selected_temp`` (``selection_temps``) written (E2-ML-5, E2-ML-8); a paused state is
+    returned as it is. Idempotent."""
+    return state._replace(
+        move_slot=selection_slots(tables, state, actions).astype(state.move_slot.dtype),
+        selected_temp=selection_temps(tables, state, actions).astype(state.selected_temp.dtype),
+    )
+
+
+# MAX_MOVES (generated/moves.txt: MOVE_NONE = 0 .. MOVE_SHADOW_FORCE = 467, then MAX_MOVES = 468),
+# the size of the move table ``MOVE_DATA`` reads (ai_context.h:45, ``moveTable[MAX_MOVES]``).
+MAX_MOVES = 468
+
+
+def past_moves_word(state: BattleState, b) -> jnp.ndarray:
+    """``int32``: ``BattleMon.moves[4]`` of battler ``b``, the u16 after the four move slots: the
+    low 16 bits of the IV bitfield (battle_mon.h:64-72, allocated from bit 0 as the ARM ABI does):
+    ``hpIV | attackIV << 5 | defenseIV << 10 | (speedIV & 1) << 15`` (``state.ivs``, the BattleMon's
+    own: a Transform's copy). An id past the move table (``>= MAX_MOVES``) would make
+    ``MOVE_DATA`` read past ``moveTable``: read as MOVE_NONE, a stated assumption (STATE.md,
+    ledger E2-ML-8)."""
+    fmt = format_of(state)
+    iv = state.ivs[party(fmt, b), state.active[b]].astype(_I32)
+    word = iv[Stat.HP] | (iv[Stat.ATK] << 5) | (iv[Stat.DEF] << 10) | ((iv[Stat.SPE] & 1) << 15)
+    return jnp.where(word < MAX_MOVES, word, 0).astype(_I32)
+
+
+def battler_selected_move(state: BattleState, b, fights) -> jnp.ndarray:
+    """``int32``: ``Battler_SelectedMove`` (battle_lib.c:2858-2868) of battler ``b`` on a state the
+    selection wrote (``with_selection``): ``moves[selected_temp - 1]`` when its SELECTED_COMMAND is
+    FIGHT (``fights``: its action this turn is a move, a locked battler's included) and
+    ``selected_temp`` is nonzero, else MOVE_NONE (E2-ML-8). ``selected_temp`` 5 (a switch to party
+    slot 5, carried) reads ``moves[4]``: ``past_moves_word``."""
+    fmt = format_of(state)
+    temp = state.selected_temp[b].astype(_I32)
+    slot = jnp.clip(temp - 1, 0, MOVE_ACTIONS - 1)
+    move = state.moves[party(fmt, b), state.active[b], slot].astype(_I32)
+    move = jnp.where(temp > MOVE_ACTIONS, past_moves_word(state, b), move)
+    return jnp.where(jnp.asarray(fights, bool) & (temp > 0), move, 0)
+
+
+def order_moves(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``int32[B]``: the move whose priority CalcTurnOrder reads for each battler's FIGHT
+    (battle_lib.c:1375-1397): Struggle where the selection set ``turnFlags.struggling`` (a battler
+    that picked a command, never a locked one, bcp.c:335, :433), else ``moves[moveSlot]`` as it
+    stands now (``selection_slots``): a locked battler's last selected slot, which a level-up or
+    a lock its slot does not hold (a called Bide or Rollout) makes differ from ``locked_move``
+    (E2-ML-5)."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    slots = selection_slots(tables, state, actions)
+    out = []
+    for b in range(fmt.B):
+        struggling = selected_move(tables, state, b, actions[b])[1]
+        locked = jnp.where(paused, state.ts_locked[b] != 0, locked_slot(state, b) >= 0)
+        slot_move = state.moves[party(fmt, b), state.active[b], slots[b]].astype(_I32)
+        out.append(jnp.where(struggling & ~locked, MOVE_STRUGGLE, slot_move))
+    return jnp.stack(out)
 
 
 def terrain_index(state: BattleState) -> jnp.ndarray:
@@ -318,12 +456,13 @@ def mirror_copied(state: BattleState, side, call) -> jnp.ndarray:
     return jnp.where(own != 0, own, jnp.where(count > 0, pick, 0)).astype(_I32)
 
 
-def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fights) -> jnp.ndarray:
+def me_first_copy(tables: Tables, state: BattleState, target_side, fights) -> jnp.ndarray:
     """``int32``: the move ``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312) copies from
     ``target_side``'s battler, 0 when it fails, for a target that has not acted yet (the caller's
     test: ``BATTLE_ACTION_PICK_COMMAND`` is not MOVE_END). The move is the target's encored move when
     it still holds it in its encored slot (:7293-7296), else ``Battler_SelectedMove`` (battle_lib.c:
-    2858-2868): ``picked`` (its ``selected_move``) when it chose FIGHT (``fights``), else MOVE_NONE.
+    2858-2868; ``battler_selected_move`` on ``state`` as the selection left it, E2-ML-8) when it
+    chose FIGHT (``fights``), else MOVE_NONE.
     It must not be struggling (the target's ``usable_moves`` leave no slot, bcp.c:433), differ in
     battle effect from every ``ME_FIRST_BANNED_MOVES`` move (``Move_MeFirstCanCopy``, battle_lib.c:
     7242-7252, ``tables.move_ai_effect``) and have power (:7300)."""
@@ -332,7 +471,7 @@ def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fight
     moves = state.moves[party(fmt, target_side), mon].astype(_I32)
     encored = state.encore_move[target_side].astype(_I32)
     held = (encored != 0) & (encored == moves[state.encore_slot[target_side]])
-    move = jnp.where(held, encored, jnp.where(fights, jnp.asarray(picked, _I32), 0))
+    move = jnp.where(held, encored, battler_selected_move(state, target_side, fights))
     banned = tables.move_ai_effect[jnp.asarray(ME_FIRST_BANNED_MOVES, _I32)]
     struggling = ~jnp.any(usable_moves(tables, state, target_side))
     ok = (
@@ -531,10 +670,10 @@ def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> 
     rows where it did not happen (``enumerate.call_consistent``)."""
     actions = jnp.asarray(actions, _I32)
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    chosen = selected_move(tables, state, side, actions[side])[0]
+    chosen = fight_move(tables, state, side, actions[side])
     kind = call_kind(tables, chosen)
     calls = (kind == CALL_SLEEP_TALK) | (kind == CALL_METRONOME) | (kind == CALL_ASSIST)
-    foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
+    foe_chosen = fight_move(tables, state, foe, actions[foe])
     foe_can = uses_move[foe] & can_call_effect(tables, state, foe, foe_chosen, EffectId.GRAVITY)
     return ~fcm.gravity_on(state) & uses_move[side] & calls & foe_can
 
@@ -604,7 +743,7 @@ def takeover_possible(tables: Tables, state: BattleState, actions, side, foe) ->
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     chosen, struggling = selected_move(tables, state, side, actions[side])
-    foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
+    foe_chosen = fight_move(tables, state, foe, actions[foe])
     fails = encore_slot_of(tables, state, side)[0]
     foe_can = uses_move[foe] & can_call_encore(tables, state, foe, foe_chosen)
     return (
@@ -638,12 +777,12 @@ def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray,
 def used_move(
     tables: Tables, state: BattleState, side, action, call=None, move_prev=None
 ) -> jnp.ndarray:
-    """``int32``: ``called_move`` of ``selected_move``: the move whose accuracy, crit odds,
+    """``int32``: ``called_move`` of ``fight_move``: the move whose accuracy, crit odds,
     damage and effect a move action draws for. ``call`` (``int[2]``, ``Outcome.call``) resolves
     an invoker (``invoked_move``; ``move_prev`` for Copycat, default ``state.move_prev``); one
     whose call finds no move uses itself (it fails). Without ``call`` an invoker uses itself:
     the heuristics' view (``search.playout``), never a chance law's."""
-    chosen = selected_move(tables, state, side, action)[0]
+    chosen = fight_move(tables, state, side, action)
     if call is None:
         return called_move(tables, state, chosen)
     invoked = invoked_move(tables, state, side, chosen, jnp.asarray(call)[side], move_prev)
@@ -658,13 +797,13 @@ def used_moves(
     action) makes it the foe's chosen move (moveTemp, UpdateMoveBuffers bcp.c:3936-3942; a foe
     whose attack message did not show leaves MOVE_NONE and Copycat fails, reading nothing),
     else the turn-start ``state.move_prev``. ``chosen`` (``int32[2]``, default each action's
-    ``selected_move``) overrides the moveTemp of each side: a takeover variant's encored move
+    ``fight_move``, E2-ML-2) overrides the moveTemp of each side: a takeover variant's encored move
     (ruling B11-1), with ``state`` its ``encored_state``."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     if chosen is None:
         chosen = jnp.stack(
-            [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
+            [fight_move(tables, state, side, actions[side]) for side in range(fmt.B)]
         )
     chosen = jnp.asarray(chosen, _I32)
     after_foe = jnp.asarray(after_foe, bool)
@@ -677,9 +816,7 @@ def used_moves(
         # says it has (E3-2-3; D3-5: the defender, the foe at B = 2).
         target = me_first_target(tables, state, side, chosen[side])
         fights = (state.over == 0) & ~is_switch(actions[target]) & ~is_item(actions[target])
-        first = jnp.where(
-            after_foe[side], 0, me_first_copy(tables, state, target, chosen[target], fights)
-        )
+        first = jnp.where(after_foe[side], 0, me_first_copy(tables, state, target, fights))
         # Mirror Move copies what the foe's move this turn recorded for its user (UpdateFlagsWhenHit,
         # bcp.c:4480-4486): the foe's chosen move when it has MoveFlag.MIRROR_MOVE and is aimed at
         # the user, else the turn-start ``move_copied`` (E3-B2-2).
@@ -941,7 +1078,9 @@ def resort_action_order(tables: Tables, state: BattleState, order, real, qc, tie
     switch, item = is_switch(real), is_item(real)
     absent = jnp.stack([absent_now(state, b) for b in range(fmt.B)])
     command = jnp.where(absent | (~switch & ~item), 0, jnp.where(item, 1, 2)).astype(_I32)
-    slot = jnp.clip(real, 0, MOVE_ACTIONS - 1)
+    # moveSlot as the turn's selection wrote it (``state.move_slot``, E2-ML-5): a locked
+    # battler's is its last selected slot, not its action's.
+    slot = state.move_slot.astype(_I32)
     moves = jnp.stack(
         [state.moves[party(fmt, b), state.active[b], slot[b]].astype(_I32) for b in range(fmt.B)]
     )
@@ -1171,7 +1310,7 @@ def _four_order(tables: Tables, state: BattleState, actions, order_tie, qc):
     switch, item = is_switch(actions), is_item(actions)
     fight = (~switch & ~item) | ~alive
     command = jnp.where(fight, 0, jnp.where(item, 1, 2)).astype(_I32)
-    moves = jnp.stack([selected_move(tables, state, b, actions[b])[0] for b in range(4)])
+    moves = order_moves(tables, state, actions)  # moves[moveSlot] (E2-ML-5)
     priority = tables.move_priority[moves].astype(_I32)
     facts = _pair_facts(tables, state, qc)
     # Stable sort on "is FIGHT": ITEM / PARTY battlers first, then the rest, each in battler order.
@@ -1232,9 +1371,7 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
         return _four_order(tables, state, actions, outcome.order_tie, state.qc_roll)[0]
     switch, item = is_switch(actions), is_item(actions)
     early = switch | item  # items and switches go before moves
-    moves = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
+    moves = order_moves(tables, state, actions)  # moves[moveSlot] (E2-ML-5)
     both_moves = ~early[0] & ~early[1]
     priority = jnp.where(both_moves, tables.move_priority[moves].astype(_I32), 0)
     second = player_second(tables, state, outcome.speed_tie, state.qc_roll)

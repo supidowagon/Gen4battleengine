@@ -1,0 +1,13 @@
+Outcome(speed_tie=Array(0, dtype=int8), hit=Array([[1, 0, 0, 0, 0, 0],
+[0, 0, 0, 0, 0, 0]], dtype=int8), crit=Array([[0, 0, 1, 1, 1, 1],
+[0, 1, 0, 1, 1, 0]], dtype=int8), roll=Array([[ 0,  9,  1, 11, 15,  3],
+[11,  6,  4, 13,  4,  3]], dtype=int8), secondary=Array([[0, 1, 1, 1, 0, 1],
+[1, 1, 1, 0, 1, 0]], dtype=int8), contact_proc=Array([[1, 0, 0, 0, 0, 1],
+[0, 0, 1, 1, 0, 1]], dtype=int8), n_hits=Array([2, 3], dtype=int8), full_para=Array([0, 1], dtype=int8), confusion_hit=Array([0, 1], dtype=int8), duration=Array([2, 3], dtype=int8), thaw=Array([0, 1], dtype=int8), flinch_item=Array([[0, 1, 1, 0, 0, 0],
+[1, 0, 0, 0, 1, 1]], dtype=int8), quick_claw=Array([0, 1], dtype=int8), end_speed_tie=Array(1, dtype=int8), magnitude=Array([4, 9], dtype=int8), shed_skin=Array([0, 0], dtype=int8), fang_flinch=Array([1, 1], dtype=int8), present=Array([1, 1], dtype=int8), protect=Array([0, 1], dtype=int8), infatuation=Array([0, 1], dtype=int8), tri_attack=Array([0, 2], dtype=int8), roar_level=Array([0, 1], dtype=int8), roar_target=Array([0, 1], dtype=int8), call=Array([  4, 111], dtype=int16), future_hit=Array([0, 1], dtype=int8), yawn_sleep=Array([2, 4], dtype=int8), acupressure=Array([  4, 136], dtype=int16), focus_band=Array([[0, 1, 0, 0, 1, 0],
+[0, 0, 1, 0, 1, 1]], dtype=int8), future_band=Array([1, 0], dtype=int8), berry_confusion=Array([2, 4], dtype=int8), chatter=Array([0, 1], dtype=int8), conv2=Array([[ 0,  4,  0, 13,  4,  8, 10,  3, 16, 15,  5, 12, 11, 10, 13, 17,
+7,  3],
+[ 8,  5,  0,  6,  7, 12,  4,  4,  3,  3,  2,  9, 10, 12, 15,  0,
+15,  2]], dtype=int8), starf=Array([[ 6, 17, 17,  8],
+[ 6, 38, 16,  8]], dtype=int8), target_draw=Array([0, 1], dtype=int8), call_target_draw=Array([1, 0], dtype=int8), bide_target_draw=Array([0, 1], dtype=int8), trace_pick=Array([[1, 1, 0, 1, 1],
+[1, 1, 1, 0, 1]], dtype=int8), order_tie=Array([], shape=(0,), dtype=int8), sort_tie=Array([], shape=(3, 0), dtype=int8), resort_tie=Array([], shape=(2, 0), dtype=int8))

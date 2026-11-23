@@ -36,10 +36,17 @@ from nuzline.engine.ids import (
     Status,
     Weather,
 )
-from nuzline.engine.order import MOVE_ACTIONS
+from nuzline.engine.order import (
+    MOVE_ACTIONS,
+    action_order,
+    battler_selected_move,
+    fight_move,
+    me_first_copy,
+    with_selection,
+)
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import replace
+from nuzline.engine.step import _pursuer_move, replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace
 from tests.engine.helpers import (
@@ -317,6 +324,766 @@ def test_a_berry_in_range_boards_are_mask_sound(tables, names):
     )
     for acts in (potion, leer):
         _assert_mask_sound(tables, s, np.asarray(acts), arbitrary, 0)
+
+
+def _encored_lock_board(tables, names):
+    """E2-ML-2 (test_enumerate.py::test_mask_sound_with_a_trainer_item falsifier, explore seed 7):
+    the player's lead locked into Bide (bide_turns 2: it stores this turn) and encored into
+    Scratch, which its encored slot holds; the foe uses a bag Potion. FightCommand runs the
+    encored move before the lock (bcp.c:1869-1873 before :1885-1888), so Scratch hits with its
+    crit and roll."""
+    n = names
+    s = roark_state(tables, names, player_moves=["Supersonic", "Scratch"])
+    scratch = n.move("Scratch")
+    s = s._replace(
+        locked_move=s.locked_move.at[0].set(n.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(2),
+        encore_move=s.encore_move.at[0].set(scratch),
+        encore_slot=s.encore_slot.at[0].set(1),
+        encore_turns=s.encore_turns.at[0].set(2),
+        last_move=s.last_move.at[0].set(scratch),
+    )
+    return s, A(0, FIRST_ITEM_ACTION, s, names)
+
+
+def test_a_turn_start_encore_runs_over_a_lock_in_the_laws(tables, names):
+    s, acts = _encored_lock_board(tables, names)
+    assert int(fight_move(tables, s, 0, 0)) == names.move("Scratch")
+    laws, drawn = _drawn(tables, s, acts)
+    assert bool(laws.relevant.crit[0, 0]) and bool(laws.relevant.roll[0, 0])
+    assert np.asarray(drawn.roll)[:, 0, 0].all()
+    # Without the Encore the lock runs Bide, which stores this turn: no crit, no roll.
+    bare = s._replace(encore_move=s.encore_move.at[0].set(0))
+    laws = jax.tree.map(np.asarray, _laws(tables, bare, acts))
+    assert not bool(laws.relevant.roll[0, 0])
+
+
+@pytest.mark.slow  # one mask-sound step of the board
+def test_a_turn_start_encore_over_a_lock_is_mask_sound(tables, names):
+    from tests.engine.test_enumerate import _assert_mask_sound
+
+    s, acts = _encored_lock_board(tables, names)
+    arbitrary = O._replace(
+        crit=jnp.ones((2, MAX_HITS), jnp.int8), roll=jnp.zeros((2, MAX_HITS), jnp.int8)
+    )
+    _assert_mask_sound(tables, s, np.asarray(acts), arbitrary, 0)
+
+
+def _unheld_encore_board(tables, names):
+    """E2-ML-3: the Bide-locked lead of ``_encored_lock_board`` whose encored slot 1 no longer
+    holds the encored move (Tackle; the slot holds Leer). FightCommand runs moves[encoredMoveSlot]
+    and ends the encore (bcp.c:1874-1883) before the lock (:1885-1888): Leer, not Bide."""
+    s, acts = _encored_lock_board(tables, names)
+    s = s._replace(
+        moves=s.moves.at[0, 0, 1].set(names.move("Leer")),
+        encore_move=s.encore_move.at[0].set(names.move("Tackle")),
+    )
+    return s, acts
+
+
+def test_an_unheld_encore_runs_its_slot_over_a_lock_in_the_laws(tables, names):
+    s, acts = _unheld_encore_board(tables, names)
+    assert int(fight_move(tables, s, 0, 0)) == names.move("Leer")
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    assert bool(laws.relevant.hit[0, 0])  # Leer's accuracy roll; Bide has none
+
+
+@pytest.mark.slow  # two steps against the reference
+def test_an_unheld_encore_runs_its_slot_over_a_lock_in_both_engines(tables, names):
+    s, acts = _unheld_encore_board(tables, names)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.stages[1, Stat.DEF]) == int(s.stages[1, Stat.DEF]) - 1  # Leer ran
+    assert int(out.encore_move[0]) == 0 and int(out.encore_turns[0]) == 0  # the encore ended
+    # A held encore runs the encored move over the lock (E2-ML-2): Scratch hits.
+    s2, acts2 = _encored_lock_board(tables, names)
+    out2 = assert_matches_reference(tables, s2, acts2, O)
+    assert int(out2.hp[1, 0]) < int(s2.hp[1, 0])
+
+
+def _locked_order_board(tables, names):
+    """E2-ML-5: the player's slower lead locked into Rollout (a lock its slot 1 holds) whose
+    moveSlot is still slot 0, Quick Attack (a level-up wrote it over the slot it last selected).
+    CalcTurnOrder reads moves[moveSlot]'s priority (battle_lib.c:1375-1397), so the player moves
+    first; the foe Tackles."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Geodude", ["Quick Attack", "Rollout"], 20)],
+        [_mon(n, "Starly", ["Tackle"], 30)],
+    )
+    s = s._replace(
+        locked_move=s.locked_move.at[0].set(n.move("Rollout")),
+        rollout_count=s.rollout_count.at[0].set(1),
+        move_slot=s.move_slot.at[0].set(0),
+    )
+    return s, jnp.asarray([0, 0], jnp.int32)
+
+
+def test_a_locked_battler_orders_by_its_move_slot(tables, names):
+    s, acts = _locked_order_board(tables, names)
+    assert int(action_order(tables, s, acts, O)[0]) == 0  # Quick Attack's +1
+    lock_slot = s._replace(move_slot=s.move_slot.at[0].set(1))
+    assert int(action_order(tables, lock_slot, acts, O)[0]) == 1  # Rollout's 0: the faster foe
+
+
+@pytest.mark.slow  # two steps against the reference
+def test_a_locked_battler_orders_by_its_move_slot_in_both_engines(tables, names):
+    s, acts = _locked_order_board(tables, names)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.move_slot[0]) == 0  # a locked battler keeps its moveSlot (bcp.c:333-337)
+    assert int(out.move_slot[1]) == 0  # the foe's FIGHT writes its chosen slot (:526)
+
+
+def _pivot_board(tables, names):
+    n = names
+    return make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn", "Tackle"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Bulbasaur", ["Tackle", "Encore"], 30)],
+    )
+
+
+def _resume_after(tables, paused, slot):
+    side = int(paused.pivot_battler) - 1
+    acts = np.asarray(paused.ts_actions).astype(int).tolist()
+    acts[side] = MOVE_ACTIONS + slot
+    return assert_matches_reference(tables, paused, tuple(acts), O)
+
+
+@pytest.mark.slow  # a pause and its resume against the reference
+def test_an_unheld_encore_u_turn_over_a_lock_resumes_with_its_move(tables, names):
+    """E2-ML-4: the player locked into Bide and encored into Tackle, whose encored slot 0 now
+    holds U-turn: FightCommand runs U-turn (bcp.c:1874-1883) and ends the Encore; at the list the
+    pause keeps that moveTemp (``ts_move_temp``) and the resumed tail's UpdateMoveBuffers writes it
+    on the newcomer (bcp.c:3917-3946), not the lock's Bide."""
+    n = names
+    s = _pivot_board(tables, names)
+    s = s._replace(
+        locked_move=s.locked_move.at[0].set(n.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(2),
+        encore_move=s.encore_move.at[0].set(n.move("Tackle")),
+        encore_slot=s.encore_slot.at[0].set(0),
+        encore_turns=s.encore_turns.at[0].set(2),
+    )
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_move_temp) == n.move("U-turn")
+    after = _resume_after(tables, paused, 1)
+    assert int(after.last_move[0]) == n.move("U-turn")
+
+
+@pytest.mark.slow  # a pause and its resume against the reference
+def test_a_mid_turn_encore_takeover_of_u_turn_resumes_with_it(tables, names):
+    """E2-ML-4: the faster foe encores the player into its last move, U-turn, which replaces the
+    chosen Tackle (bcp.c:1869-1873); the resumed tail writes U-turn (moveTemp), in both engines."""
+    n = names
+    s = _pivot_board(tables, names)
+    s = s._replace(
+        last_move=s.last_move.at[0].set(n.move("U-turn")),
+        stats=s.stats.at[1, 0, Stat.SPE - 1].set(200),
+    )
+    paused = assert_matches_reference(tables, s, (1, 1), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_move_temp) == n.move("U-turn")
+    after = _resume_after(tables, paused, 1)
+    assert int(after.last_move[0]) == n.move("U-turn")
+
+
+def test_an_encored_pursuer_with_an_item_draws_its_pursuit_in_the_laws(tables, names):
+    """E2-ML-6: battler 1 Encored into Pursuit picks a bag Potion while battler 0 switches;
+    TryPursuit takes the held Encore's move (battle_script.c:6905-6909), so its hit's crit and
+    roll are read."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 35), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Pursuit"], 35)],
+    )
+    s = s._replace(
+        encore_move=s.encore_move.at[1].set(n.move("Pursuit")),
+        encore_slot=s.encore_slot.at[1].set(0),
+        encore_turns=s.encore_turns.at[1].set(3),
+        last_move=s.last_move.at[1].set(n.move("Pursuit")),
+        trainer_items=s.trainer_items.at[1, 0].set(n.item("Potion")),
+        trainer_item_count=s.trainer_item_count.at[1].set(1),
+    )
+    acts = jnp.asarray([MOVE_ACTIONS + 1, FIRST_ITEM_ACTION], jnp.int32)
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    assert bool(laws.relevant.crit[1, 0]) and bool(laws.relevant.roll[1, 0])
+
+
+def _carried_board(tables, names):
+    """E2-ML-8: the foe locked into Rollout (slot 0) whose last selection's TEMP_VALUE is still
+    2, Pursuit (slot 1); the player switches its lead out (party slot 1)."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 35), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Rollout", "Pursuit", "Tackle"], 35)],
+    )
+    s = s._replace(
+        locked_move=s.locked_move.at[1].set(n.move("Rollout")),
+        rollout_count=s.rollout_count.at[1].set(1),
+        selected_temp=s.selected_temp.at[1].set(2),
+    )
+    return s, jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
+
+
+def test_a_locked_battler_reads_its_carried_selected_move(tables, names):
+    """E2-ML-8: a locked battler picks no command (bcp.c:333-337), so its TEMP_VALUE stays its
+    last selection's and Battler_SelectedMove (battle_lib.c:2858-2868) reads that slot's move, not
+    the lock's: Pursuit's (battle_script.c:6909) and Me First's (:7296) read."""
+    n = names
+    s, acts = _carried_board(tables, names)
+    sel = with_selection(tables, s, acts)
+    assert int(sel.selected_temp[1]) == 2  # kept by the lock
+    assert int(sel.selected_temp[0]) == 1  # the switch writes its party slot (bcp.c:595)
+    assert int(battler_selected_move(sel, 1, True)) == n.move("Pursuit")
+    assert int(battler_selected_move(sel, 1, False)) == 0  # not a FIGHT: MOVE_NONE
+    has, move = _pursuer_move(sel, 1, acts[1], n.move("Rollout"), False)
+    assert bool(has) and int(move) == n.move("Pursuit")
+    tackle = sel._replace(selected_temp=sel.selected_temp.at[1].set(3))
+    assert int(me_first_copy(tables, tackle, 1, True)) == n.move("Tackle")
+    none = sel._replace(selected_temp=sel.selected_temp.at[1].set(0))
+    assert int(me_first_copy(tables, none, 1, True)) == 0  # MOVE_NONE has no power (:7300)
+
+
+@pytest.mark.slow  # a step against the reference
+def test_a_locked_pursuer_pursues_with_its_carried_move_in_both_engines(tables, names):
+    """E2-ML-8: the foe locked into Rollout carries Pursuit's TEMP_VALUE, so TryPursuit reads
+    Pursuit (battle_script.c:6909) and chases the player's switch, spending its PP (:6914), in
+    both engines."""
+    s, acts = _carried_board(tables, names)
+    out = assert_matches_reference(tables, s, tuple(int(a) for a in acts), O)
+    assert int(out.hp[0, 0]) < int(s.hp[0, 0])  # the Pursuit hit the switcher
+    assert int(out.pp[1, 0, 1]) == int(s.pp[1, 0, 1]) - 1
+    assert int(out.selected_temp[1]) == 2
+
+
+@pytest.mark.slow  # a step against the reference
+def test_dead_selection_values_are_canonical_in_both_engines(tables, names):
+    """E2-ML-9: at the turn boundary an unrun pick leaves no trace. The sleeping player picks
+    Growl, which does not run; it can pick next turn with a usable move, so its moveSlot and
+    TEMP_VALUE are rewritten before any read (bcp.c:445-447, :525-526): both 0. The foe has no PP
+    left (STRUGGLING_ALL, bcp.c:433-442): its carried TEMP_VALUE stays readable (Rage check,
+    bcp.c:844; TryPursuit, battle_script.c:6909) and is kept; its moveSlot has no reader under
+    Struggle (battle_lib.c:1382-1383, battle_script.c:6752): 0."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle", "Growl"], 35)],
+        [_mon(n, "Houndour", ["Pursuit", "Tackle"], 30)],
+    )
+    s = s._replace(
+        status=s.status.at[0, 0].set(Status.SLEEP),
+        status_counter=s.status_counter.at[0, 0].set(3),
+        pp=s.pp.at[1, 0, :2].set(0),
+        move_slot=s.move_slot.at[1].set(1),
+        selected_temp=s.selected_temp.at[1].set(2),
+    )
+    out = assert_matches_reference(tables, s, (1, 0), O)
+    assert int(out.status[0, 0]) == Status.SLEEP  # the pick never ran
+    assert [int(out.move_slot[0]), int(out.selected_temp[0])] == [0, 0]
+    assert [int(out.move_slot[1]), int(out.selected_temp[1])] == [0, 2]
+
+
+def _struggling_pursuer_board(tables, names):
+    """E2-ML-8, review 5 #2: the foe's only move, Pursuit, is disabled, so its FIGHT Struggles
+    (STRUGGLING_ALL, bcp.c:433-434) and keeps the TEMP_VALUE 1 of its last Pursuit; TryPursuit has
+    no Disable or Struggle test (battle_script.c:6899-6916), so it chases the player's switch."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 35), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Pursuit"], 35)],
+    )
+    s = s._replace(
+        disabled_move=s.disabled_move.at[1].set(n.move("Pursuit")),
+        disable_turns=s.disable_turns.at[1].set(3),
+        selected_temp=s.selected_temp.at[1].set(1),
+    )
+    return s, jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
+
+
+def test_a_carried_pursuit_draws_its_pursuit_in_the_laws(tables, names):
+    """Review 5 #2: on the locked (``_carried_board``, Rollout) and the Struggling pursuer, step
+    hits with the carried Pursuit (``step._pursuer_move``); ``outcome.pursuit_chase`` gives the
+    laws that move, so their damage table is Pursuit's, not the lock's or Struggle's."""
+    from nuzline.engine.damage import hit_damage_table
+    from nuzline.engine.outcome import pursuit_chase
+
+    pursuit = names.move("Pursuit")
+    for board, old in (
+        (_carried_board, "Rollout"),
+        (_struggling_pursuer_board, "Struggle"),
+    ):
+        s, acts = board(tables, names)
+        fires, pursues, move = (np.asarray(x) for x in pursuit_chase(tables, s, acts))
+        assert fires.tolist() == [False, True] and pursues.tolist() == [False, True]
+        assert int(move[1]) == pursuit
+        laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+        assert bool(laws.relevant.crit[1, 0]) and bool(laws.relevant.roll[1, 0])
+        want = np.asarray(hit_damage_table(tables, s, 1, pursuit))
+        stale = np.asarray(hit_damage_table(tables, s, 1, names.move(old)))
+        assert not np.array_equal(want, stale)  # the board tells the two moves apart
+        np.testing.assert_array_equal(laws.damage[1, 0], want, err_msg=old)
+
+
+@pytest.mark.slow  # two mask-sound steps (one compiled step program)
+def test_a_carried_pursuit_is_mask_sound(tables, names):
+    """Review 5 #2: the locked and the Struggling carried-Pursuit boards are mask-sound."""
+    from tests.engine.test_enumerate import _assert_mask_sound
+
+    arbitrary = O._replace(
+        crit=jnp.ones((2, MAX_HITS), jnp.int8), roll=jnp.zeros((2, MAX_HITS), jnp.int8)
+    )
+    for board in (_carried_board, _struggling_pursuer_board):
+        s, acts = board(tables, names)
+        _assert_mask_sound(tables, s, np.asarray(acts), arbitrary, 0)
+
+
+@pytest.mark.slow  # compiles the action phase (one engine)
+def test_turn_muls_read_this_turns_selection(tables, names):
+    """Review 5 #1: the search's turn powerMul (``playout.turn_muls``, through
+    ``step.replacement_power_mul``) reads this turn's TEMP_VALUE, as step does: the foe picks
+    Pursuit while its last selection was Tackle (20), and Tackle after a Pursuit selection (10).
+    Step's own value is the chase it plays (``shown["pursuit"]``: TryPursuit,
+    battle_script.c:6884-6935, from the switch, subscript_switch_pokemon.s:11), the condition its
+    ``_action_phase`` gives ``replacement_power_mul`` on the selected state. ``ts_power_mul`` is
+    written only at a stop (``_execute_actions``' stop dict), so this unpaused turn leaves it 0.
+    A raw-state ``turn_muls`` (84278d86) reads the previous TEMP_VALUE: 10 then 20."""
+    from nuzline.engine.step import NORMAL_POWER_MUL, PURSUIT_POWER_MUL, _action_phase
+    from nuzline.search.playout import turn_muls
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 35), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Tackle", "Pursuit"], 35)],
+    )
+    phase = jax.jit(_action_phase)
+    for last_temp, foe_action, want in ((1, 1, PURSUIT_POWER_MUL), (2, 0, NORMAL_POWER_MUL)):
+        board = s._replace(selected_temp=s.selected_temp.at[1].set(last_temp))
+        acts = jnp.asarray([MOVE_ACTIONS + 1, foe_action], jnp.int32)
+        shown = phase(tables, board, acts, O)[1]
+        chased = bool(int(shown["pursuit"]))
+        stepped = PURSUIT_POWER_MUL if chased else NORMAL_POWER_MUL
+        assert stepped == want
+        assert int(turn_muls(tables, board, acts)[0]) == stepped
+
+
+def test_selection_temps_of_items_switches_and_struggle(tables, names):
+    """E2-ML-8 (review 5): ``selection_temps`` per command. A switch writes its party slot,
+    0, 1 or 5 (bcp.c:595); a bag item writes 0 (its BattleItemUse, :565: the stated assumption);
+    a FIGHT 1 + its slot (:525), under an Encore 0 (:447); a Struggling FIGHT keeps the carried
+    value (:433-434)."""
+    from nuzline.engine.order import selection_temps
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 30 + k) for k in range(6)],
+        [_mon(n, "Houndour", ["Tackle", "Pursuit", "Leer"], 35)],
+    )
+    s = s._replace(
+        active=s.active.at[0].set(2),
+        selected_temp=jnp.asarray([3, 3], s.selected_temp.dtype),
+        trainer_items=s.trainer_items.at[1, 0].set(n.item("Potion")),
+        trainer_item_count=s.trainer_item_count.at[1].set(1),
+    )
+
+    def temps(board, a0, a1):
+        return [int(x) for x in selection_temps(tables, board, jnp.asarray([a0, a1], jnp.int32))]
+
+    assert temps(s, MOVE_ACTIONS + 0, 2) == [0, 3]
+    assert temps(s, MOVE_ACTIONS + 1, FIRST_ITEM_ACTION) == [1, 0]
+    assert temps(s, MOVE_ACTIONS + 5, 0) == [5, 1]
+    encored = s._replace(
+        encore_move=s.encore_move.at[1].set(n.move("Leer")),
+        encore_slot=s.encore_slot.at[1].set(2),
+        encore_turns=s.encore_turns.at[1].set(2),
+    )
+    assert temps(encored, 0, 2)[1] == 0
+    struggling = s._replace(pp=s.pp.at[1, 0].set(0))  # no usable move: Struggle
+    assert temps(struggling, 0, 0) == [1, 3]
+
+
+def test_a_slot_five_switch_carries_the_iv_word(tables, names):
+    """E2-ML-8 (review 5): TEMP_VALUE 5 (a switch to party slot 5) makes Battler_SelectedMove read
+    ``moves[4]``, the low 16 bits of the IV bitfield after the four move slots (battle_mon.h:64-72):
+    HP IV 4, Attack IV 7, Defense IV 0 and an even Speed IV give 4 | 7 << 5 = 228, Pursuit; an odd
+    Speed IV sets bit 15, an id past the move table: MOVE_NONE (the stated assumption). Both
+    engines read it alike."""
+    from nuzline.engine.order import past_moves_word, selection_temps
+    from nuzline.reference.engine import _selected_move
+
+    n = names
+    pursuit = n.move("Pursuit")
+    assert pursuit == 228  # the decomp's MOVE_PURSUIT
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 30 + k) for k in range(6)],
+        [_mon(n, "Houndour", ["Tackle"], 35)],
+    )
+    switch = jnp.asarray([MOVE_ACTIONS + 5, 0], jnp.int32)
+    assert int(selection_temps(tables, s, switch)[0]) == 5
+    ivs = [0] * 6
+    ivs[Stat.HP], ivs[Stat.ATK], ivs[Stat.DEF], ivs[Stat.SPE] = 4, 7, 0, 30
+    board = s._replace(
+        active=s.active.at[0].set(5),
+        ivs=s.ivs.at[0, 5].set(jnp.asarray(ivs, s.ivs.dtype)),
+        selected_temp=s.selected_temp.at[0].set(5),
+    )
+    assert int(past_moves_word(board, 0)) == pursuit
+    assert int(battler_selected_move(board, 0, True)) == pursuit
+    assert _selected_move(to_ref(board), 0) == pursuit
+    ivs[Stat.SPE] = 31
+    odd = board._replace(ivs=board.ivs.at[0, 5].set(jnp.asarray(ivs, s.ivs.dtype)))
+    assert int(battler_selected_move(odd, 0, True)) == 0
+    assert _selected_move(to_ref(odd), 0) == 0
+
+
+def test_a_locked_battler_orders_by_its_move_slot_in_the_laws(tables, names):
+    """E2-ML-5 (review 5): the laws' loose branch reads CalcTurnOrder's priority through
+    ``order_moves`` (moves[moveSlot], battle_lib.c:1375-1397): at equal speed the locked player's
+    slot 0, Quick Attack (+1), against the foe's Tackle reads no speed tie; slot 1, Rollout (0),
+    does."""
+    s, acts = _locked_order_board(tables, names)
+    s = s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(int(s.stats[0, 0, Stat.SPE - 1])))
+    loose = jax.jit(outcome_laws, static_argnames=("loose",))
+
+    def tie(board):
+        return bool(np.asarray(loose(tables, board, acts, loose=True).relevant.speed_tie))
+
+    assert not tie(s)
+    assert tie(s._replace(move_slot=s.move_slot.at[0].set(1)))
+
+
+def test_a_four_battler_berry_out_of_range_needs_another_move(tables, names):
+    """E2-ML-7 (review 5): at B = 4 a Wiki Berry holder above half HP comes into range before an
+    earlier MoveEnd only through another battler's move: with the other three switching, its
+    turn-start berry check is not read; with them using Tackle, it is."""
+    from nuzline.engine.format import DOUBLES
+    from tests.engine.d2_states import four, party_of
+
+    s = four(tables, names, DOUBLES)
+    p, slot = party_of(s, 0), int(s.active[0])
+    s = s._replace(
+        item=s.item.at[p, slot].set(names.item("Wiki Berry")),
+        nature=s.nature.at[p, slot].set(ADAMANT),
+        stats=s.stats.at[p, slot, Stat.SPE - 1].set(1),  # it acts last
+    )
+    moves = jnp.asarray([1, 0, 0, 0], jnp.int32)  # Swords Dance; the others Tackle
+    switches = jnp.asarray([1, MOVE_ACTIONS + 2, MOVE_ACTIONS + 2, MOVE_ACTIONS + 3], jnp.int32)
+    read = [
+        bool(np.any(np.asarray(_laws(tables, s, a).reads.berry_start)[:, 0]))
+        for a in (moves, switches)
+    ]
+    assert read == [True, False]
+
+
+def _carrying(state, names, b: int):
+    """Battler ``b`` knows only Pursuit, disabled: its FIGHT Struggles (bcp.c:433-434) and keeps
+    the TEMP_VALUE 1 of its last Pursuit, which TryPursuit reads with no Disable or Struggle test
+    (battle_script.c:6899-6916, battle_lib.c:2858-2868)."""
+    from tests.engine.d2_states import with_moves
+
+    state = with_moves(state, names, b, ["Pursuit"])
+    return state._replace(
+        disabled_move=state.disabled_move.at[b].set(names.move("Pursuit")),
+        disable_turns=state.disable_turns.at[b].set(3),
+        selected_temp=state.selected_temp.at[b].set(1),
+    )
+
+
+def _idle_four(tables, names):
+    """DOUBLES, every battler knows only Swords Dance (no crit, no roll of its own)."""
+    from nuzline.engine.format import DOUBLES
+    from tests.engine.d2_states import four, with_moves
+
+    s = four(tables, names, DOUBLES)
+    for b in range(4):
+        s = with_moves(s, names, b, ["Swords Dance"])
+    return s
+
+
+def _assert_chase_widened(laws, b: int):
+    """Battler ``b``'s laws read its chase beside its own move (``outcome.chase_widening``): the
+    crit at hit 0 and its roll, classed over every stage's odds, no damage classes, no hit gate."""
+    from nuzline.engine.outcome import CRIT_WRITE_VARIANTS
+
+    assert bool(laws.relevant.crit[b, 0]) and bool(laws.relevant.roll[b, 0])
+    assert bool(np.all(laws.crit_possible[b, CRIT_WRITE_VARIANTS:]))
+    assert not bool(np.any(laws.compress[:, b, 0]))
+    assert not bool(laws.reads.hit_gated[b])
+    assert not bool(laws.no_crit[b])
+
+
+def test_b4_a_diagonal_switcher_meets_a_carried_pursuit_in_the_laws(tables, names):
+    """Review 6 #1: at B = 4 TryPursuit scans every battler of the other side (battle_script.c:
+    6899-6904), so battler 0, Struggling with a carried Pursuit, chases battler 3's switch
+    (``_foe(0)`` is 1). It may chase or Struggle at its own turn: both moves' reads are relevant
+    (``chase_widening``'s ``both``). Struggle alone already makes its crit and roll relevant; what
+    the old laws lacked is the chase's crit classes (every stage's odds) and the lifted hit gate
+    (the chase has no accuracy check, subscript_pursuit.s:8-12)."""
+    from nuzline.engine.outcome import chase_widening, pursuit_chase
+
+    s = _carrying(_idle_four(tables, names), names, 0)
+    acts = jnp.asarray([0, 0, 0, MOVE_ACTIONS + 2], jnp.int32)
+    fires, pursues, move = (np.asarray(x) for x in pursuit_chase(tables, s, acts))
+    assert fires.tolist() == [True, False, False, False]
+    assert pursues.tolist() == [False] * 4  # a FIGHT of another move: its own move may run
+    assert int(move[0]) == names.move("Struggle")
+    both, _, chase = (np.asarray(x) for x in chase_widening(tables, s, acts, move, fires))
+    assert both.tolist() == [True, False, False, False]
+    assert int(chase[0]) == names.move("Pursuit")
+    _assert_chase_widened(jax.tree.map(np.asarray, _laws(tables, s, acts)), 0)
+
+
+def test_b4_the_chain_reaches_the_second_pursuer_in_the_laws(tables, names):
+    """Review 6 #1: battler 0 switches; battler 1 (Struggling, carried Pursuit) is the first
+    pursuer and battler 3 the next while the switcher lives (subscript_pursuit.s:79-82 -> :8).
+    Battler 3 is Encored into Pursuit and picks a switch: it chases or runs no move, so its laws
+    are Pursuit's (``pursues``); before, ``fires[3]`` tested battler 2 (``_foe(3)``) and its
+    draws were not read."""
+    from nuzline.engine.outcome import pursuit_chase
+    from tests.engine.d2_states import with_moves
+
+    s = _carrying(_idle_four(tables, names), names, 1)
+    s = with_moves(s, names, 3, ["Pursuit"])
+    s = s._replace(
+        encore_move=s.encore_move.at[3].set(names.move("Pursuit")),
+        encore_slot=s.encore_slot.at[3].set(0),
+        encore_turns=s.encore_turns.at[3].set(3),
+    )
+    acts = jnp.asarray([MOVE_ACTIONS + 2, 0, 0, MOVE_ACTIONS + 2], jnp.int32)
+    fires, pursues, move = (np.asarray(x) for x in pursuit_chase(tables, s, acts))
+    assert fires.tolist() == [False, True, False, True]
+    assert pursues.tolist() == [False, False, False, True]
+    assert int(move[3]) == names.move("Pursuit")
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    _assert_chase_widened(laws, 1)
+    assert bool(laws.relevant.crit[3, 0]) and bool(laws.relevant.roll[3, 0])
+
+
+def test_a_u_turn_meets_a_carried_pursuit_in_the_laws(tables, names):
+    """Review 6 #1: U-turn calls the same TryPursuit (subscript_attack_then_switch_out.s:54). The
+    foe, Struggling with a carried Pursuit, chases the player's U-turn when it has not acted, or
+    Struggles first: both moves' reads are relevant (B = 2)."""
+    from nuzline.engine.outcome import chase_widening, pursuit_chase
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Pursuit"], 30)],
+    )
+    s = _carrying(s, names, 1)
+    acts = jnp.asarray([0, 0], jnp.int32)
+    fires, _, move = pursuit_chase(tables, s, acts)
+    assert not bool(np.any(np.asarray(fires)))  # no switch action
+    both = np.asarray(chase_widening(tables, s, acts, move, fires)[0])
+    assert both.tolist() == [False, True]
+    _assert_chase_widened(jax.tree.map(np.asarray, _laws(tables, s, acts)), 1)
+
+
+def test_a_u_turn_chase_by_a_carried_pursuit_reaches_acid_rain(tables, names):
+    """Review 7 #1: the Struggling carried-Pursuit foe chases the player's U-turn
+    (subscript_attack_then_switch_out.s:54); a KO there runs subscript_pursuit.s:115 on a nonzero
+    mask (:39 -> _166). Acid Rain's pursuer mask takes the battler whose TryPursuit move is a
+    Pursuit (``chase_pursuers``), not only a battler running one: Struggle's effect alone
+    misses the pair."""
+    from nuzline.engine.ids import FieldCondition
+    from nuzline.engine.order import move_effects
+    from nuzline.engine.outcome import acid_rain_reachable, chase_pursuers
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Pursuit"], 30)],
+    )
+    s = _carrying(s, names, 1)
+    s = s._replace(field_mask=jnp.asarray(int(FieldCondition.SANDSTORM_TEMP), s.field_mask.dtype))
+    acts = jnp.asarray([0, 0], jnp.int32)
+    moves = jnp.asarray([n.move("U-turn"), n.move("Struggle")], jnp.int32)
+    effect, _ = move_effects(tables, s, moves)
+    uses = jnp.asarray([True, True])
+    pursuers = chase_pursuers(tables, s, acts)
+    assert np.asarray(pursuers).tolist() == [False, True]
+    assert not bool(acid_rain_reachable(s, acts, uses, effect))  # Struggle's effect alone
+    assert bool(acid_rain_reachable(s, acts, uses, effect, pursuers))
+    # End to end (review 8): a due Future Sight on the foe reads the mask at the turn's end
+    # (bcp.c:2926-2937, :2972-2974). Deep fog alone minus the pursuer's index 1 (:115's
+    # sub_to_zero) is 0x7FFF: fog off, the Gravity counter on, so the hit's grid opens that
+    # field (``_future_fields``); without the carried TEMP_VALUE no chase, no such field.
+    from nuzline.engine.outcome import future_thresholds
+    from tests.engine.test_e1_batch_h import _pending
+
+    fog = _pending(
+        s._replace(field_mask=jnp.asarray(int(FieldCondition.DEEP_FOG), s.field_mask.dtype)),
+        names,
+        1,
+        0,
+    )
+    plain = fog._replace(selected_temp=fog.selected_temp.at[1].set(0))  # nothing carried
+    # future_thresholds returns (values bool[B, 101], loose bool[B]): the defender's possible
+    # thresholds (E4 future_values, a3113932). Gravity on with fog off adds the clipped 100.
+    chased = np.asarray(future_thresholds(tables, fog, acts, moves)[0][1])
+    unchased = np.asarray(future_thresholds(tables, plain, acts, moves)[0][1])
+    assert bool(np.all(chased | ~unchased)) and bool(np.any(chased & ~unchased))
+
+
+def test_b4_a_switch_chase_is_cut_only_by_the_chased_battlers_armor(tables, names):
+    """Review 7 (should-fix): battler 0 chooses Pursuit and diagonal battler 3 switches; battler 1
+    (``_foe(0)``) holds Shell Armor, battler 3 does not. The chase's defender is the switcher
+    (battle_script.c:6927), so the crit is not cut (the old cut read battler 1's armor)."""
+    from tests.engine.d2_states import with_ability, with_moves
+
+    s = with_moves(_idle_four(tables, names), names, 0, ["Pursuit"])
+    s = with_ability(s, 1, AbilityId.SHELL_ARMOR)
+    acts = jnp.asarray([0, 0, 0, MOVE_ACTIONS + 2], jnp.int32)
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts))
+    assert not bool(laws.no_crit[0])
+    assert bool(laws.relevant.crit[0, 0])
+    shelled = with_ability(s, 3, AbilityId.SHELL_ARMOR)  # every battler it may meet is armored
+    assert bool(np.asarray(_laws(tables, shelled, acts).no_crit)[0])
+
+
+def test_b4_a_takeover_pursuit_meets_the_u_turn_users_armor(tables, names):
+    """Review 7 #2: battler 1 chose Tackle; in the takeover variant (B11-1) battler 0's faster
+    Encore makes its last move, Pursuit, its encoredMove, and battler 2's U-turn then meets it
+    (TryPursuit's Encore branch, battle_script.c:6905-6907). Battler 0, its own target, holds
+    Shell Armor; the U-turn user does not: the takeover row's crit is not cut."""
+    from nuzline.engine.outcome import chase_widening
+    from tests.engine.d2_states import with_ability, with_moves
+
+    n = names
+    s = _idle_four(tables, names)
+    s = with_moves(s, names, 0, ["Encore"])
+    s = with_moves(s, names, 1, ["Tackle", "Pursuit"])
+    s = with_moves(s, names, 2, ["U-turn"])
+    s = with_ability(s, 0, AbilityId.SHELL_ARMOR)
+    s = s._replace(last_move=s.last_move.at[1].set(n.move("Pursuit")))
+    acts = jnp.asarray([0, 0, 0, 0], jnp.int32)
+    taken = jnp.asarray([False, True, False, False])
+    moves = jnp.asarray(
+        [n.move("Encore"), n.move("Pursuit"), n.move("U-turn"), n.move("Swords Dance")], jnp.int32
+    )
+    fires = jnp.zeros(4, bool)
+    both, armor, _ = (np.asarray(x) for x in chase_widening(tables, s, acts, moves, fires, taken))
+    assert not bool(armor[1]) and not bool(both[1])  # the chase move is the run move
+    laws = jax.tree.map(np.asarray, _laws(tables, s, acts, None, taken))
+    assert not bool(laws.no_crit[1])
+
+
+@pytest.mark.slow  # a step against the reference
+def test_a_takeover_trump_card_reads_its_move_slot_pp(tables, names):
+    """Review 5 #3: the faster foe encores the player into its last move, Trump Card, over its
+    chosen Tackle (slot 1): FightCommand changes moveTemp, not moveSlot (bcp.c:1869-1873), so
+    CalcTrumpCardPower reads ppCur[ATTACKER_MOVE_SLOT] (battle_script.c:7237), Tackle's 1 PP:
+    80, not Trump Card's 4 after its decrement (40); in both engines."""
+    from tests.engine.test_batch13 import _dfr, _loss
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Eevee", ["Trump Card", "Tackle"], 30)],
+        [_mon(n, "Bulbasaur", ["Tackle", "Encore"], 30)],
+    )
+    s = s.with_pp(0, 0, [5, 1, 0, 0])
+    s = s._replace(
+        last_move=s.last_move.at[0].set(n.move("Trump Card")),
+        stats=s.stats.at[1, 0, Stat.SPE - 1].set(200),
+    )
+    m = n.move("Trump Card")
+    assert _dfr(tables, s, m, 80) != _dfr(tables, s, m, 40)
+    out = assert_matches_reference(tables, s, (1, 1), O)
+    assert int(out.encore_move[0]) == m
+    assert int(out.pp[0, 0, 0]) == 4 and int(out.pp[0, 0, 1]) == 1
+    assert _loss(s, out) == _dfr(tables, s, m, 80)
+
+
+@pytest.mark.slow  # a step against the reference
+def test_an_unheld_encore_counter_drains_its_move_slot(tables, names):
+    """Review 5 #3: the player locked into Bide (moveSlot 2, Growl's, from its last selection) and
+    encored into Tackle, whose encored slot 1 now holds Counter: FightCommand runs Counter and ends
+    the Encore (bcp.c:1874-1883). The faster Pressure foe's Tackle lets it pass, and
+    BattleSystem_DecPPForPressure (battle_script.c:4646; battle_lib.c:7390-7395) takes one more
+    PP from ppCur[moveSlot]: Growl's, in both engines (the action's slot 0 and the Encore slot 1
+    keep theirs from it)."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Eevee", ["Supersonic", "Counter", "Growl"], 30)],
+        [_mon(n, "Bulbasaur", ["Tackle"], 30)],
+    )
+    s = _pressure(s, 1)._replace(
+        locked_move=s.locked_move.at[0].set(n.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(2),
+        encore_move=s.encore_move.at[0].set(n.move("Tackle")),
+        encore_slot=s.encore_slot.at[0].set(1),
+        encore_turns=s.encore_turns.at[0].set(2),
+        move_slot=s.move_slot.at[0].set(2),
+        stats=s.stats.at[1, 0, Stat.SPE - 1].set(200),
+    )
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # Counter hit back
+    assert int(out.pp[0, 0, 2]) == int(s.pp[0, 0, 2]) - 1  # Growl: the Pressure drain
+    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0])
+
+
+@pytest.mark.slow  # a pause and its resume against the reference
+def test_a_takeover_u_turn_leaves_a_choice_newcomer_unlocked(tables, names):
+    """E2-ML-4 (review 5): the mid-turn takeover of ``test_a_mid_turn_encore_takeover_of_u_turn_
+    resumes_with_it`` with a Choice Band newcomer: the resumed tail's UpdateMoveBuffers reads
+    moveTemp, U-turn, whose SYSCTL_UTURN_ACTIVE exempts the Choice lock (bcp.c:3923-3929), not
+    the chosen Tackle, which would lock the newcomer into it."""
+    n = names
+    s = make_state(
+        tables,
+        [
+            _mon(n, "Scyther", ["U-turn", "Tackle"], 30),
+            _mon(n, "Geodude", ["Tackle"], 30, "Choice Band"),
+        ],
+        [_mon(n, "Bulbasaur", ["Tackle", "Encore"], 30)],
+    )
+    s = s._replace(
+        last_move=s.last_move.at[0].set(n.move("U-turn")),
+        stats=s.stats.at[1, 0, Stat.SPE - 1].set(200),
+    )
+    paused = assert_matches_reference(tables, s, (1, 1), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_move_temp) == n.move("U-turn")
+    after = _resume_after(tables, paused, 1)
+    assert int(after.active[0]) == 1 and int(after.choice_lock[0]) == 0
+
+
+def test_a_klutz_lansat_at_its_pinch_reads_its_crit_after_a_gastro_acid(tables, names):
+    """E2-ML-7 (manager CLASS 7): a Klutz Lopunny holding a Lansat Berry at a quarter of its HP;
+    the faster foe's Gastro Acid takes the Klutz, and that action's MoveEnd pass eats the berry
+    (TriggerHeldItemOnStatus over every battler, battle_lib.c:4151-4165, :5261-5271; the item
+    read through Battler_HeldItem, :5352-5363), so Lopunny's Tackle can crit at the raised
+    stage. Above its pinch with no HP-lowering foe move: no variant."""
+    from nuzline.engine.outcome import CRIT_WRITE_VARIANTS, crit_variants
+
+    s = roark_state(
+        tables,
+        names,
+        player_species="Lopunny",
+        player_ability="Klutz",
+        player_moves=["Tackle"],
+        opp_moves=["Gastro Acid"],
+        opp_faster=True,
+    )
+    s = _item(s, 0, 0, "Lansat Berry", names)
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4)
+    acts = A("Tackle", "Gastro Acid", s, names)
+    w = CRIT_WRITE_VARIANTS
+
+    def opened(board):
+        odds, ok = (np.asarray(x) for x in crit_variants(tables, board, acts))
+        return bool(np.any(ok[0, 1:w] & (odds[0, 1:w] != odds[0, 0])))
+
+    assert opened(s)
+    assert not opened(s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4 + 1))
 
 
 def test_own_tempo_and_safeguard_stop_the_berry_confusion(tables, names):

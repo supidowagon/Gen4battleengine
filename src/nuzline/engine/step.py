@@ -91,8 +91,10 @@ from nuzline.engine.actions import (
     imprisoning_foe,
     locked_slot,
     move_imprisoned,
+    picks_no_command,
     replacement_bench,
     sealed_mask,
+    usable_moves,
 )
 from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
@@ -274,6 +276,7 @@ from nuzline.engine.order import (
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
+    battler_selected_move,
     call_kind,
     called_move,
     claw_flags,
@@ -293,6 +296,7 @@ from nuzline.engine.order import (
     selected_move,
     sort_mon_speed,
     truant_loafs,
+    with_selection,
 )
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -347,6 +351,12 @@ MODE_FULL, MODE_PURSUIT, MODE_RESUME, MODE_REFLECT = 0, 1, 2, 3
 # BtlCmd_TryProtection caps protectSuccessTurns at NELEMS(sProtectSuccessRate) - 1
 # (battle_script.c:5182-5184; outcome.PROTECT_RATES).
 PROTECT_CHAIN_MAX = 3
+
+# The charge moves whose script strikes under SYSCTL_LAST_OF_MULTI_TURN as well as under the lock,
+# by decomp battle effect (``move_ai_effect``): CHARGE_TURN_HIGH_CRIT (Razor Wind,
+# effect_script_0039.s:6) and SHADOW_FORCE (effect_script_0272.s:6). A grep for LAST_OF_MULTI under
+# res/battle/scripts/effects finds only these two and Bide's effect_script_0026.s:6.
+LAST_OF_MULTI_STRIKE_EFFECTS = (39, 272)
 
 # The turn's events (``step_events``, ``turn_events``): what each side's action showed,
 # recorded where ``execute_actions`` runs it. ``engine.observe`` reads them; ``step``
@@ -1179,21 +1189,31 @@ def _use_move(
     move, struggling, locked = choice[:3]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     # ATTACKER_MOVE_SLOT (common.h:8) is moveSlot[attacker], written only at selection
-    # (bcp.c:445, :526); the Encore takeover below (bcp.c:1868-1872) changes moveTemp, not
-    # moveSlot, so TryGrudge zeroes the chosen slot (review b2-fix #2).
-    chosen_slot = slot
+    # (bcp.c:445, :526; ``state.move_slot``, which ``_action_phase`` wrote, E2-ML-5); the Encore
+    # takeover below (bcp.c:1868-1872) changes moveTemp, not moveSlot, so TryGrudge zeroes the
+    # selected slot (review b2-fix #2), a locked battler's last selected one. A reflected pass
+    # (the Magic Coat holder's) reads none: no move with a moveSlot reader (Trump Card, Grudge,
+    # Counter, Mirror Coat, Metal Burst) has MOVE_FLAG_MAGIC_COAT (res/moves/*/data.json); 0
+    # there, as the reference's ``_Turn.chosen_slot`` (review 6 nit).
+    chosen_slot = jnp.where(reflected_pass, 0, state.move_slot[side].astype(_I32))
     user = state.active[side]
     # BattleControllerPlayer_FightCommand (bcp.c:1866-1883), B10-9: after Struggle, an encored
     # battler whose encored slot holds the encored move uses it (and that slot's PP: the no-PP
     # failure below), whatever it chose (a foe's faster Encore this turn); a slot that no longer
-    # holds it ends the encore (below).
+    # holds it runs that slot's move (moveTemp = moves[encoredMoveSlot], :1874-1883) and ends the
+    # encore (below): a lock's move gives way to it too (the lock is :1885-1888, E2-ML-3).
     encore_slot = state.encore_slot[side].astype(_I32)
-    encore_holds = (state.encore_move[side] != 0) & (
-        state.moves[party(fmt, side), user, encore_slot] == state.encore_move[side]
-    )
-    encored_now = encore_holds & ~jnp.asarray(struggling, bool) & ~reflected_pass
-    move = jnp.where(encored_now, state.encore_move[side].astype(_I32), move)
-    slot = jnp.where(encored_now, encore_slot, slot)
+    encore_slot_move = state.moves[party(fmt, side), user, encore_slot].astype(_I32)
+    encore_set = state.encore_move[side] != 0
+    encore_holds = encore_set & (encore_slot_move == state.encore_move[side])
+    encore_runs = encore_set & ~jnp.asarray(struggling, bool) & ~reflected_pass & head_on
+    encored_now = encore_holds & encore_runs
+    move = jnp.where(encore_runs, encore_slot_move, move)
+    slot = jnp.where(encore_runs, encore_slot, slot)
+    # A tail mode runs the paused action's own moveTemp, kept at the stop (``ts_move_temp``,
+    # E2-ML-4): FightCommand ran once, at the head (the newcomer's Encore, or the user's own
+    # Encore that ended there, plays no part).
+    move = jnp.where(head_on, move, state_in.ts_move_temp.astype(_I32))
     # BattleControllerPlayer_FightCommand (bcp.c:1900) fixes the defender with the move after the
     # Encore takeover (``moveTemp``) and the stored target (D2-1) at the action's start: the
     # resolver (``targets.resolve``, D2-4). ``speed_order``: monSpeedOrder, D3's input (B = 2: the
@@ -1416,7 +1436,10 @@ def _use_move(
     # deals 2 * storedDamage (damage.fixed_damage) at the last hitter, i.e. the foe's
     # active Pokemon, a replacement included. Nothing stored (subscript_bide_end.s:
     # "But it failed!") or the foe fainted (subscript_bide_no_target.s) ends the move
-    # here; either way the lock is released after the move (below).
+    # here. A release runs subscript_bide_end.s (or _no_target.s) first (bcp.c:2722-2724:
+    # commandNext = command), which clears VOLATILE_CONDITION_MOVE_LOCKED (:11; _no_target.s:9)
+    # before the move: a charge move then charges, Rollout and Uproar start their own lock, and
+    # that lock stays after the move. The stored damage stays until the move is done (below).
     biding = can_act & ~reflected_pass & (state.bide_turns[side] > 0)
     bide_left = jnp.maximum(state.bide_turns[side].astype(_I32) - 1, 0)
     state = state._replace(
@@ -1430,6 +1453,12 @@ def _use_move(
     # ends the move in subscript_bide_no_target.s. At B = 2 it is the foe while it lives.
     bide_def = targets.bide_defender(state, side, outcome.bide_target_draw[side])
     bide_stop = bide_ends & ((state.bide_damage[side] <= 0) | (bide_def == NO_DEFENDER))
+    # No uproar while biding: both are move locks, so ``unlock_move``'s uproar test is moot here.
+    state = state._replace(
+        locked_move=state.locked_move.at[side].set(
+            jnp.where(bide_ends, 0, state.locked_move[side]).astype(state.locked_move.dtype)
+        )
+    )
     can_act = can_act & ~bide_stop
     resolved = _redefend(resolved, side, bide_def, bide_ends)
     target_side = resolved.target_side
@@ -1498,9 +1527,9 @@ def _use_move(
     # selected move and struggling flag (``_act``); with none given the call finds nothing.
     me_first = jnp.asarray(0, _I32)
     if picks is not None:
-        copy_action, copy_move = picks[0][target_side], picks[1][0][target_side]
+        copy_action = picks[0][target_side]
         foe_fights = ~is_switch(copy_action) & ~is_item(copy_action)
-        copied = me_first_copy(tables, state, target_side, copy_move, foe_fights)
+        copied = me_first_copy(tables, state, target_side, foe_fights)
         me_first = jnp.where(jnp.asarray(moved, bool)[target_side], 0, copied)
     invoked = invoked_move(tables, state, side, move, outcome.call[side], me_first=me_first)
     call_failed = invoker & (
@@ -1527,7 +1556,13 @@ def _use_move(
     # E2 batch 10 family 7, the charge turn (B10-12..). A charge move's script (MoveFlag.CHARGE:
     # effect_script_0039.s, _0075.s, _0145.s, _0151.s, _0155.s, _0255.s, _0256.s, _0263.s, _0272.s)
     # attacks when its user is VOLATILE_CONDITION_MOVE_LOCKED (line 5: the second turn,
-    # ``locked_move``, PP spent on the first: bcp.c:335), when SolarBeam meets sun without Cloud
+    # ``locked_move``, PP spent on the first: bcp.c:335). Razor Wind (effect_script_0039.s:6) and
+    # Shadow Force (effect_script_0272.s:6) also attack under SYSCTL_LAST_OF_MULTI_TURN, which a
+    # Bide release sets before the move (subscript_bide_end.s:12, bcp.c:2722-2724) after clearing
+    # the lock (:11): on the release turn (``bide_ends``) these two strike and the other seven
+    # (lock test only: _0075.s, _0145.s, _0151.s, _0155.s, _0255.s, _0256.s, _0263.s) charge.
+    # The scripts' decomp effect id is ``move_ai_effect`` (MOVE_DATA(move).effect). It also attacks
+    # when SolarBeam meets sun without Cloud
     # Nine / Air Lock (effect_script_0151.s:5-6) or with a Power Herb (HOLD_EFFECT_CHARGE_SKIP,
     # line 6-7: subscript_item_skip_charge_turn.s removes it, :20). Otherwise it charges: the
     # direct TO_ATTACKER subscript_vanish_on_charge_turn.s locks the user into moveCur (:10,
@@ -1537,7 +1572,10 @@ def _use_move(
     # living foe keeps the user as its defender (HasNoTarget, bcp.c:2327-2334), so it charges.
     used_flags = tables.move_flags[used].astype(_I32)
     charge_move = (used_flags & MoveFlag.CHARGE) != 0
-    second_turn = charge_move & (state.locked_move[side] != 0)
+    strikes_on_release = jnp.isin(
+        tables.move_ai_effect[used].astype(_I32), jnp.asarray(LAST_OF_MULTI_STRIKE_EFFECTS, _I32)
+    )
+    second_turn = charge_move & ((state.locked_move[side] != 0) | (bide_ends & strikes_on_release))
     sun_now = (
         ((used_flags & MoveFlag.SUN_SKIP) != 0)
         & fcm.sun(fcm.weather_bits(state))
@@ -1655,13 +1693,14 @@ def _use_move(
     # A Counter-family command that passes (its script's first command, effect_script_0089.s,
     # _0144.s, _0227.s) runs BattleSystem_DecPPForPressure on its new defender, the last
     # attacker (battle_script.c:4646, :4699, :7180; battle_lib.c:7390-7397): one more PP from
-    # the user's chosen slot (moveSlot: an invoker's when the invoker called it) while that slot
-    # has PP left and the defender has Pressure, ruling G-9.
+    # the user's moveSlot[attacker] (``chosen_slot``: the selection's, an invoker's when the
+    # invoker called it; a mid-turn Encore takeover changes moveTemp, not moveSlot, bcp.c:1869-1873;
+    # review 5, Must fix 3) while that slot has PP left and the defender has Pressure, ruling G-9.
     counter_pressure = (
         can_act & has_target & counter & counter_ok & pressure_holder(state, counter_def)
-    ) & (state.pp[party(fmt, side), user, slot] > 0)
+    ) & (state.pp[party(fmt, side), user, chosen_slot] > 0)
     state = state._replace(
-        pp=state.pp.at[party(fmt, side), user, slot].add(
+        pp=state.pp.at[party(fmt, side), user, chosen_slot].add(
             jnp.where(counter_pressure, -1, 0).astype(state.pp.dtype)
         )
     )
@@ -1716,8 +1755,12 @@ def _use_move(
     # script (bcp.c:3214) and its damage (G-60). So it reads the state before the script: a
     # charge move's second turn is still VOLATILE_CONDITION_MOVE_LOCKED (the script's
     # subscript_charge_move_cleanup.s:6 clears it later) and does not count; a Recycle (or a
-    # Natural Gift, a Power Herb) changes the held item only after it (B13-34).
-    state = metronome_update(tables, state, side, move, head_on & succeeded & ~reflect)
+    # Natural Gift, a Power Herb) changes the held item only after it (B13-34). A Bide release
+    # ran subscript_bide_end.s inside the status checks (bcp.c:3145-3150, :2722-2724), which set
+    # SYSCTL_LAST_OF_MULTI_TURN (:12): the release's move does not count (battle_lib.c:6165).
+    state = metronome_update(
+        tables, state, side, move, head_on & succeeded & ~reflect, bide_release=bide_ends
+    )
     # BattleSystem_UpdateLastResort (bcp.c:3218, battle_lib.c:3443-3459): in the same tail, but in
     # its not-NO_EFFECTS branch (bcp.c:3209-3218), so not after DecrementPP's MOVE_STATUS_NO_PP;
     # moveTemp (``move``) is recorded, before the move's script, so a Last Resort tests the count
@@ -2612,16 +2655,17 @@ def _use_move(
     # The script powers read from the action, not the hit's state (CalcMoveDamage's inPower):
     # Gyro Ball's monSpeedValues come from BranchActions' speed sort at the action's start
     # (bcp.c:888, battle_lib.c:1372-1373), before the status checks (a Quick Feet user's wake-up
-    # or thaw) and the Custap Berry (Unburden), B13-14; Trump Card reads ppCur of moveSlot (the
-    # invoker's slot for a called move) after the PP decrement above (battle_script.c:7237),
-    # B13-15.
+    # or thaw) and the Custap Berry (Unburden), B13-14; Trump Card reads ppCur[ATTACKER_MOVE_SLOT]
+    # (``chosen_slot``: the selection's moveSlot, the invoker's for a called move, never changed by
+    # an Encore takeover, bcp.c:1869-1873; review 5, Must fix 3) after the PP decrement above
+    # (battle_script.c:7237), B13-15.
     used_effect = tables.move_effect[used]
     in_power = jnp.where(
         used_effect == EffectId.GYRO_BALL,
         gyro_ball_speeds_power(tables, state_in, side, target_side),
         jnp.where(
             used_effect == EffectId.TRUMP_CARD,
-            trump_card_power(state.pp[party(fmt, side), user, slot]),
+            trump_card_power(state.pp[party(fmt, side), user, chosen_slot]),
             # Fling's movePower is the flung item's power (BattleSystem_FlingItem, lib.c:5859).
             jnp.where(used_effect == EffectId.FLING, fling_power, 0),
         ),
@@ -2717,7 +2761,9 @@ def _use_move(
             script_calc=script_calc,
             fling=fling_removed,
             fling_pick=fling_pick,
-            coat_slot=slot,
+            # The reflection's DecPPForPressure reads moveSlot[holder] (bcp.c:3083, battle_lib.c:
+            # 7390-7395), which only the selection writes: the selection's slot (review 5).
+            coat_slot=chosen_slot,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -3000,6 +3046,7 @@ def _use_move(
     note = stopped & head_on
     state = state._replace(
         ts_used=jnp.where(note, used, state.ts_used).astype(state.ts_used.dtype),
+        ts_move_temp=jnp.where(note, move, state.ts_move_temp).astype(state.ts_move_temp.dtype),
         ts_damaged=jnp.where(note, damaged0, state.ts_damaged).astype(state.ts_damaged.dtype),
         ts_dealt=jnp.where(note, dealt0, state.ts_dealt).astype(state.ts_dealt.dtype),
         ts_se=jnp.where(note, se_now, state.ts_se).astype(state.ts_se.dtype),
@@ -3071,14 +3118,21 @@ def _use_move(
     # moveSlot[attacker] (common.h:8, per battler), the paused action's selected slot
     # (``ts_actions``), and moveTemp is still the pivot move, not Struggle. Every battler's bit is
     # tried (doubles section 5 rule 4); ``try_grudge``'s side test drops the attacker's own side.
-    pivot_slot = jnp.clip(state_in.ts_actions[side].astype(_I32), 0, MOVE_ACTIONS - 1)
+    pivot_slot = state_in.move_slot[side].astype(_I32)  # moveSlot[attacker] (E2-ML-5)
     for b in range(fmt.B):
         state = try_grudge(
             state, side, user, pivot_slot, b, state_in.ts_grudge[b] != 0, False, resumed
         )
-    # The unleash script clears the lock (the Bide counter is spent); the move above still
-    # saw it locked, so effect_script_0026.s did not restart Bide.
-    state = _unlock(state, side, bide_ends & head_on)
+    # The release cleared the lock before the move (subscript_bide_end.s:11, above); the stored
+    # damage it dealt (bcp.c:2701) is hidden state, 0 once the move is done. A lock the move set
+    # (a charge turn, Rollout, Uproar) stays. Reference: ref_step's ``turn.bide_release``.
+    state = state._replace(
+        bide_damage=state.bide_damage.at[side].set(
+            jnp.where(bide_ends & head_on, 0, state.bide_damage[side]).astype(
+                state.bide_damage.dtype
+            )
+        )
+    )
     # BattleControllerPlayer_UpdateFlagsWhenHit (battle_controller_player.c:4499-4507),
     # reached on every path once the move was chosen (UPDATE_MOVE_BUFFERS, :3956, or
     # LOOP_SPREAD_MOVES, :3837): moveHit[defender] = the move when the attack message
@@ -3577,19 +3631,56 @@ def _move_slot(state: BattleState, b, move) -> jnp.ndarray:
     return jnp.argmax(row == jnp.asarray(move, _I32)).astype(_I32)
 
 
+def _pursuit_pp(state: BattleState, b, move) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(knows bool, pp int32)``: the PP cell ``BtlCmd_TryPursuit`` reads and spends for battler
+    ``b``'s ``move`` (battle_script.c:6910-6922): ``ppCur[Battler_SlotForMove]``. SlotForMove
+    gives LEARNED_MOVES_MAX (4) when no slot holds the move (battle_lib.c:2376-2387), and
+    ``ppCur[4]`` is ``ppUps[0]``, the byte after ``ppCur`` (battle_mon.h:99-100): reachable when a
+    carried TEMP_VALUE 5 reads an IV word that is Pursuit (``order.past_moves_word``) and the
+    Pokemon does not know it (review 7). ``knows``: a slot holds it (``_move_slot``'s)."""
+    fmt = format_of(state)
+    mon = state.active[b]
+    row = state.moves[party(fmt, b), mon].astype(_I32)
+    knows = jnp.any(row == jnp.asarray(move, _I32))
+    slot = _move_slot(state, b, move)
+    pp = jnp.where(
+        knows, state.pp[party(fmt, b), mon, slot], state.pp_ups[party(fmt, b), mon, 0]
+    ).astype(_I32)
+    return knows, pp
+
+
+def _spend_pursuit_pp(state: BattleState, b, move, spend) -> BattleState:
+    """``state`` with ``spend`` (0-2) taken from ``_pursuit_pp``'s cell: a move slot's PP, or
+    ``ppUps[0]`` where no slot holds the move (battle_mon.h:99-100)."""
+    fmt = format_of(state)
+    mon = state.active[b]
+    knows, _ = _pursuit_pp(state, b, move)
+    slot = _move_slot(state, b, move)
+    spend = jnp.asarray(spend, _I32)
+    on_pp = jnp.where(knows, spend, 0).astype(state.pp.dtype)
+    on_ups = jnp.where(knows, 0, spend).astype(state.pp_ups.dtype)
+    return state._replace(
+        pp=state.pp.at[party(fmt, b), mon, slot].add(-on_pp),
+        pp_ups=state.pp_ups.at[party(fmt, b), mon, 0].add(-on_ups),
+    )
+
+
 def _pursuer_move(state: BattleState, pursuer, action, move, struggling):
     """``(has, move)`` of ``BtlCmd_TryPursuit``'s move choice for ``pursuer`` (battle_script.c:
     6905-6909): its Encore move when the Encore slot still holds it, whatever it selected (a FIGHT,
-    a bag item or a switch), else ``Battler_SelectedMove`` (the chosen slot's move of a FIGHT, 0
-    for any other command and for Struggle: lib.c:2858-2868; ``move`` / ``struggling`` are
-    ``selected_move``'s). ``has`` is false when it has no move. D3-9 variant B (SF2 (e) did not
-    land): at B = 2 the command test stays, a FIGHT that is not Struggling only, and SF2 (e)
-    removes it."""
+    a bag item or a switch), else ``Battler_SelectedMove`` (lib.c:2858-2868): moves[TEMP_VALUE - 1]
+    of a FIGHT, 0 for any other command; a locked or Struggling battler reads the value it carries
+    from an earlier selection (``state.selected_temp``, E2-ML-8; ``move`` / ``struggling`` are
+    unused). ``has`` is false when it has no move. Every format (E2-ML-6, SF2 (e)):
+    at B = 2 too an Encored battler that picked a bag item, a switch or is locked pursues."""
     fmt = format_of(state)
     mon = state.active[pursuer]
-    picked = ~is_switch(action) & ~is_item(action) & ~jnp.asarray(struggling)
-    if fmt.B == 2:
-        return picked, move
+    # Battler_SelectedMove (E2-ML-8): moves[TEMP_VALUE - 1] of a FIGHT, the carried value for a
+    # locked or a Struggling battler (``state.selected_temp``, which the selection wrote).
+    fights = ~is_switch(action) & ~is_item(action)
+    move = battler_selected_move(state, pursuer, fights)
+    picked = move != 0
+    del struggling  # TryPursuit has no Struggle test: Battler_SelectedMove's own value
     enc = state.encore_move[pursuer].astype(_I32)
     holds = (enc != 0) & (
         state.moves[party(fmt, pursuer), mon, state.encore_slot[pursuer]].astype(_I32) == enc
@@ -3607,13 +3698,12 @@ def _pursuer_ready(tables: Tables, state: BattleState, pursuer, action, move, st
     mon = state.active[pursuer]
     status = state.status[party(fmt, pursuer), mon]
     has, used = _pursuer_move(state, pursuer, action, move, struggling)
-    slot = _move_slot(state, pursuer, used)
     return (
         ~truant_loafs(state, pursuer)
         & (state.over == 0)
         & has
         & (tables.move_effect[used] == EffectId.PURSUIT)
-        & (state.pp[party(fmt, pursuer), mon, slot] > 0)
+        & (_pursuit_pp(state, pursuer, used)[1] > 0)
         & (state.hp[party(fmt, pursuer), mon] > 0)
         & (status != Status.SLEEP)
         & (status != Status.FREEZE)
@@ -3627,6 +3717,8 @@ def next_pursuer(
     The first battler in index order (``i = 0 .. maxBattlers - 1``, never the fastest), on the
     other side from ``switcher`` (:6904), that is not MOVE_END (``move_end``, ``bool[B]``: its
     action is over, it pursued, was dragged, entered or fainted) and passes ``_pursuer_ready``.
+    ``state`` is one the selection wrote (``with_selection``: ``_action_phase``'s prologue), as
+    every caller inside the action loop has; a turn-start caller goes through ``first_pursuer``.
     ``pursuer`` is a masked placeholder (an opposing battler) when none is found."""
     fmt = format_of(state)
     found = jnp.bool_(False)
@@ -3648,8 +3740,15 @@ def first_pursuer(
     """``(int32, bool)``: the battler ``BtlCmd_TryPursuit`` takes against ``switcher`` at the turn
     start, and whether there is one (fcm-verify (d)): ``next_pursuer`` with only the absent
     battlers MOVE_END (nothing has acted yet; bcp.c:330-333). None: the battler across from
-    ``switcher`` (a masked placeholder)."""
+    ``switcher`` (a masked placeholder). A turn-start entry point: it reads ``state`` as this
+    turn's selection leaves it (``with_selection``, idempotent on a selected turn-start state), so
+    TryPursuit's ``Battler_SelectedMove`` reads this turn's TEMP_VALUE (battle_lib.c:2858-2868,
+    E2-ML-8) on a raw turn-start state too, as ``replacement_power_mul`` does. ``next_pursuer``
+    itself runs inside the action loop on the state ``_action_phase`` selected and never
+    re-selects: mid-turn an Encore or a lock that landed would change what ``selection_temps``
+    gives."""
     fmt = format_of(state)
+    state = with_selection(tables, state, actions)
     absent = jnp.stack([absent_now(state, b) for b in range(fmt.B)])
     found, who = next_pursuer(tables, state, switcher, actions, choices, absent)
     return who, found
@@ -3667,8 +3766,12 @@ def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.nd
     sees (``post_ko_switch_in``'s ``power_mul``): ``PURSUIT_POWER_MUL`` when the player's
     switch met Pursuit (``pursuit_fires`` on the turn-start ``state``, with each side's
     move fixed when chosen), else ``NORMAL_POWER_MUL``. The one source for playouts
-    (``playout._play``) and exact expansion (``expand._turn``), which must agree."""
+    (``playout._play``) and exact expansion (``expand._turn``), which must agree. It reads the
+    state as this turn's selection leaves it (``with_selection``, idempotent): TryPursuit's
+    ``Battler_SelectedMove`` reads this turn's TEMP_VALUE (E2-ML-8), never the previous turn's
+    a raw turn-start state carries (review 5, Must fix 1)."""
     fmt = format_of(state)
+    state = with_selection(tables, state, actions)
     picks = [selected_move(tables, state, side, actions[side]) for side in range(fmt.B)]
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
     pursued = pursuit_fires(tables, state, 0, actions, choices)
@@ -3696,39 +3799,28 @@ def _pursuit_hit(
     ``effects.shell_bell_heal``) or Life Orb's recoil (``effects.life_orb_recoil``; one
     holder holds one of them). The switching side chose no FIGHT, so no Custap flag is set.
     ``switcher``: the switching battler (``switchedMon``)."""
-    fmt = format_of(state)
     # The move (an Encored pursuer's whatever it chose) and the PP slot: the first slot holding it
     # (battle_script.c:6905-6917, ``Battler_SlotForMove``).
     _, move = _pursuer_move(
         state, pursuer, actions[pursuer], choices[0][pursuer], choices[1][pursuer]
     )
-    slot = _move_slot(state, pursuer, move)
-    mon = state.active[pursuer]
-    state = state._replace(pp=state.pp.at[party(fmt, pursuer), mon, slot].add(jnp.int8(-1)))
+    # ``_pursuit_pp``: ppUps[0] where no slot holds the move (battle_mon.h:99-100, review 7).
+    state = _spend_pursuit_pp(state, pursuer, move, 1)
     # battle_script.c:6919-6922: one more while PP is left when the switching battler has
     # Pressure (Battler_Ability, its own: the switch has not happened yet), ruling G-9.
-    extra = pressure_holder(state, switcher) & (state.pp[party(fmt, pursuer), mon, slot] > 0)
-    state = state._replace(
-        pp=state.pp.at[party(fmt, pursuer), mon, slot].add(
-            jnp.where(extra, -1, 0).astype(state.pp.dtype)
-        )
-    )
+    extra = pressure_holder(state, switcher) & (_pursuit_pp(state, pursuer, move)[1] > 0)
+    state = _spend_pursuit_pp(state, pursuer, move, jnp.where(extra, 1, 0))
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
     # TryGrudge's slot is ATTACKER_MOVE_SLOT (battle_script.c:6753-6754; common.h:8,
     # moveSlot[attacker]), written only at selection (bcp.c:445 the Encore slot, :526 the chosen
     # slot); TryPursuit sets attacker = pursuer (:6926) but never moveSlot, so Grudge zeroes the
-    # chosen slot, not the PP slot above: they differ when Pursuit sits in two slots, or (B = 4) when a foe's faster Encore
-    # this turn turned another chosen move into Pursuit. An Encored pursuer that chose no FIGHT
-    # (an item or a switch this turn) keeps an earlier turn's moveSlot, not in the state: its
-    # Encore slot stands in. Reachable at B = 2, not only B = 4: item and switch actions run in
-    # battler index order (bcp.c:754-768), so an encored battler 1 using an item can meet
-    # battler 0's switch before it acts. Owed SF3 (ledger, D3-9 rows).
-    action = actions[pursuer]
-    fight = ~is_switch(action) & ~is_item(action)
-    grudge_slot = jnp.where(
-        fight, jnp.clip(action, 0, MOVE_ACTIONS - 1), state.encore_slot[pursuer]
-    ).astype(_I32)
+    # selected slot, not the PP slot above: they differ when Pursuit sits in two slots, or when
+    # an Encore turned another move into Pursuit. ``state.move_slot`` is moveSlot as the turn's
+    # selection left it (E2-ML-5): an Encored pursuer that chose no FIGHT (an item or a switch this
+    # turn), or a locked one, keeps an earlier selection's (the former Owed SF3 stand-in, its
+    # Encore slot, is gone).
+    grudge_slot = state.move_slot[pursuer].astype(_I32)
     # subscript_pursuit.s:11 ApplyTypeEffectiveness: a Wonder Guard block
     # (MOVE_STATUS_WONDER_GUARD, damage.wonder_guarded) goes to subscript_missed.s (:17, :154), whose :107-110 tags the
     # switcher's ability (ruling G-20); the hit then deals nothing (play_hit).
@@ -4641,6 +4733,7 @@ def _execute_actions(
         "ts_move_failed": read["move_failed"],
         # The paused action's own inputs and the party list's: a learn pause has none (0).
         "ts_used": jnp.where(pivot_stopped, state.ts_used, 0),
+        "ts_move_temp": jnp.where(pivot_stopped, state.ts_move_temp, 0),
         "ts_damaged": jnp.where(pivot_stopped, state.ts_damaged, 0),
         "ts_dealt": jnp.where(pivot_stopped, state.ts_dealt, 0),
         # The paused action's battleCtx->defender (1 + battler) and monSpeedOrder: written at B = 4
@@ -5740,10 +5833,13 @@ def _action_phase(
     state = state._replace(starf_roll=queue.astype(state.starf_roll.dtype), starf_taken=opened)
     fresh = _clear_stale_choice_locks(tables, state, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
+    # The selection's moveSlot and TEMP_VALUE (bcp.c:445-447, :525-526, :565, :595; E2-ML-5,
+    # E2-ML-8), before the order and the Pursuit scan read them.
+    fresh = with_selection(tables, fresh, actions)
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
     order = jnp.where(paused, state.ts_order, order).astype(_I32)
-    power_mul = replacement_power_mul(tables, state, actions)
+    power_mul = replacement_power_mul(tables, fresh, actions)
     s = _where(paused, state, fresh)
     s, read, shown, scratch, cur = _execute_actions(
         tables, s, actions, outcome, order, paused, power_mul
@@ -5872,6 +5968,8 @@ def step_events(
     s = s._replace(
         starf_roll=roll.astype(s.starf_roll.dtype), starf_taken=jnp.zeros_like(s.starf_taken)
     )
+    # The unread moveSlot / TEMP_VALUE at the turn boundary (E2-ML-9; a pause keeps them).
+    s = canonical_selection(tables, s)
     return _where(state.over != 0, state, s), events
 
 
@@ -5968,6 +6066,42 @@ def canonical_target(state: BattleState) -> BattleState:
     keep = (state.locked_move != 0) | (state.encore_move != 0)
     canon = jnp.where(keep, state.chosen_target, jnp.arange(2) ^ 1)
     return state._replace(chosen_target=canon.astype(state.chosen_target.dtype))
+
+
+def canonical_selection(tables: Tables, state: BattleState) -> BattleState:
+    """``move_slot`` and ``selected_temp`` canonical at a turn boundary (E2-ML-9): 0 where no
+    reader can see them before the next selection writes them. Nothing clears either field
+    (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182), so
+    an unrun pick (a battler immobilized, or fainted before acting) would leave states that differ
+    only in dead values. For a battler whose active Pokemon has HP and that picks a command next
+    turn (``picks_no_command`` FALSE: not locked nor recharging, Battler_CanPickCommand,
+    battle_lib.c:6224-6235) both are dead when it has a usable move (``usable_moves``, the test
+    ``order.selection_slots`` / ``selection_temps`` apply to this state at the next turn start):
+    a FIGHT writes both (bcp.c:525-526; under an Encore moveSlot and TEMP_VALUE 0, :445-447), a
+    switch or item writes TEMP_VALUE (:565, :595) and leaves a moveSlot that only a FIGHT battler's
+    readers take (battle_lib.c:1378-1391; ATTACKER_MOVE_SLOT, common.h:8, at battle_script.c:6753,
+    :7237 and lib.c:7390-7395 for the move running). A Struggle-bound battler (STRUGGLING_ALL,
+    bcp.c:433-442) writes neither: its moveSlot has no reader under Struggle (lib.c:1382-1383,
+    battle_script.c:6752), so it is 0; its TEMP_VALUE stays readable (the Rage check, bcp.c:844;
+    TryPursuit, battle_script.c:6909, neither tests Struggle), so it is kept. A locked battler
+    writes nothing (bcp.c:334-337) and its readers take both: kept; a recharging one too (its
+    values are read by the speed order, lib.c:1376-1386, and the Rage check, bcp.c:844). A battler at 0 HP keeps both:
+    an absent one writes nothing (bcp.c:330-333), and a pending replacement's newcomer decides at
+    ``replace`` / ``replace_round``, which canonicalize again. A paused state (``pivot_battler``,
+    ``learn_site``) keeps both: the turn's remaining actions read them. Idempotent."""
+    fmt = format_of(state)
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    slots, temps = [], []
+    for b in range(fmt.B):
+        present = state.hp[party(fmt, b), state.active[b]] > 0
+        picks = present & ~picks_no_command(state, b) & ~paused
+        usable = jnp.any(usable_moves(tables, state, b))
+        slots.append(jnp.where(picks, 0, state.move_slot[b]))
+        temps.append(jnp.where(picks & usable, 0, state.selected_temp[b]))
+    return state._replace(
+        move_slot=jnp.stack(slots).astype(state.move_slot.dtype),
+        selected_temp=jnp.stack(temps).astype(state.selected_temp.dtype),
+    )
 
 
 def roosting_now(state: BattleState, roosted) -> jnp.ndarray:
@@ -6304,6 +6438,8 @@ def replace(
     # The hazards' assuranceDamageMask (effects.entry_hazards) is turnFlags too, which
     # SetupNextTurn clears before any action reads it (B13-17): a turn scratch, 0 between turns.
     out = out._replace(ts_assurance=jnp.zeros_like(out.ts_assurance))
+    # The newcomer's unread moveSlot / TEMP_VALUE (E2-ML-9): its usable moves decide.
+    out = canonical_selection(tables, out)
     # The slot's speedRand stays; it is unread unless the newcomer (or, after an entry
     # faint, the next replacement) can be a Quick Claw holder (qc_kept).
     return _keep_quick_claw(tables, out, out.qc_roll)
@@ -6370,4 +6506,5 @@ def replace_round(tables: Tables, state: BattleState, picks, trace_pick=None) ->
     pending = jnp.any(needs_replacement(out) != 0)
     out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))
     out = out._replace(ts_assurance=jnp.zeros_like(out.ts_assurance))
+    out = canonical_selection(tables, out)  # E2-ML-9, as ``replace``
     return _keep_quick_claw(tables, out, out.qc_roll)

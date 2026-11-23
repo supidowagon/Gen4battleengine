@@ -1195,3 +1195,58 @@ def test_draw_inputs_draws_inside_no_local_constants(monkeypatch):
     with pytest.raises(Drawn):
         sc.draw_inputs(ctx, 0, saved={"seed 0 turn 0": {}})
     assert seen and all(seen)  # Hypothesis replays the failing example: each draw is inside
+
+
+def _pre_selection_state():
+    """A main (d2ec0fc1) state: no move_slot, selected_temp or ts_move_temp; battler 1 locked
+    into the move of its slot 2 (Rollout, 205)."""
+    s = {
+        "active": np.zeros(2, np.int8),
+        "species": np.full((2, 6), 25, np.int16),
+        "hp": np.ones((2, 6), np.int16),
+        "moves": np.zeros((2, 6, 4), np.int16),
+        "locked_move": np.array([0, 205], np.int16),
+        "ts_actions": np.zeros(2, np.int8),
+        "pivot_battler": np.int8(0),
+        "learn_site": np.int8(0),
+        "ts_move": np.zeros(2, np.int16),
+        "ts_struggling": np.zeros(2, np.int8),
+        "encore_move": np.zeros(2, np.int16),
+        "encore_slot": np.zeros(2, np.int8),
+        # main has these (their zero rows run only on an older capture)
+        "party_ability": np.zeros((2, 6), np.int16),
+        "nightmare": np.zeros(2, np.int8),
+        "starf_taken": np.zeros(2, np.int8),
+    }
+    s["moves"][1, 0] = (33, 45, 205, 0)
+    return s
+
+
+def test_selection_rows_build_the_inputs_only(monkeypatch):
+    """The E2-ML-4/5/8 rows (move_slot, selected_temp, ts_move_temp) are input-only
+    (``Upgrade.outputs`` False): they build the saved inputs both sides step from (the lock's
+    slot, 1 + it), but never a captured entry, where the checkout's own selection writes the
+    real values every turn (snapcmp-e2tlbng-7f1dbcc compared those against the derived 0 / lock
+    slot). There the rerun's fields are one-sided (``only_new``), not a divergence."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    s = _pre_selection_state()
+    ((_, got),) = sc.upgrade_inputs([("k", {"in_state": s})], None)
+    assert got["in_state"]["move_slot"].tolist() == [0, 2]
+    assert got["in_state"]["selected_temp"].tolist() == [0, 3]
+    assert got["in_state"]["ts_move_temp"].tolist() == 0  # a 0-d field (state.py: _FIELD)
+    rows = {u.name: u for u in sc.UPGRADES if not u.outputs}
+    assert sorted(w for u in rows.values() for w in u.writes) == [
+        "move_slot",
+        "selected_temp",
+        "ts_move_temp",
+    ]
+    captured = sc.upgrade_entries(sc.canon({"ref_step": s, "in_state": s}), None)
+    new = ("move_slot", "selected_temp", "ts_move_temp")
+    assert not any(p.endswith(new) for p in captured)
+    stepped = {**s, "move_slot": np.array([1, 2], np.int8),
+               "selected_temp": np.array([2, 3], np.int8), "ts_move_temp": np.zeros(1, np.int16)}  # fmt: skip
+    rerun = sc.canon({"ref_step": stepped, "in_state": got["in_state"]})
+    diverged, only_base, only_new = sc.compare_dumps([("k", "h", captured)], [("k", rerun)])
+    assert diverged is None and not only_base
+    assert {f"{p}.{f}" for p in (".ref_step", ".in_state") for f in new} == only_new
+    assert all(sc.allowed(p, set(new)) for p in only_new)

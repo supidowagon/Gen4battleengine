@@ -20,7 +20,7 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import chosen_targets
 from nuzline.engine.format import DOUBLES, SINGLES
 from nuzline.engine.ids import STARF_QUEUE, AbilityId, Stat, Status, Type
-from nuzline.engine.order import action_order
+from nuzline.engine.order import action_order, with_selection
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
 from nuzline.engine.step import (
@@ -51,6 +51,7 @@ def _engine(tables, state, actions, outcome, targets, order=None):
     state = state._replace(starf_roll=queue.astype(state.starf_roll.dtype), starf_taken=opened)
     fresh = _clear_stale_choice_locks(tables, state, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
+    fresh = with_selection(tables, fresh, actions)  # moveSlot, TEMP_VALUE (E2-ML-5, E2-ML-8)
     fresh = _record_last_move(tables, fresh, actions)
     if order is None:
         order = action_order(tables, fresh, actions, outcome)

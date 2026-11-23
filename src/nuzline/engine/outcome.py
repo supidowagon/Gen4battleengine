@@ -109,18 +109,21 @@ from nuzline.engine.order import (
     disabled_state,
     dislikes_berry,
     encored_state,
+    fight_move,
     gravity_possible,
     gravity_state,
     is_item,
     is_switch,
     metronome_weights,
     move_effects,
+    pinch_limit,
     sealed_state,
     selected_move,
     sketched_state,
     takeover_possible,
     used_move,
     used_moves,
+    with_selection,
 )
 from nuzline.engine.state import (
     BATON_PASSED_FIELDS,
@@ -579,11 +582,15 @@ def future_threshold(tables: Tables, state: BattleState, defender) -> jnp.ndarra
     )
 
 
-def acid_rain_pairs(state: BattleState, actions, uses, effect) -> jnp.ndarray:
+def acid_rain_pairs(state: BattleState, actions, uses, effect, pursuers=None) -> jnp.ndarray:
     """``bool[B, B]``: ``[b, x]``, an Acid Rain write (subscript_pursuit.s:100, :115; ledger
     G-12, H-1) can happen this turn with battler ``b`` chased and battler ``x`` of the other side
     its pursuer: ``acid_rain_reachable``'s test for that pair. Battlers are looped, never derived
-    from one another (doubles-state-design section 5, rules 1 and 4)."""
+    from one another (doubles-state-design section 5, rules 1 and 4). The chased mask is a switch
+    or a U-turn user (``uses`` and ``effect``, the moves the battlers run); the pursuer mask a
+    battler running a Pursuit-effect move, or one of ``pursuers`` (``chase_pursuers``: its chase
+    move is TryPursuit's, battle_script.c:6905-6909, which can differ from the move it runs:
+    review 7)."""
     fmt = format_of(state)
     live = state.over == 0
     # A switch action's chase runs at its switch, before every move (switches go first): a turn
@@ -592,6 +599,8 @@ def acid_rain_pairs(state: BattleState, actions, uses, effect) -> jnp.ndarray:
     switch = is_switch(actions) & (state.pivot_battler == 0)
     chased = live & (switch | (uses & (effect == EffectId.U_TURN)))
     pursues = uses & (effect == EffectId.PURSUIT)
+    if pursuers is not None:
+        pursues = pursues | jnp.asarray(pursuers, bool)
     rows = []
     for b in range(fmt.B):
         row = []
@@ -605,7 +614,7 @@ def acid_rain_pairs(state: BattleState, actions, uses, effect) -> jnp.ndarray:
     return jnp.stack(rows)
 
 
-def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarray:
+def acid_rain_reachable(state: BattleState, actions, uses, effect, pursuers=None) -> jnp.ndarray:
     """``bool``: an Acid Rain write (subscript_pursuit.s:100, :115; ledger G-12) can happen this
     turn (any pair of ``acid_rain_pairs``). ``BtlCmd_TryPursuit`` runs only from a switch (subscript_switch_pokemon.s:11) and from
     U-turn (subscript_attack_then_switch_out.s:54), and takes only a battler of the other side
@@ -616,7 +625,20 @@ def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarra
     and write it. In singles there is none (a switch's chase comes before every move; a U-turn's
     pursuer has not acted, and U-turn writes no field condition), and :115 and the switcher's
     FAINT_MON only clear bits, so a mask that is 0 now stays 0 at :115."""
-    return jnp.any(acid_rain_pairs(state, actions, uses, effect))
+    return jnp.any(acid_rain_pairs(state, actions, uses, effect, pursuers))
+
+
+def chase_pursuers(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``bool[B]``: the battlers that can be some chase's pursuer this turn by the move TryPursuit
+    takes (``_chase_capable``: a held Encore's whatever they chose, else ``Battler_SelectedMove``,
+    battle_script.c:6905-6909), whatever move they run: a locked or Struggling battler's carried
+    Pursuit, an Encored item or switch action. For ``acid_rain_pairs``' pursuer mask (review 7).
+    A takeover Encore (B11-1) makes the run move Pursuit itself: ``effect`` holds it there.
+    Reads the state as this turn's selection leaves it (``with_selection``, idempotent)."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    state = with_selection(tables, state, actions)
+    return jnp.stack([_chase_capable(tables, state, p, actions[p]) for p in range(fmt.B)])
 
 
 # future_thresholds' grid per defender: attacker slot (SLOTS) x defender slot (SLOTS) x stage
@@ -627,7 +649,9 @@ _FUTURE_WEATHERS = 3
 _FUTURE_FIELDS = 4
 
 
-def _future_fields(tables: Tables, state: BattleState, actions, uses, effect) -> jnp.ndarray:
+def _future_fields(
+    tables: Tables, state: BattleState, actions, uses, effect, pursuers=None
+) -> jnp.ndarray:
     """``bool[_FUTURE_FIELDS]``: which (Gravity on, deep fog) pairs the Future Sight hit's
     accuracy check can read at this turn's end; field ``f`` is Gravity ``f // 2``, fog ``f % 2``.
     The check reads the mask through sand, hail and deep fog (bcp.c:2926-2937) and the Gravity
@@ -654,7 +678,7 @@ def _future_fields(tables: Tables, state: BattleState, actions, uses, effect) ->
     fog = [fcm.fog(mask), jnp.asarray(False)]
     ok = [jnp.asarray(True)] * 2
     if fmt.B == 2:
-        pairs = acid_rain_pairs(state, actions, uses, effect)
+        pairs = acid_rain_pairs(state, actions, uses, effect, pursuers)
         switch = is_switch(actions) & (state.pivot_battler == 0)
         rearm = tables.gravity_rearm != 0
         for b in range(fmt.B):
@@ -779,7 +803,8 @@ def _future_grid(
     weathers = jnp.asarray(
         [0, int(FieldCondition.SANDSTORM_TEMP), int(FieldCondition.HAILING_TEMP)], _I32
     )
-    fields = _future_fields(tables, state, actions, uses, effect)
+    pursuers = chase_pursuers(tables, state, actions)  # a carried Pursuit's chase (review 7)
+    fields = _future_fields(tables, state, actions, uses, effect, pursuers)
     a_mon, d_mon, total, wi, fi, conf, lk = (
         g.reshape(-1)
         for g in jnp.meshgrid(
@@ -877,7 +902,7 @@ def _future_grid(
     # a newcomer's weather ability, subscript_sand_stream.s:11-12; Gravity; an earlier KO's
     # FAINT_MON clearing its Uproar bit; an earlier chase), and two chases compose. The exact
     # B = 4 handling goes to the doubles milestone (E2).
-    acid = acid_rain_reachable(state, actions, uses, effect) if fmt.B > 2 else False
+    acid = acid_rain_reachable(state, actions, uses, effect, pursuers) if fmt.B > 2 else False
     field_change = (
         jnp.any(
             uses
@@ -1871,18 +1896,56 @@ CRIT_ODDS_EFFECTS = {
 }
 
 
-def _lansat_pinch(tables: Tables, state: BattleState) -> BattleState:
+def _lansat_pinch(tables: Tables, state: BattleState, eats=None) -> BattleState:
     """A Lansat Berry's write to the crit inputs (``HOLD_EFFECT_PINCH_CRITRATE_UP``,
     battle_lib.c:4838-4848: the holder's Focus Energy, ``hooks._pinch_effects``): every
-    battler holding one has Focus Energy (its HP test is not judged: over-approximate). It is
-    another battler's move that brings the pinch before the holder's CalcCrit (bcp.c:3691-3696:
-    the held-item check after every move), so it is the last variant bit, used by any non-status
-    move and by Pain Split, the one modelled status move that lowers its target's HP
-    (``effects._pain_split``, subscript_pain_split.s:12-22) (``crit_variants``), F-9."""
-    holds = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
-    return state._replace(
-        focus_energy=(state.focus_energy | holds).astype(state.focus_energy.dtype)
+    battler that can eat one (``eats``, default the shown holders) has Focus Energy (its HP test
+    is not judged here: over-approximate). The held-item check after every action eats it
+    (bcp.c:3691-3696, :3973; battle_lib.c:4151-4165), so it is the last variant bit
+    (``crit_variants``), F-9, E2-ML-7."""
+    if eats is None:
+        eats = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
+    return state._replace(focus_energy=(state.focus_energy | eats).astype(state.focus_energy.dtype))
+
+
+def _lansat_eaters(tables: Tables, state: BattleState, actions, moves) -> tuple:
+    """``(eats, start)``, ``bool[B]`` (E2-ML-7): the battlers whose Lansat Berry an action's
+    MoveEnd can eat this turn (TriggerHeldItemOnStatus over every battler, battle_lib.c:4151-4165,
+    :5261-5271, reading Battler_HeldItemEffect, :4970): shown (``state.held_item``), or hidden by a
+    Klutz an earlier Skill Swap, Worry Seed or Gastro Acid takes (Battler_HeldItem, :5352-5363;
+    Embargo stays to the turn's end; at B = 4 any third battler's, over-approximate); and
+    ``start``: such a holder already at its pinch (``curHP <= maxHP / param``, Gluttony's half
+    included where its ability can change), which the first MoveEnd before its hit, after any
+    action (an item or a switch too), eats whatever that action did."""
+    fmt = format_of(state)
+    sides = jnp.arange(fmt.B)
+    mons = state.active
+    rows = party(fmt, sides)
+    raw = state.item[rows, mons]
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    effect = tables.move_effect[moves]
+    swaps = uses_move & (
+        (effect == EffectId.SKILL_SWAP)
+        | (effect == EffectId.WORRY_SEED)
+        | (effect == EffectId.GASTRO_ACID)
     )
+    ability_goes = foes(swaps) if fmt.B == 2 else jnp.ones((fmt.B,), bool)
+    klutz_goes = (
+        ability_goes
+        & (battler_ability(state, sides, mons) == AbilityId.KLUTZ)
+        & (state.embargo[sides] == 0)
+    )
+    shown = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
+    eats = shown | ((tables.item_effect[raw] == ItemId.LANSAT_BERRY) & klutz_goes)
+    power = tables.item_param[raw, 0].astype(_I32)
+    # Gluttony halves the param (battle_lib.c:4774-4776): the holder's, or one a Skill Swap
+    # hands it first.
+    swapped = foes(uses_move & (effect == EffectId.SKILL_SWAP)) if fmt.B == 2 else ability_goes
+    glutton = (battler_ability(state, sides, mons) == AbilityId.GLUTTONY) | swapped
+    divisor = jnp.where(glutton, power // 2, power)
+    hp = state.hp[rows, mons].astype(_I32)
+    limit = pinch_limit(state.max_hp[rows, mons], divisor)
+    return eats, eats & (hp > 0) & (hp <= limit)
 
 
 # The odds variants of ``crit_variants``: variant v < CRIT_WRITE_VARIANTS applies the writes of
@@ -1916,7 +1979,8 @@ def crit_variants(
     if before is None:
         before = ~jnp.eye(n, dtype=bool)
     before = jnp.asarray(before, bool)
-    writes = (*CRIT_ODDS_EFFECTS.values(), _lansat_pinch)
+    eats, start = _lansat_eaters(tables, state, actions, moves)
+    writes = (*CRIT_ODDS_EFFECTS.values(), lambda t, s: _lansat_pinch(t, s, eats))
     odds, singles = [], []
     for v in range(CRIT_WRITE_VARIANTS):
         s = state
@@ -1934,6 +1998,9 @@ def crit_variants(
     users.append(uses_move & hp_lowering)
     for e, used in enumerate(users):  # [B], by the user
         reached = jnp.any(before & used[None, :], axis=1)  # [B], by the battler hit after
+        if e == len(users) - 1:
+            # A holder at its pinch at the start eats it at any earlier action's MoveEnd (E2-ML-7).
+            reached = reached | (start & jnp.any(before, axis=1))
         singles.append(reached & (odds[1 << e] != base))
     possible = []
     for v in range(CRIT_WRITE_VARIANTS):
@@ -2310,7 +2377,9 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
 
     seen = fcm.uproar_end(state, pivot, True)._replace(
         active=state.active.at[pivot].set(slot.astype(state.active.dtype)),
-        move_prev=state.ts_move[pivot].astype(state.move_prev.dtype),
+        # The tail's UpdateMoveBuffers writes the paused action's moveTemp (bcp.c:3936-3942;
+        # ``ts_move_temp``, E2-ML-4): an Encore's move where one ran.
+        move_prev=state.ts_move_temp.astype(state.move_prev.dtype),
         **{name: reset(name) for name in (*VOLATILE_FIELDS, "stages")},
     )
     seen = clear_copied(seen, pivot)  # the foes' moveCopied of the newcomer's switch-in (E3-B2-2)
@@ -2353,7 +2422,9 @@ def _armed_trace(
         loss = hazards_loss(tables, state, foe, slot, ingrained, magnet)
         alive = state.hp[party(fmt, foe), slot].astype(_I32) - loss > 0
         stays = ~jnp.where(paused, sides[side] == pivot, is_switch(actions[side]) & ~noop[side])
-        pursued = ~paused & ~resumed & pursuit_fires(tables, state, foe, actions, choices)
+        # TryPursuit reads the selection's TEMP_VALUE (E2-ML-8).
+        chosen = with_selection(tables, state, actions)
+        pursued = ~paused & ~resumed & pursuit_fires(tables, chosen, foe, actions, choices)
         copies = (
             enters[foe]
             & stays
@@ -2484,42 +2555,174 @@ def _per_hit(fmt, key, field_key, field: str, low, high) -> jnp.ndarray:
     return jnp.concatenate([first, sixth], axis=1)
 
 
-def pursuit_chase(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """``(bool[B], int32[B])``: battler p's Pursuit fires on its foe's switch
-    (``step.pursuit_fires``) and the move it hits with (the selected move); never in a paused
-    state (the paused U-turn's Pursuit already ran, ``pivot_view``; a list switch-in meets none)."""
-    from nuzline.engine.step import pursuit_fires  # step imports this module
+def _chase_capable(tables: Tables, state: BattleState, p, action) -> jnp.ndarray:
+    """``bool``: battler ``p`` can be the battler ``BtlCmd_TryPursuit`` takes at some chase of
+    this turn, read loosely: it has a move (``step._pursuer_move``: a held Encore's whatever it
+    chose, else ``Battler_SelectedMove``) with Pursuit's effect and HP now (battle_script.c:
+    6899-6916; nothing revives it). The sleep, freeze, Truant and PP tests (:6901-6903, :6913) are
+    left out: an earlier action of the turn can change them before a later chase (a thaw, a bag
+    item, a Pressure chase before it), so dropping them over-approximates. ``state`` is selected
+    (``with_selection``)."""
+    from nuzline.engine.step import _pursuer_move  # step imports this module
 
     fmt = format_of(state)
+    has, move = _pursuer_move(state, p, action, 0, False)
+    alive = state.hp[party(fmt, p), state.active[p]] > 0
+    return (state.over == 0) & has & (tables.move_effect[move] == EffectId.PURSUIT) & alive
+
+
+def pursuit_chase(
+    tables: Tables, state: BattleState, actions
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(fires bool[B], pursues bool[B], move int32[B])`` of the chases of switch actions
+    (subscript_switch_pokemon.s:11 calls subscript_pursuit.s, whose ``TryPursuit`` scans every
+    battler ``i = 0 .. maxBattlers - 1`` on the other side from ``switchedMon``,
+    battle_script.c:6899-6904, and loops to the next one while the switcher lives,
+    subscript_pursuit.s:79-82 -> :8). ``fires``: battler p can chase some opposing battler's
+    switch. At B = 2 that is exact (``step._pursuer_ready`` against the foe's switch, as
+    ``step.pursuit_fires``); at B = 4 every opposing switcher and every battler the chain can
+    reach count, with the loose test ``_chase_capable`` (another switch, a bag item or an earlier
+    chase can come first; review 6). ``pursues``: every move p can run this turn is the chase's
+    (``step._pursuer_move``: a held Encore's whatever p chose, E2-ML-6, else
+    ``Battler_SelectedMove``'s ``moves[TEMP_VALUE - 1]``, a locked or Struggling battler's carried
+    TEMP_VALUE included, E2-ML-8): at B = 2 every firing p (the switch runs before every move,
+    bcp.c:754-785, and p's action ends at the chase, battle_script.c:6931, MOVE_END); at B = 4 a
+    firing p whose own action is a bag item or a switch (it chases or runs no move), or a FIGHT
+    of that same move. A B = 4 FIGHT of another move may chase or run its own move:
+    ``chase_widening``'s ``both``. ``move``: the chase's move where ``pursues``, else
+    ``order.fight_move``. Never in a paused state (the switches ran before the paused U-turn; a
+    list switch-in meets none). A U-turn's chases (subscript_attack_then_switch_out.s:54) need
+    the moves the battlers run: ``chase_widening``."""
+    from nuzline.engine.step import _pursuer_move, _pursuer_ready  # step imports us
+
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    state = with_selection(tables, state, actions)  # TEMP_VALUE for TryPursuit (E2-ML-8)
     picks = [selected_move(tables, state, s, actions[s]) for s in range(fmt.B)]
     choices = (jnp.stack([q[0] for q in picks]), jnp.stack([q[1] for q in picks]))
-    paused = state.pivot_battler != 0
-    fires = (
-        jnp.stack([pursuit_fires(tables, state, _foe(p), actions, choices) for p in range(fmt.B)])
-        & ~paused
+    switching = is_switch(actions) & (state.over == 0) & (state.pivot_battler == 0)
+    fights = ~is_switch(actions) & ~is_item(actions)
+    fought = jnp.stack([fight_move(tables, state, p, actions[p]) for p in range(fmt.B)])
+    carried = jnp.stack(
+        [_pursuer_move(state, p, actions[p], choices[0][p], choices[1][p])[1] for p in range(fmt.B)]
     )
-    return fires, choices[0]
+    fires = []
+    for p in range(fmt.B):
+        if fmt.B == 2:
+            ready = _pursuer_ready(tables, state, p, actions[p], choices[0][p], choices[1][p])
+        else:
+            ready = _chase_capable(tables, state, p, actions[p])
+        faced = jnp.any(jnp.stack([switching[s] for s in range(fmt.B) if side_of(s) != side_of(p)]))
+        fires.append(ready & faced)
+    fires = jnp.stack(fires)
+    pursues = fires if fmt.B == 2 else fires & ~(fights & (fought != carried))
+    return fires, pursues, jnp.where(pursues, carried, fought).astype(_I32)
+
+
+def _armor_against(state: BattleState, p: int, s: int) -> jnp.ndarray:
+    """``bool``: battler ``p``'s crit meets Battle / Shell Armor on battler ``s`` as it is now
+    (``Battler_IgnorableAbility``, battle_lib.c:7135-7136); Mold Breaker ignores it."""
+    own = battler_ability(state, s)
+    armor = (own == AbilityId.SHELL_ARMOR) | (own == AbilityId.BATTLE_ARMOR)
+    return armor & (battler_ability(state, p) != AbilityId.MOLD_BREAKER)
 
 
 def pursuit_armored(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool[B]``: p's Pursuit crit meets Battle / Shell Armor on its foe's battler as it is before
     the switch (``Battler_IgnorableAbility``, battle_lib.c:7135-7136; the defender is
-    ``switchedMon``, battle_script.c:6927, the outgoing Pokemon); Mold Breaker ignores it."""
+    ``switchedMon``, battle_script.c:6927, the outgoing Pokemon); Mold Breaker ignores it. The
+    singles pairing; ``chase_widening`` covers every battler p may chase."""
     fmt = format_of(state)
-    out = []
+    return jnp.stack([_armor_against(state, p, _foe(p)) for p in range(fmt.B)])
+
+
+def chase_widening(
+    tables: Tables, state: BattleState, actions, moves, fires, taken=None
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(both bool[B], armor bool[B], chase int32[B])`` for the laws and the sampler, given ``moves`` (the moves
+    the battlers run, ``pursuit_chase``'s ``move`` where it ``pursues``) and its ``fires``.
+
+    ``both``: battler p FIGHTs with a move other than its chase move (``step._pursuer_move``: a
+    locked or Struggling battler's carried Pursuit) and may chase or run its own move: at B = 4
+    a firing p (another switch or the chain can come first, review 6), and in any format a p
+    that can chase an opposing U-turn user (subscript_attack_then_switch_out.s:54 calls the same
+    TryPursuit; ``moves``' effect U_TURN, a called one included), which happens only while p has
+    not acted. The chase's reads (subscript_pursuit.s:8-12: CalcCrit and CalcDamage with no
+    accuracy check; a contact hit) are then relevant beside the own move's: the laws widen p's
+    damaging, rolled and contact flags, class its crit over every stage (``widen_crit``), lift
+    its damage classes and its hit gate. A bag item or switch action meets no U-turn chase:
+    items and switches all run before the first move (bcp.c:754-785), MOVE_END then.
+
+    ``armor``: the crit cut of p's draws (``armored`` where p cannot chase). Where p may chase,
+    its crit is cut only where every switching battler it may chase is armored against it
+    (``_armor_against``) and, where p may also run its own move, ``armored`` holds as well. B =
+    2's switch chase is p's only move (``pursuit_chase``); a B = 2 U-turn user is the defender of
+    p's own move too, whose ``armored`` covers the earlier chase; at B = 4 a U-turn chase is never
+    cut (an earlier action can change its user's ability). ``chase``: p's chase move
+    (``step._pursuer_move``).
+
+    ``taken`` (``bool[B]``, a takeover variant's tag, B11-1): a foe's faster Encore made the
+    side's last move its encoredMove before its action, so a later U-turn's TryPursuit takes that
+    move (the Encore branch, battle_script.c:6905-6907): the U-turn chase reads the encored
+    state (``order.encored_state``, review 7). The switch chases come before every move and read
+    the turn-start state."""
+    from nuzline.engine.step import _pursuer_move  # step imports this module
+
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    moves = jnp.asarray(moves, _I32)
+    fires = jnp.asarray(fires, bool)
+    state = with_selection(tables, state, actions)
+    took = state if taken is None else encored_state(tables, state, jnp.asarray(taken, bool))
+    live = state.over == 0
+    fights = live & ~is_switch(actions) & ~is_item(actions)
+    uturn = fights & (tables.move_effect[moves] == EffectId.U_TURN)
+    switching = is_switch(actions) & live & (state.pivot_battler == 0)
+    own_armor = armored(tables, state, actions, moves)
+    both, armor, chase = [], [], []
     for p in range(fmt.B):
-        own = battler_ability(state, _foe(p))
-        armor = (own == AbilityId.SHELL_ARMOR) | (own == AbilityId.BATTLE_ARMOR)
-        out.append(armor & (battler_ability(state, p) != AbilityId.MOLD_BREAKER))
-    return jnp.stack(out)
+        opp = [s for s in range(fmt.B) if side_of(s) != side_of(p)]
+        carried = _pursuer_move(state, p, actions[p], 0, False)[1]  # a switch chase's
+        carried_u = _pursuer_move(took, p, actions[p], 0, False)[1]  # a U-turn chase's
+        may_u = (
+            fights[p]
+            & _chase_capable(tables, took, p, actions[p])
+            & jnp.any(jnp.stack([uturn[s] for s in opp]))
+        )
+        may = fires[p] | may_u
+        sw_both = fires[p] & (fmt.B == 4) & (carried != moves[p])
+        u_both = may_u & (carried_u != moves[p])
+        both.append(fights[p] & (sw_both | u_both))
+        # Where both hold, both chase moves are Pursuit: it is the only move with
+        # BATTLE_EFFECT_HIT_BEFORE_SWITCH (res/moves/pursuit/data.json; no other data.json names
+        # it), which ``_chase_capable`` and ``pursuit_chase`` require of a chase move.
+        chase.append(jnp.where(sw_both, carried, carried_u))
+        chased = jnp.all(jnp.stack([~switching[s] | _armor_against(state, p, s) for s in opp]))
+        if fmt.B == 4:
+            chased = chased & ~may_u
+        own_possible = fights[p] & ~(fires[p] & (fmt.B == 2))
+        armor.append(jnp.where(may, chased & (own_armor[p] | ~own_possible), own_armor[p]))
+    return jnp.stack(both), jnp.stack(armor), jnp.stack(chase).astype(_I32)
+
+
+def widen_crit(possible, both) -> jnp.ndarray:
+    """``crit_variants``' ``possible`` with every stage's odds (its last columns,
+    ``sCriticalStageRates``, battle_lib.c:7097) possible where ``both``: the draw is then classed
+    over every odds a move can have, the chase's and the own move's (``chase_widening``)."""
+    stages = possible[:, CRIT_WRITE_VARIANTS:] | jnp.asarray(both, bool)[:, None]
+    return possible.at[:, CRIT_WRITE_VARIANTS:].set(stages)
 
 
 def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=None) -> dict:
     """The move-dependent fields (``MOVE_FIELDS`` but ``call``) for the moves the sides run
     (``moves``, ``int32[B]``), drawn from ``key`` (``sample_outcome``'s split indices 0, 1, 2, 10,
-    13 and fold_ins 16, 28, 41: Fang flinch, the Future Sight hit, the crit-class draw)."""
+    13 and fold_ins 16, 28, 41: Fang flinch, the Future Sight hit, the crit-class draw).
+    ``chase``: ``chase_widening``'s ``(both, armor)``; default none and ``armored``."""
     fmt = format_of(state)
-    chase = jnp.zeros(fmt.B, bool) if chase is None else chase
+    if chase is None:
+        both, chase_armor = jnp.zeros(fmt.B, bool), armored(tables, state, actions, moves)
+    else:
+        both, chase_armor = chase
     k = jax.random.split(key, 14)
     per_side = (fmt.B,)
 
@@ -2549,15 +2752,15 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=N
     # Battle Armor / Shell Armor (:7135-7136). A lock aimed at its user is not cut: its defender
     # may be the user or the foe, and step reads both on the hit's own defender
     # (effects.crit_blocked); for every other move this cut makes that read a no-op.
-    no_crit = (
-        (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
-        | jnp.where(chase, pursuit_armored(tables, state), armored(tables, state, actions, moves))
-    )[:, None] & ~lock
+    no_crit = ((state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0) | chase_armor)[
+        :, None
+    ] & ~lock
     # The crit draw, read by step with the odds at the hit (crit_lands). Odds that cannot change
     # before the hit: RandNext() % odds == 0 as 1 / 0 (the turn-start draw). Odds that can
     # (crit_variants): one r in [0, CRIT_DRAWS) per hit, as its class over the odds the hit can
     # meet (crit_class), from a fold_in key (every other field keeps its samples).
     odds, odds_ok = crit_variants(tables, state, actions, moves)
+    odds_ok = widen_crit(odds_ok, both)  # a battler that may chase or run its own move
     moving = jnp.any(odds_ok & (odds != odds[:, :1]), axis=1)[:, None]
     fixed = (_per_hit(fmt, key, k[1], "crit", 0, odds[:, :1]) == 0).astype(_I32)
     r = _per_hit(fmt, key, jax.random.fold_in(key, 41), "crit_class", 0, CRIT_DRAWS)
@@ -2634,7 +2837,7 @@ def replacement_possible(tables: Tables, state: BattleState, actions, side, foe)
     by the caller (doubles rule 1; B11-11). Over-approximate."""
     actions = jnp.asarray(actions, _I32)
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    chosen = selected_move(tables, state, side, actions[side])[0]
+    chosen = fight_move(tables, state, side, actions[side])
     talk = uses_move[side] & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & uses_move[foe]
     return (
         talk
@@ -2704,6 +2907,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
 
     state_in, actions_in = state, jnp.asarray(actions, _I32)
     state, actions = pivot_view(tables, state, actions)
+    # The state as the command selection leaves it (moveSlot, TEMP_VALUE: E2-ML-5, E2-ML-8).
+    state = with_selection(tables, state, actions)
     k = jax.random.split(key, 14)
     per_side = (fmt.B,)
 
@@ -2732,9 +2937,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         if pairs
         else jnp.zeros((fmt.B, 0), _I32)
     )
-    chosen = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
+    # The move each action runs: a turn-start Encore over the chosen or locked one (E2-ML-2).
+    chosen = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     call = _draw_calls(key, tables, state, chosen)
     # Nature Power and the invokers draw for their called move (order.called_move, used_moves):
     # its accuracy, crit odds, effect chance and secondary effect are the called move's. Copycat's
@@ -2744,8 +2948,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     fight = ~is_switch(actions) & ~is_item(actions)
     after_foe = jnp.stack([(first == _foe(side)) & fight[_foe(side)] for side in range(fmt.B)])
     moves = used_moves(tables, state, actions, call, after_foe)
-    fires = pursuit_chase(tables, state, actions)[0]
-    drawn = _move_draws(key, tables, state, actions, moves, chase=fires)
+    # A pursuer hits with TryPursuit's move (E2-ML-6, E2-ML-8), not the one it chose.
+    fires, pursues, chase_move = pursuit_chase(tables, state, actions)
+    moves = jnp.where(pursues, chase_move, moves)
+    chase = chase_widening(tables, state, actions, moves, fires)[:2]
+    drawn = _move_draws(key, tables, state, actions, moves, chase=chase)
     # BtlCmd_SetMultiHit (battle_script.c:2645): & 3 below 2 gives 2-3, else (& 3) + 2.
     first, second = draw(3, per_side, 4), draw(4, per_side, 4)
     n_hits = jnp.where(first < 2, first + 2, second + 2)
@@ -2933,7 +3140,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                     ),
                 )
             )
-        fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves), chase=fires)
+        alt_moves = jnp.where(pursues, chase_move, jnp.stack(alt_moves))
+        alt_chase = chase_widening(tables, state, actions, alt_moves, fires, taken)[:2]
+        fields = _move_draws(alt_key, tables, state, actions, alt_moves, chase=alt_chase)
         fields["call"] = alt_call
         replaced = jnp.any(which, axis=0)
         for name, value in fields.items():

@@ -31,10 +31,10 @@ from nuzline.engine.order import (
     effective_speed,
     is_item,
     is_switch,
+    order_moves,
     player_second,
     quick_claw_active,
     custap_active,
-    selected_move,
 )
 from nuzline.engine.outcome import empty_outcome, sample_outcome
 from tests.engine.d2_states import four, party_of, with_hp, with_moves
@@ -335,11 +335,16 @@ def test_quick_claw_display_counts_the_battlers_still_to_act(tables, names):
 
 
 def _old_order(tables, state, actions, outcome):
-    """The B = 2 ``action_order`` before D3-3 (the base's body)."""
+    """The B = 2 ``action_order`` before D3-3 (the base's body), with E2-ML-5's priority move:
+    CalcTurnOrder reads ``moves[moveSlot]`` of a FIGHT (Struggle where struggling,
+    battle_lib.c:1377-1394; ``order.order_moves``), not the lock's move. They differ where a
+    locked battler's selected slot no longer holds its lock (a level-up learn over it,
+    battle_script.c:10168-10176, which keeps moveSlot and the lock, battle_lib.c:183-189; review
+    9): the base body's ``selected_move`` (the lock's move) was stale there (pod u_032)."""
     actions = jnp.asarray(actions, jnp.int32)
     switch, item = is_switch(actions), is_item(actions)
     early = switch | item
-    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in range(2)])
+    moves = order_moves(tables, state, actions)
     both_moves = ~early[0] & ~early[1]
     priority = jnp.where(both_moves, tables.move_priority[moves].astype(jnp.int32), 0)
     second = player_second(tables, state, outcome.speed_tie, state.qc_roll)
@@ -379,14 +384,18 @@ def test_sampler_draws_bits_only_at_four(tables, names):
     """The tie arrays hold bits at B = 4 and have no element at B = 2 (no key consumed there:
     ``speed_tie`` keeps its draw); ``speed_tie`` / ``end_speed_tie`` are 0 at B = 4."""
     s4 = four(tables, names)
-    o = sample_outcome(jax.random.PRNGKey(7), tables, s4, jnp.zeros(4, jnp.int32), replacement=False)
+    o = sample_outcome(
+        jax.random.PRNGKey(7), tables, s4, jnp.zeros(4, jnp.int32), replacement=False
+    )
     assert o.order_tie.shape == (6,) and o.sort_tie.shape == (5, 6)
     assert set(np.asarray(o.order_tie).tolist()) <= {0, 1}
     assert int(o.speed_tie) == 0 and int(o.end_speed_tie) == 0
     seen = {
         tuple(
             np.asarray(
-                sample_outcome(jax.random.PRNGKey(k), tables, s4, jnp.zeros(4, jnp.int32), replacement=False).order_tie
+                sample_outcome(
+                    jax.random.PRNGKey(k), tables, s4, jnp.zeros(4, jnp.int32), replacement=False
+                ).order_tie
             ).tolist()
         )
         for k in range(12)
