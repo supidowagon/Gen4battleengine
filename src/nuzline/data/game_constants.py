@@ -761,7 +761,7 @@ CONSTANTS: tuple[Constant, ...] = (
     # (ai.c:834-844); Kaizo's 222 is Bulldoze and takes the same block (E4-A0): each policy pins its game's name.
     Constant("nuzline.ai.commands.MOVE_MAGNITUDE", "move", 222, "Magnitude", _P),
     Constant("nuzline.ai.commands.MOVE_MAGNITUDE", "move", 222, "Bulldoze", _K),
-    # TagStrategy_PartnerStatusMove's MOVE_TRICK / MOVE_SWITCHEROO (script.s:7451-7452): ids
+    # TagStrategy_PartnerStatusMove's MOVE_TRICK / MOVE_SWITCHEROO (script.s:7452-7453): ids
     # 271 / 415, which Kaizo names Hidden Power Psychic / Flying (damaging: never in that block).
     Constant("nuzline.ai.commands.MOVE_TRICK", "move", 271, "Trick", _P),
     Constant("nuzline.ai.commands.MOVE_TRICK", "move", 271, "Hidden Power Psychic", _K),

@@ -352,6 +352,12 @@ def test_policy_constants_only_for_their_policy(vanilla_manifest, vanilla_items)
             "ai/layout.py KAIZO: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'",
             # vanilla's move data under the Kaizo policy: Kaizo's id 222 is Bulldoze
             "ai/commands.py MOVE_MAGNITUDE: id 222 is 'Magnitude' in this game, expected 'Bulldoze'",
+            # E4-A W2 (A-9): TagStrategy_PartnerStatusMove's ids (script.s:7452-7453), Kaizo's names
+            "ai/commands.py MOVE_TRICK: id 271 is 'Trick' in this game, expected 'Hidden Power Psychic'",
+            (
+                "ai/commands.py MOVE_SWITCHEROO: id 415 is 'Switcheroo' in this game, "
+                "expected 'Hidden Power Flying'"
+            ),
         ]
     )
 

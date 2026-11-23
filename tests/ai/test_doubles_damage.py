@@ -10,8 +10,8 @@ certain and no read is made.
 
 Every state is the four-battler world of ``test_tag_doubles`` (Bulbasaur everywhere, the target and the
 partners Normal / Normal, so Tackle has STAB for them and not for the Grass / Poison attacker). Damage of
-the moves used, against a Normal / Normal target, neutral: Tackle (35) < Body Slam (85) < Earthquake (100);
-the partner's Tackle with STAB (x1.5) is still under the attacker's Earthquake.
+the moves used, against a Normal / Normal target, neutral: Tackle (35) < Crunch (80, Dark, no STAB for
+anyone) < Earthquake (100); the partner's Tackle with STAB (x1.5) is still under the attacker's Earthquake.
 """
 
 from __future__ import annotations
@@ -80,9 +80,12 @@ def test_partner_stronger_not_highest(w):
     s = _moves(w, _moves(w, w.s, 1, "Tackle", "Earthquake"), 3, "Tackle")
     assert _result(w, s, slot=0) == NOT_HIGHEST
     assert _result(w, s, slot=1) == HIGHEST  # the best of both movesets
-    # a partner move 85 against the attacker's Earthquake: not stronger
-    s = _moves(w, _moves(w, w.s, 1, "Earthquake"), 3, "Body Slam")
+    # a partner move 80 without STAB against the attacker's Earthquake: not stronger
+    s = _moves(w, _moves(w, w.s, 1, "Earthquake"), 3, "Crunch")
     assert _result(w, s) == HIGHEST
+    # Body Slam (85) is Normal: STAB for the Normal / Normal partner (x1.5, about 127 against 100): stronger
+    s = _moves(w, _moves(w, w.s, 1, "Earthquake"), 3, "Body Slam")
+    assert _result(w, s) == NOT_HIGHEST
 
 
 def test_partner_weaker_highest(w):

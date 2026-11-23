@@ -15,9 +15,13 @@ partner ``a ^ 2`` (``ATTACKER_PARTNER``), the target ``d``, the target's partner
 (``DEFENDER_PARTNER``; ``AIScript_Battler``, trainer_ai.c:2765-2782).
 
 ``CheckIfHighestDamageWithPartner`` (script.s:6684) runs for real (A-7, ``tests/ai/test_doubles_damage.py``):
-every damaging move below is the slot 0 move of an attacker whose last slot holds Explosion (``_COMPARATOR``,
-power 250: no move of these tests, nor any Magnitude draw, does more), so the result is NOT_HIGHEST and the
-script goes on through ``TagStrategy_CheckBeforeScoring`` to ``TagStrategy_CheckSpecialScoring``. A move that
+every damaging move below is the slot 0 move of an attacker whose last slot holds Power Whip (``_COMPARATOR``:
+Grass, physical, power 120, BATTLE_EFFECT_HIT, so the AI estimates it, trainer_ai.c:2823-2835; STAB for the
+Grass / Poison attacker: about 82 against a Normal / Normal Bulbasaur at level 50, above every slot 0 move here,
+the strongest Doom Desire at about 55), so the result is NOT_HIGHEST (trainer_ai.c:2420-2431) and the script
+goes on through ``TagStrategy_CheckBeforeScoring`` to ``TagStrategy_CheckSpecialScoring`` (script.s:6684-6685).
+Explosion cannot be the comparator: BATTLE_EFFECT_HALVE_DEFENSE is in ``sNoDamageCalcMoveEffects``
+(trainer_ai.c:31-32), so the AI estimates it at 0 (:2827-2835). A move that
 is not damaging reaches ``CheckSpecialScoring`` at script.s:6642 without it. The target is Normal / Normal, so
 every move below is neutral against it (no TryScoreMinus, no CheckBeforeScoring roll) unless a test sets types.
 The ally-target path (``IfTargetIsPartner``, ``TagStrategy_Partner``) is A-9's (``tests/ai/test_tag_partner.py``);
@@ -72,9 +76,10 @@ GRASS, ELECTRIC, ICE = int(Type.GRASS), int(Type.ELECTRIC), int(Type.ICE)
 SLOT_READS = (
     8  # the draws of one slot: the widest path here makes 7 (Future Sight, two sorts and a roll)
 )
-# the strongest plain damaging move: Explosion (power 250) beats every move these tests score, so the
-# attacker's slot 0 is never the highest-damage move of CheckIfHighestDamageWithPartner
-_COMPARATOR = "Explosion"
+# a damaging move the AI estimates (BATTLE_EFFECT_HIT, trainer_ai.c:2823-2835) above every move these tests
+# score (STAB Grass 120 for the Grass / Poison attacker), so the attacker's slot 0 is never the highest-damage
+# move of CheckIfHighestDamageWithPartner (:2420-2431); not Explosion, which the AI estimates at 0 (:31-32)
+_COMPARATOR = "Power Whip"
 ENGINE_ABILITY = {decomp: engine for engine, decomp in ABILITY_DECOMP_IDS.items()}
 # every ``IfRandomLessThan`` of the Tag script that these tests reach: N, the change is made at 1 - N / 256
 ROLL_64 = 64 / 256  # P(jump) of R@6666, 6678, 6959, 6972, 7012, 7022, 7053, 7075-7095
@@ -225,6 +230,15 @@ def _ability(t, s, b, name: str):
     return t._replace(species_abilities_decomp=table), s
 
 
+# abilities these tests name that no script compares (so not in ``commands.ABILITY_IDS``): decomp ids,
+# line - 1 of generated/abilities.txt (ABILITY_OVERGROW at :66, Bulbasaur's own)
+_TEST_ABILITY_IDS = {"Overgrow": 65}
+
+
+def _ability_id(name: str) -> int:
+    return c.ABILITY_IDS[name] if name in c.ABILITY_IDS else _TEST_ABILITY_IDS[name]
+
+
 def _two_abilities(t, s, b, first: str, second: str):
     """``t`` whose species of battler ``b`` has the two abilities ``first`` and ``second``: the AI,
     which knows neither battler's, reads ``CheckBattlerAbility`` of an unrecorded ``b`` as UNKNOWN when
@@ -233,9 +247,7 @@ def _two_abilities(t, s, b, first: str, second: str):
     p, slot = _at(s, b)
     species = int(s.species[p, slot])
     row = int(t.species_form_row[species, int(s.ability_form[p, slot])])
-    pair = jnp.asarray(
-        [c.ABILITY_IDS[first], c.ABILITY_IDS[second]], t.species_abilities_decomp.dtype
-    )
+    pair = jnp.asarray([_ability_id(first), _ability_id(second)], t.species_abilities_decomp.dtype)
     table = t.species_abilities_decomp
     for index in {species, row}:
         table = table.at[index].set(pair)
@@ -296,6 +308,8 @@ def test_move_ids_are_the_decomps(names):
                 "Lava Plume"):  # fmt: skip
         assert names.move(key) == c.MOVE_IDS[key], key
     assert names.move("Magnitude") == c.MOVE_MAGNITUDE
+    for key, decomp in _TEST_ABILITY_IDS.items():
+        assert names.ability(key) == decomp, key
 
 
 # --- 2.2 TryScoreMinus1 / TryScoreMinus2 ----------------------------------------------------
@@ -361,8 +375,9 @@ def test_weather_partner_abilities(w):
     t2, s2 = _ability(t, sun, 1, "Flower Gift")
     t2, s2 = _ability(t2, s2, ap, "Leaf Guard")
     _check(t2, s2, 104, case="own Flower Gift, partner Leaf Guard")
-    # TagStrategy_Hail (:6857-6884): the partner's Ice Body, Snow Cloak or a known Blizzard +2
-    hail = w.attack(base, "Hail", "Blizzard")
+    # TagStrategy_Hail (:6857-6884): the partner's Ice Body, Snow Cloak or a known Blizzard +2; the attacker's
+    # own known Blizzard is its own +2 (IfMoveKnown AI_BATTLER_ATTACKER, :6866)
+    hail = w.attack(base, "Hail")
     for name in ("Ice Body", "Snow Cloak"):
         t1, s1 = _ability(t, hail, ap, name)
         _check(t1, s1, 102, case=f"partner {name}")
@@ -372,7 +387,9 @@ def test_weather_partner_abilities(w):
     t1, s1 = _ability(t, hail, 1, "Ice Body")
     t1, s1 = _ability(t1, s1, ap, "Snow Cloak")
     _check(t1, s1, 104, case="own Ice Body, partner Snow Cloak")
-    _check(t, w.moves(hail, ap, "Blizzard"), 104, case="both know Blizzard")
+    own = w.attack(base, "Hail", "Blizzard")
+    _check(t, own, 102, case="own Blizzard")
+    _check(t, w.moves(own, ap, "Blizzard"), 104, case="both know Blizzard")
 
 
 @pytest.mark.parametrize(
@@ -719,8 +736,8 @@ def test_copier_mr_mime_future_sight(w_multi_ai, names):
     # Future Sight into its first Mimic slot (BtlCmd_Mimic writes the defender's last move there,
     # battle_script.c:4476-4524; its party Pokemon keeps Mimic, :4512); 454's Xatu (battler 3) knows
     # Future Sight. Both at Speed 70 below the target (100) and above its partner (50): they share
-    # ranks 1 and 2. The Mimic slot takes A-8 2.16 like any Future Sight slot. The party's Explosion is
-    # the comparator (``_COMPARATOR``) in the last slot, in place of Endure.
+    # ranks 1 and 2. The Mimic slot takes A-8 2.16 like any Future Sight slot. The comparator
+    # (``_COMPARATOR``, Power Whip) is in the last slot, in place of the party's Endure.
     from tests.ai.test_commands_four import _with_mimic
 
     w = w_multi_ai
@@ -916,27 +933,30 @@ def test_fainted_partner_reads(w):
 # --- MULTI, TWO_TRAINERS ----------------------------------------------------------------------
 
 
-def test_multi_partner_attacker_true_reads(w_multi, w_two):
+@pytest.mark.parametrize(("world_name", "a", "ap", "d"), [("w_multi", 2, 0, 1), ("w_two", 1, 3, 0)])
+def test_multi_partner_attacker_true_reads(request, world_name, a, ap, d):
     # MULTI battler 2 (the AI partner, A-16): its ATTACKER_PARTNER is battler 0, the player's Pokemon,
     # and the target 1's partner is battler 3. Same-side reads are true data, never the AI's record
     # (trainer_ai.c:1255-1256, :1650-1664, :1925-1926). TWO_TRAINERS: the attacker's partner is the
-    # other trainer's Pokemon (party 2, battler 3).
-    for world, a, ap, d in ((w_multi, 2, 0, 1), (w_two, 1, 3, 0)):
-        t, base = world.t, world.s
-        quake = world.attack(base, "Earthquake")
-        _check(
-            t, _types(quake, ap, FIRE, NORMAL), 90, a=a, d=d, case=f"{world.fmt} Earthquake Fire"
-        )
-        _check(t, quake, 97, a=a, d=d, case=f"{world.fmt} Earthquake Normal")
-        t1, s1 = _ability(t, world.attack(base, "Rain Dance"), ap, "Dry Skin")
-        _check(t1, s1, 102, a=a, d=d, case=f"{world.fmt} true ability (no record)")
-        hail = world.moves(world.attack(base, "Hail"), ap, "Blizzard")
-        _check(t, hail, 102, a=a, d=d, case=f"{world.fmt} true moves")
-        _check(t, _types(world.attack(base, "Gravity"), ap, FLYING, NORMAL), 95, a=a, d=d,
-               case=f"{world.fmt} Gravity")  # fmt: skip
-        s1 = _hp(_hp(world.attack(base, "Follow Me"), a, 100), ap, 40)
-        _check(t, s1, _roll(2, 64), a=a, d=d, reads=1, case=f"{world.fmt} Follow Me")
-    # the target's partner by target: attacker 2 against 1 (partner 3) and against 3 (partner 1)
+    # other trainer's Pokemon (party 2, battler 3). One format per case: one compile each.
+    world = request.getfixturevalue(world_name)
+    t, base = world.t, world.s
+    quake = world.attack(base, "Earthquake")
+    _check(t, _types(quake, ap, FIRE, NORMAL), 90, a=a, d=d, case=f"{world.fmt} Earthquake Fire")
+    _check(t, quake, 97, a=a, d=d, case=f"{world.fmt} Earthquake Normal")
+    t1, s1 = _ability(t, world.attack(base, "Rain Dance"), ap, "Dry Skin")
+    _check(t1, s1, 102, a=a, d=d, case=f"{world.fmt} true ability (no record)")
+    hail = world.moves(world.attack(base, "Hail"), ap, "Blizzard")
+    _check(t, hail, 102, a=a, d=d, case=f"{world.fmt} true moves")
+    _check(t, _types(world.attack(base, "Gravity"), ap, FLYING, NORMAL), 95, a=a, d=d,
+           case=f"{world.fmt} Gravity")  # fmt: skip
+    s1 = _hp(_hp(world.attack(base, "Follow Me"), a, 100), ap, 40)
+    _check(t, s1, _roll(2, 64), a=a, d=d, reads=1, case=f"{world.fmt} Follow Me")
+
+
+def test_multi_defender_partner_by_target(w_multi):
+    # the target's partner by target (AIScript_Battler, trainer_ai.c:2765-2782): attacker 2 against 1
+    # (partner 3) and against 3 (partner 1)
     t, base = w_multi.t, w_multi.s
     bolt = w_multi.attack(base, "Thunderbolt")
     _check(t, _record(bolt, 3, "Lightningrod"), 99, a=2, d=1, case="d = 1: partner 3 records it")
@@ -962,10 +982,15 @@ def test_multi_partner_attacker_true_reads(w_multi, w_two):
 def test_ally_target_terminate_flags(w, bit):
     # ``IfTargetIsPartner Terminate`` (script.s:54, :1625, :6355, :6418, :6501, :6523, :6565, :7980, :8022;
     # Terminate = PopOrEnd, :8105-8106): the ally target (attacker 1, target 3) ends the flag's script with
-    # the score unchanged and no read. TAG_STRATEGY is forced on in doubles (trainer_ai.c:253-255) and runs
-    # after them (bit order): the score is the Tag Strategy ally part's alone. A damaging move that no
-    # absorb ladder takes is -30 there (script.s:7349-7350).
+    # the score unchanged and no read. One compile per bit: the flag's script alone (the Tag Strategy ally
+    # part's own -30 is test_tag_partner's, the two in a row test_ally_target_terminate_then_tag_strategy).
+    _check(w.t, w.attack(w.s, "Tackle"), 100, d=3, reads=0, flags=(bit,), case="Terminate")
+
+
+@pytest.mark.slow  # one compile of a flag script and the whole Tag Strategy in a row: over 60 s
+def test_ally_target_terminate_then_tag_strategy(w):
+    # TAG_STRATEGY is forced on in doubles (trainer_ai.c:253-255) and runs after the other flags (bit order,
+    # trainer_ai.c:380-392): after a flag's Terminate the score is the Tag Strategy ally part's alone. A
+    # damaging move that no absorb ladder takes is -30 there (script.s:7349-7350).
     s = w.attack(w.s, "Tackle")
-    _check(w.t, s, 100, d=3, reads=0, flags=(bit,), case="Terminate")
-    _check(w.t, s, 70, d=3, reads=0, flags=(bit, TAG_STRATEGY), case="then Tag Strategy")
-    _check(w.t, s, 70, d=3, reads=0, flags=(TAG_STRATEGY,), case="Tag Strategy alone")
+    _check(w.t, s, 70, d=3, reads=0, flags=(RISKY, TAG_STRATEGY), case="then Tag Strategy")

@@ -21,6 +21,7 @@ from tests.ai.test_tag_doubles import (
     FIRE,
     GROUND,
     NORMAL,
+    POISON,
     _ability,
     _at,
     _check,
@@ -224,11 +225,14 @@ def test_poison_heal_91_92(w):
         ally(w, t1, _hp(s1, ALLY, 91), 105, reads=0, case=f"{move} 91")
         ally(w, t1, _hp(s1, ALLY, 92), 70, reads=0, case=f"{move} 92")
         ally(w, t1, _hp(s1, ALLY, 30), 105, case=f"{move} 30")
-        ally(w, t1, _status(s1, ALLY, Status.PARALYSIS), 70, case=f"{move} statused")
-        ally(w, t1, _item(s1, "Toxic Orb"), 70, case=f"{move} Toxic Orb")
-        ally(w, w.t, w.attack(w.s, move), 70, case=f"{move} no Poison Heal")
-        # the script's BUG: no Poison / Steel type test
-        ally(w, t1, _types(s1, ALLY, BUG, NORMAL), 105, case=f"{move} Bug")
+        # each other condition at hp% 91, where it alone decides
+        at91 = _hp(s1, ALLY, 91)
+        ally(w, t1, _status(at91, ALLY, Status.PARALYSIS), 70, case=f"{move} statused")
+        ally(w, t1, _item(at91, "Toxic Orb"), 70, case=f"{move} Toxic Orb")
+        ally(w, w.t, _hp(w.attack(w.s, move), ALLY, 91), 70, case=f"{move} no Poison Heal")
+        # the script's BUG: no Poison / Steel type test (a Poison-type ally scores the same)
+        ally(w, t1, _types(at91, ALLY, BUG, NORMAL), 105, case=f"{move} Bug")
+        ally(w, t1, _types(at91, ALLY, POISON, NORMAL), 105, case=f"{move} Poison")
 
 
 # --- 1.10 Helping Hand ------------------------------------------------------------------------------
@@ -303,13 +307,18 @@ def test_acupressure_laws(w):
 # --- drivers -------------------------------------------------------------------------------------------
 
 
+def test_check_hp_ally_alone(w):
+    # CheckHP_Main (:7696-7697) sends the ally target to the Tag Strategy ally part: bit 8 alone scores it.
+    ally(w, w.t, w.attack(w.s, "Tackle"), 70, reads=0, flags=(CHECK_HP,), case="bit 8 alone")
+
+
+@pytest.mark.slow  # one compile of the Tag Strategy and CheckHP scripts in a row: over 60 s
 def test_check_hp_runs_twice(w):
     # CheckHP_Main (:7696-7697) sends the ally target to the same part: bit 7 then bit 8, both score
     # changes and both draw sets (A-9 0.4).
     both = (TAG_STRATEGY, CHECK_HP)
     s = w.attack(w.s, "Tackle")
     ally(w, w.t, s, 40, reads=0, flags=both, case="-30 twice")
-    ally(w, w.t, s, 70, reads=0, flags=(CHECK_HP,), case="bit 8 alone")
     t1, s1 = _ability(w.t, w.attack(w.s, "Thunderbolt"), ALLY, "Volt Absorb")
     p = 64 / 256
     ally(w, t1, _hp(s1, ALLY, 80), {106: p * p, 103: 2 * p * (1 - p), 100: (1 - p) ** 2},

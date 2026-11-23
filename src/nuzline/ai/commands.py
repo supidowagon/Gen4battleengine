@@ -1261,7 +1261,7 @@ MOVE_IDS = {
     "Seed Flare": 465,
     "Head Smash": 457,
 }
-# TagStrategy_PartnerStatusMove's IfMoveEqualTo MOVE_TRICK / MOVE_SWITCHEROO (script.s:7451-7452)
+# TagStrategy_PartnerStatusMove's IfMoveEqualTo MOVE_TRICK / MOVE_SWITCHEROO (script.s:7452-7453)
 # compare ids (trainer_ai.c:834-844); Kaizo's moves on ids 271 and 415 are Hidden Power Psychic
 # and Hidden Power Flying (damaging, so they never reach that block): each policy pins its
 # game's name (data.game_constants).

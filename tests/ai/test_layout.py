@@ -288,9 +288,13 @@ B4_FORMATS = ("double", "double_two_trainer", "multi")
 
 def test_fight_slot_reads_b4(kaizo_tables):
     """``fight_slot_reads(.., b4=True)`` is the most over the move rows and both target kinds
-    (A-15 section 5). The B = 4 rows are ``[n, 2, 11]``, enemy then ally. Hand rows: a Future Sight
-    (effect 148) walks Tag Strategy's rank calls and R@7173 on an enemy (7) and nothing on an ally
-    (the partner part never reaches that block, s:6638); a Helping Hand (effect 176) on an ally
+    (A-15 section 5). The B = 4 rows are ``[n, 2, 11]``, enemy then ally. Hand rows: a damaging
+    Future Sight (effect 148) on an enemy reads 9 in Tag Strategy: before its block, TryScoreMinus's
+    R@6666 or the SE roll R@6722 after CheckIfHighestDamageWithPartner's R@6694 (s:6658-6730), one
+    each way, then the block's three rank calls of two reads each and R@7173 (s:7150-7193): 2 + 7.
+    On an ally the partner part never reaches that block (s:6638); the row is keyed by effect, not
+    type, so it holds the one roll an Electric / Water move of that effect may make in the absorb
+    ladders (s:7343-7345, rolls at :7383-7438): 1. A Helping Hand (effect 176) on an ally
     reads 3 in TagStrategy_Partner (s:7582-7599), and CHECK_HP (bit 8) enters the same part again
     (s:7697), so bits 7 and 8 together make 6."""
     from nuzline.ai.layout import move_read_rows
@@ -300,9 +304,9 @@ def test_fight_slot_reads_b4(kaizo_tables):
     helping_hand = 1 + int(np.flatnonzero(effect[1:] == 176)[0])
     rows = move_read_rows(kaizo_tables, [future_sight, helping_hand], b4=True)
     assert rows.shape == (2, 2, 11)
-    assert (rows[0, 0, 7], rows[0, 1, 7]) == (7, 0)
+    assert (rows[0, 0, 7], rows[0, 1, 7]) == (9, 1)
     assert (rows[1, 1, 7], rows[1, 1, 8]) == (3, 3)
-    assert fight_slot_reads(rows, TAG, b4=True) == int(rows[..., 7].max()) >= 7
+    assert fight_slot_reads(rows, TAG, b4=True) == int(rows[..., 7].max()) == 9
     assert fight_slot_reads(rows[1:, 1:], TAG | 1 << 8, b4=True) == 6
     assert fight_slot_reads(rows, 0, b4=True) == 1  # no flag: at least 1
 
