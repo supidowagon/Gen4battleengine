@@ -354,7 +354,6 @@ tests/tools/rom/test_trainers.py 6 e3-fogrom2-f359df0
 tests/tools/rom/test_vcdiff.py 6 nightly-20261121-395916d
 tests/tools/test_backlog.py 6 fogrom-gate-125b4c4
 tests/tools/test_battle_scripts.py 6 e3-pfix-a6db161
-tools/build_tables.py 3 local-build-e166bf41
 tests/tools/test_build_tables.py 6 nightly-20261121-395916d
 tests/tools/test_build_tables_game.py 6 nightly-20261121-395916d
 tests/tools/test_cache_sync.py 6 cachevol-c9e9a57
