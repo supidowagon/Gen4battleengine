@@ -53,7 +53,9 @@ from tools.kaizo.gauntlet_map import (
     pc_reachable,
     pc_spots,
     relevant_moves,
+    repel_stretches,
     runs,
+    stretch_sums,
     wild_levels,
 )
 from tools.rom.inputs import REPO_ROOT
@@ -915,6 +917,52 @@ def test_a_chain_through_grass_has_an_avoid_case():
     assert facts["wild_levels"][0]["header"] == 1 and facts["wild_levels"][0]["max_level"] == 7
     (case,) = facts["cases"]
     assert case["moves"] == [] and case["orders"] == [[[2], [1]]]
+    # C10b, by hand: from (0,1) east over the grass, 3 steps to 1's line (3,1); to 2's line
+    # (6,1) the way round row 3 (1 + 1 + 6 + 2 = 10); between the lines 3 steps either way
+    assert facts["repel_steps"] == [
+        {"order": [[1], [2]], "steps": [3, 3]},
+        {"order": [[2], [1]], "steps": [10, 3]},
+    ]
+    assert case["repel_steps"] == []  # no wild in the case: no encounter tile
+
+
+def test_a_walk_counts_the_steps_before_each_fight():
+    rows = ["###.##.", "..g....", ".#####.", "......."]
+    objs = [trainer(1, 3, 0, SOUTH, 1), trainer(2, 6, 0, SOUTH, 1)]
+    maps = StaticMaps([_grass_area(rows, objects=objs)])
+    w = Walker(maps, (1, 2), moves=FieldMoves(wild=True))
+    w.count_steps = True
+    walk = w.walk(Pos(1, 0, 1))
+    assert walk.fight_steps == {(1,): 3, (2,): 10}
+    assert {s.pos: n for s, n in walk.steps.items()}[Pos(1, 6, 3)] == 8
+    # a walker keeps no state depths by default (only the Wayward Repel pass reads them)
+    plain = Walker(StaticMaps([area(1, ["....."], [trainer(1, 4, 0, WEST, 1)])]), (1,))
+    walk = plain.walk(Pos(1, 0, 0))
+    assert walk.steps is None and walk.fight_steps == {(1,): 3}
+    # a talk counts the steps to the tile talked from (trainer 1 sees nothing: sight 0)
+    talk = Walker(StaticMaps([area(1, ["...", "..."], [trainer(1, 2, 0, SOUTH, 0)])]), (1,))
+    walk = talk.walk(Pos(1, 0, 0))
+    assert {sg.how for sg in walk.starts[(1,)]} == {"talk"} and walk.fight_steps == {(1,): 1}
+
+
+def test_repel_stretches_take_the_worst_start_state():
+    # 1 (3,0) looks south, sight 2: its fight starts on (3,1) after 3 steps or on (3,2) after
+    # 4 (1 walks up to (3,1)). From (3,1) 2's line (6,1) is 3 steps away, from (3,2) 4: the
+    # second stretch is 4 (the worst start), never 3
+    rows = ["###.##.", ".......", "......."]
+    objs = [trainer(1, 3, 0, SOUTH, 2), trainer(2, 6, 0, SOUTH, 1)]
+    maps = StaticMaps([area(1, rows, objs)])
+    walkers = [Walker(maps, (1, 2), two_alive=c == 2) for c in (1, 2)]
+    assert repel_stretches(walkers, ROCK_SPEC, (1, 2)) == {((1,), (2,)): [3, 4]}
+    # a group of the chain's last fight only: its one stretch sums both
+    assert repel_stretches(walkers, ROCK_SPEC, (2,)) == {((2,),): [7]}
+
+
+def test_stretch_sums_add_the_chain_fights_and_take_the_worst_sequence():
+    a, b, c = (1,), (2,), (3,)
+    steps = {(a,): 5, (a, b): 4, (a, b, c): 6, (b,): 9, (b, a): 1, (b, a, c): 2}
+    got = stretch_sums(steps, [(a, b, c), (b, a, c)], (1, 3))
+    assert got == {(a, c): [max(5, 9 + 1), max(4 + 6, 2)]}
 
 
 def test_the_split_badges_follow_the_split_order():
@@ -1243,6 +1291,7 @@ def test_a_case_with_no_full_sequence_is_stored_empty():
             "heal_gaps": [],
             "locked_gaps": [],
             "live_next": None,
+            "repel_steps": [],
         }
     ]
     with pytest.raises(MapReadError, match="no full sequence"):
@@ -1534,6 +1583,9 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
     assert d.get("requires_beaten", []) == list(f.requires_beaten)
     # the wild levels of the walk with wild (gauntlet_map.wild_levels)
     assert [WildLevel.from_dict(w) for w in d["wild_levels"]] == list(f.wild_levels)
+    # the Repel step count (C10b), or the refusal where it is not counted (Wayward Cave)
+    assert d["repel_steps"] == [r.to_dict() for r in f.repel_steps]
+    assert d.get("repel_refusal", "") == f.repel_refusal
     if f.partner is None:
         assert d["partner"] is None
     else:
@@ -2480,6 +2532,42 @@ def test_rom_c9_oreburgh_hand_path(rom_files):
     row = _committed_row("Oreburgh Mine")
     assert row["orders"] == [[[196], [195]]]
     assert row["leave_gaps"] == [] and row["heal_gaps"] == []
+    # C10b, the Repel steps by hand: the fewest steps from the arrival (15,1) to a start of
+    # 196 (its line, or (2,23) above it: a talk), then from each start (196 beaten, still
+    # standing) to 195's line or a tile beside it (a talk); the worst start counts
+    dist = _hand_steps(attr, objects, (15, 2), sight196 | sight195)
+    starts196 = [(2, 23), (3, 24)]  # (1,24) and (2,25) beside 196 have the collision bit
+    assert attr(1, 24) & 0x8000 and attr(2, 25) & 0x8000
+    assert not {(4, 24), (5, 24)} & set(dist)
+    first = 1 + min(dist[t] for t in starts196)
+    assert first <= len(path)
+    seconds = []
+    for start in starts196:
+        d = _hand_steps(attr, objects, start, sight195)
+        seconds.append(min(d[t] for t in talk195 if t in d))
+    second = max(seconds)
+    assert min(seconds) <= len(after)
+    assert row["repel_steps"] == [{"order": [[196], [195]], "steps": [first, second]}]
+
+
+def _hand_steps(attr, blocked, start, sight):
+    """``_hand_reach`` breadth first: the fewest steps from ``start`` to each tile reached
+    (a jump is one step: one move, ``PlayerAvatar_WillJump``)."""
+    dist, todo = {start: 0}, [start]
+    for x, z in todo:
+        if (x, z) in sight and (x, z) != start:
+            continue
+        for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            t = (x + dx, z + dz)
+            a = attr(*t)
+            if (dx, dz) == (0, 1) and a & 0xFF == JUMP_SOUTH_B:
+                t = (x, z + 2)
+                a = attr(*t)
+            if a & 0x8000 or t in blocked or t in dist:
+                continue
+            dist[t] = dist[(x, z)] + 1
+            todo.append(t)
+    return dist
 
 
 @pytest.mark.slow

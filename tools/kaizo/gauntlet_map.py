@@ -162,7 +162,7 @@ from __future__ import annotations
 import re
 import struct
 from collections import deque
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from itertools import combinations
@@ -948,6 +948,17 @@ class Walk:
     held: bool = False
     states: set = field(default_factory=set)
     layouts: int = 0  # walk_layouts: the states reached (``states`` is not filled)
+    # The player steps of the shortest way (``Walker.walk`` and ``walk_from``; not
+    # ``walk_layouts``): ``fight_steps`` per fight, the fewest steps from the start before it
+    # starts (a sight or arrival start counts the step onto its tile, a talk the steps to the
+    # tile talked from); ``steps`` per state, its depth (only for a walker with
+    # ``count_steps``). One step per move: a forced slide, a warp step and a coord tile
+    # count one each, where the game counts none (``Field_ProcessStep``,
+    # src/overlay005/field_control.c:719-731 return before ``Field_UpdateRepel`` :755), so
+    # the count is never below the game's.
+    fight_steps: dict = field(default_factory=dict)
+    steps: dict | None = None
+    _at: int | None = field(default=None, compare=False, repr=False)
 
     def headers(self) -> set[int]:
         return {p.header for p in self.seen}
@@ -957,9 +968,14 @@ class Walk:
         return {t for f in self.spot for t in f}
 
     def sighted(self, f: Fight, sight: Sighting) -> None:
-        """Record a start of ``f``."""
+        """Record a start of ``f`` (and its steps, ``fight_steps``, while ``_at`` holds the
+        steps of the tile checked)."""
         self.spot.setdefault(f, sight)
         self.starts.setdefault(f, set()).add(sight)
+        if self._at is not None:
+            n = self._at - (sight.how == "talk")
+            if f not in self.fight_steps or n < self.fight_steps[f]:
+                self.fight_steps[f] = n
 
 
 class CoordEffect(NamedTuple):
@@ -1065,6 +1081,8 @@ class Walker:
         self.used: set[str] = set()
         # (header, kind) -> the encounter tiles a step of this walker ended on (``wild`` held)
         self.wild_tiles: dict[tuple[int, str], set[tuple[int, int]]] = {}
+        # keep each walk's state depths (``Walk.steps``); off by default (memory)
+        self.count_steps = False
 
     def _wild_ok(self, area: Area, x: int, z: int) -> bool:
         """Whether a step may end on ``(x, z)``: not an encounter tile (``Area.encounter``;
@@ -1826,12 +1844,14 @@ class Walker:
         flags: Collection[int] | None = None,
         bridge: bool | None = None,
         moved: tuple = (),
+        keep: bool = True,
     ) -> Walk:
         """Breadth-first walk from ``start`` (at height ``y``, an arrival when None) with
         ``defeated`` trainers beaten and ``flags`` set (``Walker.flags`` when None; ``bfs2.js``
         ``run``), on the elevated bridge when ``bridge`` (when None: the start tile is a bridge
         start), with the ``moved`` objects off their event tiles (``_State.moved``): sight is
-        checked on the start tile, every tile entered and every warp arrival."""
+        checked on the start tile, every tile entered and every warp arrival. ``keep``: cache
+        the walk (False: the caller drops it after use)."""
         defeated = frozenset(defeated)
         flags = self.flags if flags is None else frozenset(flags)
         if y is None:
@@ -1844,7 +1864,9 @@ class Walker:
         if key in self._walks:
             return self._walks[key]
         walk = Walk({start: None})
-        self._walks[key] = walk
+        walk._at = 0
+        if keep:
+            self._walks[key] = walk
         if self._spotted(walk, start, y, "arrival", defeated, removable, flags, bridge, moved):
             walk.held = True
             self._reached.add(start.header)
@@ -1869,6 +1891,7 @@ class Walker:
         if key in self._walks:
             return self._walks[key]
         walk = Walk({s.pos: None for s in seeds})
+        walk._at = 0
         if keep:
             self._walks[key] = walk
         queue: deque[_State] = deque()
@@ -1962,12 +1985,22 @@ class Walker:
         return [("step", here, here, False)]
 
     def _bfs(
-        self, walk: Walk, queue: deque[_State], defeated: frozenset[int], removable: bool
+        self,
+        walk: Walk,
+        queue: deque[_State],
+        defeated: frozenset[int],
+        removable: bool,
     ) -> Walk:
         states = walk.states
+        # the depth of each state: the queue holds depths n and n + 1 only, Strength turned
+        # on (same depth) goes to its front, so states are met in depth order and a fight's
+        # first record is its fewest steps (``Walk.fight_steps``)
+        depth = {s: 0 for s in queue}
         while queue:
             s = queue.popleft()
+            now = depth[s]
             for d in range(4):
+                walk._at = now + 1
                 for kind, target, here, _ in self._moves(walk, s, d, defeated, removable):
                     if target in states:
                         # the warp tile is stood on even when the landing is known (else
@@ -1976,14 +2009,24 @@ class Walker:
                             walk.seen.setdefault(here.pos, s.pos)
                         continue
                     if kind == "stay":
-                        # the sight check runs on every field-input frame (field_control.c:181-196)
-                        if self._spotted(
+                        # the sight check runs on every field-input frame (field_control.c:181-196).
+                        # Strength turned on (a talk) is no step; a push is counted as one (the
+                        # player walks on the spot, ov5_021DFB54.c:572-578: never below the game)
+                        push = target.moved != s.moved
+                        walk._at = now + push
+                        spotted = self._spotted(
                             walk, target.pos, target.y, "sight", defeated, removable,
                             target.flags, target.bridge, target.moved,
-                        ):  # fmt: skip
+                        )  # fmt: skip
+                        walk._at = now + 1
+                        if spotted:
                             continue
                         states.add(target)
-                        queue.append(target)
+                        depth[target] = now + push
+                        if push:
+                            queue.append(target)
+                        else:
+                            queue.appendleft(target)
                         continue
                     effects = self._coord_step(target.pos, walk, target.flags)
                     if effects is None:
@@ -1995,8 +2038,12 @@ class Walker:
                     if target in states:
                         continue
                     states.add(target)
+                    depth[target] = now + 1
                     walk.seen.setdefault(target.pos, s.pos)
                     queue.append(target)
+        walk._at = None
+        if self.count_steps:
+            walk.steps = depth
         self._reached |= walk.headers()
         return walk
 
@@ -2454,6 +2501,89 @@ def runs(walker: Walker, spec: ChainSpec) -> list[Run]:
         states = tuple(walks[p[:k]] for k in range(len(p) + 1))
         out.append(Run(p, states, tuple(heads[f] for f in p)))
     return out
+
+
+def stretch_sums(
+    steps: Mapping[tuple[Fight, ...], int],
+    sequences: Iterable[tuple[Fight, ...]],
+    group: Collection[int],
+) -> dict[tuple[Fight, ...], list[int]]:
+    """Per order of the group's fights (each sequence restricted to them), the steps of each
+    stretch: stretch k ends at the group's k-th fight and starts at the start (k = 0) or at
+    the group's fight before it; its steps are the sum of ``steps[prefix]`` (the steps before
+    the prefix's last fight) over the sequence's fights in it. Several sequences of one order:
+    the most steps per stretch. A sum of per-fight worsts is at least the worst sum."""
+    members = frozenset(group)
+    out: dict[tuple[Fight, ...], list[int]] = {}
+    for seq in sequences:
+        order: list[Fight] = []
+        sums: list[int] = []
+        run = 0
+        for j, f in enumerate(seq):
+            run += steps[seq[: j + 1]]
+            if set(f) & members:
+                order.append(f)
+                sums.append(run)
+                run = 0
+        key = tuple(order)
+        old = out.get(key)
+        out[key] = sums if old is None else [max(a, b) for a, b in zip(old, sums)]
+    return out
+
+
+def repel_stretches(
+    walkers: Sequence[Walker], spec: ChainSpec, group: tuple[int, ...]
+) -> dict[tuple[Fight, ...], list[int]]:
+    """The Repel step count of a chain group (``wild`` held): per order and stretch (the
+    start to fight 1, each gap to the next fight) the steps of the shortest walk of that
+    stretch, worst over histories. A Repel counts one step per player step
+    (``Repel_UpdateSteps``, src/overlay006/repel_step_update.c:12-25, from
+    ``Field_ProcessStep``, src/overlay005/field_control.c:755); ``Walk.fight_steps`` never
+    counts fewer.
+
+    A DP over (prefix, start state) as ``chain_prefixes``, with every walker of ``walkers``
+    (the live counts: a faint or a revive between fights changes the count, so a start state
+    of one count's walk is walked under each): ``steps[p + f]`` is the most, over the walks
+    of p that can start f, of the fewest steps to f (each start state is a history; the
+    worst start, never the nearest). Per order (``stretch_sums``) a stretch sums the steps of
+    the chain's fights in it."""
+    members = frozenset(spec.members)
+    level: dict[tuple[Fight, ...], dict[int, Walk]] = {(): {}}
+    for walker in walkers:
+        for i, e in enumerate(spec.entries):
+            extra = spec.entry_flags[i] if spec.entry_flags else (frozenset(),)
+            for fl in extra:
+                w = walker.walk(e, (), flags=walker.flags | fl)
+                level[()][id(w)] = w
+    steps: dict[tuple[Fight, ...], int] = {}
+    full: list[tuple[Fight, ...]] = []
+    while level:
+        nxt: dict[tuple[Fight, ...], dict[int, Walk]] = {}
+        for p, ws in level.items():
+            done = frozenset(t for f in p for t in f)
+            if done == members:
+                full.append(p)
+                continue
+            for w in ws.values():
+                for f, sights in _chain_fights(w, members, members, done).items():
+                    q = (*p, f)
+                    steps[q] = max(steps.get(q, 0), w.fight_steps[f])
+                    bucket = nxt.setdefault(q, {})
+                    for s in sights:
+                        for walker in walkers:
+                            after = _start_walk(walker, s, done | set(f))
+                            bucket[id(after)] = after
+        level = nxt
+    return stretch_sums(steps, full, group)
+
+
+def repel_rows(got: Mapping[tuple[Fight, ...], list[int]], orders: Iterable) -> list[dict]:
+    """The ``repel_steps`` rows (``nuzline.data.gauntlet.RepelSteps``): one per order of
+    ``got``, sorted; every order of ``orders`` must have one."""
+    for o in orders:
+        if tuple(tuple(f) for f in o) not in got:
+            raise MapReadError(f"order {o}: no Repel stretches")
+    return [{"order": [list(f) for f in o], "steps": list(got[o])} for o in sorted(got)]
 
 
 def start_counts(walker: Walker, spec: ChainSpec) -> tuple[int, int, int]:
@@ -3508,6 +3638,7 @@ def _facts(orders, leave_gaps, fight_headers, escape_, **more) -> dict:
         "field_moves": [],
         "cases": [],
         "wild_levels": [],
+        "repel_steps": [],
         **more,
     }
 
@@ -3697,13 +3828,31 @@ def chain_group_facts(
         "locked_gaps": [],
         "live_next": None,
     }
+    def repel(names: tuple[str, ...], orders: list) -> list[dict]:
+        # the Repel stretches of a case with ``wild`` (none without: no encounter tile), one
+        # row per order the walk allows under either count (``live_next`` sequences too)
+        if "wild" not in names or not orders:
+            return []
+        w = walked[names]
+        return repel_rows(repel_stretches([w[1], w[2]], spec, group), orders)
+
     cases = [
-        {"moves": list(names), **(by[names] or empty)}
+        {
+            "moves": list(names),
+            **(by[names] or empty),
+            "repel_steps": repel(names, (by[names] or empty)["orders"]),
+        }
         for names in move_subsets(relevant)
         if names != relevant
     ]
     wild = wild_levels(maps, walked[relevant].values()) if "wild" in relevant else []
-    return {**top, "field_moves": list(relevant), "cases": cases, "wild_levels": wild}
+    return {
+        **top,
+        "field_moves": list(relevant),
+        "cases": cases,
+        "wild_levels": wild,
+        "repel_steps": repel(relevant, top["orders"]),
+    }
 
 
 def derive_groups(
@@ -3816,6 +3965,7 @@ def derive_groups(
             field_moves=facts["field_moves"],
             cases=facts["cases"],
             wild_levels=facts["wild_levels"],
+            repel_steps=facts["repel_steps"],
             **({"requires_beaten": needs} if needs else {}),
         )
 
@@ -3873,6 +4023,14 @@ def derive_groups(
     return out
 
 
+WAYWARD_REPEL_REFUSAL = (
+    "the worst start's steps are not counted: from 450+496 on the start states are thousands "
+    "of pushed-boulder layouts and one walk per start is too slow; the union walk gives the "
+    "nearest start only, below the worst (C10b ruling 22 Nov: refused until the exact or a "
+    "proven upper bound lands, owed)"
+)
+
+
 def wayward_group_facts(
     maps, scripts: ScriptReader, doubles: Collection[int], seen: dict[str, set[int]]
 ) -> dict:
@@ -3917,6 +4075,7 @@ def wayward_group_facts(
             raise MapReadError(
                 f"Wayward Cave: field moves {names} change the walk outside {relevant}"
             )
+
     cases = []
     for names in move_subsets(relevant):
         if names == relevant:
@@ -3936,6 +4095,7 @@ def wayward_group_facts(
                 "heal_gaps": [],
                 "locked_gaps": [],
                 "live_next": None,
+                "repel_steps": [],
             }
         )
     return _facts(
@@ -3948,6 +4108,12 @@ def wayward_group_facts(
         cases=cases,
         skips=way["skips"],
         wild_levels=way["wild_levels"] if "wild" in relevant else [],
+        # no Repel step count: the worst start's steps are not counted here (the start
+        # states from 450+496 on are thousands of pushed-boulder layouts; one walk per start
+        # is too slow, the union walk gives the nearest start only). wild = repel is refused
+        # by name (``GauntletFacts.repel_refusal``; ruling 22 Nov, owed: exact or a proven
+        # upper bound)
+        **({"repel_refusal": WAYWARD_REPEL_REFUSAL} if "wild" in relevant else {}),
     )
 
 

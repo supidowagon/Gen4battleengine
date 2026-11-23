@@ -43,7 +43,11 @@ Tables (keys are ROM trainer ids unless said otherwise):
   the same rules; ``orders = []`` and no other key: the case has no full sequence;
   ``GauntletFacts.cases``, ``MoveCase``). Optional ``wild_levels`` (a list of tables
   ``header``, ``kind``, ``rate``, ``max_level``, ``tiles``, ``examples``, optional ``roaming``:
-  ``WildLevel``; exactly when ``wild`` is a field move) with ``wild_levels_source``. Gap k follows
+  ``WildLevel``; exactly when ``wild`` is a field move) with ``wild_levels_source``, and
+  ``repel_steps`` (a list of tables ``order``, ``steps``: ``RepelSteps``; with ``wild``: every
+  order, skip order and order of the other live count) with ``repel_steps_source``; a case
+  with ``wild`` and orders holds its own ``repel_steps``; ``repel_refusal`` (a reason) in
+  their place refuses ``wild = repel`` by name. Gap k follows
   the k-th fight of an order. Each fact has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
   read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
@@ -90,6 +94,7 @@ from nuzline.data.gauntlet import (
     LiveRow,
     MoveCase,
     Partner,
+    RepelSteps,
     Skip,
     WildLevel,
 )
@@ -197,6 +202,13 @@ class Overrides:
 
 
 # --- loader ---------------------------------------------------------------------------
+
+
+def _reason(entry: str, value: object) -> str:
+    """A plain-words reason (``repel_refusal``): a string, empty when absent."""
+    if not isinstance(value, str):
+        raise OverridesError(f"{entry}: repel_refusal must be a string")
+    return value
 
 
 def _source(entry: str, table: object) -> str:
@@ -363,6 +375,9 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
         raise OverridesError(f"{entry}: wild_levels must be a list of tables")
     if "wild_levels" in t and "wild_levels_source" not in t:
         raise OverridesError(f"{entry}: wild_levels needs wild_levels_source")
+    if "repel_steps" in t and "repel_steps_source" not in t:
+        raise OverridesError(f"{entry}: repel_steps needs repel_steps_source")
+    repel = _repel_steps(entry, t["repel_steps"]) if "repel_steps" in t else ()
     try:
         return GauntletFacts(
             name=name,
@@ -397,6 +412,11 @@ def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> Gau
             wild_levels_source=_fact_source(entry, t, "wild_levels_source", "")
             if "wild_levels" in t
             else "",
+            repel_steps=repel,
+            repel_steps_source=_fact_source(entry, t, "repel_steps_source", "")
+            if "repel_steps" in t
+            else "",
+            repel_refusal=_reason(entry, t.get("repel_refusal", "")),
         )
     except ValueError as e:
         if isinstance(e, OverridesError):
@@ -427,7 +447,28 @@ CASE_KEYS = (
     "locked_gaps",
     "fight_headers",
     "live_next",
+    "repel_steps",
 )
+
+
+def _repel_steps(where: str, raw: object) -> tuple[RepelSteps, ...]:
+    """``repel_steps``: a list of tables ``{ order, steps }`` (``RepelSteps``)."""
+    if not isinstance(raw, list) or not all(isinstance(r, dict) for r in raw):
+        raise OverridesError(f"{where}: repel_steps must be a list of tables")
+    out = []
+    for r in raw:
+        if set(r) != {"order", "steps"}:
+            raise OverridesError(f"{where}: a repel_steps row holds order and steps only")
+        if not isinstance(r["order"], list) or not all(
+            isinstance(f, list) and f and all(isinstance(t, int) for t in f) for f in r["order"]
+        ):
+            raise OverridesError(f"{where}: repel_steps order must be a list of fights")
+        steps = _ints(where, "repel_steps steps", r["steps"])
+        try:
+            out.append(RepelSteps(tuple(tuple(f) for f in r["order"]), tuple(steps)))
+        except ValueError as e:
+            raise OverridesError(f"{where}: {e}") from None
+    return tuple(out)
 
 
 def _cases(entry: str, raw: object, trainers: list[int]) -> tuple[MoveCase, ...]:
@@ -474,6 +515,9 @@ def _cases(entry: str, raw: object, trainers: list[int]) -> tuple[MoveCase, ...]
                     locked_gaps=_gaps(where, "locked_gaps", c["locked_gaps"], n),
                     fight_headers=_fight_headers(where, c.get("fight_headers"), sizes),
                     live_next=_live_next(where, c["live_next"]) if "live_next" in c else (),
+                    repel_steps=_repel_steps(where, c["repel_steps"])
+                    if "repel_steps" in c
+                    else (),
                 )
             )
         except ValueError as e:
@@ -614,6 +658,9 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
                 "requires_beaten_source",
                 "wild_levels",
                 "wild_levels_source",
+                "repel_steps",
+                "repel_steps_source",
+                "repel_refusal",
                 *FACT_KEYS,
                 *FACT_SOURCES,
             ),

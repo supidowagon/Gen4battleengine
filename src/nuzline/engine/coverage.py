@@ -1156,6 +1156,15 @@ def _check_kaizo_fields(c: _Collector, names: Names, trainer: Trainer) -> None:
             f"{display_name(trainer)}: gauntlet {group} (fight {fight_id}; facts {recorded})",
             "battle format",
         )
+        facts = trainer.gauntlet_facts
+        if facts is not None and facts.repel_refusal:
+            # a fact not counted (C10b: Wayward Cave's Repel steps): wild = repel is refused
+            c.add(
+                Support.NONE,
+                f"{display_name(trainer)}: gauntlet {group}: wild = repel refused "
+                "(Repel steps not counted)",
+                "battle format",
+            )
     for k in missing_set_data(trainer):
         c.add(
             Support.NONE,

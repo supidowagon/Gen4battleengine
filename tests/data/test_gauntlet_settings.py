@@ -756,8 +756,61 @@ def _wild_facts(roaming=False, max_level=12):
             cases=[case],
             wild_levels=[level],
             wild_levels_source="rom:test wild levels",
+            repel_steps=WILD_REPEL_ROWS,
+            repel_steps_source="rom:test repel steps",
         )
     )
+
+
+# per order: Repels of 100 steps needed = 2 + 0 + 1 = 3 and 1 + 2 + 1 = 4
+WILD_REPEL_ROWS = [
+    {"order": [[10], [11, 12], [13]], "steps": [150, 0, 99]},
+    {"order": [[11, 12], [10], [13]], "steps": [100, 101, 1]},
+]
+
+
+def test_repel_steps_round_trip_and_count_one_fresh_repel_per_stretch():
+    f = _wild_facts()
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+    assert f.repels_needed([[10], [11, 12], [13]], 100) == 3
+    assert f.repels_needed([[11, 12], [10], [13]], 100) == 4
+    assert f.repels_needed([[11, 12], [10], [13]], 250) == 3
+    with pytest.raises(ValueError, match="at least one step"):
+        f.repels_needed([[10], [11, 12], [13]], 0)
+    d = f.to_dict()
+    with pytest.raises(ValueError, match="repel_steps exactly when wild"):
+        GauntletFacts.from_dict({**d, "repel_steps": []})
+    with pytest.raises(ValueError, match="need repel_steps_source"):
+        GauntletFacts.from_dict({**d, "repel_steps_source": ""})
+    with pytest.raises(ValueError, match="no row for"):
+        GauntletFacts.from_dict({**d, "repel_steps": WILD_REPEL_ROWS[:1]})
+    with pytest.raises(ValueError, match="lists an order twice"):
+        GauntletFacts.from_dict({**d, "repel_steps": WILD_REPEL_ROWS + WILD_REPEL_ROWS[:1]})
+    with pytest.raises(ValueError, match="not of the group"):
+        extra = {"order": [[10], [77]], "steps": [1, 1]}
+        GauntletFacts.from_dict({**d, "repel_steps": [*WILD_REPEL_ROWS, extra]})
+    with pytest.raises(ValueError, match="ints >= 0"):
+        bad = [{**WILD_REPEL_ROWS[0], "steps": [1, -1, 1]}, WILD_REPEL_ROWS[1]]
+        GauntletFacts.from_dict({**d, "repel_steps": bad})
+    # a row of an order the other live count allows is kept (live_next sequences)
+    more = {"order": [[10], [11], [12], [13]], "steps": [1, 2, 3, 4]}
+    g = GauntletFacts.from_dict({**d, "repel_steps": [*WILD_REPEL_ROWS, more]})
+    assert g.repels_needed([[10], [11], [12], [13]], 2) == 1 + 1 + 2 + 2
+    # the case without wild holds none; the top-level case keeps the rows
+    assert f.case(()).repel_steps == () and f.case(("wild",)).repel_steps == f.repel_steps
+
+
+def test_a_repel_refusal_replaces_the_rows_and_refuses_wild_repel_by_name():
+    d = {k: v for k, v in _wild_facts().to_dict().items() if not k.startswith("repel_steps")}
+    f = GauntletFacts.from_dict({**d, "repel_refusal": "steps not counted"})
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+    with pytest.raises(SettingsError, match="Test Cave: wild = repel is refused here: steps"):
+        f.walk_moves((), "repel", first_live_level=50, repel_steps=250, repels=9)
+    assert f.walk_moves((), "accept") == ("wild",) and f.walk_moves((), "avoid") == ()
+    with pytest.raises(ValueError, match="repel_refusal only with wild and no repel_steps"):
+        GauntletFacts.from_dict({**_wild_facts().to_dict(), "repel_refusal": "x"})
+    with pytest.raises(ValueError, match="repel_refusal only with wild"):
+        GauntletFacts.from_dict(facts_dict(repel_refusal="x"))
 
 
 def test_wild_and_catch_options_default_to_the_strict_value():
@@ -782,17 +835,21 @@ def test_walk_moves_follow_the_wild_setting():
     party = ("rock_smash",)
     assert f.walk_moves(party, "avoid") == party
     assert f.walk_moves(party, "accept") == (*party, "wild")
-    # repel: a Repel in the bag and the first live member above every wild level (strict >)
-    assert f.walk_moves(party, "repel", first_live_level=13, repel_in_bag=True) == (
-        *party,
-        "wild",
-    )
-    assert f.walk_moves(party, "repel", first_live_level=12, repel_in_bag=True) == party
-    assert f.walk_moves(party, "repel", first_live_level=50, repel_in_bag=False) == party
+    # repel: the first live member above every wild level (strict >) and Repels in the bag
+    # for the worst order (4 of 100 steps, WILD_REPEL_ROWS)
+    bag = {"repel_steps": 100, "repels": 4}
+    assert f.walk_moves(party, "repel", first_live_level=13, **bag) == (*party, "wild")
+    assert f.walk_moves(party, "repel", first_live_level=12, **bag) == party
+    assert f.walk_moves(party, "repel", first_live_level=50, repel_steps=100) == party
+    assert f.walk_moves(party, "repel", first_live_level=50, repels=4) == party
+    few = {"repel_steps": 100, "repels": 3}  # enough for the first order only: refused
+    assert f.walk_moves(party, "repel", first_live_level=50, **few) == party
+    big = {"repel_steps": 250, "repels": 3}  # 1 + 1 + 1 for either order
+    assert f.walk_moves(party, "repel", first_live_level=50, **big) == (*party, "wild")
     # a roamer's route: the active roamers' levels must be known and below too
     r = _wild_facts(roaming=True)
-    assert r.walk_moves(party, "repel", first_live_level=50, repel_in_bag=True) == party
-    kw = {"first_live_level": 50, "repel_in_bag": True}
+    assert r.walk_moves(party, "repel", first_live_level=50, **bag) == party
+    kw = {"first_live_level": 50, **bag}
     assert r.walk_moves(party, "repel", roamer_levels={}, **kw) == (*party, "wild")
     assert r.walk_moves(party, "repel", roamer_levels={199: 50}, **kw) == party
     with pytest.raises(SettingsError):

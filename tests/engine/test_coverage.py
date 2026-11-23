@@ -398,6 +398,32 @@ def test_gauntlet_refused_with_facts(tables, names):
     assert line in report.missing
 
 
+@pytest.mark.fullset
+def test_gauntlet_repel_refusal_is_listed(tables, names):
+    # C10b: a group whose Repel steps are not counted (Wayward Cave) lists the refusal
+    level = {"header": 1, "kind": "grass", "rate": 10, "max_level": 5, "tiles": 1,
+             "examples": [[0, 0]]}  # fmt: skip
+    facts = facts_dict(
+        field_moves=["wild"],
+        field_moves_source="rom:test wild",
+        cases=[{"moves": [], "orders": []}],
+        wild_levels=[level],
+        wild_levels_source="rom:test wild levels",
+        repel_refusal="steps not counted",
+    )
+    t = replace(
+        roark_trainer(),
+        gauntlet=("Oreburgh Gym", 1),
+        gauntlet_facts=GauntletFacts.from_dict(facts),
+    )
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    line = (
+        "Roark: gauntlet Oreburgh Gym: wild = repel refused (Repel steps not counted) "
+        "(battle format UNSUPPORTED)"
+    )
+    assert line in report.missing
+
+
 def test_optional_not_refused(tables, names):
     plain = check_opponent(tables, names, roark_trainer(), roark_party(names), 0)
     optional = replace(roark_trainer(), optional=True)

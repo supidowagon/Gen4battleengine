@@ -681,6 +681,81 @@ class WildLevel:
         return out
 
 
+@dataclass(frozen=True)
+class RepelSteps:
+    """The Repel step count of one order of a group, for a walk that ends steps on encounter
+    tiles (``wild``): per stretch (the start to fight 1, then each gap to the next fight) the
+    steps of the shortest walk of that stretch, worst over the start states of the fight
+    before (tools/kaizo/gauntlet_map.py ``repel_stretches``, ``wayward_repel``). A Repel
+    counts down one per player step and ends at 0 (``Repel_UpdateSteps``,
+    src/overlay006/repel_step_update.c:12-25, from src/overlay005/field_control.c:755); a
+    new one is refused while steps remain (``TryUseRepel``,
+    src/applications/bag/main.c:2257-2265) and sets its item's ``effectParam`` steps (:2264,
+    ``SetRepelSteps`` :639-643; ``ITEM_PARAM_EFFECT_PARAM``, src/item.c:160-161; the
+    ``hold_param`` column of ``items.json``). ``repels``: one fresh Repel per stretch,
+    ``ceil(steps / item steps)`` each; a stretch of 0 steps needs none (no step, no encounter
+    check)."""
+
+    order: Order
+    steps: tuple[int, ...]
+
+    def __post_init__(self):
+        if len(self.steps) != len(self.order):
+            raise ValueError(f"repel steps of {self.order}: one count per fight")
+        if any(not isinstance(n, int) or isinstance(n, bool) or n < 0 for n in self.steps):
+            raise ValueError(f"repel steps of {self.order}: counts are ints >= 0")
+
+    def repels(self, item_steps: int) -> int:
+        """The Repels of ``item_steps`` steps the order uses."""
+        if not isinstance(item_steps, int) or isinstance(item_steps, bool) or item_steps < 1:
+            raise ValueError(f"a Repel lasts at least one step, not {item_steps!r}")
+        return sum(-(-n // item_steps) for n in self.steps)
+
+    @classmethod
+    def from_dict(cls, d: Mapping) -> RepelSteps:
+        return cls(tuple(tuple(f) for f in d["order"]), tuple(d["steps"]))
+
+    def to_dict(self) -> dict:
+        return {"order": [list(f) for f in self.order], "steps": list(self.steps)}
+
+
+def _check_repel_steps(
+    name: str,
+    rows: Sequence[RepelSteps],
+    wanted: bool,
+    orders: Sequence[Order],
+    more: Iterable[Order] = (),
+) -> None:
+    """``repel_steps`` is present exactly when ``wanted`` (the walk holds ``wild``, has
+    orders and is not refused, ``GauntletFacts.repel_refusal``); its orders are distinct,
+    each of the group's trainers once at most, and every order of ``orders`` and ``more``
+    (the skips) has a row. Rows may hold more orders: those a walk under the other live
+    count allows (``live_next``)."""
+    if bool(rows) != wanted:
+        raise ValueError(f"{name}: repel_steps exactly when wild is a move and orders exist")
+    if not rows:
+        return
+    everyone = {t for o in orders for f in o for t in f}
+    keys = [r.order for r in rows]
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"{name}: repel_steps lists an order twice")
+    for r in rows:
+        ts = [t for f in r.order for t in f]
+        if len(set(ts)) != len(ts) or not set(ts) <= everyone:
+            raise ValueError(f"{name}: repel_steps order {r.order} is not of the group")
+    missing = [o for o in (*orders, *more) if o not in set(keys)]
+    if missing:
+        raise ValueError(f"{name}: repel_steps has no row for {missing}")
+
+
+def _repels_needed(name: str, rows: Sequence[RepelSteps], order, item_steps: int) -> int:
+    key = tuple(tuple(f) for f in order)
+    row = next((r for r in rows if r.order == key), None)
+    if row is None:
+        raise ValueError(f"{name}: no Repel step count for the order {key}")
+    return row.repels(item_steps)
+
+
 def _subsets(moves: tuple[str, ...]) -> list[tuple[str, ...]]:
     """Every subset of ``moves`` (kept in their order), smallest first."""
     return [c for n in range(len(moves) + 1) for c in combinations(moves, n)]
@@ -702,11 +777,17 @@ class MoveCase:
     locked_gaps: tuple[int, ...]
     fight_headers: tuple[tuple[int, ...], ...] = ()
     live_next: tuple[LiveRow, ...] = ()
+    # with ``wild`` in ``moves``: the Repel step count of every order (``RepelSteps``)
+    repel_steps: tuple[RepelSteps, ...] = ()
 
     def __post_init__(self):
         name = f"field-move case {list(self.moves)}"
         if self.moves != tuple(m for m in FIELD_MOVES if m in self.moves):
             raise ValueError(f"{name}: distinct names of {FIELD_MOVES}, in that order")
+        # rows exactly with wild and orders, or none (the group refuses wild = repel:
+        # ``GauntletFacts.repel_refusal``, checked there)
+        if self.repel_steps:
+            _check_repel_steps(name, self.repel_steps, "wild" in self.moves, self.orders)
         if not self.orders:
             rest = (self.leave_gaps, self.pc_gaps, self.heal_gaps, self.locked_gaps)
             if any(v != () for v in rest) or self.fight_headers or self.live_next:
@@ -738,11 +819,16 @@ class MoveCase:
             locked_gaps=tuple(d["locked_gaps"]),
             fight_headers=tuple(tuple(h) for h in d.get("fight_headers", ())),
             live_next=tuple(LiveRow.from_dict(r) for r in d.get("live_next") or ()),
+            repel_steps=tuple(RepelSteps.from_dict(r) for r in d.get("repel_steps") or ()),
         )
 
+    def repels_needed(self, order, item_steps: int) -> int:
+        """The Repels of ``item_steps`` steps the walk of ``order`` uses (``RepelSteps``)."""
+        return _repels_needed(f"case {list(self.moves)}", self.repel_steps, order, item_steps)
+
     def to_dict(self) -> dict:
-        """The inverse of ``from_dict``; an absent gap field and an empty ``fight_headers`` or
-        ``live_next`` are omitted."""
+        """The inverse of ``from_dict``; an absent gap field and an empty ``fight_headers``,
+        ``live_next`` or ``repel_steps`` are omitted."""
         out: dict[str, Any] = {
             "moves": list(self.moves),
             "orders": [[list(f) for f in o] for o in self.orders],
@@ -758,6 +844,8 @@ class MoveCase:
             out["fight_headers"] = [list(h) for h in self.fight_headers]
         if self.live_next:
             out["live_next"] = [r.to_dict() for r in self.live_next]
+        if self.repel_steps:
+            out["repel_steps"] = [r.to_dict() for r in self.repel_steps]
         return out
 
 
@@ -813,12 +901,35 @@ class GauntletFacts:
     # ``wild`` is in ``field_moves``; ``wild_levels_source`` names the ROM reads.
     wild_levels: tuple[WildLevel, ...] = ()
     wild_levels_source: str = ""
+    # The Repel step count of every order of the walk with ``wild`` (``RepelSteps``: the
+    # orders, the skips' orders and those of the other live count), exactly when ``wild`` is
+    # in ``field_moves``; ``repel_steps_source`` names the count's rule.
+    repel_steps: tuple[RepelSteps, ...] = ()
+    repel_steps_source: str = ""
+    # With ``wild`` and no ``repel_steps``: why the steps are not counted; ``wild = repel`` is
+    # then refused by name (``walk_moves``).
+    repel_refusal: str = ""
 
     def __post_init__(self):
         if ("wild" in self.field_moves) != bool(self.wild_levels):
             raise ValueError(f"{self.name}: wild_levels exactly when wild is a field move")
         if self.wild_levels and not self.wild_levels_source:
             raise ValueError(f"{self.name}: wild_levels need wild_levels_source")
+        wild = "wild" in self.field_moves
+        if self.repel_refusal and (not wild or self.repel_steps):
+            raise ValueError(f"{self.name}: repel_refusal only with wild and no repel_steps")
+        _check_repel_steps(
+            self.name,
+            self.repel_steps,
+            wild and not self.repel_refusal,
+            self.orders,
+            (s.order for s in self.skips),
+        )
+        for c in self.cases:
+            if "wild" in c.moves and c.orders and not c.repel_steps and not self.repel_refusal:
+                raise ValueError(f"{self.name}: case {list(c.moves)} needs repel_steps")
+        if self.repel_steps and not self.repel_steps_source:
+            raise ValueError(f"{self.name}: repel_steps need repel_steps_source")
         _check_gap_facts(
             self.name,
             self.orders,
@@ -881,6 +992,9 @@ class GauntletFacts:
             requires_beaten_source=d.get("requires_beaten_source", ""),
             wild_levels=tuple(WildLevel.from_dict(w) for w in d.get("wild_levels") or ()),
             wild_levels_source=d.get("wild_levels_source", ""),
+            repel_steps=tuple(RepelSteps.from_dict(r) for r in d.get("repel_steps") or ()),
+            repel_steps_source=d.get("repel_steps_source", ""),
+            repel_refusal=d.get("repel_refusal", ""),
         )
 
     def to_dict(self) -> dict:
@@ -930,6 +1044,11 @@ class GauntletFacts:
         if self.wild_levels:
             out["wild_levels"] = [w.to_dict() for w in self.wild_levels]
             out["wild_levels_source"] = self.wild_levels_source
+        if self.repel_steps:
+            out["repel_steps"] = [r.to_dict() for r in self.repel_steps]
+            out["repel_steps_source"] = self.repel_steps_source
+        if self.repel_refusal:
+            out["repel_refusal"] = self.repel_refusal
         return out
 
     @property
@@ -943,24 +1062,31 @@ class GauntletFacts:
         wild: str,
         *,
         first_live_level: int | None = None,
-        repel_in_bag: bool = False,
+        repel_steps: int | None = None,
+        repels: int = 0,
         roamer_levels: Mapping[int, int] | None = None,
     ) -> tuple[str, ...]:
         """The moves to pass to ``case``: the party's usable field moves, plus ``wild`` when
         the ``wild`` setting lets the walk end steps on encounter tiles. ``avoid``: never.
-        ``accept``: always. ``repel``: when the bag holds a Repel and the first live member's
-        level is above every wild level (``RepelPreventsEncounter``, wild_encounters.c:1397-1400,
-        strict ``>``; the first battler, :258-262) and above the level of every active roamer on
-        a roaming header (``roamer_levels``: header -> highest active roamer level there, from
-        the save; None: unknown, so ``repel`` does not hold on a roaming header). Each Repel
-        use is a bag use; the steps a Repel lasts are not counted here (owed)."""
+        ``accept``: always. ``repel``: when the first live member's level is above every wild
+        level (``RepelPreventsEncounter``, wild_encounters.c:1397-1400, strict ``>``; the first
+        battler, :258-262) and above the level of every active roamer on a roaming header
+        (``roamer_levels``: header -> highest active roamer level there, from the save; None:
+        unknown, so ``repel`` does not hold on a roaming header), and the bag's ``repels``
+        Repels of ``repel_steps`` steps each (the item's ``effectParam``, ``RepelSteps``) cover
+        every order of the case with ``wild``: at least the most ``repels_needed`` over its
+        ``repel_steps`` rows (any order the walk allows, so the planner's pick is covered).
+        Each Repel use is a bag use. A group with ``repel_refusal`` raises ``SettingsError``
+        under ``repel`` (its steps are not counted)."""
         _one_of(WILD_VALUES)(wild)
         moves = tuple(m for m in party_moves if m != "wild")
         if wild == "avoid" or "wild" not in self.field_moves:
             return moves
         if wild == "accept":
             return (*moves, "wild")
-        if not repel_in_bag or first_live_level is None:
+        if self.repel_refusal:
+            raise SettingsError(f"{self.name}: wild = repel is refused here: {self.repel_refusal}")
+        if repel_steps is None or repels < 1 or first_live_level is None:
             return moves
         for w in self.wild_levels:
             if first_live_level <= w.max_level:
@@ -970,7 +1096,18 @@ class GauntletFacts:
                     return moves
                 if first_live_level <= roamer_levels.get(w.header, 0):
                     return moves
+        try:
+            rows = self.case((*moves, "wild")).repel_steps
+        except ValueError:
+            return moves  # no full sequence with wild either: the case without it refuses
+        if repels < max(r.repels(repel_steps) for r in rows):
+            return moves
         return (*moves, "wild")
+
+    def repels_needed(self, order, item_steps: int) -> int:
+        """The Repels of ``item_steps`` steps the walk of ``order`` (an order, a skip's order
+        or one of the other live count) uses with every field move (``RepelSteps``)."""
+        return _repels_needed(self.name, self.repel_steps, order, item_steps)
 
     def case(self, moves: Collection[str]) -> MoveCase:
         """The facts of the field-move case of a party whose usable field moves are ``moves``
@@ -991,6 +1128,7 @@ class GauntletFacts:
                 self.locked_gaps,
                 self.fight_headers,
                 self.live_next,
+                self.repel_steps,
             )
         found = next((c for c in self.cases if c.moves == key), None)
         if found is None:

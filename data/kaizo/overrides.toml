@@ -512,6 +512,10 @@ wild_levels = [
   { header = 199, kind = "grass", rate = 10, max_level = 10, tiles = 216, examples = [[2, 17], [2, 18], [2, 20]] },
 ]
 wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
+repel_steps = [
+  { order = [[196], [195]], steps = [36, 12] },
+]
+repel_steps_source = "rom:per order and stretch the fewest steps of the walk with every field move, worst over start states and both live counts (Repel_UpdateSteps repel_step_update.c:12-25 from field_control.c:755; one step per move, never below the game; gauntlet_map.repel_stretches)"
 orders_source = "rom:header 199 events 197 objs 1, 2 (rocks), 5, 6; ledges (2-4,19) behaviour 0x3B; stairs warp (15,1)"
 escape_source = "rom:header 199 map type 3 escape bit 1"
 [[gauntlet.case]]
@@ -546,6 +550,12 @@ wild_levels = [
   { header = 346, kind = "grass", rate = 30, max_level = 14, tiles = 58, examples = [[170, 677], [170, 678], [170, 679]], roaming = true },
 ]
 wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
+repel_steps = [
+  { order = [[13], [14], [15]], steps = [29, 9, 17] },
+  { order = [[13], [15], [14]], steps = [29, 11, 17] },
+  { order = [[15], [13], [14]], steps = [17, 14, 9] },
+]
+repel_steps_source = "rom:per order and stretch the fewest steps of the walk with every field move, worst over start states and both live counts (Repel_UpdateSteps repel_step_update.c:12-25 from field_control.c:755; one step per move, never below the game; gauntlet_map.repel_stretches)"
 live_next = [
   { fought = [], live = 1, next = [[13]], headers = [346] },
   { fought = [], live = 2, next = [[15]], headers = [346] },
@@ -732,6 +742,7 @@ wild_levels = [
   { header = 284, kind = "grass", rate = 10, max_level = 75, tiles = 1428, examples = [[2, 2], [2, 3], [2, 4]] },
 ]
 wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
+repel_refusal = "the worst start's steps are not counted: from 450+496 on the start states are thousands of pushed-boulder layouts and one walk per start is too slow; the union walk gives the nearest start only, below the worst (C10b ruling 22 Nov: refused until the exact or a proven upper bound lands, owed)"
 skips_source = "rom:header 284 obj 14 = trainer 455 at (42,42), movement 16 MOVEMENT_TYPE_LOOK_WEST (fixed facing: src/unk_020EDBAC.c:167-173, src/unk_0206450C.c:454-466, :478-481), sight 2, line (41,42), (40,42); a boulder on a tile between interrupts the sight (src/trainer_encounter.c:310-344, src/map_object_move.c:599-601, :623-665, MapObject_GetDistanceToPlayer :230-243); gauntlet_map.wayward_skip; ruling 22 Nov (455 optional, the planner chooses)"
 [[gauntlet.skips]]
 order = [[383, 443], [380, 458], [450, 496], [459], [460], [454], [749, 750]]

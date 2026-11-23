@@ -9,6 +9,7 @@ from nuzline.data.gauntlet import (
     GauntletFacts,
     GauntletSettingsError,
     Partner,
+    SettingsError,
     check_swap_gap,
 )
 from tools.kaizo.overrides import (
@@ -1115,7 +1116,9 @@ WILD_FACTS = CASE_FACTS.replace('field_moves = ["rock_smash"]', 'field_moves = [
     'orders_source = "rom:header 1 events 2"\n'
     'wild_levels = [{header = 1, kind = "grass", rate = 10, max_level = 7, tiles = 1, '
     "examples = [[2, 1]]}]\n"
-    'wild_levels_source = "rom:header 1 wild 5 (pl_enc_data)"\n',
+    'wild_levels_source = "rom:header 1 wild 5 (pl_enc_data)"\n'
+    'repel_steps = [{order = [[1], [2]], steps = [12, 3]}, {order = [[2], [1]], steps = [0, 7]}]\n'
+    'repel_steps_source = "rom:gauntlet_map.repel_stretches"\n',
 )
 
 
@@ -1128,6 +1131,58 @@ def test_gauntlet_wild_levels_load_with_the_wild_case(tmp_path):
     text = WILD_FACTS.replace('wild_levels_source = "rom:header 1 wild 5 (pl_enc_data)"\n', "")
     with pytest.raises(OverridesError, match="needs wild_levels_source"):
         load_overrides(write(tmp_path, gauntlet_text(facts=text)))
+
+
+def test_gauntlet_repel_steps_load_and_count_repels(tmp_path):
+    # C10b: one row per order; one fresh Repel per stretch, ceil(steps / item steps) each
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=WILD_FACTS))).gauntlets[0].facts
+    assert f.repel_steps_source == "rom:gauntlet_map.repel_stretches"
+    assert f.repels_needed([[1], [2]], 10) == 2 + 1
+    assert f.repels_needed([[2], [1]], 10) == 0 + 1  # a stretch of 0 steps needs none
+    assert f.case(["wild"]).repels_needed([[1], [2]], 100) == 2
+    with pytest.raises(ValueError, match="no Repel step count"):
+        f.repels_needed([[1, 2]], 10)
+    src = 'repel_steps_source = "rom:gauntlet_map.repel_stretches"\n'
+    with pytest.raises(OverridesError, match="needs repel_steps_source"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=WILD_FACTS.replace(src, ""))))
+    one = WILD_FACTS.replace(", {order = [[2], [1]], steps = [0, 7]}", "")
+    with pytest.raises(OverridesError, match="no row for"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=one)))
+    short = WILD_FACTS.replace("steps = [12, 3]", "steps = [12]")
+    with pytest.raises(OverridesError, match="one count per fight"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=short)))
+    plain = CASE_FACTS.replace(
+        'orders_source = "rom:header 1 events 2"\n',
+        'orders_source = "rom:header 1 events 2"\n'
+        'repel_steps = [{order = [[1], [2]], steps = [1, 1]}, {order = [[2], [1]], steps = [1, 1]}]\n'
+        'repel_steps_source = "rom:x"\n',
+    )
+    with pytest.raises(OverridesError, match="exactly when wild"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=plain)))
+
+
+def test_committed_repel_steps_cover_every_order_of_the_wild_groups():
+    # C10b: the chain groups whose walk holds wild carry a Repel step count for every order
+    o = {g.name: g.facts for g in load_overrides().gauntlets}
+    for name in ("Oreburgh Mine", "Route 204 North"):
+        f = o[name]
+        keys = {r.order for r in f.repel_steps}
+        assert set(f.orders) | {s.order for s in f.skips} <= keys, name
+        assert all(n > 0 for r in f.repel_steps for n in r.steps), name
+    assert all(not f.repel_steps for n, f in o.items() if "wild" not in f.field_moves)
+
+
+@pytest.mark.fullset
+def test_wayward_cave_refuses_wild_repel_by_name():
+    # C10b ruling (c), 22 Nov: the worst start's steps are not counted in Wayward Cave (owed:
+    # exact or a proven upper bound), so wild = repel is refused there by name; stale when
+    # the count lands
+    f = {g.name: g.facts for g in load_overrides().gauntlets}["Wayward Cave"]
+    assert "wild" in f.field_moves and not f.repel_steps and "worst start" in f.repel_refusal
+    moves = ("rock_smash", "strength")
+    with pytest.raises(SettingsError, match="Wayward Cave: wild = repel is refused here"):
+        f.walk_moves(moves, "repel", first_live_level=100, repel_steps=250, repels=99)
+    assert f.case(f.walk_moves(moves, "accept")).orders == f.orders
 
 
 def test_a_gauntlet_case_with_no_orders_is_refused_when_picked(tmp_path):
