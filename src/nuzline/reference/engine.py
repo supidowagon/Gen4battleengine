@@ -1017,6 +1017,9 @@ def _ground_immune(tables, s: RefState, attacker: int, defender: int, move_type:
 # battle the charge moves are on it whenever the chart runs and Fire Fang (273) never is (rulings
 # G-18, G-27).
 _MULTI_TURN_EFFECTS = (26, 39, 75, 145, 151, 155, 255, 256, 263, 273)
+# Razor Wind (CHARGE_TURN_HIGH_CRIT, effect_script_0039.s:6) and SHADOW_FORCE (_0272.s:6): the charge
+# scripts that strike under SYSCTL_LAST_OF_MULTI_TURN as well as under the lock (decomp effect ids).
+_LAST_OF_MULTI_STRIKE = (39, 272)
 
 
 def _wonder_guarded(
@@ -3120,16 +3123,18 @@ def _update_last_resort(s: RefState, side: int, move: int) -> None:
     sd.last_resort_count += 1
 
 
-def _metronome_update(tables, s: RefState, side: int, move: int) -> None:
+def _metronome_update(tables, s: RefState, side: int, move: int, bide_release: bool) -> None:
     """``BattleSystem_UpdateMetronomeCount`` (lib.c:6160-6178), G-60: a Metronome holder not
-    uproaring nor move-locked counts ``moveTemp`` (same move +1 up to 10, else 0 and the new
-    move); an attacker holding no Metronome has its own count reset to 0 (:6176-6177). A move
+    uproaring, not move-locked and not under SYSCTL_LAST_OF_MULTI_TURN (:6165; at BeforeMove's
+    end only a Bide release set it: subscript_bide_end.s:12, run inside the status checks,
+    bcp.c:2722-2724, ``bide_release``) counts ``moveTemp`` (same move +1 up to 10, else 0 and the
+    new move); an attacker holding no Metronome has its own count reset to 0 (:6176-6177). A move
     with MOVE_STATUS_NO_PP (bcp.c:2285) counts too: the update follows the NO_EFFECTS branch
     (bcp.c:3209-3221); only Spite (E3-B2-4; or an encored move with no PP) gets there."""
     sd = s.battlers[side]
     if _item_effect(tables, _active(s, side), s) != ItemId.METRONOME_ITEM:
         sd.metronome_turns = 0
-    elif not sd.uproar and not sd.locked_move:
+    elif not sd.uproar and not sd.locked_move and not bide_release:
         if sd.metronome_move == move:
             sd.metronome_turns = min(sd.metronome_turns + 1, 10)
         else:
@@ -6518,7 +6523,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         and (struggling or locked or mon.pp[action] != 0)
     )
     if not no_target0 and not reflect:
-        _metronome_update(tables, s, side, move)
+        _metronome_update(tables, s, side, move, turn.bide_release)
         turn.met_reached = True
         # BattleSystem_UpdateLastResort (bcp.c:3218) is in the tail's not-NO_EFFECTS branch: not
         # after DecrementPP's MOVE_STATUS_NO_PP (below; E3-B2-11).
@@ -6646,7 +6651,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
     # The charge-turn moves (B10-12; step._use_move cites the scripts): they hit when the user is
     # locked (the second turn), SolarBeam in sun without Cloud Nine / Air Lock, or with a Power
-    # Herb (removed, and Skull Bash's Defense +1 first); else they charge: the lock into moveCur,
+    # Herb (removed, and Skull Bash's Defense +1 first); Razor Wind and Shadow Force also hit on a
+    # Bide release turn (SYSCTL_LAST_OF_MULTI_TURN from subscript_bide_end.s:12, tested at
+    # effect_script_0039.s:6 / _0272.s:6; the other seven test the lock only, which the release
+    # cleared at :11); else they charge: the lock into moveCur,
     # the semi-invulnerable bit, Skull Bash's Defense +1, and the action ends (no accuracy,
     # Protect or type chart: SYSCTL_FIRST_OF_MULTI_TURN). Only Skull Bash's charge sets
     # SYSCTL_ATTACK_MESSAGE_SHOWN (subscript_update_stat_stage.s:6-7).
@@ -6655,7 +6663,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     if redirected and flags & MoveFlag.CHARGE:
         _reveal_redirect(s, tables, turn.defender)  # TryMove's message, a charge turn too
     if flags & MoveFlag.CHARGE:
-        second = bool(sd.locked_move)
+        second = bool(sd.locked_move) or (
+            turn.bide_release and _t(tables, "move_ai_effect", move) in _LAST_OF_MULTI_STRIKE
+        )
         sun_now = bool(flags & MoveFlag.SUN_SKIP) and _sunny(tables, s)
         herb = not second and not sun_now and _item_effect(tables, mon, s) == ItemId.POWER_HERB
         if herb:

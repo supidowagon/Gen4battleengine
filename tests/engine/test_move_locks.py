@@ -138,7 +138,7 @@ def test_bide_without_target_is_lost(tables, names):
     assert int(out.locked_move[0]) == 0 and int(out.bide_damage[0]) == 0
 
 
-@pytest.mark.parametrize("move", ["SolarBeam", "Rollout"])
+@pytest.mark.parametrize("move", ["SolarBeam", "Rollout", "Razor Wind", "Shadow Force"])
 def test_bide_release_unlocks_before_the_move(tables, names, move):
     """Review M1 (tracelaws 26ea67d7): on the release turn ``CHECK_STATUS_STATE_BIDE`` runs
     subscript_bide_end.s before the move (bcp.c:2722-2724, commandNext = command), and its :11
@@ -146,7 +146,11 @@ def test_bide_release_unlocks_before_the_move(tables, names, move):
     Metronome (movePrevByBattler = moveTemp, bcp.c:3945-3946): on the release turn FightCommand's
     Encore branch (bcp.c:1869-1873, before the relock at :1884-1887) runs Metronome, which calls
     ``move``. SolarBeam then charges (effect_script_0151.s:9 tests only the lock) and Rollout
-    starts at its first power (battle_script.c:5667-5674); the lock either sets stays after it."""
+    starts at its first power (battle_script.c:5667-5674); the lock either sets stays after it.
+    Razor Wind (effect_script_0039.s:6) and Shadow Force (effect_script_0272.s:6) also test
+    SYSCTL_LAST_OF_MULTI_TURN, which subscript_bide_end.s:12 set: they strike at once
+    (_031 / _049) and subscript_charge_move_cleanup.s leaves no lock (review tracelaws 5f2ebe51
+    MUST 2). Neither is in sCannotMetronomeMoves (battle_lib.c:7152ff)."""
     s = locked_into_bide(bide_state(tables, names), names, turns=1, damage=30)
     metronome = names.move("Metronome")
     s = s._replace(
@@ -156,17 +160,42 @@ def test_bide_release_unlocks_before_the_move(tables, names, move):
         encore_turns=s.encore_turns.at[0].set(3),
     )
     called = names.move(move)
-    rank = int(jnp.sum(metronome_candidates(tables, s, 0)[:called]))
+    candidates = metronome_candidates(tables, s, 0)
+    assert bool(candidates[called])
+    rank = int(jnp.sum(candidates[:called]))
     call = empty_outcome().call
     out = play(
         tables, s, acts(s, names, "Tackle"), empty_outcome()._replace(call=call.at[0].set(rank))
     )
-    assert int(out.locked_move[0]) == called
     assert int(out.bide_turns[0]) == 0 and int(out.bide_damage[0]) == 0
+    if move in ("Razor Wind", "Shadow Force"):
+        assert int(out.locked_move[0]) == 0 and int(out.semi_invulnerable[0]) == 0
+        assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # the strike
+        return
+    assert int(out.locked_move[0]) == called
     if move == "SolarBeam":
         assert int(out.hp[1, 0]) == int(s.hp[1, 0])  # the charge turn: no damage
     else:
         assert int(out.rollout_count[0]) == 4  # rolloutCount 5, decremented once
+
+
+def test_bide_release_does_not_count_for_the_metronome_item(tables, names):
+    """Review tracelaws 5f2ebe51 MUST 1: subscript_bide_end.s runs inside the status checks
+    (bcp.c:3145-3150, :2722-2724) and sets SYSCTL_LAST_OF_MULTI_TURN (:12) after clearing the lock
+    (:11); BattleSystem_UpdateMetronomeCount at BeforeMove's end (bcp.c:3221) skips a battler
+    under that flag (battle_lib.c:6165). So the release leaves the Metronome item's count and
+    metronomeMove as they were, though the lock is already gone. Both engines."""
+    s = locked_into_bide(bide_state(tables, names), names, turns=1, damage=30)
+    growl = names.move("Growl")
+    s = s._replace(
+        item=s.item.at[0, 0].set(names.item("Metronome")),
+        metronome_move=s.metronome_move.at[0].set(growl),
+        metronome_turns=s.metronome_turns.at[0].set(4),
+    )
+    out = play(tables, s, acts(s, names))
+    assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # the release struck
+    assert int(out.locked_move[0]) == 0 and int(out.bide_turns[0]) == 0
+    assert int(out.metronome_move[0]) == growl and int(out.metronome_turns[0]) == 4
 
 
 def test_locked_side_actions(tables, names):

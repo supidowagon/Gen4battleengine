@@ -753,6 +753,10 @@ three structs has a row.
   TryPursuit, battle_script.c:6909, read it with no Struggle test), as do a locked battler, a
   battler at 0 HP and a paused state. The trace does not record it: `tools/trace_to_state.py`
   refuses a turn whose fitting candidates differ in a live value (`_Turn.check_selection`).
+  `actions.usable_moves` / the reference's `_usable` have no CHECK_INVALID_HEAL_BLOCK
+  (battle_lib.c:2296-2299; CHECK_INVALID_ALL = ~0) because Heal Block is not modelled (no
+  state field): modelling it must add that check there, or this canonicalization and the
+  Struggle test go wrong.
 - The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
   counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
   written at B = 4 only.

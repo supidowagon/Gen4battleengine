@@ -668,6 +668,37 @@ def test_a_striking_sky_attack_flinches_for_sure_unless_imprisoned(tables):
     assert not bool(laws_of(tables, _striking_sky_attack(s, True), acts).reads.flinch_sure[1])
 
 
+def test_a_bide_release_sky_attack_never_flinches_for_sure_in_the_laws(tables):
+    """Review tracelaws 5f2ebe51: on u_027's board the foe is locked into Bide on its release turn
+    (``bide_turns`` 1, damage stored) and Encored on Sky Attack (its slot 0). FightCommand's
+    Encore branch runs Sky Attack (bcp.c:1869-1873); subscript_bide_end.s has cleared the lock
+    (:11) before it, and effect_script_0075.s:5 tests only the lock, so it charges: no flinch.
+    The laws' ``reach`` needs ``bide_turns`` 0, so the flinch is not sure."""
+    acts = np.zeros(2, np.int32)
+    s = stored("u027_state.txt")
+    fields = {
+        name: np.array(getattr(s, name))
+        for name in (
+            "locked_move",
+            "bide_turns",
+            "bide_damage",
+            "encore_move",
+            "encore_slot",
+            "encore_turns",
+        )
+    }
+    for name, value in (
+        ("locked_move", 117),
+        ("bide_turns", 1),
+        ("bide_damage", 20),
+        ("encore_move", 143),
+        ("encore_slot", 0),
+        ("encore_turns", 2),
+    ):
+        fields[name][1] = value
+    assert not bool(laws_of(tables, s._replace(**fields), acts).reads.flinch_sure[1])
+
+
 @pytest.mark.slow
 def test_mask_sound_on_a_sourceless_uproar_lock(tables):
     """u_027's falsifying example, pinned: no undrawn Outcome element changes the step on the

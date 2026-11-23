@@ -93,8 +93,8 @@ of the turn:
 * ``magnitude[s]``: ``s`` uses a ``MAGNITUDE`` move (``BtlCmd_CalcMagnitudePower``).
   ``crit``/``roll`` are not relevant for ``LEVEL_DAMAGE`` (Night Shade deals its user's
   level with no crit or roll, ``damage.fixed_damage``) nor for ``BIDE`` (the unleash is
-  ``2 * storedDamage``, also fixed). A locked side's move is its locked move
-  (``order.selected_move``), so the masks above read it.
+  ``2 * storedDamage``, also fixed). A locked side's move is its locked move (FightCommand's
+  moveLockedInto, ``order.fight_move``), so the masks above read it.
 * ``present[s]``: ``s`` uses Present (``BtlCmd_Present``). It joins ``crit[s, 0]`` and
   ``roll[s, 0]`` in one joint factor (``_present_reads``): the heal path reads neither.
 * ``tri_attack[s]``: ``s``'s move runs Tri Attack (its own, or Nature Power's call) and its
@@ -3052,11 +3052,9 @@ def outcome_laws(
         # nothing, so its flinch is never sure there. A Power Herb would strike at once, so this
         # drops a sure flinch it could have: over-approximate, only on a charge move's first turn.
         # A Bide release (bide_turns 1 now) clears the lock before the move (subscript_bide_end.s:
-        # 11, bcp.c:2722-2724), so an Encore takeover's charge move charges then too.
-        & ~(
-            ((tables.move_flags[moves] & MoveFlag.CHARGE) != 0)
-            & ((state.locked_move == 0) | (state.bide_turns == 1))
-        )
+        # 11, bcp.c:2722-2724), so an Encore takeover's Sky Attack charges then: ``reach`` already
+        # needs bide_turns 0, so no Bide turn's flinch is ever sure here.
+        & ~(((tables.move_flags[moves] & MoveFlag.CHARGE) != 0) & (state.locked_move == 0))
         # B = 4: a third battler's mover or a Trace firing at its MoveEnd can give the target
         # Inner Focus or Shield Dust before the first mover's flinch (outcome.doubles_ability_change).
         & ~b4

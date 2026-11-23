@@ -348,6 +348,12 @@ MODE_FULL, MODE_PURSUIT, MODE_RESUME, MODE_REFLECT = 0, 1, 2, 3
 # (battle_script.c:5182-5184; outcome.PROTECT_RATES).
 PROTECT_CHAIN_MAX = 3
 
+# The charge moves whose script strikes under SYSCTL_LAST_OF_MULTI_TURN as well as under the lock,
+# by decomp battle effect (``move_ai_effect``): CHARGE_TURN_HIGH_CRIT (Razor Wind,
+# effect_script_0039.s:6) and SHADOW_FORCE (effect_script_0272.s:6). A grep for LAST_OF_MULTI under
+# res/battle/scripts/effects finds only these two and Bide's effect_script_0026.s:6.
+LAST_OF_MULTI_STRIKE_EFFECTS = (39, 272)
+
 # The turn's events (``step_events``, ``turn_events``): what each side's action showed,
 # recorded where ``execute_actions`` runs it. ``engine.observe`` reads them; ``step``
 # drops them. ``act_kind`` values:
@@ -1527,7 +1533,13 @@ def _use_move(
     # E2 batch 10 family 7, the charge turn (B10-12..). A charge move's script (MoveFlag.CHARGE:
     # effect_script_0039.s, _0075.s, _0145.s, _0151.s, _0155.s, _0255.s, _0256.s, _0263.s, _0272.s)
     # attacks when its user is VOLATILE_CONDITION_MOVE_LOCKED (line 5: the second turn,
-    # ``locked_move``, PP spent on the first: bcp.c:335), when SolarBeam meets sun without Cloud
+    # ``locked_move``, PP spent on the first: bcp.c:335). Razor Wind (effect_script_0039.s:6) and
+    # Shadow Force (effect_script_0272.s:6) also attack under SYSCTL_LAST_OF_MULTI_TURN, which a
+    # Bide release sets before the move (subscript_bide_end.s:12, bcp.c:2722-2724) after clearing
+    # the lock (:11): on the release turn (``bide_ends``) these two strike and the other seven
+    # (lock test only: _0075.s, _0145.s, _0151.s, _0155.s, _0255.s, _0256.s, _0263.s) charge.
+    # The scripts' decomp effect id is ``move_ai_effect`` (MOVE_DATA(move).effect). It also attacks
+    # when SolarBeam meets sun without Cloud
     # Nine / Air Lock (effect_script_0151.s:5-6) or with a Power Herb (HOLD_EFFECT_CHARGE_SKIP,
     # line 6-7: subscript_item_skip_charge_turn.s removes it, :20). Otherwise it charges: the
     # direct TO_ATTACKER subscript_vanish_on_charge_turn.s locks the user into moveCur (:10,
@@ -1537,7 +1549,10 @@ def _use_move(
     # living foe keeps the user as its defender (HasNoTarget, bcp.c:2327-2334), so it charges.
     used_flags = tables.move_flags[used].astype(_I32)
     charge_move = (used_flags & MoveFlag.CHARGE) != 0
-    second_turn = charge_move & (state.locked_move[side] != 0)
+    strikes_on_release = jnp.isin(
+        tables.move_ai_effect[used].astype(_I32), jnp.asarray(LAST_OF_MULTI_STRIKE_EFFECTS, _I32)
+    )
+    second_turn = charge_move & ((state.locked_move[side] != 0) | (bide_ends & strikes_on_release))
     sun_now = (
         ((used_flags & MoveFlag.SUN_SKIP) != 0)
         & fcm.sun(fcm.weather_bits(state))
@@ -1717,8 +1732,12 @@ def _use_move(
     # script (bcp.c:3214) and its damage (G-60). So it reads the state before the script: a
     # charge move's second turn is still VOLATILE_CONDITION_MOVE_LOCKED (the script's
     # subscript_charge_move_cleanup.s:6 clears it later) and does not count; a Recycle (or a
-    # Natural Gift, a Power Herb) changes the held item only after it (B13-34).
-    state = metronome_update(tables, state, side, move, head_on & succeeded & ~reflect)
+    # Natural Gift, a Power Herb) changes the held item only after it (B13-34). A Bide release
+    # ran subscript_bide_end.s inside the status checks (bcp.c:3145-3150, :2722-2724), which set
+    # SYSCTL_LAST_OF_MULTI_TURN (:12): the release's move does not count (battle_lib.c:6165).
+    state = metronome_update(
+        tables, state, side, move, head_on & succeeded & ~reflect, bide_release=bide_ends
+    )
     # BattleSystem_UpdateLastResort (bcp.c:3218, battle_lib.c:3443-3459): in the same tail, but in
     # its not-NO_EFFECTS branch (bcp.c:3209-3218), so not after DecrementPP's MOVE_STATUS_NO_PP;
     # moveTemp (``move``) is recorded, before the move's script, so a Last Resort tests the count
