@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from nuzline.data.gauntlet import MoveCase, Skip
+from nuzline.data.gauntlet import MoveCase, Skip, WildLevel
 from tools.kaizo.gauntlet_map import (
     CLOCK_SIDE,
     CLOCK_STATES,
@@ -1532,6 +1532,8 @@ def test_the_tool_re_derives_the_committed_facts(derived, name):
     # the skips behind a pushed boulder (wayward_skip)
     assert [Skip.from_dict(k) for k in d.get("skips", [])] == list(f.skips)
     assert d.get("requires_beaten", []) == list(f.requires_beaten)
+    # the wild levels of the walk with wild (gauntlet_map.wild_levels)
+    assert [WildLevel.from_dict(w) for w in d["wild_levels"]] == list(f.wild_levels)
     if f.partner is None:
         assert d["partner"] is None
     else:
@@ -1616,13 +1618,17 @@ def test_wayward_order_join_points_and_the_459_talk_tiles(rom_files, derived):
     assert [len(o) for o in d["orders"]] == [6, 7, 7, 8]
     assert d["partner"] == {"trainer": 612, "join_before": [1]}
     assert d["leave_gaps"] == [[]] * 4 and d["escape"] is True
-    # Strength (the boulders before 459+460) and Rock Smash both needed: every smaller case
-    # has no full sequence
-    assert d["field_moves"] == ["rock_smash", "strength"]
+    # Strength (the boulders before 459+460), Rock Smash and wild (cave-floor encounter tiles
+    # on every way) all needed: every smaller case has no full sequence
+    assert d["field_moves"] == ["rock_smash", "strength", "wild"]
     assert [(c["moves"], c["orders"]) for c in d["cases"]] == [
         ([], []),
         (["rock_smash"], []),
         (["strength"], []),
+        (["wild"], []),
+        (["rock_smash", "strength"], []),
+        (["rock_smash", "wild"], []),
+        (["strength", "wild"], []),
     ]
     # 455 (obj 14 at (42,42), LOOK_WEST, sight 2: line (41,42), (40,42)) is skipped only with
     # boulder 26 pushed from (28,16) onto (41,42) while the player passes (40,42)

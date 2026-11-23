@@ -504,8 +504,19 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 199
+field_moves = ["wild"]
+field_moves_source = "rom:every way from the stairs warp (15,1) to 196 and 195 ends steps on encounter tiles of headers 199 (grass rate 10) and 198: without wild no order (gauntlet_map.chain_group_facts, changing_moves)"
+wild_levels = [
+  { header = 45, kind = "grass", rate = 20, max_level = 10, tiles = 25, examples = [[310, 793], [310, 794], [310, 795]] },
+  { header = 198, kind = "grass", rate = 10, max_level = 10, tiles = 206, examples = [[4, 4], [4, 5], [4, 6]] },
+  { header = 199, kind = "grass", rate = 10, max_level = 10, tiles = 216, examples = [[2, 17], [2, 18], [2, 20]] },
+]
+wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
 orders_source = "rom:header 199 events 197 objs 1, 2 (rocks), 5, 6; ledges (2-4,19) behaviour 0x3B; stairs warp (15,1)"
 escape_source = "rom:header 199 map type 3 escape bit 1"
+[[gauntlet.case]]
+moves = []
+orders = []
 
 # Twins Liv & Liz (DOUBLE) (Gauntlet Start)*; Bug Catcher Brandon (Gauntlet)*; Aroma Lady Taylor (Gauntlet End)*
 # rows: Gardenia Split:59=15, Gardenia Split:69=13, Gardenia Split:79=14
@@ -528,8 +539,13 @@ pc_gaps = []
 heal_gaps = []
 locked_gaps = []
 fight_headers = 346
-field_moves = []
-field_moves_source = "rom:held rock_smash (the split's badges); none changes the facts: no walk used it (gauntlet_map.chain_group_facts, changing_moves)"
+field_moves = ["wild"]
+field_moves_source = "rom:held rock_smash, wild (the split's badges; wild every split); no walk used rock_smash; every way from warp (180,698) to the trainers ends steps on grass of header 346 (rate 30): without wild no order (gauntlet_map.chain_group_facts, changing_moves)"
+wild_levels = [
+  { header = 254, kind = "grass", rate = 30, max_level = 7, tiles = 11, examples = [[26, 42], [26, 43], [26, 44]] },
+  { header = 346, kind = "grass", rate = 30, max_level = 14, tiles = 58, examples = [[170, 677], [170, 678], [170, 679]], roaming = true },
+]
+wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
 live_next = [
   { fought = [], live = 1, next = [[13]], headers = [346] },
   { fought = [], live = 2, next = [[15]], headers = [346] },
@@ -550,6 +566,9 @@ live_next = [
   { fought = [[15], [13]], live = 2, next = [[14]], headers = [346], gap = ["leave"] },
 ]
 orders_source = "rom:header 346 events 332; warp (180,698) -> header 254"
+[[gauntlet.case]]
+moves = []
+orders = []
 
 # Galactic Mercury (B2B With Galactic Terra); GalacticfTerra (B2B With Galactic Mercury)
 # rows: Gardenia Split:91=296, Gardenia Split:101=297
@@ -707,8 +726,12 @@ partner = { trainer = 612, join_before = [1], source = "rom:scr 318 entry 2 @152
 orders_source = "rom:header 284 events 273; scr 318 entries 2, 4, 5, 6; split: obj 459 talk tiles (34,28), (35,27); 454, 455 in turn when a moved trainer or a pushed boulder cuts 455's line"
 leave_gaps_source = "rom:scr 318 entry 6 @271-311, @399 Warp 350 (310,608); coord (85,8)-(85,10) runs only while 0x4091 == 0, i.e. before fight 1"
 escape_source = "rom:header 284 map type 3 escape bit 1"
-field_moves = ["rock_smash", "strength"]
-field_moves_source = "rom:header 284: boulders objs 19 (26,16), 26 (28,16) (gfx 0x54, scr 10002) before 459+460; Rock Smash rocks (scr 10001) objs 15-18, 20-25; held cut, rock_smash, strength (Galactic split badges); without either no order reaches the exit (gauntlet_map.wayward_group_facts, changing_moves)"
+field_moves = ["rock_smash", "strength", "wild"]
+field_moves_source = "rom:header 284: boulders objs 19 (26,16), 26 (28,16) (gfx 0x54, scr 10002) before 459+460; Rock Smash rocks (scr 10001) objs 15-18, 20-25; held cut, rock_smash, strength (Galactic split badges); without either no order reaches the exit; every way ends steps on cave-floor encounter tiles (wild): without it no order (gauntlet_map.wayward_group_facts, changing_moves)"
+wild_levels = [
+  { header = 284, kind = "grass", rate = 10, max_level = 75, tiles = 1428, examples = [[2, 2], [2, 3], [2, 4]] },
+]
+wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
 skips_source = "rom:header 284 obj 14 = trainer 455 at (42,42), movement 16 MOVEMENT_TYPE_LOOK_WEST (fixed facing: src/unk_020EDBAC.c:167-173, src/unk_0206450C.c:454-466, :478-481), sight 2, line (41,42), (40,42); a boulder on a tile between interrupts the sight (src/trainer_encounter.c:310-344, src/map_object_move.c:599-601, :623-665, MapObject_GetDistanceToPlayer :230-243); gauntlet_map.wayward_skip; ruling 22 Nov (455 optional, the planner chooses)"
 [[gauntlet.skips]]
 order = [[383, 443], [380, 458], [450, 496], [459], [460], [454], [749, 750]]
@@ -734,6 +757,18 @@ moves = ["rock_smash"]
 orders = []
 [[gauntlet.case]]
 moves = ["strength"]
+orders = []
+[[gauntlet.case]]
+moves = ["wild"]
+orders = []
+[[gauntlet.case]]
+moves = ["rock_smash", "strength"]
+orders = []
+[[gauntlet.case]]
+moves = ["rock_smash", "wild"]
+orders = []
+[[gauntlet.case]]
+moves = ["strength", "wild"]
 orders = []
 
 # Elite Four + Champion: moved to batch 4 (B4-19; facts in docs/gauntlet-design.md).

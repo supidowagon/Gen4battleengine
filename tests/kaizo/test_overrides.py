@@ -927,6 +927,26 @@ def test_committed_facts_recorded():
     assert all(len(g.facts.fight_headers) == len(g.facts.orders) for g in o.gauntlets)
 
 
+def test_groups_with_no_walk_off_encounter_tiles_are_refused_under_wild_avoid():
+    # C10 re-derive (W26): every way through Oreburgh Mine, Route 204 North and Wayward Cave
+    # ends steps on encounter tiles, so the case without wild has no full sequence and the
+    # default wild = avoid refuses them by name; accept reaches the top level.
+    o = {g.name: g.facts for g in load_overrides().gauntlets}
+    held = {
+        "Oreburgh Mine": (),
+        "Route 204 North": (),
+        "Wayward Cave": ("rock_smash", "strength"),
+    }
+    for name, moves in held.items():
+        f = o[name]
+        assert "wild" in f.field_moves and f.wild_levels, name
+        with pytest.raises(ValueError, match="no full sequence|lacks|needs"):
+            f.case(f.walk_moves(moves, "avoid"))
+        assert f.case(f.walk_moves(moves, "accept")).orders == f.orders
+    others = set(o) - set(held)
+    assert all("wild" not in o[n].field_moves and not o[n].wild_levels for n in others)
+
+
 def test_elite_four_and_champion_run_through_coverage(kaizo_names, kaizo_trainers):
     # Elite Four + Champion (866-870) run as single fights until batch 4 adds their group with the
     # chain (B4-19; manager ruling 21 Nov, docs/gauntlet-design.md:18) and enter it with no new
