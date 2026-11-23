@@ -353,6 +353,7 @@ from nuzline.engine.state import (
     STAGE_MIN,
     BattleState,
     ai_record_ability,
+    ai_record_clear,
     ai_record_kept,
     ai_record_write,
     battler_ability,
@@ -4293,6 +4294,13 @@ def play_hit(
                 struggling,
                 ko,
             )
+        # That subscript's :36 FAINT_MON cleans the switcher up (PlayFaintAnimation,
+        # battle_script.c:1803; battle_lib.c:2223-2225) before TriggerAbilityOnHit
+        # (subscript_pursuit.s:86-87): the AI's record clears here, so what the contact ability's
+        # message then tags (battle_script.c:11805-11806) stays until the replacement enters
+        # (battle_lib.c:2151-2153). The faint check does not clear it again (``step._faint_check``,
+        # ``record_cleared``).
+        state = ai_record_clear(state, target_side, ko)
     # subscript_move_followup_message.s:12-16: "hung on using its {1}" tags the defender's item
     # (BattleMessage_ItemTag, battle_script.c:11736-11739): the AI learns a Focus Band that stays.
     state = reveal_item(state, target_side, target, endured)

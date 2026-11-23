@@ -19,11 +19,19 @@ from nuzline.engine import enumerate as enum_mod
 from nuzline.engine import outcome as outcome_mod
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import _paused_rock, enumerate_turn
-from nuzline.engine.ids import AbilityId, FieldCondition, Stat, Status, Type, Weather
+from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
+    AbilityId,
+    FieldCondition,
+    Stat,
+    Status,
+    Type,
+    Weather,
+)
 from nuzline.engine.order import metronome_weights
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, pivot_view
 from nuzline.engine.state import make_state
-from nuzline.engine.step import step_events
+from nuzline.engine.step import _pursuit_hit, step_events
 from tests.engine.helpers import assert_matches_reference, jit_step, step_rows, trick_room_of
 
 O = empty_outcome()
@@ -96,23 +104,65 @@ def _player_switcher(tables, n, species, ability, bond, pursuer_hp=None):
     return _bond(s, 0) if bond else s
 
 
+def _after_hit(tables, n, s):
+    # The state right after battler 1's Pursuit hit on the switching battler 0, its faint check
+    # and the switch still to come.
+    choices = (jnp.asarray([0, n.move("Pursuit")], jnp.int32), jnp.zeros(2, bool))
+    acts = jnp.asarray((SWITCH, 0), jnp.int32)
+    return jax.jit(_pursuit_hit)(tables, s, 1, 0, acts, choices, _proc(1))[0]
+
+
 @pytest.mark.parametrize("pursuer_hp", [None, 1])
 def test_bond_takes_the_pursuer_before_rough_skin(tables, names, pursuer_hp):
     # The old order ran Rough Skin first: its message tagged the switcher's ability
-    # (subscript_rough_skin.s, ``hooks.CONTACT_DAMAGE``) and the AI learned it. Now the take-down
-    # (subscript_pursuit.s:85) leaves Rough Skin's attacker-HP test failing (battle_lib.c:4258).
+    # (subscript_rough_skin.s:8, battle_script.c:11805-11806) and the AI learned it. Now the
+    # take-down (subscript_pursuit.s:85) leaves Rough Skin's attacker-HP test failing
+    # (battle_lib.c:4258). The record is read right after the hit: the switch goes on after the KO
+    # (subscript_switch_pokemon.s:11-13, :22) and the newcomer's entry clears the battler's record
+    # (SwitchAndUpdateMon, battle_script.c:2522; battle_lib.c:2151-2153), so after the turn it is 0
+    # with and without the bond.
     n = names
     s = _player_switcher(tables, n, "Carvanha", "Rough Skin", True, pursuer_hp)
     out = assert_matches_reference(tables, s, (SWITCH, 0), _proc(1))
     assert int(out.hp[0, 0]) == 0
     assert int(out.hp[1, 0]) == 0
     assert int(out.ai_ability_known[0]) == 0
+    assert int(_after_hit(tables, n, s).ai_ability_known[0]) == 0
     ev = _events(tables, s, (SWITCH, 0), _proc(1))
     assert int(ev["contact_ability"][0]) == 0
-    # Without the bond Rough Skin reveals itself.
+    # Without the bond Rough Skin reveals itself, after the KO's own clear (:85 before :86).
     s = _player_switcher(tables, n, "Carvanha", "Rough Skin", False, pursuer_hp)
+    hit = _after_hit(tables, n, s)
+    assert int(hit.hp[0, 0]) == 0
+    assert int(hit.ai_ability_known[0]) == ABILITY_DECOMP_IDS[AbilityId.ROUGH_SKIN]
     out = assert_matches_reference(tables, s, (SWITCH, 0), _proc(1))
-    assert int(out.ai_ability_known[0]) != 0
+    assert int(out.active[0]) == 1
+    assert int(out.ai_ability_known[0]) == 0
+
+
+def test_rough_skin_of_a_u_turn_user_felled_by_pursuit_stays_known(tables, names):
+    # A U-turn user the Pursuit fells gets no list (subscript_attack_then_switch_out.s:54-55). Its
+    # FAINT_MON cleared the record (subscript_pursuit.s:85 -> subscript_faint_check_destiny_bond.s:
+    # 36 -> battle_script.c:1803, battle_lib.c:2223-2225) and Rough Skin's message wrote the ability
+    # after it (subscript_pursuit.s:86-87, subscript_rough_skin.s:8, battle_script.c:11805-11806).
+    # Nothing clears that before the replacement enters; the moves seen before the KO are gone.
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Carvanha", ["U-turn"], 30, ability="Rough Skin"), _bench(n)],
+        [_chaser(n)],
+    ).replace_hp(0, 0, 1)
+    # Houndour acts after the U-turn and lives through it.
+    stages = s.stages.at[0, Stat.ATK].set(_i8(s.stages, -6))
+    s = s._replace(
+        stages=stages.at[1, Stat.SPE].set(_i8(s.stages, -6)),
+        ai_seen_moves=s.ai_seen_moves.at[0, 0].set(n.move("U-turn")),
+    )
+    out = assert_matches_reference(tables, s, (0, 0), _proc(1))
+    assert int(out.pivot_battler) == 0
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) > 0
+    assert int(out.ai_ability_known[0]) == ABILITY_DECOMP_IDS[AbilityId.ROUGH_SKIN]
+    assert not np.asarray(out.ai_seen_moves[0]).any()
 
 
 def test_static_switcher_with_bond_paralyzes_nobody_for_either_draw(tables, names):

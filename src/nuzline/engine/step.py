@@ -3816,6 +3816,7 @@ def _faint_check(
     entry_turn=None,
     decide: bool = True,
     won_cure: bool = True,
+    record_cleared=None,
 ) -> BattleState:
     """Count new player faints (``player_faints``) and record their party slots
     (``deaths``); a player faint ends the battle only when no player Pokemon has HP left.
@@ -3831,7 +3832,9 @@ def _faint_check(
     ``move_hit``, :2199), ``fake_out_turn`` becomes ``entry_turn`` (:2195; by default
     ``turn + 1``, the value inside ``step``), and the effects it is the source of end
     (``_source_leaves``: the Bind on the other side, :2179, and its infatuation,
-    :2174-2176), and the AI's record of the battler (``_forget``, :2223-2225); its Camouflage
+    :2174-2176), and the AI's record of the battler (``_forget``, :2223-2225; not again for
+    battler ``record_cleared``, a Pursuit's switcher, cleared at its own faint inside the hit,
+    subscript_pursuit.s:85, before the contact ability's message wrote it); its Camouflage
     types are restored (``_restore_types``). Every newly fainted Pokemon also loses its status condition and counter: the
     decomp writes ``status = 0`` for a Pokemon with no HP (battle_controller.c:1482-1486)."""
     fmt = format_of(before)
@@ -3876,7 +3879,10 @@ def _faint_check(
         after = _entered(after, side, entry_turn, active_fainted)
         after = _source_leaves(after, side, active_fainted, faint=True)
         # The AI's record of the battler goes last (battle_lib.c:2223-2225, sheet D45-1 rule 4).
-        after = _forget(after, side, active_fainted)
+        forget = active_fainted
+        if record_cleared is not None:
+            forget = forget & (side != jnp.asarray(record_cleared, _I32))
+        after = _forget(after, side, forget)
         # CleanupFaintedMon zeroes the battler's turnFlags (battle_lib.c:2190-2193), B13-17;
         # helpingHand among them (D3 fix B).
         after = after._replace(
@@ -4274,7 +4280,8 @@ def _execute_actions(
         # R1 (SF2 (a2)): nothing between the Pursuit and the action's MoveEnd checks for a
         # battle end; the faints are only flagged (script.c:1769-1772) and the action's own
         # faint check at its MoveEnd decides (bcp.c:3969).
-        state = _faint_check(tables, pre, struck, decide=False)
+        # The switcher's AI record was cleared inside the hit (``play_hit``).
+        state = _faint_check(tables, pre, struck, decide=False, record_cleared=side)
         # U-turn's head stopped with its Synchronize flag and sideEffectMon (``sync``); the
         # Pursuit's contact ability (subscript_pursuit.s:40, :86, TriggerAbilityOnHit: the
         # pursuer becomes the sideEffectMon) toggles the flag, and its faint check zeroes only
