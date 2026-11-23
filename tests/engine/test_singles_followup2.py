@@ -177,7 +177,7 @@ def test_static_switcher_with_bond_paralyzes_nobody_for_either_draw(tables, name
     for out in outs:
         assert int(out.hp[1, 0]) == 0
         assert int(out.status[1, 0]) == Status.NONE
-        assert int(out.ai_ability_known[0]) == 0
+    assert int(_after_hit(tables, n, s).ai_ability_known[0]) == 0  # before the newcomer's entry
     for x, y in zip(outs[0], outs[1], strict=True):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y))
     rows, _ = enumerate_turn(tables, s, (SWITCH, 0))
