@@ -1173,10 +1173,13 @@ def unlock_move(state: BattleState, side, cond) -> BattleState:
 
 def _bide(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """``subscript_bide_start.s``: only a first use (``effect_script_0026.s`` skips the
-    start while ``VOLATILE_CONDITION_MOVE_LOCKED`` is set or on the unleash turn,
-    ``SYSCTL_LAST_OF_MULTI_TURN``) locks the user in with ``BIDE_1`` (two turns) and
-    ``storedDamage = 0``."""
-    cond = (h.effect == _E.BIDE) & h.landed & (state.locked_move[h.side] == 0)
+    start while ``VOLATILE_CONDITION_MOVE_LOCKED`` is set, :5, or on the release turn,
+    ``SYSCTL_LAST_OF_MULTI_TURN``, :6) locks the user in with ``BIDE_1`` (two turns) and
+    ``storedDamage = 0``. The release cleared the lock already (subscript_bide_end.s:11-12);
+    its turn is the one with the Bide counter spent and stored damage kept (``damage.py``'s
+    ``unleash``; only a release reaches a move with both, step._use_move)."""
+    release = (state.bide_turns[h.side] == 0) & (state.bide_damage[h.side] > 0)
+    cond = (h.effect == _E.BIDE) & h.landed & (state.locked_move[h.side] == 0) & ~release
     state = _set(state, "locked_move", h.side, h.move, cond)
     state = _set(state, "bide_turns", h.side, BIDE_TURNS, cond)
     return _set(state, "bide_damage", h.side, 0, cond)
@@ -3879,24 +3882,30 @@ def last_resort_fails(state: BattleState, side) -> jnp.ndarray:
     return (state.last_resort_count[side].astype(_I32) < known - 1) | (known < 2)
 
 
-def metronome_update(tables: Tables, state: BattleState, side, move, cond) -> BattleState:
+def metronome_update(
+    tables: Tables, state: BattleState, side, move, cond, bide_release=False
+) -> BattleState:
     """``BattleSystem_UpdateMetronomeCount`` (battle_lib.c:6160-6178) for ``side``'s battler
     where ``cond`` (the end of ``BattleControllerPlayer_BeforeMove``, bcp.c:3221: the move got
     past the status checks and has a target). A holder of ``HOLD_EFFECT_BOOST_REPEATED``
-    (``Battler_HeldItemEffect``) that is not uproaring nor ``VOLATILE_CONDITION_MOVE_LOCKED``
-    (``locked_move``; Thrash is unsupported, and ``SYSCTL_LAST_OF_MULTI_TURN`` is clear at
-    BeforeMove, BattleContext_Init cleared it) counts ``moveTemp`` (``move``: the chosen or
-    encored move, Struggle, an invoker itself): the same move as ``metronomeMove`` adds 1 up to
-    10, another one sets the count to 0 and becomes ``metronomeMove``. A battler that holds no
-    Metronome has its own count reset to 0 (:6176-6177). As the update follows the
-    ``MOVE_STATUS_NO_EFFECTS`` branch (bcp.c:3209-3221), a move DecrementPP flagged
-    ``MOVE_STATUS_NO_PP`` (bcp.c:2285) counts too; only Spite (``_spite``, E3-B2-4) empties a chosen move's PP
-    before its use, as does the encored move with no PP (B10-9). G-60."""
+    (``Battler_HeldItemEffect``) that is not uproaring, not ``VOLATILE_CONDITION_MOVE_LOCKED``
+    (``locked_move``; Thrash is unsupported) and not under ``SYSCTL_LAST_OF_MULTI_TURN`` (:6165)
+    counts ``moveTemp`` (``move``: the chosen or encored move, Struggle, an invoker itself): the
+    same move as ``metronomeMove`` adds 1 up to 10, another one sets the count to 0 and becomes
+    ``metronomeMove``. A battler that holds no Metronome has its own count reset to 0
+    (:6176-6177). As the update follows the ``MOVE_STATUS_NO_EFFECTS`` branch (bcp.c:3209-3221),
+    a move DecrementPP flagged ``MOVE_STATUS_NO_PP`` (bcp.c:2285) counts too; only Spite
+    (``_spite``, E3-B2-4) empties a chosen move's PP before its use, as does the encored move with
+    no PP (B10-9). BattleContext_Init clears ``SYSCTL_LAST_OF_MULTI_TURN`` after every action
+    (battle_lib.c:2009, SYSCTL_INIT_P1); at BeforeMove's end only a Bide release has set it:
+    subscript_bide_end.s runs inside the status checks (bcp.c:3145-3150, :2722-2724: commandNext
+    = command) and sets it (:12) after clearing the lock (:11), so the release's move (Bide, or an
+    Encore takeover's move) does not count (``bide_release``). G-60."""
     side = jnp.asarray(side, _I32)
     move = jnp.asarray(move, _I32)
     cond = jnp.asarray(cond)
     holder = holds(tables, state, side, ItemId.METRONOME_ITEM)
-    exempt = (state.uproar[side] != 0) | (state.locked_move[side] != 0)
+    exempt = (state.uproar[side] != 0) | (state.locked_move[side] != 0) | jnp.asarray(bide_release)
     turns = state.metronome_turns[side].astype(_I32)
     same = state.metronome_move[side].astype(_I32) == move
     counts = cond & holder & ~exempt

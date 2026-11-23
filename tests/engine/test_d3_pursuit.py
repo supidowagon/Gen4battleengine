@@ -3,9 +3,8 @@
 :6934; never by speed) for the first battler of the other side that is not MOVE_END, alive, not
 asleep or frozen, not loafing, whose move (its Encore move when the Encore slot holds it, else the
 selected one: :6905-6909) has the Pursuit effect and PP in the first slot holding it (:6910-6916);
-subscript_pursuit.s:79-82 loops to the next one while the switcher lives. Variant B (SF2 (e) did
-not land): at B = 2 the command test stays (FIGHT only), at B = 4 an Encored battler pursues whatever
-it chose.
+subscript_pursuit.s:79-82 loops to the next one while the switcher lives. SF2 (e) landed (E2-ML-6):
+in every format an Encored battler pursues whatever it chose.
 
 Each ``play`` case is the engine's action phase asserted equal to the reference's (every field).
 """
@@ -65,7 +64,14 @@ def choices_of(tables, state, actions):
 
 
 def scan(tables, state, switcher, actions, move_end=()):
+    """``next_pursuer`` on ``state`` as ``step._action_phase`` hands it to the action loop: the
+    selection written (``with_selection``: moveSlot and TEMP_VALUE, E2-ML-5, E2-ML-8), which
+    TryPursuit's ``Battler_SelectedMove`` reads (battle_lib.c:2858-2868). The in-loop scan never
+    re-selects, so a raw turn-start state finds no FIGHT's move there."""
+    from nuzline.engine.order import with_selection
+
     acts = jnp.asarray(actions, jnp.int32)
+    state = with_selection(tables, state, acts)
     found, who = next_pursuer(
         tables, state, switcher, acts, choices_of(tables, state, acts), mask(*move_end)
     )
@@ -272,13 +278,14 @@ def test_a_felled_u_turn_users_rough_skin_stays_in_its_record(tables, names):
     assert int(out.ai_ability_known[2]) == ABILITY_DECOMP_IDS[AbilityId.ROUGH_SKIN]
 
 
-# --- singles (B = 2): unchanged ------------------------------------------------------------
+# --- singles (B = 2) ----------------------------------------------------------------------
 
 
-def test_singles_an_encored_pursuer_with_an_item_does_not_pursue(tables, names):
-    """Variant B: SF2 (e) did not land, so at B = 2 the command test stays (a FIGHT only): battler
-    1 Encored into Pursuit that picked a bag item does not pursue when battler 0 switches; SF2 (e)
-    flips this assert."""
+def test_singles_an_encored_pursuer_with_an_item_pursues(tables, names):
+    """SF2 (e), E2-ML-6: TryPursuit takes a held Encore's move before Battler_SelectedMove
+    (battle_script.c:6905-6909) with no command test, so battler 1 Encored into Pursuit that
+    picked a bag item pursues battler 0's switch (items and switches run in battler order,
+    bcp.c:754-768) and its item action is then MOVE_END (:6931)."""
     n = names
     s = make_state(
         tables,
@@ -292,8 +299,8 @@ def test_singles_an_encored_pursuer_with_an_item_does_not_pursue(tables, names):
     )
     switch, use = MOVE_ACTIONS + 1, FIRST_ITEM_ACTION
     out = assert_matches_reference(tables, s, (switch, use), empty_outcome())
-    assert int(out.hp[0, 0]) == int(s.hp[0, 0])  # no Pursuit hit the switcher
-    assert int(out.pp[1, 0, 0]) == int(s.pp[1, 0, 0])
+    assert int(out.hp[0, 0]) < int(s.hp[0, 0])  # the Pursuit hit the switcher
+    assert int(out.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 1
     fight = A("Tackle", "Pursuit", s, n)
     out = assert_matches_reference(tables, s, (switch, int(fight[1])), empty_outcome())
     assert int(out.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 1  # a FIGHT still pursues

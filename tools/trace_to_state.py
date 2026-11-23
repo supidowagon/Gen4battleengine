@@ -54,7 +54,14 @@ from nuzline.data.games import VANILLA, get_game
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import Trainer
-from nuzline.engine.actions import FIRST_ITEM_ACTION, legal_actions, usable_trainer_items
+from nuzline.engine.actions import (
+    FIRST_ITEM_ACTION,
+    legal_actions,
+    locked_slot,
+    picks_no_command,
+    usable_moves,
+    usable_trainer_items,
+)
 from nuzline.engine.damage import (
     PRESENT_HEAL,
     PRESENT_TABLE,
@@ -1053,6 +1060,82 @@ class _Turn:
                     self._ties.append(self._fit(start, chunk, result, need, wrong, asked, int(k)))
         return self._ties
 
+    def check_selection(self, fit: _Fit) -> None:
+        """``AmbiguousTrace`` when ``fit`` leaves a live ``move_slot`` / ``selected_temp`` the
+        trace cannot show (E2-ML-9). The engine zeroes both at a turn boundary unless a reader
+        can see them (``step.canonical_selection``): a locked battler keeps both
+        (Battler_CanPickCommand, battle_lib.c:6224-6235; read at lib.c:1378, battle_script.c:7237,
+        lib.c:7390-7395, bcp.c:844, battle_script.c:6909), a Struggle-bound one keeps
+        ``selected_temp`` (bcp.c:844, battle_script.c:6909). The trace records neither, and an
+        unrun pick shows no PP drop, so (1) tied candidates that differ there are refused; (2) an
+        Encore that lands before the battler's move this turn and leaves it live (locked, or with
+        no usable move: the PP drop emptied the encored slot, battle_lib.c:2302-2304, :2265-2268,
+        so its next selection is STRUGGLING_ALL, bcp.c:433-442, which writes nothing) runs the
+        encored move (FightCommand's takeover, bcp.c:1868-1872, changes moveTemp, not moveSlot or
+        TEMP_VALUE): the PP drop (bcp.c:2272, the encored slot) hides the pick, refused too."""
+        state, start = fit.state, self.state
+        if int(state.over) or int(state.pivot_battler) or int(state.learn_site):
+            return
+        fmt = format_of(state)
+        live = []
+        for b in range(fmt.B):
+            present = int(state.hp[party(fmt, b), int(state.active[b])]) > 0
+            locked = bool(picks_no_command(state, b))
+            if present and (locked or not bool(jnp.any(usable_moves(self.tables, state, b)))):
+                live.append(b)
+        if not live:
+            return
+        for b in live:
+            took_over = (
+                int(start.encore_move[b]) == 0
+                and int(state.encore_move[b]) != 0
+                and int(locked_slot(start, b)) < 0
+                and int(start.active[b]) == int(state.active[b])
+            )
+            if took_over and self._encored_first(b):
+                raise AmbiguousTrace(
+                    f"turn {self.index}: battler {b} was Encored before its move and is locked "
+                    "or Struggle-bound after it; its picked slot (moveSlot, battlerActions[b][2]) is not in the "
+                    "trace",
+                    [fit.actions],
+                )
+        if fit.mismatched:
+            return  # not one of the ties
+        # Both values are the selection's (order.with_selection; no later writer runs: the
+        # disobedience check, bcp.c:2183, is outside the obedient party), so they follow the
+        # battler's own action: one candidate action, nothing to refuse.
+        if all(len({pair[b] for _, pair, _ in self.candidate_list()}) == 1 for b in live):
+            return
+
+        def key(f: _Fit) -> tuple:
+            return tuple((int(f.state.move_slot[b]), int(f.state.selected_temp[b])) for b in live)
+
+        keys = {key(f): f.actions for f in self.ties()}
+        if len(keys) > 1:
+            raise AmbiguousTrace(
+                f"turn {self.index}: battlers {live} are locked or Struggle-bound after the "
+                "turn and the fitting actions leave different moveSlot / battlerActions[b][2] "
+                "(an unrun pick the trace cannot show)",
+                sorted(keys.values()),
+            )
+
+    def _encored_first(self, b: int) -> bool:
+        """Another battler's Encore ``move_end`` comes before battler ``b``'s first ``hit`` or
+        ``move_end`` record this turn."""
+        for e in self.events:
+            if e["kind"] not in ("hit", "move_end"):
+                continue
+            if e["attacker"] == b:
+                return False
+            move = e.get("move")
+            if (
+                e["kind"] == "move_end"
+                and move is not None
+                and int(self.tables.move_effect[int(move)]) == EffectId.ENCORE
+            ):
+                return True
+        return False
+
     def unexplained_self_hit(self) -> bool:
         """A confusion self-hit record (attacker == defender) of a side that is not confused
         at the turn's start: its confusion was drawn on an earlier turn and not fitted."""
@@ -1149,6 +1232,7 @@ def _accept(tables: Tables, turns: list[Turn], fits: list[_Turn], inference: _Tu
     0 HP in the record that the replay keeps alive (a newcomer that fainted on entry)."""
     state, after, i = inference.state, inference.after, inference.index
     fit = _fit_learns(tables, inference, fit)
+    inference.check_selection(fit)  # E2-ML-9: a live moveSlot / TEMP_VALUE the trace lacks
     if fit.need[0] and fit.need[1]:
         raise TraceError(f"turn {i}: both sides need a replacement (a double KO)")
     if fit.need[0]:
