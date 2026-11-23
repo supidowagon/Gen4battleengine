@@ -15,7 +15,7 @@ stops it when free RAM drops below 4 GB (exit 15).
 CLI:
     python tools/ops/ramgate.py --build [--weight GB] -- <command ...>
         a local job that is not pytest (table builds, `tools.kaizo.*` runs): waits for free RAM >
-        6 GB + weight (--weight, else the weights.txt line `tools/build_tables.py`, else 14), takes
+        6 GB + weight (--weight, else the weights.txt line `tools/build_tables.py`, else 6), takes
         the machine lock, runs the command as its child under the lock and exits with its code.
         On the pod or off Windows it runs the command directly (no wait, lock or watchdog).
     python tools/ops/ramgate.py <ids> [--weight GB] [--rom-gate]
@@ -50,7 +50,7 @@ ENGINE_FREE_WEIGHT = 6.0  # the same in an engine-free run (the blocker is on): 
 POD_WEIGHT = 8.0
 RESERVE_GB = 6.0
 BUILD_KEY = "tools/build_tables.py"  # the weights.txt line a table build waits for
-BUILD_DEFAULT_WEIGHT = 14.0  # without that line: a build waits for > 6 + 14 = 20 GB free
+BUILD_DEFAULT_WEIGHT = 6.0  # without that line: > 6 + 6 = 12 GB free (measured build peak 0.64 GB)
 POLL_S = 60.0
 EXIT_REFUSE = 13  # refused (pytest) or POD (CLI)
 EXIT_TIMEOUT = 14
@@ -97,7 +97,12 @@ ROM_ONLY_IDS = frozenset(
 # tests/conftest.py imports it for every run under tests/.
 # A ROM-only item's pod weight was measured while it skipped, so a ROM-only item weighs
 # ROM_UNMEASURED_GB until rom_weights.txt (same format as weights.txt, measured locally) has it.
-ROM_UNMEASURED_GB = 14.0  # an unmeasured ROM-only item waits for > 6 + 14 = 20 GB free
+# The 6 holds only while the engine stays out (rom_measure_w3.md measured engine-free tests):
+# an unmeasured ROM-only item in a run that loaded the engine at collection weighs
+# ROM_ENGINE_UNMEASURED_GB, and a run with an unmeasured ROM-only item gets the engine blocker
+# (blocker_wanted), so an engine import in a test body fails instead of loading a step.
+ROM_UNMEASURED_GB = 6.0  # an unmeasured engine-free ROM-only item waits for > 6 + 6 = 12 GB free (largest measured figure: 3)
+ROM_ENGINE_UNMEASURED_GB = 14.0  # the same when the engine is loaded: > 20 GB free (one loaded step is about 6.3 GB)
 ROM_WEIGHTS = ROOT / "tools" / "ops" / "day" / "rom_weights.txt"
 POD_ONLY = ROOT / "tools" / "ops" / "day" / "pod_only.txt"  # refused on the PC whatever they import
 ENGINE_PREFIX = "nuzline.engine"
@@ -684,14 +689,16 @@ def item_weight(
     item, table: Mapping[str, float], rom_table: Mapping[str, float], engine_free: bool = False
 ) -> float:
     """Pod weights come from runs where ROM-only tests skip: a ROM-only item weighs the figure of
-    rom_weights.txt (measured locally), else 14 GB or its pod weight (if it has a key) when higher.
+    rom_weights.txt (measured locally), else 6 GB in an engine-free run (14 when the engine is
+    loaded), or its pod weight (if it has a key) when higher.
     Any other item weighs its weights.txt key; without one 6 GB in an engine-free run, else 20."""
     if is_rom_only(item):
         measured = lookup(item.nodeid, rom_table)
         if measured is not None:
             return measured
+        base = ROM_UNMEASURED_GB if engine_free else ROM_ENGINE_UNMEASURED_GB
         pod = lookup(item.nodeid, table)
-        return ROM_UNMEASURED_GB if pod is None else max(ROM_UNMEASURED_GB, pod)
+        return base if pod is None else max(base, pod)
     return weight(item.nodeid, table, ENGINE_FREE_WEIGHT if engine_free else DEFAULT_WEIGHT)
 
 
@@ -722,9 +729,23 @@ class EngineBlocker(importlib.abc.MetaPathFinder):
             raise ImportError(f"ramgate: no engine tests on the PC: {fullname}: {QUICK_LANE_HINT}")
 
 
-def blocker_wanted(items: Iterable, env: Mapping[str, str]) -> bool:
-    """An engine-free run (not all ROM-only) gets the finder."""
-    return not all(is_rom_only(i) for i in items)
+def blocker_wanted(
+    items: Iterable,
+    env: Mapping[str, str],
+    rom_table: Mapping[str, float] | None = None,
+    measuring: Callable[[], bool] | None = None,
+) -> bool:
+    """The finder goes on in an engine-free run (not all ROM-only), and in an all-ROM-only run
+    with an item that rom_weights.txt does not list: its 6 GB default assumes no engine. Not while
+    the measuring harness (machine lock kind "measure") runs the unmeasured items to measure them."""
+    items = list(items)
+    if not all(is_rom_only(i) for i in items):
+        return True
+    rom_table = load_rom_weights() if rom_table is None else rom_table
+    if all(lookup(i.nodeid, rom_table) is not None for i in items):
+        return False
+    measuring = (lambda: MachineLock().held_by_lineage("measure")) if measuring is None else measuring
+    return not measuring()
 
 
 def install_blocker(meta_path: list | None = None) -> EngineBlocker:

@@ -6,7 +6,7 @@ IDS_FILE: ROM-only node ids, one per line (`python tools/ops/ramgate.py --rom-id
 SKIP_FILE: ids left unmeasured (the slow ones). One file's ids per pytest process, strictly
 serial, from the checkout this script is in, with its python. The harness takes the machine lock
 as kind "measure" (tools/ops/ramgate.py MachineLock) for the whole pass, so the gate of each child
-pytest honours NUZLINE_RAMGATE_NO_WAIT=1; before each file it waits for free RAM > 20 GB. Every
+pytest honours NUZLINE_RAMGATE_NO_WAIT=1; before each file it waits for free RAM > 20 GB (START_FREE_GB, fixed: an unmeasured test may load the engine). Every
 0.5 s it sums the resident size of the pytest process and all its descendants; when free RAM
 drops below 4 GB it kills that tree (by the pid it started, never by name) and records the file
 as `pod-measure needed`, weight 20. Figure = ceil(max(1.25 m, m + 2)) GB of the peak m.
@@ -36,7 +36,7 @@ rg = importlib.util.module_from_spec(_spec)
 sys.modules["ramgate_for_measure"] = rg
 _spec.loader.exec_module(rg)
 
-START_FREE_GB = 20.0  # free RAM before each file: > 6 GB reserve + 14 GB
+START_FREE_GB = 20.0  # free RAM before each file; fixed, not tied to the gate's defaults
 POLL_S = 0.5
 PEAK_KILLED_WEIGHT = 20
 UNMEASURED_WEIGHT = 14  # a run that did not run every id: one loaded step, as rom_weights.txt

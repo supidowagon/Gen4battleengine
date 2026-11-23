@@ -142,9 +142,8 @@ moves without transcribed script paths, too many script-roll sites, type-chart
 modifiers the AI does not model, switching-rule refusals) on the fight's turn-0 state,
 and refuses a bag that mixes item ids (the decomp applies the last zeroed slot's item,
 docs/discrepancies.md). The AI's state-dependent refusals that can first appear later in
-the fight (more switch draws than the layout's ``switch_sites``, ``AI_OnlyIneffectiveMoves``)
-are not visible at turn 0; ``ai_policy`` refuses them when they occur. The Kaizo layout's 60
-switch sites are every draw a party of six can make, so only vanilla can exceed its count.
+the fight (``AI_OnlyIneffectiveMoves``) are not visible at turn 0; ``ai_policy`` refuses them
+when they occur. The Kaizo layout's 69 switch sites are every draw a party of six can make.
 """
 
 from __future__ import annotations
@@ -152,6 +151,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -175,6 +175,8 @@ from nuzline.engine.ids import (
     GRAVITY_TURNS,
     METRONOME_DRAW,
     MOVE_CHATTER,
+    MOVE_SKETCH,
+    SKETCH_FORBIDDEN,
     SPECIES_CHATOT,
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
@@ -840,6 +842,90 @@ def fight_calls(tables: Tables, party: Sequence[PokemonSpec]) -> list[int]:
     return sorted(out)
 
 
+# A Pokemon that knows no move: ``metronome_calls``' superset for a Metronome gained in battle.
+_NO_MOVES = SimpleNamespace(moves=(0, 0, 0, 0))
+
+
+def reached_moves(tables: Tables, moves: Sequence[int]) -> list[int]:
+    """``moves`` and, when one of them is Metronome, every move ``BtlCmd_Metronome`` can call
+    (battle_script.c:4535-4562; ``metronome_calls`` of a Pokemon knowing none: its holder's own
+    moves, which it skips, are in ``moves`` already), distinct: the moves a line holding
+    ``moves`` can reach, for the checks that read every move of the fight (the Kaizo ROM
+    changes, the terrain)."""
+    effect = np.asarray(tables.move_effect)
+    out = [int(m) for m in moves if m]
+    if any(int(effect[m]) == EffectId.METRONOME for m in out):
+        out += metronome_calls(tables, _NO_MOVES)
+    return list(dict.fromkeys(out))
+
+
+# Decomp battle effects (tables.move_ai_effect; generated/move_battle_effects.txt, line N is id
+# N - 1) that lock the user into the move it is using, ``moveLockedInto = moveCur``
+# (Battler_LockMoveChoice, battle_lib.c:1828-1832): BtlCmd_LockMoveChoice in Bide's
+# subscript_bide_start.s:6 (26) and the charge moves' subscript_vanish_on_charge_turn.s:10 (39,
+# 75, 145, 151, 155, 255, 256, 263, 272), BtlCmd_CalcRolloutPower (battle_script.c:5667-5669;
+# 117, Rollout and Ice Ball), and ``BTLVAR_ATTACKER_LOCKED_MOVE = BTLVAR_CURRENT_MOVE`` in
+# subscript_thrash.s:8 (27) and subscript_uproar.s:5 (159). A called move's ``moveCur`` is the
+# called move (BtlCmd_GoToMoveScript, battle_script.c:2118), so the next turn ``moveTemp`` is it
+# (bcp.c:1885-1888), and UpdateMoveBuffers writes it to ``moveSketched`` and ``movePrevByBattler``
+# (bcp.c:3936-3954). The recharge turn (80, subscript_recharge_turn.s:6) locks too, but prints no
+# attack message (subscript_recharging.s, bcp.c:2514-2522), so it writes neither: not listed.
+LOCK_EFFECTS = (26, 27, 39, 75, 117, 145, 151, 155, 159, 255, 256, 263, 272)
+# The invokers whose call can be a move the user does not know: Metronome (BtlCmd_Metronome,
+# battle_script.c:4535-4562), Copycat (``movePrev``, :7333-7336), Mirror Move (``moveCopied``,
+# bcp.c:4480-4485) and Me First (the target's chosen move, battle_script.c:7286-7312).
+FOREIGN_INVOKERS = (EffectId.METRONOME, EffectId.COPYCAT, EffectId.MIRROR_MOVE, EffectId.ME_FIRST)
+
+
+def locked_calls(tables: Tables, moves: Sequence[int]) -> list[int]:
+    """The moves a holder of ``moves`` can be locked into without knowing them: every move with a
+    ``LOCK_EFFECTS`` effect when one of ``moves`` is a ``FOREIGN_INVOKERS`` move, else none. Its
+    next turn's ``moveTemp`` is the locked move (bcp.c:1885-1888), which becomes its
+    ``moveSketched`` (Sketch's copy, battle_script.c:4839-4884) and its ``movePrevByBattler``
+    (Mimic's copy, :4476-4524). A superset: any lock move, whichever invoker and chain calls it."""
+    effect = np.asarray(tables.move_effect)
+    if not any(m and int(effect[m]) in FOREIGN_INVOKERS for m in moves):
+        return []
+    ai_effect = np.asarray(tables.move_ai_effect)
+    return [m for m in range(1, METRONOME_DRAW + 1) if int(ai_effect[m]) in LOCK_EFFECTS]
+
+
+def sketch_calls(
+    tables: Tables,
+    known: Sequence[int],
+    opp: Sequence[PokemonSpec],
+    party_moves: Sequence[int] = (),
+) -> list[int]:
+    """The moves a player's Sketch can copy (``BtlCmd_TrySketch``, battle_script.c:4839-4884):
+    ``known`` are the Pokemon's moves and its ``learnable_moves`` (empty unless one is Sketch); the
+    copy is a foe's ``moveSketched``, the move in its slot when the attack message shows
+    (``moveTemp``, bcp.c:3952-3954), so a move of ``opp`` that is neither forbidden
+    (``SKETCH_FORBIDDEN``) nor already known. A foe that can copy a move of the player's party
+    carries it in a slot too: Mimic's copy (``BtlCmd_TryMimic``, battle_script.c:4476-4524) and
+    Transform's four moves (``BtlCmd_Transform``, :5346-5348), Transform also through Metronome
+    (not in ``sCannotMetronomeMoves``, battle_lib.c:7152-7177) and, when the player's party has
+    it, through Copycat (``movePrev``, the player's Transform, ``Move_CanBeMetronomed``,
+    battle_script.c:7333-7336). Then ``party_moves`` (the moves of the player's party and their
+    ``learnable_moves``) join, as the Sketch holder itself may not know them. A foe slot with a
+    ``FOREIGN_INVOKERS`` move adds the moves it can be locked into (``locked_calls``): a called
+    Outrage or SolarBeam is its next turn's ``moveSketched``. A superset: the foe may not use it.
+    The checks that read every move of the fight (``move_effect_line``, the AI's
+    ``player_move_refusal``, the holder's own ``halved_defense_line`` and ``gyro_speed_line``, its
+    Metronome calls, the terrain and the ROM changes) run over them, as over the Metronome calls
+    (``fight_calls``)."""
+    if MOVE_SKETCH not in known:
+        return []
+    effect = np.asarray(tables.move_effect)
+    copier = {EffectId.MIMIC, EffectId.TRANSFORM, EffectId.METRONOME}
+    if any(m and int(effect[m]) == EffectId.TRANSFORM for m in party_moves):
+        copier.add(EffectId.COPYCAT)
+    copies = any(m and int(effect[m]) in copier for mon in opp for m in mon.moves)
+    slots = [m for mon in opp for m in mon.moves] + (list(party_moves) if copies else [])
+    pool = slots + locked_calls(tables, slots)
+    banned = {*known, *SKETCH_FORBIDDEN}
+    return sorted({m for m in pool if m and m not in banned})
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -904,6 +990,8 @@ def rom_change_refusals(
         name for name, on in (("trick_room", area.trick_room), ("gravity", area.gravity)) if on
     }
     moves = {int(m) for s in specs for m in s.moves if m} | {int(m) for m in extra_moves}
+    # A Metronome's calls are moves of the fight too (``reached_moves``), known or gained.
+    moves = set(reached_moves(tables, sorted(moves)))
     # Nature Power's call runs its own effect script and data (terrain_calls).
     moves |= set(terrain_calls(tables, trainer, sorted(moves)))
     items = {int(s.item) for s in specs}
@@ -960,7 +1048,8 @@ def terrain_refusal(
     tiles give and the three sources checked, ledger G-18) or unplaced; else None. Every
     move Nature Power calls is modelled (ledger G-21)."""
     effect = np.asarray(tables.move_ai_effect)
-    hit = sorted({int(m) for m in moves if m and int(effect[m]) in TERRAIN_EFFECTS})
+    reached = reached_moves(tables, moves)  # a Metronome's calls read the terrain too
+    hit = sorted({m for m in reached if int(effect[m]) in TERRAIN_EFFECTS})
     if not hit or trainer.terrain != TERRAIN_UNKNOWN:
         return None
     if trainer.terrains:
@@ -992,7 +1081,10 @@ def _check_trainer(
     trainer: Trainer,
     specs: Sequence[PokemonSpec],
     extra_moves: Sequence[int] = (),
+    extra_calls: Sequence[int] = (),
 ) -> None:
+    """``extra_moves``: the player's moves beyond its known ones; ``extra_calls``: the calls of a
+    Metronome the player gains in battle, read here only by the terrain and ROM-change lines."""
     if POLICY.get(names.game) is None:
         c.add(
             Support.NONE,
@@ -1007,9 +1099,12 @@ def _check_trainer(
     c.add(support, what, "battle format")
     _check_kaizo_fields(c, names, trainer)
     if names.game == KAIZO:
-        for label in rom_change_refusals(tables, names, trainer, specs, extra_moves):
+        for label in rom_change_refusals(
+            tables, names, trainer, specs, [*extra_moves, *extra_calls]
+        ):
             c.add(Support.NONE, rom_change_line(label), "ROM change")
-    moves = [m for s in specs for m in s.moves] + list(extra_moves) + fight_calls(tables, specs)
+    moves = [m for s in specs for m in s.moves] + [*extra_moves, *extra_calls]
+    moves += fight_calls(tables, specs)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
     # A bag item acts by its party params (engine.bag, E1 rulings G-43, F-15).
@@ -1096,15 +1191,17 @@ def check_opponent(
     start_condition: int,
     player: Sequence[PokemonSpec] = (),
     extra_moves: Sequence[int] = (),
+    extra_calls: Sequence[int] = (),
 ) -> CoverageReport:
     """The trainer's side of ``check_coverage``: its party, bag, AI flags and the weather
-    lines (``player``, when given, and ``extra_moves``, the player's learnable moves, only
-    widen the Kaizo ROM-change conditions and the terrain check). It runs no
+    lines (``player``, when given, ``extra_moves``, the player's learnable and Sketch moves, and
+    ``extra_calls``, a gained Metronome's calls, only widen the Kaizo ROM-change conditions and
+    the terrain check; ``extra_moves`` also joins the AI's Mimic and Transform pool). It runs no
     ``ai_refusals``: those depend on the player's party, so a caller that needs them runs
     them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp)
-    _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
+    _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves, extra_calls)
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
     if not unknown_start(trainer):
@@ -1184,7 +1281,32 @@ def check_coverage(
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
-    extra = sorted({m for moves in learnable for m in moves})
+    party_moves = [m for i, mon in enumerate(player) for m in (*mon.moves, *learnable[i])]
+    sketched = [
+        sketch_calls(tables, [*mon.moves, *learnable[i]], opp, party_moves)
+        for i, mon in enumerate(player)
+    ]
+    # A Metronome gained in battle (a Sketch copy or a level-up move) calls for its holder too:
+    # any move ``Move_CanBeMetronomed`` allows (battle_script.c:4535-4562), its known moves at the
+    # call unknown here, so none excluded (the superset). The calls are the holder's: they go to
+    # its per-mon lines and to the fight's terrain and ROM lines (``extra_calls``), as a known
+    # Metronome's do (``fight_calls``), not into ``extra``. A call is never ``movePrevByBattler``,
+    # which Mimic copies (DEFENDER_LAST_MOVE, battle_script.c:4481): that is ``moveTemp``, the
+    # Metronome itself (bcp.c:3945-3946), which Mimic refuses (Move_CanBeMimicked, battle_lib.c:
+    # 7182-7191); Transform copies slot moves (:5346-5348). Only a called lock move is its next
+    # turn's ``moveTemp`` (``locked_calls``), so those join ``extra`` for the AI's Mimic pool.
+    effect = np.asarray(tables.move_effect)
+    gained_calls = [
+        metronome_calls(tables, _NO_MOVES)
+        if any(int(effect[m]) == EffectId.METRONOME for m in (*learnable[i], *sketched[i]) if m)
+        else []
+        for i in range(len(player))
+    ]
+    own = [m for moves in sketched for m in moves] + party_moves
+    extra = sorted(
+        {m for moves in (*learnable, *sketched) for m in moves} | {*locked_calls(tables, own)}
+    )
+    extra_calls = sorted({m for moves in gained_calls for m in moves})
     if chatot_cry is None:
         for slot, mon in enumerate(player):
             if mon.species == SPECIES_CHATOT and MOVE_CHATTER in (*mon.moves, *learnable[slot]):
@@ -1194,7 +1316,9 @@ def check_coverage(
                     "confusion chance needs the save's Chatot cry",
                     "chatter",
                 )
-    theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
+    theirs = check_opponent(
+        tables, names, trainer, opp, start_condition, player, extra, extra_calls
+    )
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
     c.report.level = min(c.report.level, theirs.level)
@@ -1209,6 +1333,11 @@ def check_coverage(
             c.add(support, f"{where}: {name}", "level-up in battle move effect")
             if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
                 c.add(Support.NONE, f"{where}: {name} (level-up in battle, {reason})", "trainer AI")
+        for move in sketched[slot]:  # a Sketch copies any move of the fight (I-3)
+            support, name = move_effect_line(tables, names, move, row)
+            c.add(support, f"{where}: {name}", "Sketch move effect")
+            if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
+                c.add(Support.NONE, f"{where}: {name} (Sketch, {reason})", "trainer AI")
         levels_up = reachable_level(tables, mon, opp) > mon.level
         for line in exp_refusals(tables, names, mon, learnable[slot], fight_moves, levels_up):
             c.add(Support.NONE, f"{where}: {line}", "experience")
@@ -1216,8 +1345,8 @@ def check_coverage(
     for owner, party, foes in (("Player", player, opp), (display_name(trainer), opp, player)):
         foe_defense = low_defense(tables, foes)
         for slot, mon in enumerate(party):
-            extra_moves = learnable[slot] if owner == "Player" else ()
-            calls = fight_calls(tables, [mon])
+            extra_moves = [*learnable[slot], *sketched[slot]] if owner == "Player" else ()
+            calls = fight_calls(tables, [mon]) + (gained_calls[slot] if owner == "Player" else [])
             for move in [*mon.moves, *(m for m in [*extra_moves, *calls] if m not in mon.moves)]:
                 if move and (low := halved_defense_line(tables, move, foe_defense)):
                     where = f"{owner} {names.species_names[mon.species]} (slot {slot})"

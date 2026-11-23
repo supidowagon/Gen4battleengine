@@ -153,6 +153,8 @@ of each other (about 3 hours), the managing session names a train order.
   line, and the files a batch lists with the `A` flag.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
+  At the first split close the managing session also puts the owner question on the five
+  pod-only ROM + engine tests (section 5, ROM + engine tests).
 - **Local runs:** CLAUDE.md, Where tests run.
 
 ## 4. Progress measure
@@ -195,11 +197,17 @@ rate used for estimates.
   deleting the file frees nothing.
   `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
-  weighs 20), else 14 GB (the pod weight when the item has a higher key), so an unmeasured
-  ROM-only item waits for more than 20 GB free. Local measuring pass:
+  weighs 20), else 6 GB (the pod weight when the item has a higher key), so an unmeasured
+  ROM-only item waits for more than 12 GB free (the PC idles at 16-18 GB free). The 6 holds only
+  without the engine: a run with an unmeasured ROM-only item gets the engine blocker (an engine
+  import in a test body fails), and when the engine is already loaded at collection the
+  unmeasured item weighs 14 (more than 20 GB free). Only a run where the test passed gives a
+  figure: an id that skipped while measured keeps 14, tag `unmeasured-skipped-<why>`. The five
+  ROM + engine ids are refused through `pod_only.txt` (ROM + engine tests below). Local measuring pass:
   `python tools/ops/ramgate_measure.py IDS_FILE OUT_JSON [--skip SLOW_IDS_FILE]` (its header
   has the details): it holds the machine lock as kind `measure` for the whole pass, runs one
-  file's ROM-only ids per process, strictly serial, each started when free RAM is above 20 GB;
+  file's ROM-only ids per process, strictly serial, each started when free RAM is above 20 GB
+  (fixed, as an unmeasured test may load the engine);
   it polls every 0.5 s and kills that pytest tree when free RAM drops below 4 GB (the file is
   then marked `pod-measure needed`, weight 20); figure = ceil(max(1.25 m, m + 2)) GB of the
   peak summed RSS m of the tree, tag `local-measure-<sha7>-<yyyymmdd>`. Every gated run (and
@@ -224,8 +232,8 @@ rate used for estimates.
   pytest, or python importing the engine, without it in effect), which skips the gate on
   Linux only (on the Windows PC it is ignored). Local jobs that are not
   pytest run as the gate's child: `python tools/ops/ramgate.py --build [--weight GB] -- <command>`
-  waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, else 14, so
-  more than 20 GB free) and the machine lock, runs the command under the lock and exits with
+  waits for RAM (default weight: the `tools/build_tables.py` line of `weights.txt`, 3, else 6, so
+  more than 9 or 12 GB free) and the machine lock, runs the command under the lock and exits with
   its code; it never prints POD. On the pod (`NUZLINE_ON_POD=1`) or off Windows it runs the
   command directly: no wait, no lock, no watchdog. `tools/ops/build_tables.sh` wraps its build
   steps in it itself.
@@ -233,8 +241,8 @@ rate used for estimates.
   `python tools/ops/ramgate.py --build [--weight GB] -- python -m tools.kaizo.<module> ...`.
   An agent's brief makes it wait on the gate (or `--build`), never print free RAM and start
   anyway. Measured local weights: `tools/ops/day/rom_weights.txt` (most ROM-only files 3 GB,
-  unmeasured ones 14). A table build was measured at about 0.6 GB peak; `--build` weighs it
-  14 until `weights.txt` has a `tools/build_tables.py` line. Engine work outside pytest on the
+  unmeasured ones 6). A table build was measured at about 0.6 GB peak; `--build` weighs it
+  3 by the `tools/build_tables.py` line of `weights.txt`. Engine work outside pytest on the
   PC (`tools.differential`, `snap_compare`, benchmarks, ad hoc scripts) has no gate: it goes
   to the pod.
 - **ROM-only run of a merge gate (PC).** Skip it only when the diff touches no ROM-reading
@@ -252,6 +260,7 @@ rate used for estimates.
   These helpers are git-ignored local files on the owner's PC (local helpers below).
   3. Read every `*.log` last line: all `passed`; a skip only for an input the PC lacks
      (`kaizo_save_probe`). Write the result to `_scratch/manager/romonly_<name>.md`.
+- **ROM + engine tests** (the five Roark/scoreboard ids tagged `engine-test-pod` in `rom_weights.txt`, listed in `pod_only.txt`): refused on the PC and never in a merge-gate ROM-only run; running them on the PC at a split close is against the owner's no-engine-tests order as it stands, so the managing session puts that question to the owner at the first split close (manager ruling, 22 Nov 2026); there is no standing slot.
 - **Agents kill only processes they started**, by recorded pid, never by name pattern
   (22 Nov 2026: a stream's agent killed stray `pytest.main` processes that may have been
   another session's run).

@@ -306,9 +306,12 @@ Encodings:
   [0, ``ids.STARF_DRAWS``) for the held-item checks (``hooks.held_item_check`` and
   ``pluck_berry``, which have no outcome argument): ``step._action_phase`` loads the turn's
   (``Outcome.starf[:, 0]``); at the turn's end ``step_events`` keeps the faint replacement's
-  (``Outcome.starf[:, 1]``) where a replacement can send in a living Starf holder
-  (``step.starf_kept``; ``step.replace`` reads it, then clears it), else 0, and 0 at a pause, so
-  states merge. Hidden from the player, like ``qc_roll``. ``STARF_UNDRAWN`` while the battle
+  (``Outcome.starf[:, 1]``) where a replacement can send in a living Starf holder, or where the
+  side's active holder can eat at its pinch while a replacement is pending or a newcomer's states
+  wait (a Future Sight hit after its ITEM_CONDITION; ``step.starf_kept``, ``starf_kept_active``;
+  ``step.replace`` / ``switch_in.show_battle_mon4`` read it, ``replace`` then clears it), else 0,
+  and 0 at a pause, so states merge. Stored modulo 5 where the check meets five stats below +6 (a
+  replacement; an active holder with all five at +4 or below), else whole (the law's 60 values). Hidden from the player, like ``qc_roll``. ``STARF_UNDRAWN`` while the battle
   start's checks run (``hooks.battle_start``): a lead's Starf Berry is eaten there with its stat
   left open, ``starf_open`` 1, until the root draws it (``step.root_belief``,
   ``step.sample_root``; ``hooks.resolve_starf``; a ``step`` given an open state draws it first
@@ -459,6 +462,7 @@ class BattleState(NamedTuple):
     flinched: jnp.ndarray  # int8
     choice_lock: jnp.ndarray  # int16
     last_move: jnp.ndarray  # int16
+    sketch_move: jnp.ndarray  # int16, BattleContext.moveSketched (I-3)
     protect_count: jnp.ndarray  # int8
     rollout_count: jnp.ndarray  # int8
     charge_turn: jnp.ndarray  # int8
@@ -811,6 +815,7 @@ VOLATILE_FIELDS = (
     "flinched",
     "choice_lock",
     "last_move",
+    "sketch_move",
     "protect_count",
     "rollout_count",
     "charge_turn",
@@ -964,6 +969,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "flinched": (_BATTLER, np.int8),
     "choice_lock": (_BATTLER, np.int16),
     "last_move": (_BATTLER, np.int16),
+    "sketch_move": (_BATTLER, np.int16),
     "protect_count": (_BATTLER, np.int8),
     "rollout_count": (_BATTLER, np.int8),
     "charge_turn": (_BATTLER, np.int8),
