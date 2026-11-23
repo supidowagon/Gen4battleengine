@@ -480,7 +480,7 @@ def test_pressure_switch_in_reveals_it_to_the_ai(tables, names):
     )
     assert int(s.ai_ability_known[0]) == 0
     out = assert_matches_reference(tables, s, (SWITCH_TO_1, 0), O)
-    assert int(out.active[0]) == 1 and int(out.ai_ability_known[1]) != 0
+    assert int(out.active[0]) == 1 and int(out.ai_ability_known[0]) != 0
 
 
 # --- Status guards: Synchronize and Leaf Guard (G-12 .. G-17) -----------------------------
@@ -684,7 +684,7 @@ def test_synchronize_after_u_turn_into_toxic_spikes(tables, names):
         out = assert_matches_reference(tables, paused, tuple(acts), O)
         assert int(out.active[0]) == 1 and int(out.status[0, 1]) == own
         assert int(out.status[1, 0]) == Status.POISON
-        assert int(out.ai_ability_known[1]) != 0
+        assert int(out.ai_ability_known[0]) != 0
 
 
 @pytest.mark.parametrize(
@@ -1042,8 +1042,11 @@ def test_ai_bench_wonder_guard_is_immune_to_the_last_hit(tables, names):
 
 
 def test_wonder_guard_pursuit_on_a_switching_holder(tables, names):
-    """G-20: Pursuit's hit on a switching Wonder Guard holder (subscript_pursuit.s:11, :17,
-    :154) ends in subscript_missed.s: no damage, and its :107-110 message tags the ability."""
+    """G-20: Pursuit's hit on a switching Wonder Guard holder (subscript_switch_pokemon.s:11;
+    subscript_pursuit.s:17, :75-77) ends in subscript_missed.s: no damage, and its :54-56 message
+    tags the ability (BattleMessage_AbilityTag, battle_script.c:11806). The switch then runs
+    SwitchAndUpdateMon (subscript_switch_pokemon.s:22; BattleSystem_UpdateAfterSwitch,
+    battle_lib.c:2152), which clears battler 0's ability record: the AI does not keep the tag."""
     n = names
     s = make_state(
         tables,
@@ -1053,7 +1056,7 @@ def test_wonder_guard_pursuit_on_a_switching_holder(tables, names):
     s = _ability(s, 0, AbilityId.WONDER_GUARD)
     out = assert_matches_reference(tables, s, A(SWITCH_TO_1, "Pursuit", s, n), O)
     assert int(out.active[0]) == 1
-    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) != 0
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 0
 
 
 # --- the follow-ups (G-24 .. G-26) ---------------------------------------------------------

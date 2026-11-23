@@ -36,7 +36,14 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from nuzline.engine.format import MULTI, blackout_parties, party_sides, side_of, side_out_parties
+from nuzline.engine.format import (
+    MULTI,
+    ai_battlers,
+    blackout_parties,
+    party_sides,
+    side_of,
+    side_out_parties,
+)
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import party as _party
 from nuzline.engine.ids import (
@@ -520,17 +527,18 @@ def _side_ability_count(s: RefState, side: int, ability: int) -> int:
 def _reveal_item(s: RefState, side: int) -> None:
     """A message names ``side``'s active Pokemon's held item through an item tag of the
     attacker, defender or ``msgBattlerTemp`` (``BattleMessage_ItemTag``, script.c:11726-11745):
-    ``BattleAI_SetHeldItem`` (:12119-12122). The AI reads the other side's only, so only the
-    party-0 battler's is kept (ruling D3-1a)."""
-    if _party(_fmt(s), side) == 0:
-        s.ai_item_known[s.battlers[side].active] = _active(s, side).item
+    ``BattleAI_SetHeldItem`` (:12119-12122). Kept where ``_record_kept`` (sheet D45-3 rule 4);
+    read by LoadHeldItemEffect for every battler but the attacker and by IfHeldItemEqualTo for
+    the other side (trainer_ai.c:1908, :1925-1929)."""
+    if _record_kept(s, side):
+        s.ai_item_known[side] = _active(s, side).item  # row of battler ``side`` (D45-1)
 
 
 def _forget_item(s: RefState, side: int) -> None:
     """``side``'s active Pokemon lost its item: the removal's ``BattleMon_CopyToParty``
-    clears the AI's record (``BattleAI_ClearKnownItem``, lib.c:1819-1823)."""
-    if _party(_fmt(s), side) == 0:
-        s.ai_item_known[s.battlers[side].active] = 0
+    clears the AI's record (``BattleAI_ClearKnownItem``, lib.c:1819-1823). Any battler, ungated
+    (sheet D45-3 rule 4)."""
+    s.ai_item_known[side] = 0
 
 
 def _remove_item(s: RefState, side: int) -> None:
@@ -713,16 +721,22 @@ def _personal_types(tables, mon: RefPokemon) -> list[int]:
     return _multitype_plate(tables, mon.species, ability, mon.item, types)
 
 
+def _record_kept(s: RefState, b: int) -> bool:
+    """Battler ``b``'s record row is one some trainer-AI battler reads, so it is kept (sheet D45-1
+    rule 6, manager ruling Q1): every battler at B = 4; at B = 2 the player's battler (party 0)
+    only: the AI battler 1 reads its own record never (trainer_ai.c:1179, :1908, :1925)."""
+    return _fmt(s).B == 4 or _party(_fmt(s), b) == 0
+
+
 def _know_ability(s: RefState, b: int) -> None:
     """``BattleAI_SetAbility`` (battle_script.c:12106-12109): the AI records the decomp id of
-    battler ``b``'s current ability (``ai_ability_known``, keyed by its party slot), 0 for one the
-    engine does not name (G-69); only for a party-0 battler (ruling D3-1a). Raw:
+    battler ``b``'s current ability (``ai_ability_known[b]``, the row of battler ``b``), -1 for one
+    the engine does not name (G-69); only where ``_record_kept`` (sheet D45-2 rule 4). Raw:
     BattleMessage_AbilityTag reads ``BattleMon.ability`` (script.c:11805)."""
-    if _party(_fmt(s), b) != 0:
+    if not _record_kept(s, b):
         return
-    slot = s.battlers[b].active
-    named = ABILITY_DECOMP_IDS.get(s.parties[0].mons[slot].ability, 0)
-    s.ai_ability_known[slot] = named if named > 0 else -1
+    named = ABILITY_DECOMP_IDS.get(_active(s, b).ability, 0)
+    s.ai_ability_known[b] = named if named > 0 else -1
 
 
 @contextmanager
@@ -785,10 +799,10 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
     if not foe_mon.hp or foe.semi_invulnerable or foe.transformed:
         return False
     fresh = not sd.transformed
-    if _party(_fmt(s), side) == 0 and s.ai_ability_known[s.battlers[side].active] < 0:
+    if _record_kept(s, side) and s.ai_ability_known[side] < 0:
         # the record of an ability the engine does not name settles to its id (effects._transform;
         # raw, the AI's record of BattleMon.ability, script.c:11805)
-        s.ai_ability_known[s.battlers[side].active] = _decomp_ability(tables, mon)
+        s.ai_ability_known[side] = _decomp_ability(tables, mon)
     keep = [not fresh or sd.mimic_slots >> k & 1 for k in range(len(mon.moves))]
     if fresh:
         sd.shadow_species, sd.shadow_form = mon.species, mon.form
@@ -2125,12 +2139,21 @@ def ref_damage_table(tables, state: RefState, atk_side: int, move: int, crit: bo
 # --------------------------------------------------------------------------- faints
 
 
+def _forget_record(s: RefState, b: int) -> None:
+    """``BattleAI_ClearKnownMoves`` / ``Ability`` / ``Item`` of battler ``b``
+    (battle_lib.c:7711-7738): its three record rows to 0 (sheet D45-1)."""
+    s.ai_seen_moves[b] = [0] * len(s.ai_seen_moves[b])
+    s.ai_ability_known[b] = 0
+    s.ai_item_known[b] = 0
+
+
 def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     """``BattleSystem_CleanupFaintedMon`` (lib.c:2156): the fainted battler's stat
     stages, ``statusVolatile``, ``moveEffectsMask`` and ``moveEffectsData`` are
     cleared, ``fakeOutTurnNumber = totalTurns + 1`` (lib.c:2195), ``moveHit`` and
     ``movePrevByBattler`` reset (lib.c:2199); what it is the source of ends: the Bind it put
-    on a foe (lib.c:2179) and the foe's infatuation (:2174-2176)."""
+    on a foe (lib.c:2179) and the foe's infatuation (:2174-2176); the AI's record of the battler
+    is cleared last (lib.c:2223-2225)."""
     _restore_types(turn.tables, s, side)
     _reset_battler(s.battlers[side])
     _clear_copied(s, side)
@@ -2141,6 +2164,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     s.battlers[side].fake_out_turn = turn.entry_turn
     s.battlers[side].truant = turn.entry_turn & 1  # lib.c:2197
     _source_leaves(s, side, faint=True)
+    _forget_record(s, side)  # lib.c:2223-2225
 
 
 # What Baton Pass keeps (BattleSystem_UpdateAfterSwitch, lib.c:2078-2079, :2107; condition.h:72,
@@ -3311,8 +3335,8 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> bool:
                     stopped = True
                     # "{0}'s {1} prevents poisoning!" (subscript_poison.s:80-82,
                     # _badly_poison.s:93-103): BattleAI_SetAbility (script.c:11806).
-                    if _party(_fmt(s), side) == 0:
-                        s.ai_ability_known[sd.active] = ability  # the decomp id the message names
+                    if _record_kept(s, side):
+                        s.ai_ability_known[side] = ability  # the decomp id the message names
                 # subscript_poison.s:29 / _badly_poison.s:46: CheckSubstitute, silent (a Baton
                 # Pass newcomer keeps the substitute, B10-4).
                 # Then the side's Safeguard (poison :41, badly_poison :55), B10-7.
@@ -3600,7 +3624,7 @@ def _run_states(
         weather = WEATHER_ABILITIES.get(_ability(s, mon))
         if act[b] and weather is not None and mon.hp:
             if not s.field_mask & WEATHER_PERM_BIT[weather]:
-                _know_ability(s, b)  # subscript_drought.s etc. (party 0 only)
+                _know_ability(s, b)  # subscript_drought.s etc. (kept battlers, D45-2)
             _weather_ability_bits(s, weather)
             s.battlers[b].weather_announced = 1
     for b in order:  # SWITCH_IN_CHECK_STATE_INTIMIDATE (lib.c:3795-3813)
@@ -3693,7 +3717,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int, flagged: int | None 
         weather = WEATHER_ABILITIES.get(_ability(s, _active(s, battler)))
         if weather is not None and _active(s, battler).hp:
             if not s.field_mask & WEATHER_PERM_BIT[weather]:
-                _know_ability(s, battler)  # subscript_drought.s etc. (party 0 only)
+                _know_ability(s, battler)  # subscript_drought.s etc. (kept battlers, D45-2)
             _weather_ability_bits(s, weather)
             s.battlers[battler].weather_announced = 1
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
@@ -3844,7 +3868,7 @@ def _move_end_switch_in(turn: _Turn, s: RefState) -> None:
         weather = WEATHER_ABILITIES.get(_ability(s, mon))
         if not sd.weather_announced and weather is not None and mon.hp:
             if not s.field_mask & WEATHER_PERM_BIT[weather]:
-                _know_ability(s, b)  # subscript_drought.s etc. (party 0 only)
+                _know_ability(s, b)  # subscript_drought.s etc. (kept battlers, D45-2)
             _weather_ability_bits(s, weather)
             sd.weather_announced = 1
     for b in battlers:
@@ -3885,19 +3909,24 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
         newcomer.item = 0
     sd.fake_out_turn = turn.entry_turn
     sd.truant = turn.entry_turn & 1  # lib.c:2119
-    # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (a party-0
-    # battler's only, ruling D3-1a).
-    if _party(_fmt(s), side) == 0:
-        s.ai_seen_moves[slot] = [0] * len(s.ai_seen_moves[slot])
-        s.ai_ability_known[slot] = 0
-        s.ai_item_known[slot] = 0
+    # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item, any battler
+    # (sheet D45-1 rule 3).
+    _forget_record(s, side)
     _source_leaves(s, side, baton)
+
+
+def _mark_sent_out(s: RefState, side: int) -> None:
+    """``battleParticipantMask[side] |= FlagIndex(selectedPartySlot[side])`` (battle_system.c:
+    973-976) at battler ``side``'s send-out (BattleController_EmitShowPokemon, battle_controller.c:
+    332; every switch, drag and replacement subscript, before its hazards check). Never cleared."""
+    s.battlers[side].sent_out |= 1 << s.battlers[side].active
 
 
 def _send_out_exp(s: RefState, side: int) -> None:
     """``BtlCmd_PokemonSendOut`` (script.c:543-635) for battler ``side``'s newcomer: a player
     send-out flags the enemy (:571-572, :592-593, :607-608, :622-623), an enemy send-out
     clears the mask, then flags (:580-581, :595-596, :610-611, :625-626).
+    Also the send-out mask (``_mark_sent_out``, D45-18).
     ``BattleSystem_ClearSideExpGain`` (lib.c:1456-1459) sets ``sideGetExpMask`` to 0;
     ``BattleSystem_FlagBattlerExpGain`` (lib.c:1461-1479) ORs in
     ``selectedPartySlot[PLAYER_1]``'s bit when the enemy's ``curHP`` is nonzero (``PLAYER_2``
@@ -3908,6 +3937,7 @@ def _send_out_exp(s: RefState, side: int) -> None:
     enemy send-out of ``e`` clears and flags its own entry only. A flag ORs the active slot of
     player battler 0, then 2 (only 0 for MULTI, lib.c:1475-1477), each not in
     ``battlersSwitchingMask`` (``_absent_now``), when ``e`` has HP (:1467-1469)."""
+    _mark_sent_out(s, side)
     fmt = _fmt(s)
     if fmt.B == 2:
         if side == 1:
@@ -6344,11 +6374,8 @@ def bide_defender(s: RefState, battler: int, bit: int) -> int | None:
 
 def _reveal_redirect(s: RefState, tables, holder: int) -> None:
     """subscript_lightning_rod_redirected.s:9 tags the holder's ability: ``BattleAI_SetAbility``
-    for a player's Pokemon (D2-12 rule 10)."""
-    if _party_of(s, holder) is s.parties[0]:
-        mon = _active(s, holder)
-        slot = s.battlers[holder].active
-        s.ai_ability_known[slot] = ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
+    for every kept battler (D2-12 rule 10, sheet D45-2 rule 4)."""
+    _know_ability(s, holder)
 
 
 def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
@@ -8793,31 +8820,33 @@ def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, boo
 
 
 def _record_last_moves(tables, s: RefState, actions, choices) -> None:
-    """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717) for the turn, as
-    ``engine.step._record_last_move`` (ruling D3-1a): when any enemy battler (1, or 1 and 3 at
-    four battlers, ``TrainerAI_MainDoubles`` :362-375) takes its FIGHT path (no forced Struggle,
-    bcp.c:433; no locked move, :335), the AI adds ``movePrevByBattler`` of every party-0 battler
-    to its list of that battler's moves. At four battlers the enemy and the recorded battler must
-    have HP (:363); at two neither test applies (:295). A first free entry unless the move is
-    listed or the list is full (:2705-2716; Struggle is recorded too, G-68)."""
-    four = _fmt(s).B == 4
-    enemies = (1,) if not four else (1, 3)
-    fight = False
-    for e in enemies:
-        if (
-            _command(actions[e]) == FIGHT
-            and not choices[e][1]
-            and not choices[e][2]
-            and (not four or _active(s, e).hp > 0)
+    """``engine.step.record_last_moves`` for every deciding AI battler (``ai_battlers``): the
+    ``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717) of the AI battler ``a`` adds
+    ``movePrevByBattler[t]`` to ``battlerMoves[t]`` for the defenders it scores: B = 2 the foe
+    (:265, :295); four battlers every living battler of the other side (:362-375), a MULTI partner
+    included (one ``AIContext`` for the battle, ai_context.h:27-29). It records only on the FIGHT
+    path through the move menu: no forced Struggle (bcp.c:433-441), no locked move (:333-337), not
+    recharging (battle_lib.c:6228), not Encored (:442-454, D45-4a), and at four battlers with HP
+    (:329-332); a target needs HP at four battlers (:363). Each target row is written once, the
+    deciders' union (every decider writes the same ``movePrevByBattler``): first free entry unless
+    the move is listed or the list is full (:2705-2716; Struggle is recorded too, G-68)."""
+    fmt = _fmt(s)
+    four = fmt.B == 4
+    rows = set()
+    for a in ai_battlers(fmt):
+        if not (
+            _command(actions[a]) == FIGHT
+            and not choices[a][1]
+            and not choices[a][2]
+            and not s.battlers[a].recharge
+            and not s.battlers[a].encore_move
+            and (not four or _active(s, a).hp > 0)
         ):
-            fight = True
-    if not fight:
-        return
-    for b in range(_fmt(s).B):
-        if _party(_fmt(s), b) != 0 or (four and _active(s, b).hp <= 0):
             continue
-        player = s.battlers[b]
-        _record_seen_move(s.ai_seen_moves[player.active], player.last_move)
+        targets = [t for t in range(fmt.B) if side_of(t) != side_of(a)] if four else [_foe(a)]
+        rows.update(t for t in targets if not four or _active(s, t).hp > 0)
+    for t in sorted(rows):
+        _record_seen_move(s.ai_seen_moves[t], s.battlers[t].last_move)
 
 
 def ref_step(
@@ -9269,14 +9298,13 @@ def _move_end_tail(turn: _Turn, s: RefState, clear: bool) -> None:
 
 
 def _stale_snapshot(s: RefState) -> list[tuple[int, int, bool, int]]:
-    """``(battler, active slot, knocked off then, its HP)`` for each party-0 battler at a
-    segment's start (B10-6, ruling D3-1a)."""
+    """``(battler, active slot, knocked off then, its HP)`` for each battler at a segment's start
+    (B10-6; every battler's record is cleared, sheet D45-3 rule 3)."""
     snaps = []
     for b in range(_fmt(s).B):
-        if _party(_fmt(s), b) == 0:
-            slot = s.battlers[b].active
-            mon = s.parties[0].mons[slot]
-            snaps.append((b, slot, _knocked_off(s, b, slot), mon.hp))
+        slot = s.battlers[b].active
+        mon = _party_of(s, b).mons[slot]
+        snaps.append((b, slot, _knocked_off(s, b, slot), mon.hp))
     return snaps
 
 
@@ -9286,9 +9314,15 @@ def _stale_known_item(s: RefState, snaps: list[tuple[int, int, bool, int]], foug
     AI's record of its item cleared (its CopyToParty: battle_script.c:1720, bcp.c:2748;
     lib.c:1819-1823)."""
     for b, slot, knocked, hp in snaps:
-        mon = s.parties[0].mons[slot]
-        if knocked and mon.item == 0 and (mon.hp != hp or b == fought):
-            s.ai_item_known[slot] = 0
+        mon = _party_of(s, b).mons[slot]
+        # row b is the Pokemon now in b (D45-1 rule 7)
+        if (
+            knocked
+            and mon.item == 0
+            and (mon.hp != hp or b == fought)
+            and s.battlers[b].active == slot
+        ):
+            s.ai_item_known[b] = 0
 
 
 def _carry_flags(turn: _Turn, s: RefState) -> None:

@@ -43,7 +43,7 @@ Implemented so far: the opponent's bag items (``engine.bag``, ``_use_trainer_ite
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 ``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``), the
 AI's knowledge of the player (``last_move``: ``_use_move``, ``_pursuit_hit``;
-``ai_seen_moves``: ``_record_last_move``, ``_forget``; ``ai_ability_known``:
+``ai_seen_moves``: ``_record_last_move``, ``_forget`` (entry and faint); ``ai_ability_known``:
 ``hooks.reveal_ability``, ``_forget``),
 switching (with Natural Cure; Roar's drag takes the same path, ``_use_move``) and the switch-in hooks
 (``hooks.on_switch_in``: Stealth Rock, Intimidate, berries), damaging moves, the
@@ -194,6 +194,7 @@ from nuzline.engine.effects import (
 from nuzline.engine.format import (
     MULTI,
     Format,
+    ai_battlers,
     blackout_parties,
     format_of,
     party,
@@ -311,6 +312,9 @@ from nuzline.engine.state import (
     TURN_SCRATCH,
     VOLATILE_FIELDS,
     BattleState,
+    ai_record_clear,
+    ai_record_moves,
+    ai_record_write,
     battler_ability,
     clear_copied,
     field_index,
@@ -585,63 +589,72 @@ def _set_sketch(state: BattleState, side, move, cond) -> BattleState:
     return state._replace(sketch_move=state.sketch_move.at[side].set(value))
 
 
-def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
-    """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717), at the start of the turn:
-    the AI adds the player's ``movePrevByBattler`` to its list of the player's moves
-    (``state.record_seen_move``). It runs only on the AI's FIGHT path (``TrainerAI_MainSingles``,
-    :295, after ``TrainerAI_PickCommand`` chose neither a switch nor an item, :3989; at four
-    battlers ``TrainerAI_MainDoubles`` records for every living opposing battler, :362-375), and not
-    when the opponent must Struggle: the move menu, and with it ``TrainerAI_Main``, is
-    skipped for ``STRUGGLING_ALL`` (battle_controller_player.c:433) and for a locked
-    opponent (:335). The list holds the moves by id (``ai_seen_moves``, G-68), so a Mimic copy, a
-    level-up's replacement and the player's own Struggle (``MOVE_STRUGGLE``) are recorded as the
-    decomp does.
+def record_last_moves(tables: Tables, state: BattleState, actions, deciders) -> BattleState:
+    """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717) for each deciding AI battler of
+    ``deciders``, at command selection (sheet D45-4). The AI battler ``a`` adds
+    ``movePrevByBattler[t]`` (``state.last_move[t]``) to ``battlerMoves[t]`` (``ai_seen_moves``
+    row ``t``) for the defenders it scores: singles ``TrainerAI_MainSingles`` records
+    ``BattleSystem_RandomOpponent`` (battler 0, :265, :295, no HP test); at four battlers
+    ``TrainerAI_MainDoubles`` records every living battler of the other side, never its ally
+    (:362-375). One ``AIContext`` serves the whole battle (ai_context.h:27-29), so a MULTI partner
+    (battler 2) records the enemy rows 1 and 3 as the enemies record 0 and 2.
 
-    Ruling D3-1a: the record is made when any enemy battler (1, or 1 and 3 at four battlers)
-    takes its FIGHT path, for every party-0 battler (keyed by ``active[b]``); at four battlers
-    the enemy and the recorded battler must have HP (:363), at two neither test applies
-    (:295)."""
+    A decider records only on the FIGHT path through the move menu (``TrainerAI_Main`` runs only
+    from ``Task_TrainerShowMoveSelectMenu``, battle_display.c:3580-3590): not for a switch or item
+    command, not when every move is unusable (STRUGGLING_ALL, bcp.c:433-441), not when it picks
+    no command (``Battler_CanPickCommand``: locked, battle_lib.c:6224-6236; recharging, :6228;
+    bcp.c:333-337), not when Encored (bcp.c:442-454; D45-4a), and at four battlers not when it has
+    no HP (bcp.c:329-332: no living Pokemon left to send in).
+
+    Every decider that records ``t`` writes the same value (``movePrevByBattler`` does not change
+    during command selection) and the write is idempotent, so the result is order-free: row ``t``
+    takes ``last_move[t]`` once when at least one decider whose targets include ``t`` records.
+    MOVE_NONE matches the first empty entry and writes nothing (:2708-2710;
+    ``state.record_seen_move``). Rows that exist: DOUBLES / TWO_TRAINERS rows 0 and 2; MULTI rows
+    0-3; B = 2 row 0. A decider outside ``format.ai_battlers`` raises ValueError, as
+    ``actions.legal_opponent_actions`` does (its row may be one ``ai_record_kept`` drops)."""
     fmt = format_of(state)
     four = fmt.B == 4
-    enemies = (1,) if fmt.B == 2 else (1, 3)
-    fight = None
-    for e in enemies:
-        _, struggling = selected_move(tables, state, e, actions[e])
-        locked = locked_slot(state, e) >= 0  # a locked battler picks no command (:335)
-        fight_e = (actions[e] < MOVE_ACTIONS) & ~struggling & ~locked
+    for a in deciders:
+        if a not in ai_battlers(fmt):
+            raise ValueError(
+                f"battler {a} does not choose by AI in this format ({ai_battlers(fmt)})"
+            )
+    on = [False] * fmt.B  # one traced bool per target row; Python False: never a target
+    for a in deciders:
+        _, struggling = selected_move(tables, state, a, actions[a])
+        picks = (actions[a] < MOVE_ACTIONS) & ~struggling  # bcp.c:431-441
+        picks = picks & (locked_slot(state, a) < 0)  # bcp.c:333-337
+        picks = picks & (state.recharge[a] == 0)  # battle_lib.c:6228
+        picks = picks & (state.encore_move[a] == 0)  # bcp.c:442-454 (D45-4a)
         if four:
-            fight_e = fight_e & (state.hp[party(fmt, e), state.active[e]] > 0)
-        fight = fight_e if fight is None else fight | fight_e
-    for b in range(fmt.B):
-        if fmt.party_of[b] != 0:
+            picks = picks & (state.hp[party(fmt, a), state.active[a]] > 0)  # bcp.c:329-332
+            targets = [t for t in range(fmt.B) if side_of(t) != side_of(a)]  # trainer_ai.c:371-375
+        else:
+            targets = [_foe(a)]  # trainer_ai.c:265, :295
+        for t in targets:
+            live = state.hp[party(fmt, t), state.active[t]] > 0 if four else True  # :363
+            on[t] = on[t] | (picks & live)
+    for t in range(fmt.B):
+        if on[t] is False:
             continue
-        mon = state.active[b]
-        pending = state.last_move[b]
-        on = fight
-        if four:
-            on = on & (state.hp[0, mon] > 0)
-        seen = state.ai_seen_moves
-        row = jnp.where(on, record_seen_move(seen[mon], pending), seen[mon]).astype(seen.dtype)
-        state = state._replace(ai_seen_moves=seen.at[mon].set(row))
+        row = record_seen_move(ai_record_moves(state, t), state.last_move[t])
+        state = ai_record_write(state, "ai_seen_moves", t, state.active[t], row, on[t])
     return state
 
 
-def _forget(state: BattleState, side, slot) -> BattleState:
-    """The AI forgets what it knew about the player's party ``slot`` when it enters
-    (``BattleSystem_UpdateAfterSwitch`` clears the battler's known moves, ability and held
-    item, battle_lib.c:2151-2153); nothing for a battler outside party 0 (ruling D3-1a)."""
-    on = party(format_of(state), jnp.asarray(side, _I32)) == 0
-    return state._replace(
-        ai_seen_moves=state.ai_seen_moves.at[slot].set(
-            jnp.where(on, 0, state.ai_seen_moves[slot]).astype(state.ai_seen_moves.dtype)
-        ),
-        ai_ability_known=state.ai_ability_known.at[slot].set(
-            jnp.where(on, 0, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
-        ),
-        ai_item_known=state.ai_item_known.at[slot].set(
-            jnp.where(on, 0, state.ai_item_known[slot]).astype(state.ai_item_known.dtype)
-        ),
-    )
+def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
+    """The turn's record: ``record_last_moves`` for every deciding AI battler
+    (``format.ai_battlers``), at the start of the turn (``_action_phase``)."""
+    return record_last_moves(tables, state, actions, ai_battlers(format_of(state)))
+
+
+def _forget(state: BattleState, side, cond) -> BattleState:
+    """The AI forgets what it knew about battler ``side`` where ``cond``:
+    ``BattleSystem_UpdateAfterSwitch`` (entry, battle_lib.c:2151-2153) and
+    ``BattleSystem_CleanupFaintedMon`` (faint, :2223-2225) clear the battler's known moves,
+    ability and held item, any battler (sheet D45-1 rules 3-4)."""
+    return ai_record_clear(state, side, cond)
 
 
 def _restore_transform(state: BattleState, side, cond) -> BattleState:
@@ -779,8 +792,9 @@ def _switch_in(
     (``_restore_types``), stages and volatiles reset, the effects the
     outgoing Pokemon is the source of end (``_source_leaves``: the Bind it put on the other
     side, the other side's infatuation), ``fake_out_turn`` becomes ``entry_turn`` and the AI
-    forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
-    Then the send-out updates the participation mask (``_flag_exp``). ``baton``: a Baton Pass
+    forgets the battler's record (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
+    Then the send-out updates the participation mask (``_flag_exp``) and the send-out mask
+    (``_mark_sent_out``). ``baton``: a Baton Pass
     switch (``_reset_battler``)."""
     state = _restore_transform(state, side, True)
     state = _restore_types(tables, state, side, True)
@@ -799,10 +813,19 @@ def _switch_in(
     # keeps that). Reached with an item only at B = 4: a partner's Knock Off on the same slot
     # number (D3 fix B); at B = 2 the bit is the newcomer's own, set with its item removed.
     state = _set_mon(state, "item", side, slot, 0, knocked_off_at(state, side, slot))
-    state = _forget(state, side, slot)
+    state = _forget(state, side, True)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
-    return _flag_exp(_source_leaves(state, side, True, baton), side)
+    return _mark_sent_out(_flag_exp(_source_leaves(state, side, True, baton), side), side)
+
+
+def _mark_sent_out(state: BattleState, side) -> BattleState:
+    """``battleParticipantMask[side] |= FlagIndex(selectedPartySlot[side])`` (battle_system.c:
+    973-976) at battler ``side``'s send-out (BattleController_EmitShowPokemon, battle_controller.c:
+    332; every switch, drag and replacement subscript, before its hazards check). Never cleared."""
+    bit = jnp.left_shift(jnp.int32(1), state.active[side].astype(_I32))
+    value = state.sent_out[side].astype(_I32) | bit
+    return state._replace(sent_out=state.sent_out.at[side].set(value.astype(state.sent_out.dtype)))
 
 
 def _flag_exp(state: BattleState, side) -> BattleState:
@@ -3848,7 +3871,8 @@ def _faint_check(
     ``move_hit``, :2199), ``fake_out_turn`` becomes ``entry_turn`` (:2195; by default
     ``turn + 1``, the value inside ``step``), and the effects it is the source of end
     (``_source_leaves``: the Bind on the other side, :2179, and its infatuation,
-    :2174-2176); its Camouflage types are restored (``_restore_types``). Every newly fainted Pokemon also loses its status condition and counter: the
+    :2174-2176), and the AI's record of the battler (``_forget``, :2223-2225); its Camouflage
+    types are restored (``_restore_types``). Every newly fainted Pokemon also loses its status condition and counter: the
     decomp writes ``status = 0`` for a Pokemon with no HP (battle_controller.c:1482-1486)."""
     fmt = format_of(before)
     entry_turn = after.turn + 1 if entry_turn is None else entry_turn
@@ -3891,6 +3915,8 @@ def _faint_check(
         after = _reset_battler(after, side, active_fainted)
         after = _entered(after, side, entry_turn, active_fainted)
         after = _source_leaves(after, side, active_fainted, faint=True)
+        # The AI's record of the battler goes last (battle_lib.c:2223-2225, sheet D45-1 rule 4).
+        after = _forget(after, side, active_fainted)
         # CleanupFaintedMon zeroes the battler's turnFlags (battle_lib.c:2190-2193), B13-17;
         # helpingHand among them (D3 fix B).
         after = after._replace(
@@ -5001,8 +5027,7 @@ def _stale_known_item(before: BattleState, after: BattleState, fought) -> Battle
     AI, which reads the record only at its next choice. ``before``: the segment's start; the slot
     must have been knocked off by then (the knock-off's own hit updates the HP first). ``fought``
     (``bool[B]``): each battler made a FIGHT attempt in the segment. Every battler is checked
-    (doubles design section 5 rule 4); ``forget_item`` keeps the record of the player's only (the
-    AI's own items are not in it)."""
+    (doubles design section 5 rule 4); ``forget_item`` clears every battler's record (sheet D45-3)."""
     fmt = format_of(before)
     fought = jnp.broadcast_to(jnp.asarray(fought, bool), (fmt.B,))
     for side in range(fmt.B):

@@ -104,7 +104,7 @@ def test_insomnia_cures_on_entry_and_move_end(tables, names, spinarak):
     bench = bench.with_status(0, 1, SLEEP, counter=3)
     out = jit_step(tables, bench, A(SWITCH_TO_1, "Tackle", bench, names), empty_outcome())
     assert int(out.status[0, 1]) == Status.NONE and int(out.status_counter[0, 1]) == 0
-    assert int(out.ai_ability_known[1]) == 0  # BTLSCR_MSG_TEMP: no reveal (I-6)
+    assert int(out.ai_ability_known[0]) == 0  # BTLSCR_MSG_TEMP: no reveal (I-6)
     # An asleep Insomnia active wakes at the end of its own action (MoveEnd).
     asleep = spinarak.with_status(0, 0, SLEEP, counter=3)
     leer = A("Poison Sting", "Tackle", asleep, names)

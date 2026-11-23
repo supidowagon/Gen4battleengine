@@ -153,7 +153,8 @@ sums them. Today's rows: ``starf_roll`` (B,) -> (B, 3) and ``Outcome.starf`` (B,
 no successor (G-12, G-13); ``learn_pin``, ``exp_refused`` dropped, no successor (E3-B2-21);
 ``ts_qc`` of a resumed segment (k > 0) from segment k - 1's ``in_outcome.quick_claw`` (the turn's
 draw its stop stored; ``upgrade_inputs`` hands the row that read, E3-B2-29 (c));
-``leech_seed_recipient`` = 1 + (b ^ 1) where ``leech_seed[b]`` (D3-11b).
+``leech_seed_recipient`` = 1 + (b ^ 1) where ``leech_seed[b]`` (D3-11b); the AI record by
+party slot -> per battler (D45-1).
 
 Outputs (states, Outcomes, events, reference outputs) are flattened to "path" -> (kind, dtype,
 shape, bytes) entries keyed by name. compare checks the entries present on both sides byte for
@@ -722,6 +723,37 @@ def _leech_seed_recipient(a, lead, tables):
     return {"leech_seed_recipient": np.where(seeded, 1 + (b ^ 1), 0).astype(np.int8)}
 
 
+# --- D45-1-R begin: the AI record per battler (sheet D45-1) -------------------------------------
+def _ai_record_by_battler(a, lead, tables):
+    """D45-1: the AI record per player party slot (int16[6, 4] / [6]) -> per battler ([2, 4] / [2]):
+    row 0 = the old row of active[0] unless that Pokemon's CleanupFaintedMon has run (it clears the
+    row, battle_lib.c:2223-2225): kept while it has HP, and at a pivot pause while its faint is
+    still pending (0 HP with its ``ts_alive`` bit set: an enemy U-turn's hit fainted it, and its
+    PlayFaintAnimation, battle_script.c:1803, comes at the action's faint check after the switch,
+    subscript_attack_then_switch_out.s:71 -> subscript_show_party_list.s:9 SwitchAndUpdateMon,
+    then :23-24 FAINT_MON); row 1 = 0 (never kept at B = 2, sheet D45-1 rule
+    6). B = 2 only: no capture holds a B = 4 state; any other battler count raises."""
+    import numpy as np
+
+    active, hp = np.asarray(a["active"]), np.asarray(a["hp"])
+    alive = np.asarray(a["ts_alive"])
+    if active.shape[len(lead) :] != (2,):
+        raise ValueError("ai record relayout: only a B = 2 state is re-keyed (sheet D45-1)")
+    out = {}
+    for f in ("ai_seen_moves", "ai_item_known", "ai_ability_known"):
+        old = np.asarray(a[f])
+        new = np.zeros((*lead, 2, *old.shape[len(lead) + 1 :]), old.dtype)
+        for i in np.ndindex(*lead):
+            slot = int(active[(*i, 0)])
+            pending = (int(alive[(*i, 0)]) >> slot) & 1
+            if hp[(*i, 0, slot)] > 0 or pending:
+                new[(*i, 0)] = old[(*i, slot)]
+        out[f] = new
+    return out
+
+
+# --- D45-1-R end ---------------------------------------------------------------------------------
+
 _I1, _I2 = "|i1", "<i2"
 _MON_READS = tuple(
     (f, d, ("P", 6))
@@ -749,6 +781,8 @@ UPGRADES = (
     dropped("state", "exp_refused", _I1, (), "E3-B2-21", "main's sticky window (c) refusal code; the payout's prompt now pauses the turn, so learn work never refuses (review b2 #6)"),
     derive("state", ((RESUME_QC, _I1, ("B",)),), ("ts_qc",), _resumed_qc, "E3-B2-29 (c)", "a resumed segment (k > 0) reads the turn's draw its stop stored: quick_claw != 0 of segment k - 1's in_outcome; main kept none and drew again"),
     derive("state", (("leech_seed", _I1, ("B",)),), ("leech_seed_recipient",), _leech_seed_recipient, "D3-11b", "older Leech Seeds were set by the opposite battler: 1 + (b ^ 1) where seeded", ("leech_seed",)),
+    # D45-1-R: the literal 6 never matches a new state ((2, 4) / (4, 4)), so the row runs on old captures only
+    derive("state", (("ai_seen_moves", _I2, (6, 4)), ("ai_item_known", _I2, (6,)), ("ai_ability_known", _I2, (6,)), ("active", _I1, ("B",)), ("hp", _I2, ("P", 6)), ("ts_alive", _I1, ("P",))), ("ai_seen_moves", "ai_item_known", "ai_ability_known"), _ai_record_by_battler, "D45-1", "the record per battler (ai_context.h:27-29): row 0 = the old row of active[0] while it has HP or its faint is pending at a pivot pause (ts_alive), row 1 never kept at B = 2", ("active", "hp", "ts_alive")),
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}

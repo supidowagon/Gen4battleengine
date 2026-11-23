@@ -370,6 +370,7 @@ def _learn_party(draw, tables, s):
     rows = np.asarray(tables.species_form_row)
     lm, ll = np.asarray(tables.learnset_move), np.asarray(tables.learnset_level)
     active, transformed = int(a["active"][0]), bool(a["transformed"][0])
+    seen = np.zeros(a["moves"].shape[1:], np.int16)  # the AI's record by party slot, then row 0
     for slot in np.flatnonzero(a["species"][0]):
         level = int(a["level"][0, slot])
         if transformed and slot == active:
@@ -390,10 +391,13 @@ def _learn_party(draw, tables, s):
                 move = draw(st.sampled_from(learnable))
                 a["moves"][0, slot, k] = move
                 a["pp"][0, slot, k] = int(tables.move_pp[move])
-        a["ai_seen_moves"][slot] = 0
         ids = [int(m) for m in a["moves"][0, slot] if m]
         picked = draw(st.lists(st.sampled_from(ids), unique=True, max_size=4)) if ids else []
-        a["ai_seen_moves"][slot, : len(picked)] = picked
+        seen[slot] = 0
+        seen[slot, : len(picked)] = picked
+    # D45-1: the record is per battler; battler 0 holds the active slot's row.
+    a["ai_seen_moves"][...] = 0
+    a["ai_seen_moves"][0] = seen[int(a["active"][0])]
     side = int(a["active"][0])
     # E1 trial batch (G-68): the active Pokemon's slot may hold a Mimic copy, the party's move
     # (the learn's reads and writes) in the shadow.

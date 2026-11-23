@@ -48,7 +48,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
-from nuzline.engine.format import format_of, party, side_of
+from nuzline.engine.format import ai_battlers, format_of, party, side_of
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
     GRAVITY_MOVES,
@@ -262,19 +262,26 @@ def legal_actions(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 
 
 def usable_trainer_items(tables: Tables, state: BattleState, side) -> jnp.ndarray:
-    """``bool[BAG_SLOTS]``: ``side``'s bag slots holding an item, while its active Pokemon
-    has HP left and is not locked into a move."""
+    """``bool[BAG_SLOTS]``: battler ``side``'s bag slots (``trainer_items[side]``) holding an
+    item, while its active Pokemon has HP left and is not locked into a move."""
     fmt = format_of(state)
     held = state.trainer_items[side] != 0
     free = (state.hp[party(fmt, side), state.active[side]] > 0) & (locked_slot(state, side) < 0)
     return held & free
 
 
-def legal_opponent_actions(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``bool[NUM_OPP_ACTIONS]``: the opponent's moves and switches as
-    ``legal_actions(tables, state, 1)``, then its bag slots (``usable_trainer_items``)."""
+def legal_opponent_actions(tables: Tables, state: BattleState, b: int = 1) -> jnp.ndarray:
+    """``bool[NUM_OPP_ACTIONS]``: AI battler ``b``'s moves and switches (``legal_actions(tables,
+    state, b)``), then its bag slots (``usable_trainer_items``). ``b`` is a battler that chooses by
+    AI (``format.ai_battlers``: 1; 1 and 3 at B = 4; and 2, the partner, in MULTI; sheet D45-6 R4);
+    its bag is ``trainer_items[b]`` (bcp.c:4796-4813, ruling D1-5), empty for the MULTI partner and
+    for every MULTI battler (R1-R3). ``b`` must be a static Python int (it picks the bag row and
+    the legality rows at trace time), never a traced array."""
+    fmt = format_of(state)
+    if b not in ai_battlers(fmt):
+        raise ValueError(f"battler {b} does not choose by AI in this format ({ai_battlers(fmt)})")
     return jnp.concatenate(
-        [legal_actions(tables, state, 1), usable_trainer_items(tables, state, 1)]
+        [legal_actions(tables, state, b), usable_trainer_items(tables, state, b)]
     )
 
 
