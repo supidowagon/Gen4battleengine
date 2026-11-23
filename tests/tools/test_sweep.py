@@ -430,7 +430,7 @@ esac
 for a in "$@"; do case "$a" in --hypothesis-seed=*) seed=${a#*=};; esac; done
 T="$FAKE_TRACE"
 echo "start $seed $(date +%s.%N) $NUZLINE_HYPOTHESIS_PROFILE $*" >> "$T"
-if [ "$seed" = "${FAKE_HANG_SEED:-}" ]; then sleep 600; fi
+if [ "$seed" = "${FAKE_HANG_SEED:-}" ]; then sleep "${FAKE_HANG_S:-600}"; fi
 sleep "${FAKE_JOB_S:-1}"
 echo "end $seed" >> "$T"
 if [ "$seed" = "${FAKE_FAIL_SEED:-}" ]; then echo "E       Failing test case: t("; exit 1; fi
@@ -473,6 +473,15 @@ def _jobs(tmp_path: Path, seeds_: list[int]) -> Path:
         newline="\n",
     )
     return j
+
+
+def _live(pgid: str, args: str) -> list[str]:
+    """The processes that live (state not Z) in the group <pgid> or with exactly the command line
+    <args>. Never a text search over the pod: other runs' processes are on it too."""
+    ps = subprocess.run(["ps", "-ww", "-eo", "pgid=,stat=,args="], check=True, capture_output=True, text=True)  # fmt: skip
+    rows = [ln.split(None, 2) for ln in ps.stdout.splitlines()]
+    return [" ".join(r) for r in rows
+            if not r[1].startswith("Z") and (r[0] == pgid or r[2:] == [args])]  # fmt: skip
 
 
 def _max_concurrent(trace: Path) -> int:
@@ -938,9 +947,9 @@ def test_sweep_refuses_an_out_dir_that_holds_a_sweep(tmp_path):
 @linux
 def test_sweep_a_job_over_its_time_limit_fails_and_the_sweep_goes_on(tmp_path):
     d = _run_folder(tmp_path)
-    env = _env(
-        tmp_path, 10 * 10**9, FAKE_JOB_S="0", FAKE_HANG_SEED="2", SWEEP_JOB_S="2", SWEEP_P="3"
-    )
+    hang = f"600.{os.getpid()}"  # this process's own duration: no other `sleep` of the pod has it
+    env = _env(tmp_path, 10 * 10**9, FAKE_JOB_S="0", FAKE_HANG_SEED="2", FAKE_HANG_S=hang,
+               SWEEP_JOB_S="2", SWEEP_P="3")  # fmt: skip
     r = subprocess.run([BASH, _posix(d / "bin/sweep.sh"), _posix(_jobs(tmp_path, [1, 2, 3]))], check=False,
                        capture_output=True, text=True, env=env, timeout=60)  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
@@ -953,10 +962,41 @@ def test_sweep_a_job_over_its_time_limit_fails_and_the_sweep_goes_on(tmp_path):
     ]
     assert (out / "SWEEP_DONE").is_file()
     assert not list((d / "sweep" / "out" / "run").iterdir())
-    left = subprocess.run(["ps", "-ww", "-eo", "args="], check=True, capture_output=True, text=True).stdout
-    assert "sleep 600" not in left  # the hung job's leftovers were killed
+    m = re.search(rf"START {SHORT_A}_2 pgid=(\d+) ", (out / "driver.log").read_text())
+    assert m, (out / "driver.log").read_text()
+    # the hung job's leftovers were killed (under the pod's PID 1 they stay as zombies: dead)
+    assert _live(m[1], f"sleep {hang}") == []
     assert collect.main([str(out), "--night", "20261122", "--tip", "abcdef01"]) == 0
     assert f"(NO-FALSIFIER rc=124, {SHORT_A}, -)" in (out / "sweep_failures.txt").read_text()
+
+
+@linux
+def test_a_zombie_of_a_hung_job_counts_as_dead():
+    hang = f"601.{os.getpid()}"
+    proc = subprocess.Popen(["sleep", hang], start_new_session=True)  # its own group, as a job
+    g, args = str(proc.pid), f"sleep {hang}"
+    grouplive = [BASH, "-c", f'. "{_posix(POD / "gate.sh")}"; grouplive {g}']  # reap's check
+    try:
+        for _ in range(100):  # the child's exec
+            if _live("", args):
+                break
+            time.sleep(0.05)
+        assert len(_live("", args)) == len(_live(g, "")) == 1  # both ways find the live one
+        assert subprocess.run(grouplive, check=False).returncode == 0
+        proc.kill()  # not waited for: a zombie, as under the pod's PID 1, which never reaps
+        for _ in range(100):
+            st = subprocess.run(
+                ["ps", "-o", "stat=", "-p", g], check=False, capture_output=True, text=True
+            ).stdout
+            if st.startswith("Z"):
+                break
+            time.sleep(0.05)
+        assert st.startswith("Z"), st
+        assert _live(g, args) == []
+        assert subprocess.run(grouplive, check=False).returncode == 1
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 # --- the driver-alive checks: a zombie or dead driver is not a running sweep --------------------
