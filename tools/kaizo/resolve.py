@@ -741,9 +741,10 @@ def _header_fields(
     cites: list[str], split_rows: dict[str, tuple[int, str, dict, dict]]
 ) -> dict[str, list[tuple[str, object]]]:
     """``optional``, ``left_side`` and ``tag_partner`` as each of a trainer's sheet headers
-    says them: field -> [(cite, value)] in workbook order. ``tag_partner``: the header is
-    tagged as the player's tag partner (``extract_kaizo_docs`` header tags ``tag partner``,
-    ``partner``, ``tag battle with X``): a fact about the sheet's own headers, which only the
+    says them: field -> [(cite, value)] in workbook order. ``tag_partner``: the header carries
+    a tag/partner tag (``extract_kaizo_docs`` header tags ``tag partner``, ``partner``, and
+    ``tag battle with X``, which enemy tag pairs carry too: an ally only together with the
+    ally relation, ``Trainer.partner``; ``tools/kaizo/backlog.py`` intersects them): a fact about the sheet's own headers, which only the
     sheet holds (the ROM's scripts and PKCalc's flags.js tag triples give the ally relation,
     ``partner``, not header tags)."""
     out: dict[str, list[tuple[str, object]]] = {"optional": [], "left_side": [], "tag_partner": []}

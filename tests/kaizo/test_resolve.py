@@ -368,6 +368,8 @@ def _record(cites, fields=None):
         "A Split:10": (0, "A Split", {"tags": {"optional": True}}, {"tags": {}}),
         "A Split:20": (0, "A Split", {"tags": {}}, {"tags": {}, "ai_known": False}),
         "A Split:30": (0, "A Split", {"tags": {}}, {"tags": {"optional": True}}),
+        "A Split:40": (0, "A Split", {"tags": {}}, {"tags": {"tag_partner": True}}),
+        "A Split:50": (0, "A Split", {"tags": {}}, {"tags": {"tag_partner": True}}),
     }
     ctx = TrainerContext({}, {1: list(cites)}, {}, {})
     ov = Overrides(fields={1: fields} if fields else {}, sources={"fields.1": "user, 2026-11-07"})
@@ -431,6 +433,22 @@ def test_headers_that_disagree_give_unknown():  # M3
     assert split["optional"] is None
     assert "headers disagree: A Split:10 true, A Split:20 false" in split["sources"]["optional"]
     assert split["split"] == "A Split" and split["split_order"] == [0, 10]
+
+
+def test_tag_partner_from_the_header_tags():
+    """``tag_partner``: True or False when every header agrees (a section tag does not
+    count), None with the disagreement in its source, None with every source silent when the
+    trainer has no header."""
+    tagged = _record(["A Split:40", "A Split:50"])
+    assert tagged["tag_partner"] is True
+    assert tagged["sources"]["tag_partner"] == "sheet A Split:40, A Split:50"
+    assert _record(["A Split:10"])["tag_partner"] is False  # section tag optional only
+    split = _record(["A Split:40", "A Split:10"])
+    assert split["tag_partner"] is None
+    assert "headers disagree: A Split:40 true, A Split:10 false" in split["sources"]["tag_partner"]
+    none = _record([])
+    assert none["tag_partner"] is None and none["split"] is None
+    assert none["sources"]["tag_partner"].startswith("rom, pkcalc: no sheet-header tag")
 
 
 def test_split_override_drops_the_sheet_position():  # M5

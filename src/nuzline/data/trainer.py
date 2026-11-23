@@ -229,9 +229,10 @@ class Trainer:
     or partner variant is fought with; ``gauntlet`` is (group, position) in a chain of
     fights with ``gauntlet_rules`` (``heal_between``, ``change_team``; empty: not
     recorded); ``optional``, ``left_side`` (the split's Left Side AI) and ``tag_partner``
-    (every sheet header of the trainer is tagged as the player's tag partner, so its split
-    row is an ally, not a battle; None: headers disagree, no header, or vanilla) come from the
-    spreadsheet; ``area_condition`` is what the fight starts with (built from
+    (every sheet header of the trainer carries a tag/partner tag, which enemy tag pairs carry
+    too: with the ally relation, a ``partner`` variant of another row, it marks the player's
+    tag partner, an ally and not a battle; None: headers disagree, no header, or vanilla)
+    come from the spreadsheet; ``area_condition`` is what the fight starts with (built from
     ``start_condition`` when the JSON has none); ``split`` and ``split_order`` (split
     index, line) place the fight in the level-cap splits; ``sources`` cites each field.
 

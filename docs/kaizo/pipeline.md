@@ -170,9 +170,13 @@ fight label prefix). No rebuild needed.
   from the patched battle code), so every trainer on such a map gets Trick Room. Trick Room
   that no map holds, and Cynthia's Gravity, come from `overrides.toml`. Maps whose weather
   depends on the date are settled in `start_conditions.json`.
-- **Split, optional, left side (9).** Read from the spreadsheet on every build, with a
-  citation; `overrides.toml` can correct them. When a trainer's sheet headers disagree on
-  `optional` or `left_side`, the field is unknown and the report says so. Gauntlet groups
+- **Split, optional, left side, tag partner (9).** Read from the spreadsheet on every build,
+  with a citation; `overrides.toml` can correct split, optional and left side. `tag_partner`
+  (every header carries a tag/partner tag; the ROM and PKCalc give only the ally relation,
+  `partner`) is the sheet's alone; `tools/kaizo/backlog.py` reads it from the built
+  `trainers.json` to confirm each ally split row is a tag partner, not a battle. When a
+  trainer's sheet headers disagree on `optional`, `left_side` or `tag_partner`, the field is
+  unknown and the report says so. Gauntlet groups
   are in `overrides.toml`, drafted from the spreadsheet's gauntlet and "B2B With" tags; their
   healing and team-change rules stay empty until you reach them.
 - **Battle formats (10).** Single, double, two-trainer double or multi come from the ROM's
