@@ -368,6 +368,8 @@ def _record(cites, fields=None):
         "A Split:10": (0, "A Split", {"tags": {"optional": True}}, {"tags": {}}),
         "A Split:20": (0, "A Split", {"tags": {}}, {"tags": {}, "ai_known": False}),
         "A Split:30": (0, "A Split", {"tags": {}}, {"tags": {"optional": True}}),
+        "A Split:40": (0, "A Split", {"tags": {}}, {"tags": {"tag_partner": True}}),
+        "A Split:50": (0, "A Split", {"tags": {}}, {"tags": {"tag_partner": True}}),
     }
     ctx = TrainerContext({}, {1: list(cites)}, {}, {})
     ov = Overrides(fields={1: fields} if fields else {}, sources={"fields.1": "user, 2026-11-07"})
@@ -431,6 +433,22 @@ def test_headers_that_disagree_give_unknown():  # M3
     assert split["optional"] is None
     assert "headers disagree: A Split:10 true, A Split:20 false" in split["sources"]["optional"]
     assert split["split"] == "A Split" and split["split_order"] == [0, 10]
+
+
+def test_tag_partner_from_the_header_tags():
+    """``tag_partner``: True or False when every header agrees (a section tag does not
+    count), None with the disagreement in its source, None with every source silent when the
+    trainer has no header."""
+    tagged = _record(["A Split:40", "A Split:50"])
+    assert tagged["tag_partner"] is True
+    assert tagged["sources"]["tag_partner"] == "sheet A Split:40, A Split:50"
+    assert _record(["A Split:10"])["tag_partner"] is False  # section tag optional only
+    split = _record(["A Split:40", "A Split:10"])
+    assert split["tag_partner"] is None
+    assert "headers disagree: A Split:40 true, A Split:10 false" in split["sources"]["tag_partner"]
+    none = _record([])
+    assert none["tag_partner"] is None and none["split"] is None
+    assert none["sources"]["tag_partner"].startswith("rom, pkcalc: no sheet-header tag")
 
 
 def test_split_override_drops_the_sheet_position():  # M5
@@ -627,6 +645,51 @@ def test_split_fields_from_the_sheet_or_unknown(resolved_trainers):
     assert roark["sources"]["split"] == "sheet Roark Split:272"
     unplaced = [t for t in resolved_trainers.values() if t["label"] and t["split"] is None]
     assert unplaced and all(t["optional"] is None and t["left_side"] is None for t in unplaced)
+
+
+def _ally_split_ids(resolved_trainers):
+    return {
+        p["trainer"]
+        for t in resolved_trainers.values()
+        for p in (t["partner"] or ())
+        if resolved_trainers[p["trainer"]]["split"]
+    }
+
+
+def test_tag_partner_on_every_ally_split_row(resolved_trainers):
+    """``tag_partner`` is in every resolved row, and every split row that fights beside the
+    player (a ``partner`` variant) is tagged True from its sheet headers: the fact
+    ``tools/kaizo/backlog.py`` reads instead of the docs extraction."""
+    assert all("tag_partner" in t for t in resolved_trainers.values())
+    allies = _ally_split_ids(resolved_trainers)
+    assert allies
+    for tid in sorted(allies):
+        t = resolved_trainers[tid]
+        assert t["tag_partner"] is True, (tid, t["label"], t["sources"].get("tag_partner"))
+        assert t["sources"]["tag_partner"].startswith("sheet "), tid
+
+
+def test_tag_partner_is_the_sheet_header_tags(resolved_trainers, docs):
+    """ROM-only (the ``docs`` workbook extraction never goes to the pod): ``tag_partner`` is
+    what the trainer's sheet headers (cited in its source) say, None when they disagree or
+    there is none."""
+    tags = {
+        h["cite"]: h["tags"]
+        for sv in docs["splits"].values()
+        for sec in sv["sections"]
+        for h in sec["trainers"]
+    }
+    tagged = 0
+    for tid, t in resolved_trainers.items():
+        src = t["sources"]["tag_partner"]
+        if not src.startswith("sheet "):
+            assert t["tag_partner"] is None, tid
+            continue
+        cites = src.removeprefix("sheet ").split(" (headers disagree")[0].split(", ")
+        said = {bool(tags[c].get("tag_partner")) for c in cites}
+        assert t["tag_partner"] == (said.pop() if len(said) == 1 else None), (tid, cites)
+        tagged += t["tag_partner"] is True
+    assert tagged >= len(_ally_split_ids(resolved_trainers))
 
 
 def test_json_shapes(resolved_trainers):

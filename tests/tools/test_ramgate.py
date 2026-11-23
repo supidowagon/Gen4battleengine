@@ -167,8 +167,19 @@ def test_is_rom_only_by_fixture_and_by_path():
 
 
 def test_engine_loaded_prefix_only():
-    assert rg.engine_loaded(["nuzline.engine"]) and rg.engine_loaded(ENGINE)
+    assert rg.engine_loaded(["nuzline.engine", "nuzline.engine.step"]) and rg.engine_loaded(ENGINE)
     assert not rg.engine_loaded(NO_ENGINE + ["nuzline.engineering", "jax"])
+
+
+def test_the_light_engine_modules_do_not_count_as_the_engine_loaded():
+    # tools.kaizo.rows_tables imports nuzline.engine.ids (COORD.md 22 Nov 20:01): enums only
+    assert not rg.engine_loaded(NO_ENGINE + ["nuzline.engine", "nuzline.engine.ids"])
+    assert rg.engine_loaded(["nuzline.engine", "nuzline.engine.ids", "nuzline.engine.state"])
+    for name in rg.LIGHT_ENGINE_MODULES:  # each light module imports only the standard library
+        tail = "/__init__.py" if name == rg.ENGINE_PREFIX else ".py"
+        path = ROOT / "src" / (name.replace(".", "/") + tail)
+        heads = re.findall(r"^\s*(?:from|import)\s+([\w.]+)", path.read_text(encoding="utf-8"), re.M)
+        assert {h.split(".")[0] for h in heads} <= {"os", "sys", "enum", "__future__"}, (name, heads)
 
 
 def test_gate_engine_free_run_goes():
@@ -461,6 +472,7 @@ _PYTEST_START = re.compile(
     r"|\buv\s+run(\s+--?[\w=-]+)*\s+pytest\b"  # uv run [opts] pytest
     r"|(^|[;&|`]|\$\(|^\s*\(|\b(exec|then|do|else)\b)\s*(\w+=\S*\s+)*pytest(\s|$)"  # a command
     r"|\S*/pytest(\s|[\"']|$)"  # a path to the binary: .venv/bin/pytest, "$repo"/.venv/bin/pytest
+    r"|(^|[\s;&|(])pytest\s+-"  # behind any word with options: timeout 900 pytest -q, nohup pytest -x
 )
 _SEARCHES = re.compile(r"\b(pgrep|pkill|grep|egrep|fgrep)\b[^;&|]*")  # a pattern, not a start
 _UNSETS = re.compile(r"\bunset\s+([\w\s]*\s)?NUZLINE_ON_POD\b|\benv\s+(-\S+\s+)*-u\s*NUZLINE_ON_POD\b|\benv\s+(-\S+\s+)*-i\b|\benv\s+--ignore-environment\b|\benv\s+--unset[= ]NUZLINE_ON_POD\b")
@@ -577,6 +589,9 @@ def test_the_pod_marker_check_catches_each_way_to_miss_it(tmp_path):
         '"$repo/.venv/bin/pytest" tests\n',
         '"$repo"/.venv/bin/pytest\n',
         "nice -n 5 /work/r/.venv/bin/pytest -x\n",
+        "timeout 900 pytest -q tests\n",
+        "if pytest -q tests; then echo ok; fi\n",
+        "nohup pytest -x tests &\n",
     ],
 )
 def test_the_pod_marker_check_sees_every_way_to_start_pytest(tmp_path, start):
@@ -988,6 +1003,21 @@ def test_pod_only_tests_are_refused_on_the_pc_even_engine_free():
     assert gate([spike], pod_only=keys, collect_only=True)[0] == "GO"  # collecting is fine
 
 
+def test_a_rom_and_engine_pod_only_test_gets_no_quick_lane_hint():
+    # review_q3_merge_85fd5160 SHOULD: the quick lane has no ROM, so it cannot run these
+    reasons = {"tests/test_spike_step.py": "jit", "tests/k/test_roark.py::t": "rom-and-engine-split-close"}
+    roark = item("tests/k/test_roark.py::t", "docs")
+    verdict, msg = gate([roark], modules=NO_ENGINE, pod_only=reasons)
+    assert verdict == "REFUSE" and "test_roark" in msg and "ROM + engine" in msg
+    assert "quick lane, run name" not in msg and "owner question" in msg
+    spike = item("tests/test_spike_step.py::test_jit[a]", "tmp_path")
+    verdict, msg = gate([spike, roark], modules=NO_ENGINE, pod_only=reasons)
+    assert verdict == "REFUSE" and "quick lane, run name" in msg and "ROM + engine" in msg
+    committed = rg.load_pod_only_reasons()
+    assert set(committed) == rg.load_pod_only()
+    assert sum(r.startswith(rg.ROM_AND_ENGINE_REASON) for r in committed.values()) == 5
+
+
 def test_the_committed_pod_only_list():
     keys = rg.load_pod_only()
     assert {"tests/test_spike_step.py", "tests/test_jaxcache.py"} <= keys
@@ -1099,6 +1129,24 @@ def test_the_measuring_harness_figures_and_reads_rss():
     assert 'kind="measure"' in text and "rg.ENV_NO_WAIT" in text
 
 
+def test_the_measuring_harness_gives_a_figure_only_when_every_id_ran():
+    spec = importlib.util.spec_from_file_location("ramgate_measure_w", ROOT / "tools/ops/ramgate_measure.py")
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)
+
+    def line(rc, summary, figure=4):
+        return harness.weight_line("tests/a.py", {"rc": rc, "summary": summary, "figure": figure}, "abc1234-20261122")
+
+    assert line(0, "3 passed in 1.0s") == "tests/a.py 4 local-measure-abc1234-20261122"
+    assert line(0, "2 passed, 1 deselected in 1.0s") == "tests/a.py 4 local-measure-abc1234-20261122"
+    assert line(0, "2 passed, 1 skipped in 1.0s") == "tests/a.py 14 unmeasured-skipped-abc1234-20261122"
+    assert line(0, "3 skipped in 0.1s") == "tests/a.py 14 unmeasured-skipped-abc1234-20261122"
+    assert line(0, ["no summary"]) == "tests/a.py 14 unmeasured-skipped-abc1234-20261122"
+    assert line(1, "1 failed, 2 passed in 1.0s") == "tests/a.py 14 unmeasured-failed-rc1-abc1234-20261122"
+    assert line(5, "no tests ran in 0.1s") == "tests/a.py 14 unmeasured-failed-rc5-abc1234-20261122"
+    assert line("killed", "pod-measure needed", 20) == "tests/a.py 20 pod-measure-needed"
+
+
 def test_free_gb_reads_this_machine():
     assert 0.0 < rg.free_gb() < 10_000.0
 
@@ -1122,7 +1170,7 @@ MINI_FILES = {
     "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef docs():\n    return 1\n",
     "tests/test_mix.py": (
         "import sys\nimport types\n\nimport pytest\n\n"
-        "sys.modules.setdefault('nuzline.engine', types.ModuleType('nuzline.engine'))\n\n\n"
+        "sys.modules.setdefault('nuzline.engine.step', types.ModuleType('nuzline.engine.step'))\n\n\n"
         "@pytest.mark.rom\ndef test_rom(docs):\n    assert docs == 1\n\n\n"
         "def test_eng():\n    pass\n"
     ),
@@ -1248,6 +1296,8 @@ def _fake_proc(root, rows):
         )
     (root / "self").mkdir()
     (root / "99").mkdir()  # no stat file: skipped
+    (root / "98").mkdir()
+    (root / "98" / "stat").write_text("98 (cut", encoding="utf-8")  # no ")": skipped
 
 
 def test_a_zombie_counts_as_gone_in_the_process_table(tmp_path):

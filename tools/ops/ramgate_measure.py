@@ -11,7 +11,10 @@ pytest honours NUZLINE_RAMGATE_NO_WAIT=1; before each file it waits for free RAM
 drops below 4 GB it kills that tree (by the pid it started, never by name) and records the file
 as `pod-measure needed`, weight 20. Figure = ceil(max(1.25 m, m + 2)) GB of the peak m.
 OUT_JSON keeps the results (a rerun skips the files in it); the rom_weights.txt lines are printed
-at the end, tag `local-measure-<sha7>-<yyyymmdd>`. Exit 0, or 14 when the RAM or lock wait timed out.
+at the end. A figure comes only from a run where the tests ran: exit 0 and no `skipped` in the
+summary gives tag `local-measure-<sha7>-<yyyymmdd>`; any other run (failed, error, skipped ids,
+no tests) gives weight 14 (one loaded step), tag `unmeasured-skipped-<sha7>-<yyyymmdd>` or
+`unmeasured-failed-rc<rc>-<sha7>-<yyyymmdd>`. Exit 0, or 14 when the RAM or lock wait timed out.
 """
 
 import argparse
@@ -36,6 +39,7 @@ _spec.loader.exec_module(rg)
 START_FREE_GB = 20.0  # free RAM before each file; fixed, not tied to the gate's defaults
 POLL_S = 0.5
 PEAK_KILLED_WEIGHT = 20
+UNMEASURED_WEIGHT = int(rg.ROM_ENGINE_UNMEASURED_GB)  # a run that did not run every id: one loaded step (14)
 
 
 def rss_bytes(pid: int) -> int:
@@ -98,6 +102,19 @@ def tree_pids(pid: int) -> list[int]:
 
 def figure(peak_gb: float) -> int:
     return math.ceil(max(1.25 * peak_gb, peak_gb + 2))
+
+
+def weight_line(f: str, r: dict, stamp: str) -> str:
+    """The rom_weights.txt line of one file's result; stamp = `<sha7>-<yyyymmdd>`. Only a run
+    with exit 0 and no skipped id gives a figure; a skip or a failure measured too little."""
+    if r["rc"] == "killed":
+        return f"{f} {r['figure']} pod-measure-needed"
+    summary = " ".join(r["summary"]) if isinstance(r["summary"], list) else str(r["summary"])
+    if r["rc"] != 0:
+        return f"{f} {UNMEASURED_WEIGHT} unmeasured-failed-rc{r['rc']}-{stamp}"
+    if re.search(r"\bskipped\b", summary) or not re.search(r"\bpassed\b", summary):
+        return f"{f} {UNMEASURED_WEIGHT} unmeasured-skipped-{stamp}"
+    return f"{f} {r['figure']} local-measure-{stamp}"
 
 
 def measure_file(ids: list[str], log: Path) -> dict:
@@ -171,10 +188,9 @@ def main(argv: list[str]) -> int:
     sha = subprocess.run(
         ["git", "rev-parse", "--short=7", "HEAD"], cwd=ROOT, capture_output=True, text=True
     ).stdout.strip()
-    tag = f"local-measure-{sha}-{datetime.date.today():%Y%m%d}"
+    stamp = f"{sha}-{datetime.date.today():%Y%m%d}"
     for f, r in sorted(res.items()):
-        mark = "pod-measure-needed" if r["rc"] == "killed" else tag
-        print(f"{f} {r['figure']} {mark}")
+        print(weight_line(f, r, stamp))
     return code
 
 
