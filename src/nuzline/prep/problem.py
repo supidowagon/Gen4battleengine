@@ -386,6 +386,11 @@ class PrepProblem:
     # header (field_map_change.c:273-280) while the var keeps the script from running again,
     # so every setup starts as ``start_condition`` says (clear), the save's own party too.
     script_weather_warp: bool = False
+    # Battle-start friendship (ledger E3-B3-5.a; ``prep.friendship``): the class id of the fight's
+    # second enemy trainer (None: one enemy). ``trainer.class_id`` is enemy 1's, and
+    # ``trainer.map_labels`` the map label text ids of its headers: one fixes the fight's label,
+    # several or none leave it open and each reader takes its bound (``battle_start_spec``).
+    enemy_2_class: int | None = None
 
 
 def _lookup(lookup: Callable[[str], int], name: str, what: str) -> int:
@@ -412,13 +417,17 @@ def build_problem(
     prestatus: Sequence[str] = (),
     field_move: int = 0,
     script_weather_warp: bool = False,
+    opponent_2: Trainer | None = None,
 ) -> tuple[PrepProblem, list[str]]:
     """The save's pool at ``cap`` as a :class:`PrepProblem`, and the warnings (every
     exclusion and trim, reserved items missing from the bag). ``ValueError`` for a ``deaths``
     outside ``0..MAX_DEATH_BUDGET``, an unknown item or prestatus name, a value both protected
     and excluded, a protected Pokemon left out as unsupported, and an empty pool, or, with a
     ``field_move``, a pool where no candidate knows it (the team phase starts from the
-    candidates' own moves, ``setups.knows_field_move``)."""
+    candidates' own moves, ``setups.knows_field_move``).
+
+    Battle-start friendship (``prep.friendship``): ``opponent_2`` is the fight's second enemy
+    trainer; the fight's map labels are ``trainer.map_labels``."""
     if not 0 <= deaths <= MAX_DEATH_BUDGET:
         raise ValueError(f"deaths {deaths} outside [0, {MAX_DEATH_BUDGET}]")
     reserved = [_lookup(names.item, name, "item") for name in reserve]
@@ -488,6 +497,7 @@ def build_problem(
         chatot_cry=save.chatot_cry,
         field_move=field_move,
         script_weather_warp=script_weather_warp,
+        enemy_2_class=None if opponent_2 is None else opponent_2.class_id,
     )
     if field_move and not any(field_move in c.spec.moves for c in problem.candidates):
         raise ValueError(

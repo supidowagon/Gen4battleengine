@@ -156,7 +156,6 @@ def _exp_party(draw, tables, names, s, *, near_level: bool, markers: bool):
     ``recalc_stats``' at the drawn level and EVs."""
     a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
-    forms = np.asarray(tables.species_form_row)
     for slot in np.flatnonzero(a["species"][0]):
         if draw(st.integers(0, 9)) == 0:
             a["level"][0, slot] = draw(st.sampled_from((99, 100)))
@@ -184,18 +183,10 @@ def _exp_party(draw, tables, names, s, *, near_level: bool, markers: bool):
         )
         a["pokerus"][slot] = draw(st.integers(0, 1))
         a["friend_bonus"][slot] = draw(st.integers(0, 1))
-        if markers and draw(st.integers(0, 4)) == 0:
-            a["learn_level"][slot] = draw(st.integers(2, max(2, level)))
-            # The cursor never passes the learnset's terminator: it starts at 0 (bs.c:9882) and
-            # moves only past a real entry (src/pokemon.c:3952, :3960). The learnset is the party
-            # Pokemon's own (a Transformed active's shadow, G-69).
-            sp, fm = (
-                (a["shadow_species"][0], a["shadow_form"][0])
-                if own
-                else (a["species"][0, slot], a["form"][0, slot])
-            )
-            entries = int(np.count_nonzero(np.asarray(tables.learnset_level)[forms[sp, fm]]))
-            a["learn_cursor"][slot] = draw(st.integers(0, entries))
+        if markers and level >= 2 and draw(st.integers(0, 4)) == 0:
+            # A reachable marker: learn_level old level + 1, cursor 0 (levelup.py:274-275).
+            a["learn_level"][slot] = draw(st.integers(2, level))
+            a["learn_cursor"][slot] = 0
     a["exp_mask"][...] = draw(st.integers(0, 63)) | (1 << int(a["active"][0]))
     for slot in np.flatnonzero(a["species"][0]):  # the drawn level and EVs' stats
         recalc_stats(tables, a, 0, int(slot))
@@ -325,7 +316,11 @@ def test_replacement_follows_the_resumed_learn_pause(tables, names):
     # 2190-2193, :2231), and the test sent the opponent's replacement into the paused turn,
     # where ``replace`` zeroes the scratch and the reference kept it. Geodude's Quick Attack
     # damages Prinplup first, Bubble KOs it, the payout's BubbleBeam prompt pauses MoveEnd
-    # (bcp.c:3968); the answer resumes the turn, then Bonsly comes in.
+    # (bcp.c:3968); the answer resumes the turn, then Bonsly comes in. The field holds a Light
+    # Screen, a sandstorm with turns left and a pending Wish: the resume runs the turn end's
+    # field pass whole (CheckFieldConditions, bcp.c:932-1254; 093367d6), each counter once.
+    from nuzline.engine import field as fcm
+    from nuzline.engine.ids import Weather
     from nuzline.engine.levelup import GIVE_UP, LEARN_MOVE_END
     from nuzline.engine.outcome import empty_outcome
     from tests.engine.helpers import A, assert_matches_reference
@@ -334,6 +329,10 @@ def test_replacement_follows_the_resumed_learn_pause(tables, names):
 
     opp = [_mon(names, "Geodude", 12, moves=("Quick Attack",)), _mon(names, "Bonsly", 15)]
     s = _learn_state(tables, names, opp).replace_hp(1, 0, 1)
+    s = fcm.with_weather(s, int(Weather.SANDSTORM), 3)._replace(
+        light_screen=s.light_screen.at[0].set(3),
+        wish_timer=s.wish_timer.at[0].set(2),
+    )
     acts = A("Bubble", "Quick Attack", s, names)
     paused = assert_matches_reference(tables, s, acts, empty_outcome())
     assert int(paused.learn_site) == LEARN_MOVE_END and int(paused.ts_assurance[0]) == 1
@@ -343,6 +342,8 @@ def test_replacement_follows_the_resumed_learn_pause(tables, names):
     _assert_same(answered, from_ref(ref_learn(np_tables, to_ref(paused), GIVE_UP)))
     done = assert_matches_reference(tables, answered, jnp.zeros(2, jnp.int32), empty_outcome())
     assert int(done.learn_site) == 0 and int(done.ts_assurance[0]) == 0
+    assert int(done.light_screen[0]) == 2 and int(done.weather_turns) == 2
+    assert int(done.wish_timer[0]) == 1
     got = jit_replace(tables, done, 1, 1)
     _assert_same(got, from_ref(ref_replace(np_tables, to_ref(done), 1, 1)))
 

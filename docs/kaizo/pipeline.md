@@ -9,6 +9,7 @@ ROM reading: `docs/rom_pipeline.md`.
 All inputs are local files and are never committed. Each path comes from an environment
 variable, else from `data/local.toml` (git-ignored; copy `data/local.example.toml`). Use
 single-quoted strings for Windows paths; relative paths resolve against the repository root.
+An optional `[run]` table (Nuzlocke rules, `nuzline prep`) shares the file; the ROM tools skip it.
 
 | `data/local.toml` key | Environment variable | What it is |
 | --- | --- | --- |
@@ -123,8 +124,15 @@ each with a `source` (`"<Sheet>:<row>"`, `"pkcalc:<file>:<line>"`, `"rom:<what>"
   condition (see "Settling a user call").
 - `[area_exception.<id>]`: a ROM Trick Room trainer deliberately left without Trick Room, with
   the `reason`.
-- `[[gauntlet]]`: `name`, `trainers` (ids in fight order), `rules` (`heal_between`,
-  `change_team`; fill in when play reaches the gauntlet).
+- `[[gauntlet]]`: `name`, `trainers` (ids in the sheet's order) and the group's game facts, all or none:
+  `orders`, `leave_gaps`, `escape`, `pc_gaps`, `heal_gaps`, `locked_gaps`, optional `partner`, each with a
+  `<key>_source` (`orders_source` required). With `live_next`, a gap field the table makes order- or
+  count-dependent is absent (`docs/gauntlet-design.md` section 2). Optional `field_moves` (with
+  `field_moves_source`) and one `[[gauntlet.case]]` table per other subset of them: the facts per field-move
+  case (the moves the party knows and uses). Optional `[[gauntlet.skips]]` tables (`order`, `skipped`,
+  `header`, `boulder`, `boulder_from`, `boulder_to`, `hold`) with `skips_source`: orders that leave trainers
+  unfought behind a pushed Strength boulder (`Skip`). They are read from the ROM by `tools/kaizo/gauntlet_map.py`
+  and re-derived by `tests/kaizo/test_gauntlet_map.py`; user choices never go here.
 - `[trainer_ids."<label or Sheet:row>"]`: `id`, when a PKCalc label or sheet header matches
   the wrong ROM trainer.
 - `[fields.<id>]`: `split` (the trainer's sheet position is then unknown), `optional`,

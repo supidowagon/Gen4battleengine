@@ -56,6 +56,7 @@ from nuzline.engine.state import SLOTS
 from nuzline.engine.step import WINNER_PLAYER
 from nuzline.jaxcache import code_version
 from nuzline.search.stage_b import PlanNode, SolveResult, learn_label
+from nuzline.text import decimals, tenths
 
 __all__ = ["distribution_line", "label", "render", "to_json"]
 
@@ -574,13 +575,23 @@ def to_json(
     }
 
 
-def _pct(p: float) -> str:
-    return f"{100 * p:5.1f} %"
+def _pct(p: float, *, up: bool = False) -> str:
+    """A chance in percent (``nuzline.text.tenths``): rounded down (a win chance, a branch's
+    chance) or, with ``up``, rounded up (a share that weakens the estimate: unexplored, refused,
+    over budget)."""
+    return f"{tenths(p, up=up):>5} %"
+
+
+def _interval(low: float, high: float) -> str:
+    """A 95 % interval in percent: the low end rounded down, the high end up."""
+    return f"[{tenths(low):>4}, {tenths(high, up=True):>5}]"
 
 
 def distribution_line(dist, label: str = "deaths under the leader") -> str:
     """``<label>: 0: a %  1: b % ...`` from a ``DeathDistribution`` (3 and 4+ deaths
-    folded into ``3+``); Stage A/B keep the default label."""
+    folded into ``3+``); Stage A/B keep the default label. The no-death share rounds down,
+    every other share (deaths, whiteout, unfinished, protected lost) up
+    (``nuzline.text.tenths``)."""
     p = dist.probs
     cells = (
         ("0", p[0]),
@@ -591,18 +602,19 @@ def distribution_line(dist, label: str = "deaths under the leader") -> str:
         ("unfinished", p[7]),
         ("protected lost", p[5]),
     )
-    return f"{label}: " + "  ".join(f"{n}: {100 * v:.1f} %" for n, v in cells)
+    return f"{label}: " + "  ".join(f"{n}: {tenths(v, up=n != '0')} %" for n, v in cells)
 
 
 def _precision_line(result: SolveResult) -> str:
     """The precision target of the final pass: met or not, the half-A leader's half-width
-    and the top-up rounds run."""
+    and the top-up rounds run. The half-width, the interval's spread, rounds up
+    (``nuzline.text.decimals``)."""
     head = f"precision target {100 * result.settings.precision:g} pp"
     rounds = f"after {result.rounds} top-up round{'' if result.rounds == 1 else 's'}"
     if result.half_width_a is None:
         return f"{head}: no ranked action to measure, {rounds}"
     verdict = "met" if result.precision_met else "not met"
-    width = f"{100 * result.half_width_a:.2f} pp"
+    width = f"{decimals(100 * result.half_width_a, 2, up=True)} pp"
     return f"{head}: {verdict} (leader's half-A half-width {width}) {rounds}"
 
 
@@ -643,8 +655,8 @@ def render(
         out = ["the player sees one of these before acting (a chance root), each solved alone"]
         if r is not None:
             out.append(
-                f"  {r.label}: {_pct(r.estimate)} [{100 * r.ci_low:4.1f}, "
-                f"{100 * r.ci_high:5.1f}], lower {_pct(r.lower_bound)}"
+                f"  {r.label}: {_pct(r.estimate)} {_interval(r.ci_low, r.ci_high)}, "
+                f"lower {_pct(r.lower_bound)}"
             )
             if r.distribution is not None:
                 out.append(distribution_line(r.distribution))
@@ -669,11 +681,12 @@ def render(
     ]
     for i, r in enumerate(result.ranking, 1):
         mark = "*" if r.tied_with_best else " "
-        odds = f"{_pct(r.estimate)} [{100 * r.ci_low:4.1f}, {100 * r.ci_high:5.1f}]"
+        odds = f"{_pct(r.estimate)} {_interval(r.ci_low, r.ci_high)}"
         sampled = f"{_pct(r.sampled)} ({r.sampled_nodes})"
         out.append(
             f"  {mark} {i:2d}  {r.label:<24}  {odds:<27}  {_pct(r.lower_bound):>7}  "
-            f"{_pct(r.unexplored):>10}  {sampled:>15}  {_pct(r.refused):>8}  {_pct(r.failed):>11}"
+            f"{_pct(r.unexplored, up=True):>10}  {sampled:>15}  {_pct(r.refused, up=True):>8}  "
+            f"{_pct(r.failed, up=True):>11}"
         )
         staged = result.leaf_budget is not None  # depth 0 (Stage A) has no plan to show
         if i == 1 and staged and show_depth > 0 and r.action in result.plan.children:

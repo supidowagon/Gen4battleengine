@@ -75,6 +75,9 @@ MAP_HEADER_SIZE = 24
 HEADER_MATRIX, HEADER_SCRIPTS, HEADER_EVENTS, HEADER_WEATHER = 2, 4, 16, 20
 HEADER_INIT_SCRIPTS = 6  # u16 initScriptsArchiveID after scriptsArchiveID (map_header.h:14-15)
 HEADER_FLAGS, BATTLE_BG_SHIFT, BATTLE_BG_BITS = 22, 7, 5
+# mapLabelTextID: the low 8 bits of the u16 bitfield at 18 (map_header.h:21; Kaizo's getter reads
+# the same byte of the d_test.narc member, docs/kaizo/rom_diff.md MapHeader_GetMapLabelTextID).
+HEADER_LABEL = 18
 MATRIX_NARC = "fielddata/mapmatrix/map_matrix.narc"  # platinum.us/filesys.csv:265
 LAND_DATA_NARC = "fielddata/land_data/land_data.narc"  # platinum.us/filesys.csv:271
 # MapHeader_GetMapMatrixID (src/map_header.c:28-38) turns matrix 22 into 23 only when
@@ -1159,6 +1162,14 @@ def map_init_scripts(rom: RomFiles, symbols: SymbolMap) -> list[int]:
         struct.unpack_from("<H", raw, base + HEADER_INIT_SCRIPTS)[0]
         for base in range(0, len(raw), MAP_HEADER_SIZE)
     ]
+
+
+def map_header_labels(rom: RomFiles, symbols: SymbolMap) -> list[int]:
+    """Each map header's ``mapLabelTextID`` (``MapHeader_GetMapLabelTextID``,
+    src/map_header.c:90-94), by header id, from the same header bytes ``map_header_rows``
+    reads."""
+    raw = _map_header_bytes(rom, symbols)
+    return [raw[base + HEADER_LABEL] for base in range(0, len(raw), MAP_HEADER_SIZE)]
 
 
 def map_header_rows(rom: RomFiles, symbols: SymbolMap) -> list[tuple[int, int, int]]:

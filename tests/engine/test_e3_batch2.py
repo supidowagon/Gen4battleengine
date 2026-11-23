@@ -3566,11 +3566,11 @@ def test_midturn_learn_pending_action_rereads_the_replaced_slot(tables, names, a
 
 
 def test_midturn_learn_resume_starts_the_next_action_at_power_mul_10(tables, names):
-    # Geodude is faster and Selfdestructs; the payout pauses Prinplup's MoveEnd at the BubbleBeam
-    # prompt. The resume runs that MoveEnd's tail, whose BattleContext_Init sets powerMul to 10
-    # (bcp.c:3998, battle_lib.c:1980); Prinplup's Baton Pass then stops at its party list, where
-    # the foe's replacement AI reads that powerMul (``ts_pick_mul``, battle_script.c:6928 is the
-    # only 20).
+    # Geodude is faster and Selfdestructs; the payout pauses the MoveEnd of Geodude's Selfdestruct
+    # action (bcp.c:3968) at the BubbleBeam prompt. The resume runs that MoveEnd's tail, whose
+    # BattleContext_Init sets powerMul to 10 (bcp.c:3998, battle_lib.c:1980); Prinplup's Baton
+    # Pass then stops at its party list, where the foe's replacement AI reads that powerMul
+    # (``ts_pick_mul``, battle_script.c:6928 is the only 20).
     from nuzline.engine.levelup import LEARN_MOVE_END
     from tests.engine.test_levelup import _base, _mon
 

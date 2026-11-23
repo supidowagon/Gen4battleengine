@@ -23,14 +23,20 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-# 44: Sketch (move effect 95) is EffectId.SKETCH 143 (I-3); 43: E3 batch 2 over E1's 42 (EffectId FLING..DEFOG 131-142 after NIGHTMARE 130; MoveFlag.MIRROR_MOVE,
+# 48: E3 batch 3 merged main c479effc (main's 44: Sketch (move effect 95) is EffectId.SKETCH 143, I-3; E3's 44-47 below);
+# C8: GauntletFacts carry wild_levels and FIELD_MOVES the pseudo-move wild (the avoid case).
+# 44 (E3): E3 batch 3 GT-2: trainers carry gauntlet_facts (the group orders, gaps, escape, partner) in place of
+# gauntlet_rules; fight ids from the orders (Elite Four + Champion joins in batch 4, B4-19).
+# 47: E3 B3 fix 3 C6: GauntletFacts carry field_moves, field_moves_source and the field-move cases
+# (tables built before them are refused); 46: E3 batch 3 after main fd3c1fcc: GauntletFacts carry fight_headers and live_next (tables built
+# before them are refused); 45: map_evolution_methods (MapHeader_GetMapEvolutionMethod, E3-B3-12); 43: E3 batch 2 over E1's 42 (EffectId FLING..DEFOG 131-142 after NIGHTMARE 130; MoveFlag.MIRROR_MOVE,
 # MoveFlag.MAGIC_COAT, E3-B2-2, E3-B2-6); 42: batch G merged main 08a5700 (E2 SF2; main was 34, batch G 41).
 # 41: gFieldScriptCommands is not_reached on header 321 (the multi-condition status word, G-39); 40: vanilla Nightmare (effect 107) is EffectId.NIGHTMARE (G-31); 39: Kaizo script weather (G-23, G-24): 835/836 start in rain, trainers carry script_weather /
 # script_window; 38: a mixed-terrain trainer's terrain source names the three sources (G-18); 37:
 # trainers carry fog_headers (field Defog, G-15); 36: Air Lock = ability id 96; 35: batch F's
 # abilities at ids 91-95; 34: E3's trick_room_rearm; 33: gravity_rearm with E2 batch 13's fling /
 # Natural Gift.
-MANIFEST_VERSION = 44
+MANIFEST_VERSION = 48
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:

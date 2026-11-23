@@ -47,6 +47,8 @@ class Learnsets:
             int(s): tuple((int(m), int(p), int(t)) for m, p, t in rows)
             for s, rows in manifest["evolutions"].items()
         }
+        self._method_names = tuple(manifest["evolution_methods"])
+        self._map_methods = {int(h): int(m) for h, m in manifest["map_evolution_methods"].items()}
         self._egg_moves = {
             int(s): tuple(int(m) for m in ms) for s, ms in manifest["egg_moves"].items()
         }
@@ -99,9 +101,21 @@ class Learnsets:
         """``(method, param, target species)`` per evolution; ``method`` indexes the
         manifest's ``evolution_methods`` and ``param`` is the level, item, move or species
         the method needs, else 0. Keyed by species id (``LoadSpeciesEvolutions``,
-        ``src/pokemon.c:4812``), so a form has the species' evolutions. A lookup only: prep
-        does not use it (Ruling 12). ``ValueError`` for a species id out of range."""
+        ``src/pokemon.c:4812``), so a form has the species' evolutions. Read by
+        ``nuzline.prep.growth.evolution_target`` (E3-B3-12). ``ValueError`` for a species id out of range."""
         return self._evolutions.get(self._species_id(species), ())
+
+    @property
+    def evolution_methods(self) -> tuple[str, ...]:
+        """The evolution method names (``generated/evolution_methods.txt`` stems, lowercased);
+        the index is the method id the rows of :meth:`evolutions` carry."""
+        return self._method_names
+
+    def map_evolution_method(self, header: int) -> int:
+        """The evolution method of a map header (``MapHeader_GetMapEvolutionMethod``,
+        ``src/map_header.c:251-303``): magnetic field, moss rock or ice rock for the maps the
+        game lists, else 0 (``EVO_NONE``). ``header`` is the map header id."""
+        return self._map_methods.get(int(header), 0)
 
     def egg_moves(self, species: int) -> tuple[int, ...]:
         """The species' egg moves in table order, empty for a species with none (keyed by

@@ -25,7 +25,8 @@ refuse intermediates older than an edit to them.
 Each trainer's battle terrain (``trainers.json`` ``terrain``/``terrains``, K3b2 Task 9) comes
 from the same trainer -> map join, read through ``maps.trainer_terrain_rows``
 (``tools/terrain.py``); for Kaizo the ROM diff must leave the terrain code alone
-(``maps.check_terrain_code``).
+(``maps.check_terrain_code``). Its ``map_labels`` (the headers' map label text ids,
+``maps.map_header_labels``, through ``extract_decomp.map_label_fields``) come from the same join.
 
 Battle command operands that are variables no constant reaches on some walked script path
 (``tools.rom.readers.maps.UnresolvedOperand``) place no trainer; each is printed to stderr
@@ -57,6 +58,7 @@ from tools.extract_decomp import (
     extract_charmap,
     extract_move_lists,
     extract_static,
+    map_label_fields,
 )
 from tools.rom.inputs import (
     REPO_ROOT,
@@ -76,6 +78,7 @@ ROM_FILES = (
     "learnsets",
     "tm_learnsets",
     "evolutions",
+    "map_evolution_methods",
     "egg_moves",
     "tutor_moves",
     "tutor_learnsets",
@@ -94,6 +97,7 @@ UNRESOLVED_FILE = "rom_unresolved.json"
 FIELD_EFFECTS_FILE = "rom_field_effects.json"
 TRAINER_MAPS_FILE = "rom_trainer_maps.json"  # Kaizo: trainer id -> map headers (sight pairs)
 MAP_WEATHER_FILE = "rom_map_weather.json"  # Kaizo: weather byte of each map header, by header id
+MAP_LABELS_FILE = "rom_map_labels.json"  # Kaizo: mapLabelTextID of each map header, by header id
 # Kaizo: the script weather (command 0x9C) before a battle and left on a map (ledger G-23, G-24;
 # maps.script_weathers): {"battles": {...}, "windows": {...}}.
 SCRIPT_WEATHER_FILE = "rom_script_weather.json"
@@ -329,11 +333,17 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         _member_entries(ROM_DIFF_TOML, changed)
         _check_code_entries(ROM_DIFF_TOML, code)
 
-    from tools.rom.readers.code_tables import egg_moves, tutor_learnsets, tutor_moves
+    from tools.rom.readers.code_tables import (
+        egg_moves,
+        map_evolution_methods,
+        tutor_learnsets,
+        tutor_moves,
+    )
     from tools.rom.readers.evolutions import read_evolutions
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
     from tools.rom.readers.maps import (
+        map_header_labels,
         map_header_rows,
         trainer_fog_headers,
         trainer_start_conditions,
@@ -393,6 +403,9 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "learnsets": read_learnsets(rom, decomp),
             "tm_learnsets": read_tm_learnsets(rom),
             "evolutions": read_evolutions(rom),
+            "map_evolution_methods": {
+                str(k): v for k, v in map_evolution_methods(rom, smap, decomp).items()
+            },
             "egg_moves": {str(k): v for k, v in egg_moves(rom, smap, decomp).items()},
             "tutor_moves": tutors,
             "tutor_learnsets": tutor_learnsets(rom, smap, len(tutors)),
@@ -408,7 +421,10 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             ),
         }
         terrains = trainer_terrain_rows(rom, decomp, smap, where, len(starts))
-        tables["trainers"] = [{**t, **terrains[t["id"]]} for t in tables["trainers"]]
+        labels = map_label_fields(len(starts), where, map_header_labels(rom, smap))
+        tables["trainers"] = [
+            {**t, **terrains[t["id"]], **labels[t["id"]]} for t in tables["trainers"]
+        ]
         for name, data in tables.items():
             _write(stage / f"{name}.json", data)
         if changed is not None:
@@ -418,6 +434,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             _write(stage / FIELD_EFFECTS_FILE, _report_kaizo(tables["trainers"], effects))
             _write(stage / TRAINER_MAPS_FILE, {str(t): h for t, h in where.items()})
             _write(stage / MAP_WEATHER_FILE, [w for _, _, w in map_header_rows(rom, smap)])
+            _write(stage / MAP_LABELS_FILE, map_header_labels(rom, smap))
             _write(stage / SCRIPT_WEATHER_FILE, scripted)
         fresh = stage / "decomp"
         extract_static(decomp, fresh)
@@ -441,6 +458,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             sources[FIELD_EFFECTS_FILE] = "rom: map weather through the battle weather switch"
             sources[TRAINER_MAPS_FILE] = "rom: trainer -> map header join (map scripts, events)"
             sources[MAP_WEATHER_FILE] = "rom: map header weather byte (the raw id, per header)"
+            sources[MAP_LABELS_FILE] = "rom: map header mapLabelTextID (d_test.narc byte 18)"
             sources[SCRIPT_WEATHER_FILE] = "rom: script weather command 0x9C over the map scripts"
             sources[INPUTS_KEY] = kaizo_input_hashes(move_lists)
         _write(stage / "rom_sources.json", sources)

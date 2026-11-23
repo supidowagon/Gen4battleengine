@@ -31,7 +31,7 @@ import csv
 import json
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from tools.battle_scripts import (
@@ -854,6 +854,52 @@ def extract_evolutions(decomp: Path) -> dict[str, list[list[int]]]:
     return out
 
 
+MAP_HEADER_C = Path("src") / "map_header.c"
+
+
+def _map_header_ids(decomp: Path) -> dict[str, int]:
+    """``MAP_HEADER_*`` name -> header id: the line order of ``generated/map_headers.txt`` up to
+    ``MAP_HEADER_COUNT`` (the file then names ``MAP_HEADER_INVALID`` and ``MAP_HEADER_DYNAMIC``
+    as aliases, not headers)."""
+    path = decomp / "generated" / "map_headers.txt"
+    out: dict[str, int] = {}
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if line == "MAP_HEADER_COUNT":
+            return out
+        if not re.fullmatch(r"MAP_HEADER_[A-Z0-9_]+", line):
+            raise ExtractError(f"{path}:{lineno}: unexpected map header line {raw!r}")
+        out[line] = len(out)
+    raise ExtractError(f"{path}: no MAP_HEADER_COUNT line")
+
+
+def extract_map_evolution_methods(decomp: Path) -> dict[str, int]:
+    """Map header id -> evolution method from the static ``mapEvolutionMethods`` of
+    ``MapHeader_GetMapEvolutionMethod`` (``src/map_header.c:251-303``): (header, method) pairs
+    scanned two at a time, the first pair naming the header winning (``:298-300``); a header
+    outside the table gives ``EVO_NONE``. ``method`` is the ``generated/evolution_methods.txt``
+    id, as the evolutions' methods are."""
+    path = decomp / MAP_HEADER_C
+    m = re.search(
+        r"mapEvolutionMethods\[\]\s*=\s*\{(.*?)\};", path.read_text(encoding="utf-8"), re.DOTALL
+    )
+    if not m:
+        raise ExtractError(f"{path}: no mapEvolutionMethods table")
+    tokens = [t.strip() for t in m.group(1).split(",") if t.strip()]
+    if len(tokens) % 2:
+        raise ExtractError(f"{path}: mapEvolutionMethods has {len(tokens)} values, not pairs")
+    header_id = _map_header_ids(decomp)
+    method_id = _index(_constants(decomp, "evolution_methods", "EVO_"), "evolution method")
+    out: dict[str, int] = {}
+    for header, method in zip(tokens[0::2], tokens[1::2], strict=True):
+        if header not in header_id:
+            raise ExtractError(f"{path}: unknown map header constant {header!r}")
+        key = str(header_id[header])
+        if key not in out:  # the scan returns the first pair naming the header
+            out[key] = method_id(method)
+    return out
+
+
 def extract_egg_moves(decomp: Path) -> dict[str, list[int]]:
     """Species id -> egg moves, for species with at least one (``learnset.egg_moves``,
     emitted by ``EmitEggMoves``, ``speciesproc.c:681-692``, into ``sEggMoves``; read by
@@ -980,7 +1026,8 @@ def _ai_flag_bits(decomp: Path) -> dict[str, int]:
 
 
 def _map_headers(decomp: Path) -> dict[str, dict[str, str]]:
-    """``include/data/map_headers.h``: MAP_HEADER_* -> its scripts, events and weather."""
+    """``include/data/map_headers.h``: MAP_HEADER_* -> its scripts, events, weather and map
+    label text id constant (``mapLabelTextID``)."""
     path = decomp / "include" / "data" / "map_headers.h"
     src = path.read_text(encoding="utf-8")
     out = {}
@@ -989,12 +1036,40 @@ def _map_headers(decomp: Path) -> dict[str, dict[str, str]]:
     ):
         fields = dict(re.findall(r"\.(\w+) = ([^,\n]+),", body))
         try:
-            out[name] = {k: fields[k] for k in ("scriptsArchiveID", "eventsArchiveID", "weather")}
+            out[name] = {
+                k: fields[k]
+                for k in ("scriptsArchiveID", "eventsArchiveID", "weather", "mapLabelTextID")
+            }
         except KeyError as e:
             raise ExtractError(f"{path}: {name} has no {e.args[0]}") from None
     if len(out) != src.count("\n    [MAP_HEADER_"):
         raise ExtractError(f"{path}: parsed {len(out)} map headers, file has more")
     return out
+
+
+def map_label_fields(
+    n_trainers: int, where: dict[int, Iterable[int]], labels: Sequence[int]
+) -> list[dict]:
+    """Per trainer id, the ``trainers.json`` field ``map_labels``: the sorted map label text
+    ids (``labels``, by header id) of the map headers ``where[id]`` its battle starts on. The
+    battle's ``mapLabelTextID`` is its header's (``MapHeader_GetMapLabelTextID``,
+    src/field_battle_data_transfer.c:263; ``battleSys->mapHeader``, battle_main.c:1054), which
+    ``Pokemon_UpdateFriendship`` compares with the egg location (src/pokemon.c:2668-2670);
+    ``prep.friendship`` fixes the label when there is one and carries both friendship bounds
+    otherwise. Empty: no map places the trainer."""
+    return [
+        {"map_labels": sorted({labels[h] for h in where.get(tid, ())})} for tid in range(n_trainers)
+    ]
+
+
+def _decomp_map_labels(decomp: Path, headers: dict[str, dict[str, str]]) -> dict[str, int]:
+    """MAP_HEADER_* -> its ``mapLabelTextID`` as a number: the message index of the
+    ``LocationNames_Text_*`` constant in ``res/text/location_names.json`` (a bank's text ids
+    number its messages in file order)."""
+    bank = _load_json(decomp / "res" / "text" / "location_names.json")
+    names = [m["id"] for m in bank["messages"]]
+    label = _index(names, "map label text")
+    return {name: label(h["mapLabelTextID"]) for name, h in headers.items()}
 
 
 def _weather_conditions(decomp: Path) -> dict[str, set[str]]:
@@ -1334,6 +1409,8 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       (``tools.terrain``, K3b2 Task 9): a ``TERRAIN_*`` id (``generated/battle_terrains.txt``)
       and every terrain the maps can give; ``terrain`` is ``TERRAIN_UNKNOWN`` (-1) when
       they give several (mixed) or none (no map places the trainer).
+    * ``map_labels`` are the map label text ids of the trainer's map headers
+      (``map_label_fields``): the battle's location for the friendship rule.
     """
     decomp, out_dir = Path(decomp_root), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1371,6 +1448,12 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     from tools.terrain import header_names
 
     header_id = _index(header_names(decomp), "map header")
+    by_label = _decomp_map_labels(decomp, headers)
+    labels = map_label_fields(
+        len(trainers),
+        {tid: [header_id(h) for h in where.get(c, ())] for tid, c in enumerate(trainers)},
+        [by_label[h] for h in header_names(decomp)],
+    )
 
     out = []
     for tid, const in enumerate(trainers):
@@ -1435,6 +1518,7 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 "start_condition": start,
                 "fog_headers": fog if start == "fog" else [],
                 **terrains[tid],
+                **labels[tid],
             }
         )
     lone_walk_formats(out)
@@ -1505,6 +1589,7 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     _write(out_dir / "evolutions.json", extract_evolutions(decomp_root))
     _write(out_dir / "egg_moves.json", extract_egg_moves(decomp_root))
     _write(out_dir / "evolution_methods.json", extract_evolution_methods(decomp_root))
+    _write(out_dir / "map_evolution_methods.json", extract_map_evolution_methods(decomp_root))
     _write(out_dir / "tutor_moves.json", extract_tutor_moves(decomp_root))
     _write(out_dir / "tutor_learnsets.json", extract_tutor_learnsets(decomp_root))
     _write(out_dir / "exp_tables.json", extract_exp_tables(decomp_root))

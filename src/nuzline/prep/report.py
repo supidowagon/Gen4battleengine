@@ -10,11 +10,16 @@ TMs and HMs, held items, entry HP, prestatus, then the party order.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Sequence
+import itertools
+from collections.abc import Callable, Sequence
+from typing import NamedTuple
 
 import numpy as np
 
 from nuzline.data.forms import personal_row
+from nuzline.data.gauntlet import Settings
+from nuzline.data.learnsets import Learnsets
+from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import TERRAIN_NAMES, run_terrain
 from nuzline.engine.coverage import start_gravity, start_trick_room
@@ -22,7 +27,11 @@ from nuzline.engine.ids import Status
 from nuzline.engine.state import BattleState, make_state
 from nuzline.jaxcache import code_version
 from nuzline.prep.checkpoint import _plain, fingerprint
+from nuzline.prep.gauntlet import Carry
+from nuzline.prep.gauntlet import member_spec as carry_member_spec
+from nuzline.prep.growth import Prompt, post_battle_prompts, resolve_post_battle
 from nuzline.prep.problem import PrepProblem
+from nuzline.prep.screen import ScreenStats, prep_order, scored, screen
 from nuzline.prep.search import PrepResult, PrepSettings, setup_label
 from nuzline.prep.setups import Setup, setup_cost, setup_specs
 from nuzline.prep.variants import (
@@ -37,8 +46,24 @@ from nuzline.prep.variants import (
     percent_cut,
 )
 from nuzline.search import plan_tree
+from nuzline.text import decimals
+from nuzline.text import tenths as _tenths
 
-__all__ = ["cost_line", "ladder_lines", "prep_steps", "record", "render", "setup_card"]
+__all__ = [
+    "CANNOT_UNDO",
+    "PostFight",
+    "PostFightAnswer",
+    "cost_line",
+    "ladder_lines",
+    "next_fight_scorer",
+    "post_fight_evolution",
+    "post_fight_json",
+    "post_fight_lines",
+    "prep_steps",
+    "record",
+    "render",
+    "setup_card",
+]
 
 HM_NOTE = "(an HM move needs the Move Deleter to remove)"
 
@@ -279,7 +304,8 @@ def _distribution_line(result: PrepResult) -> str:
         ("unfinished", p[7]),
         ("protected lost", p[5]),
     )
-    return f"Deaths ({source}): " + "  ".join(f"{n}: {100 * v:.1f} %" for n, v in cells)
+    # The 0-deaths cell is a win chance, rounded down; every other cell is a loss, rounded up.
+    return f"Deaths ({source}): " + "  ".join(f"{n}: {_tenths(v, up=n != '0')} %" for n, v in cells)
 
 
 def ladder_lines(result: PrepResult, problem: PrepProblem, names: Names) -> list[str]:
@@ -288,8 +314,8 @@ def ladder_lines(result: PrepResult, problem: PrepProblem, names: Names) -> list
     out = [f"Odds ladder (rung {problem.deaths} planned):"]
     for rung in result.ladder:
         out.append(
-            f"  deaths <= {rung.k}: {100 * rung.p:.1f} % "
-            f"[{100 * rung.ci_low:.1f}, {100 * rung.ci_high:.1f}]  {rung.source}"
+            f"  deaths <= {rung.k}: {_percent(rung.p)} "
+            f"[{_tenths(rung.ci_low)}, {_tenths(rung.ci_high)}]  {rung.source}"
         )
         if rung.setup != result.chosen:
             out.append(f"  (best for this rung: {_team_text(problem, names, rung.setup)})")
@@ -337,8 +363,8 @@ def _cheaper_lines(result: PrepResult, problem: PrepProblem, names: Names) -> li
     top = f.result.ranking[0]
     line = (
         f"Cheaper, tied within noise: {setup_label(names, problem, f.setup)} "
-        f"{top.estimate:.1%} ({top.ci_low:.1%}-{top.ci_high:.1%}), "
-        f"{top.e_deaths:.3f} expected deaths, {cost_line(problem, names, f.setup)}"
+        f"{_tenths(top.estimate)}% ({_tenths(top.ci_low)}%-{_tenths(top.ci_high)}%), "
+        f"{decimals(top.e_deaths, 3, up=True)} expected deaths,{cost_line(problem, names, f.setup)}"
     )
     return [line]
 
@@ -358,10 +384,241 @@ def _cheaper_json(result: PrepResult, problem: PrepProblem, names: Names) -> dic
     }
 
 
+CANNOT_UNDO = "An evolution cannot be undone."
+
+
+class PostFightAnswer(NamedTuple):
+    """One answer to the post-fight prompts scored against the next fight: ``evolve`` the carry
+    slots that evolve (every other offered member cancels), the rung-``k`` chance with its
+    interval and the expected deaths of the single-fight screen."""
+
+    evolve: tuple[int, ...]
+    p: float
+    ci_low: float
+    ci_high: float
+    e_deaths: float
+
+
+class PostFight(NamedTuple):
+    """The evolutions a single battle offers after it (design v5.4 section 6, "Single battle,
+    post-fight evolution"; ledger E3-B3-17). ``prompts`` are GT-14's and ``methods`` their method
+    names, one each. ``answers`` are the scored answers best first (``prep.screen.prep_order``)
+    against ``next_trainer``, empty without ``--next``; ``k`` the deaths allowed."""
+
+    prompts: tuple[Prompt, ...]
+    methods: tuple[str, ...]
+    answers: tuple[PostFightAnswer, ...] = ()
+    k: int = 0
+    next_trainer: str | None = None
+
+
+def post_fight_evolution(
+    tables: Tables,
+    learnsets: Learnsets,
+    carry: Carry,
+    levelled: Sequence[bool] | np.ndarray,
+    result: int,
+    map_method: int,
+    time: str | None,
+    settings: Settings,
+    *,
+    score: Callable[[Sequence[Carry]], Sequence[ScreenStats]] | None = None,
+    k: int = 0,
+    next_trainer: str | None = None,
+) -> PostFight:
+    """The evolution prompts after a single battle and, with ``score`` (``--next``), every answer
+    scored.
+
+    ``carry`` is the party as the battle left it (a single Carry) and ``levelled`` the party-0
+    slot mask of the members that levelled up in it: both come from the caller, because the
+    planned line's post-fight party is ``carry_out``'s (GT-4b, which waits for D3-8b) and this
+    function never reads a BattleState. The prompts are :func:`post_battle_prompts` (battle
+    result, level-up mask, HP not checked: ``src/battle/battle_system.c:826-850``). Evolution
+    runs after the battle ends (``battle_main.c:261``, ``:274-297``), so it never changes the
+    fight just planned and only the next fight sees it.
+
+    ``score`` takes the Carries one answer each and returns their screens against the next
+    trainer (see :func:`next_fight_scorer`). The answers are every subset of the living offered
+    members evolving, post-evolution learn prompts all given up (the base plan; GT-15's plan
+    belongs to the next fight's own search), in :func:`~nuzline.prep.screen.prep_order`; among
+    tied answers fewer evolutions rank first (they cost less), so a cancel wins a tie. A fainted
+    member is offered but its answer is cancel (design section 6). An answer whose screen was
+    refused is left out."""
+    prompts = tuple(
+        post_battle_prompts(tables, learnsets, carry, levelled, result, map_method, time)
+    )
+    methods = tuple(learnsets.evolution_methods[p.method].replace("_", " ") for p in prompts)
+    base = PostFight(prompts, methods, (), k, next_trainer)
+    living = [p.slot for p in prompts if not p.dead]
+    if not living or score is None:
+        return base
+    subsets = [c for r in range(len(living) + 1) for c in itertools.combinations(living, r)]
+    carries = [
+        resolve_post_battle(
+            tables,
+            learnsets,
+            carry,
+            levelled,
+            result,
+            map_method,
+            time,
+            settings,
+            lambda prompt, chosen=chosen: {} if prompt.slot in chosen else None,
+        )[0]
+        for chosen in subsets
+    ]
+    stats = list(score(carries))
+    if len(stats) != len(subsets):
+        raise ValueError(f"score returned {len(stats)} screens for {len(subsets)} answers")
+    kept = [(c, st) for c, st in zip(subsets, stats, strict=True) if not st.refused]
+    rows = [scored(st, k, float(len(c)), i) for i, (c, st) in enumerate(kept)]
+    answers = []
+    for i in prep_order(rows):
+        chosen, st = kept[i]
+        low, high = st.interval(k)
+        answers.append(PostFightAnswer(chosen, st.rung(k), low, high, st.e_deaths))
+    return base._replace(answers=tuple(answers))
+
+
+def next_fight_scorer(
+    tables: Tables,
+    opp: Sequence[PokemonSpec],
+    trainer,
+    start_condition: int,
+    *,
+    k: int,
+    n: int,
+    key,
+    max_turns: int = 100,
+    chatot_cry: int = 0,
+) -> Callable[[Sequence[Carry]], list[ScreenStats]]:
+    """The ``score`` of :func:`post_fight_evolution`: each Carry's party, in carry order, plays
+    ``n`` playouts (even) of the single-fight screen against ``opp`` with ``k`` deaths allowed.
+    ``tables`` are the next trainer's fight tables and ``trainer`` its data (items, terrain)."""
+    from nuzline.prep.states import make_states
+
+    def score(carries: Sequence[Carry]) -> list[ScreenStats]:
+        teams = [[carry_member_spec(c, int(i)) for i in np.flatnonzero(c.present)] for c in carries]
+        states = make_states(
+            tables,
+            teams,
+            opp,
+            start_condition,
+            trainer.items,
+            k,
+            terrain=trainer.terrain,
+            gravity=start_gravity(trainer),
+            chatot_cry=chatot_cry,
+            trick_room=start_trick_room(trainer),
+        )
+        return screen(tables, states, n, key, max_turns)
+
+    return score
+
+
+def _percent(p: float) -> str:
+    return f"{_tenths(p)} %"
+
+
+def _answer_text(post: PostFight, names: Names, answer: PostFightAnswer) -> str:
+    by_slot = {p.slot: p for p in post.prompts}
+    who = ", ".join(
+        f"{names.species_names[by_slot[s].species]} to {names.species_names[by_slot[s].target]}"
+        for s in answer.evolve
+    )
+    return f"evolve {who}" if who else "cancel"
+
+
+def post_fight_lines(post: PostFight, names: Names) -> list[str]:
+    """The post-fight evolution section as ASCII lines; empty when nothing evolves. With scored
+    answers the better of evolving and cancelling is named with both numbers; without them
+    cancel is recommended, and the report always says an evolution cannot be undone."""
+    if not post.prompts:
+        return []
+    out = ["After the fight (evolution runs after the battle ends and never changes this fight):"]
+    for p, method in zip(post.prompts, post.methods, strict=True):
+        fainted = ", fainted: offered, the answer is cancel" if p.dead else ""
+        out.append(
+            f"  party slot {p.slot}: {names.species_names[p.species]} would be offered "
+            f"{names.species_names[p.target]} ({method}{fainted})"
+        )
+    rung = f"{post.k} {'death' if post.k == 1 else 'deaths'} allowed"
+    cancel = next((a for a in post.answers if not a.evolve), None)
+    evolving = next((a for a in post.answers if a.evolve), None)
+    if post.next_trainer is not None and cancel is not None:
+        out.append(f"  Against {post.next_trainer}, the next fight ({rung}):")
+        for answer in (evolving, cancel):
+            if answer is not None:
+                out.append(
+                    f"    {_answer_text(post, names, answer)}: {_percent(answer.p)} "
+                    f"({_percent(answer.ci_low)} to {_percent(answer.ci_high)}), "
+                    f"{decimals(answer.e_deaths, 2, up=True)} expected deaths"
+                )
+        out.append(f"  Better answer: {_answer_text(post, names, post.answers[0])}.")
+    elif post.next_trainer is not None:
+        why = (
+            "every offered Pokemon fainted"
+            if all(p.dead for p in post.prompts)
+            else "a playout of the next fight was refused"
+        )
+        out.append(f"  Against {post.next_trainer}: not scored ({why}). Recommended: cancel.")
+    else:
+        out.append(
+            "  No --next given. Recommended answer: cancel. A cancelled evolution is offered "
+            "again at that Pokemon's next level-up, but the evolved species' moves of the level "
+            "it evolves at are not: its learn loop offers only the entries of exactly that level "
+            "(src/evolution.c:461-480), so after a cancel a move the evolved species learns only "
+            "at the level reached now is never offered. Give --next <trainer-id> to score both answers "
+            "against the next fight."
+        )
+    out.append(f"  {CANNOT_UNDO}")
+    return out
+
+
+def post_fight_json(post: PostFight | None, names: Names) -> dict | None:
+    """:func:`post_fight_lines` as JSON-ready data (``None`` when nothing evolves)."""
+    if post is None or not post.prompts:
+        return None
+    return {
+        "offered": [
+            {
+                "slot": p.slot,
+                "species": names.species_names[p.species],
+                "target": names.species_names[p.target],
+                "method": m,
+                "fainted": p.dead,
+            }
+            for p, m in zip(post.prompts, post.methods, strict=True)
+        ],
+        "next_trainer": post.next_trainer,
+        "deaths_allowed": post.k,
+        "answers": [
+            {
+                "answer": _answer_text(post, names, a),
+                "evolve": list(a.evolve),
+                "p": a.p,
+                "ci_low": a.ci_low,
+                "ci_high": a.ci_high,
+                "e_deaths": a.e_deaths,
+            }
+            for a in post.answers
+        ],
+        "recommended": _answer_text(post, names, post.answers[0]) if post.answers else "cancel",
+        "note": CANNOT_UNDO,
+    }
+
+
 def render(
-    result: PrepResult, problem: PrepProblem, names: Names, show_depth: int = 1, *, tables: Tables
+    result: PrepResult,
+    problem: PrepProblem,
+    names: Names,
+    show_depth: int = 1,
+    *,
+    tables: Tables,
+    post_fight: PostFight | None = None,
 ) -> list[str]:
-    """The whole answer as ASCII lines (module docstring; spec section 7)."""
+    """The whole answer as ASCII lines (module docstring; spec section 7). ``post_fight``: the
+    evolutions the fight offers afterwards (:func:`post_fight_evolution`)."""
     from nuzline.cli import all_zero_footer
 
     k = problem.deaths
@@ -402,6 +659,8 @@ def render(
     else:
         why = result.stats.stopped or "max depth 0"
         out.append(f"screen only, no plan ({why})")
+    if post_fight is not None:
+        out.extend(post_fight_lines(post_fight, names))
     s = result.stats
     out.append(
         f"Search: {s.setups_screened} setups screened, {s.team_rounds} team rounds, "
@@ -457,6 +716,7 @@ def record(
     game: str = "platinum_us",
     *,
     tables: Tables,
+    post_fight: PostFight | None = None,
 ) -> dict:
     """The run as JSON-ready data (spec section 7). ``reserved``: the item names the user
     reserved (the problem keeps only what is left in the bag). ``game``: the game id, kept
@@ -526,4 +786,5 @@ def record(
             for dropped, by in result.pruned
         ],
         "cheaper_alternative": _cheaper_json(result, problem, names),
+        "post_fight_evolution": post_fight_json(post_fight, names),
     }

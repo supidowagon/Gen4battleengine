@@ -104,6 +104,15 @@ VAR_PLAYER_STARTER_INDEX = 48
 # 0x4120 (generated/vars_flags.txt:4399, counted as above), so the page holds 288 vars.
 NUM_VARS = 288
 VARS_START = 0x4000  # the first saved variable's id (generated/vars_flags.txt: VARS_START)
+# VarsFlags.flags (include/vars_flags.h:14, u8 flags[NUM_FLAGS / 8], NUM_FLAGS 2912 :8)
+# follows the vars: flag f < VARS_START is bit f % 8 of byte f / 8
+# (VarsFlags_GetFlagChunk, src/vars_flags.c:52-63; GET_FLAG_BIT :10).
+FLAGS = VARS + 2 * NUM_VARS
+NUM_FLAGS = 2912
+# A trainer's defeated flag (Script_IsTrainerDefeated, src/script_manager.c:517-520):
+# TRAINER_DEFEATED_FLAGS_START + id; it follows FLAG_UNUSED_0x054F
+# (generated/vars_flags.txt:1364-1365), so 0x550.
+TRAINER_DEFEATED_FLAGS_START = 0x550
 
 # --- the normal block's pages (gSaveTable, src/savedata/save_table.c:49-86) -------------
 # Each page's ``sizeFunc`` result in table order (SavePageInfo_Init, src/savedata.c:826-850:

@@ -6,7 +6,7 @@ import struct
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.extract_decomp import MAX_TUTOR_COST, _constants, _stem
+from tools.extract_decomp import MAX_TUTOR_COST, _constants, _map_header_ids, _stem
 from tools.rom.readers import ReaderError, symbol_bytes
 from tools.rom.readers.personal import FORM_ROW_COUNT, ROW_COUNT, SPECIES_COUNT
 
@@ -28,6 +28,9 @@ TUTOR_ENTRY = struct.Struct(
 # Personal rows with no tutor set (SPECIES_NONE, SPECIES_EGG, SPECIES_BAD_EGG; HasTutorSet,
 # tools/dataproc/src/speciesproc.c:258).
 TUTOR_NO_SET_ROWS = (0, SPECIES_COUNT - 2, SPECIES_COUNT - 1)
+MAP_EVOLUTION_SYMBOL = (
+    "mapEvolutionMethods$12747"  # the function's static table, src/map_header.c:253
+)
 NATIONAL_DEX_COUNT = SPECIES_COUNT - 3  # MAX_SPECIES - 2, include/constants/species.h:7
 
 
@@ -95,6 +98,41 @@ def egg_moves(
             if len(cur) > MAX_EGG_MOVES:
                 raise ReaderError(f"{EGG_SYMBOL}[{i}]: more than {MAX_EGG_MOVES} egg moves")
     return {k: v for k, v in out.items() if v}
+
+
+def map_evolution_methods(
+    rom: RomFiles, symbols: SymbolMap, decomp: Path | None = None
+) -> dict[int, int]:
+    """Map header id -> evolution method from ``mapEvolutionMethods``: u16 (header, method)
+    pairs scanned two at a time by ``MapHeader_GetMapEvolutionMethod``
+    (``src/map_header.c:251-303``; the linker map names the symbol ``mapEvolutionMethods$12747``,
+    0x54 bytes, 21 pairs). A header outside the table gives ``EVO_NONE``. ``method`` is the
+    ``generated/evolution_methods.txt`` id.
+
+    Shape checks: a whole number of pairs, every header a real map header (below
+    ``MAP_HEADER_COUNT``), every method a real evolution method (below the number of methods),
+    and no header twice."""
+    decomp = _decomp_root(decomp)
+    n_headers = len(_map_header_ids(decomp))
+    n_methods = len(_constants(decomp, "evolution_methods", "EVO_"))
+    data = symbol_bytes(rom, symbols, MAP_EVOLUTION_SYMBOL)
+    if not data or len(data) % 4:
+        raise ReaderError(
+            f"{MAP_EVOLUTION_SYMBOL}: {len(data)} bytes is not a whole number of u16 pairs"
+        )
+    vals = struct.unpack(f"<{len(data) // 2}H", data)
+    out: dict[int, int] = {}
+    for i, (header, method) in enumerate(zip(vals[0::2], vals[1::2], strict=True)):
+        if header >= n_headers:
+            raise ReaderError(f"{MAP_EVOLUTION_SYMBOL}[{i}]: map header {header} is out of range")
+        if method >= n_methods:
+            raise ReaderError(
+                f"{MAP_EVOLUTION_SYMBOL}[{i}]: evolution method {method} is out of range"
+            )
+        if header in out:
+            raise ReaderError(f"{MAP_EVOLUTION_SYMBOL}[{i}]: map header {header} listed twice")
+        out[header] = method
+    return out
 
 
 def _decomp_root(decomp: Path | None) -> Path:
@@ -183,3 +221,52 @@ def tutor_learnsets(rom: RomFiles, symbols: SymbolMap, n_tutor: int) -> dict[str
             )
         out[str(row)] = [j for j in range(n_tutor) if mask >> j & 1]
     return out
+
+
+GYM_E4_CHAMPION_SYMBOL = "TrainerIsGymLeaderE4OrChampion"  # src/battle/battle_main.c:1376-1397
+# The compiled switch (Thumb, overlay16): subs r0, #base; cmp r0, #n - 1; bhi FALSE; the
+# halfword jump table (adds r0, r0, r0; add r0, pc; ldrh r0, [r0, #6]; lsls/asrs #16;
+# add pc, r0; n entries), then TRUE (movs r0, #1; bx lr) and FALSE (movs r0, #0; bx lr).
+_SWITCH_HEAD = (0x1800, 0x4478, 0x88C0, 0x0400, 0x1400, 0x4487)
+_RETURN_TRUE, _RETURN_FALSE = (0x2001, 0x4770), (0x2000, 0x4770)
+
+
+def gym_e4_champion_classes(rom: RomFiles, symbols: SymbolMap) -> frozenset[int]:
+    """The trainer class ids for which ``TrainerIsGymLeaderE4OrChampion``
+    (src/battle/battle_main.c:1376-1397) returns TRUE, read from the ROM's compiled switch:
+    ``BattleSys_New`` raises the party's friendship against them (:1360-1372). The function is
+    read at its linker-map address plus Kaizo's overlay16 shift (``tools.rom.offsets._shift``,
+    0 below the patched routines); any code other than the switch shape above raises."""
+    from nuzline.data.games import KAIZO, VANILLA
+    from tools.rom.offsets import _shift
+
+    sym = symbols.find(GYM_E4_CHAMPION_SYMBOL)
+    if sym.module != "overlay16":
+        raise ReaderError(f"{GYM_E4_CHAMPION_SYMBOL}: module {sym.module}, not overlay16")
+    game = VANILLA if rom.game_code == "CPUE" else KAIZO
+    address = sym.address + _shift(game, sym.address)
+    ram, data = rom.overlay_info(16)[0], rom.overlay(16)
+    code = data[address - ram : address - ram + sym.size]
+    words = struct.unpack(f"<{len(code) // 2}H", code)
+
+    def fail(what: str):
+        return ReaderError(f"{GYM_E4_CHAMPION_SYMBOL} at {address:#x}: {what}")
+
+    if len(code) != sym.size or len(words) < 9 or words[0] >> 8 != 0x38 or words[1] >> 8 != 0x28:
+        raise fail("not subs r0, #base; cmp r0, #n - 1")
+    base, n = words[0] & 0xFF, (words[1] & 0xFF) + 1
+    if words[2] >> 8 != 0xD8 or words[3:9] != _SWITCH_HEAD:
+        raise fail("not bhi and the halfword jump table dispatch")
+    table, tail = words[9 : 9 + n], words[9 + n :]
+    if len(table) != n or tail != _RETURN_TRUE + _RETURN_FALSE:
+        raise fail("the table is not followed by return TRUE, return FALSE")
+    after_table = address + 2 * (9 + n)
+    false_at = after_table + 4
+    bhi = words[2] & 0xFF
+    if address + 4 + 4 + 2 * (bhi - 256 if bhi & 0x80 else bhi) != false_at:
+        raise fail("bhi does not reach return FALSE")
+    pc = address + 2 * 8 + 4  # add pc, r0 reads its own address + 4
+    targets = [pc + (t - 0x10000 if t & 0x8000 else t) for t in table]
+    if not set(targets) <= {after_table, false_at}:
+        raise fail("a case reaches neither return")
+    return frozenset(base + i for i, t in enumerate(targets) if t == after_table)

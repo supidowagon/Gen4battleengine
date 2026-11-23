@@ -124,7 +124,7 @@ from pathlib import Path
 
 from nuzline.data.games import ALIASES
 from nuzline.data.trainer import Trainer
-from nuzline.text import ascii_text, class_text
+from nuzline.text import ascii_text, class_text, decimals, tenths
 
 # The vanilla trainers directory (benchmarks/ and tests read it; commands use the game's).
 INTERMEDIATE = Path(__file__).resolve().parents[2] / "data" / "intermediate"
@@ -182,6 +182,64 @@ def protected_slots(
 def _check_deaths(args) -> None:
     if not 0 <= args.deaths <= MAX_DEATHS:
         raise ValueError(f"--deaths {args.deaths}: must be between 0 and {MAX_DEATHS}")
+
+
+_GAUNTLET_FLAGS = (
+    "rule",
+    "gap_rule",
+    "rules",
+    "beaten",
+    "dead",
+    "swaps_left",
+    "bench",
+    "horizon",
+    "growth_cap",
+    "time",
+    "next_fight",
+)
+
+
+def _gauntlet_setup(args, trainer: Trainer, save, game, trainers=None):
+    """The resolved gauntlet input of ``trainer``'s group (``nuzline.data.gauntlet``): flags
+    > ``--rules`` > ``data/local.toml [run]`` > defaults, plus the re-run inputs. None for a
+    trainer outside a gauntlet group when no gauntlet flag was given; a flag for such a
+    trainer is a ``ValueError``. ``GauntletSettingsError`` (a ``ValueError``) names the key,
+    group and origin of a refused input. Nothing is written."""
+    from nuzline.data import gauntlet as G
+
+    facts = trainer.gauntlet_facts
+    if facts is None:
+        if any(getattr(args, name) not in (None, []) for name in _GAUNTLET_FLAGS):
+            raise ValueError(
+                f"trainer {trainer.id} is not in a gauntlet group with recorded facts: "
+                "--rule, --gap-rule, --rules, --beaten, --dead, --swaps-left, --bench, "
+                "--horizon, --growth-cap, --time and --next do not apply"
+            )
+        return None
+    rule = [*args.rule, *([f"time={args.time}"] if args.time is not None else [])]
+    rules = G.load_rules_file(args.rules) if args.rules is not None else None
+    known = None
+    if rules is not None:
+        every = trainers if trainers is not None else _load_trainers(game)
+        known = {t.gauntlet_facts.name for t in every if t.gauntlet_facts is not None}
+    run = G.RunInput(
+        beaten=G.parse_ids(args.beaten, "--beaten"),
+        dead=G.parse_members(args.dead, "--dead"),
+        bench=G.parse_members(args.bench, "--bench"),
+        swaps_left=args.swaps_left,
+        horizon=args.horizon,
+        growth_cap=args.growth_cap,
+        next_fight=args.next_fight,
+    )
+    return G.resolve_settings(
+        facts,
+        flags=G.parse_flags(rule, args.gap_rule),
+        rules_file=rules,
+        local=G.load_local(),
+        run=run,
+        save=save,
+        known_groups=known,
+    )
 
 
 EXIT_OK, EXIT_ERROR, EXIT_REFUSED = 0, 1, 2
@@ -325,6 +383,79 @@ def _parser() -> argparse.ArgumentParser:
             "from its cutscene until the Chelle win or a map change), or not (--no-...)",
         )
 
+    def gauntlet_inputs(cmd: argparse.ArgumentParser) -> None:
+        """The gauntlet settings and the re-run inputs (docs/gauntlet-design.md section 3;
+        ``nuzline.data.gauntlet``). Nothing here is tracked or written."""
+        cmd.add_argument(
+            "--rule",
+            action="append",
+            default=[],
+            metavar="KEY=VALUE",
+            help="a gauntlet or Nuzlocke option, e.g. heal=bag or swap=bench:1,budget:1; repeatable",
+        )
+        cmd.add_argument(
+            "--gap-rule",
+            action="append",
+            default=[],
+            metavar="K:KEY=VALUE",
+            help="an option at gap K only (after the K-th fight), e.g. 2:heal=full; repeatable",
+        )
+        cmd.add_argument(
+            "--rules",
+            type=Path,
+            default=None,
+            help='a TOML rules file you keep outside the repo ([run], [gauntlet."GROUP"])',
+        )
+        cmd.add_argument(
+            "--beaten",
+            action="extend",
+            nargs="+",
+            default=[],
+            metavar="ID",
+            help="trainer ids of the group's fights already won, in the order played "
+            "(a re-run mid-gauntlet)",
+        )
+        cmd.add_argument(
+            "--dead",
+            action="extend",
+            nargs="+",
+            default=[],
+            metavar="MEMBER",
+            help="Pokemon dead by your Nuzlocke rules though the save shows them healthy: "
+            "party:N or box:B:S",
+        )
+        cmd.add_argument(
+            "--swaps-left", type=int, default=None, help="swaps still allowed (-1 = unlimited)"
+        )
+        cmd.add_argument(
+            "--bench",
+            action="extend",
+            nargs="+",
+            default=[],
+            metavar="MEMBER",
+            help="box:B:S members already chosen as the bench",
+        )
+        cmd.add_argument("--horizon", type=int, default=None, help="fights planned ahead")
+        cmd.add_argument(
+            "--growth-cap",
+            type=int,
+            default=None,
+            help="growth plans screened at most (default 64, -1 = all)",
+        )
+        cmd.add_argument(
+            "--time",
+            choices=("day", "night"),
+            default=None,
+            help="time of day for day/night evolutions (same as --rule time=...)",
+        )
+        cmd.add_argument(
+            "--next",
+            dest="next_fight",
+            type=int,
+            default=None,
+            help="trainer id of the fight you play next (narrows an open order)",
+        )
+
     def fight(cmd: argparse.ArgumentParser) -> None:
         game(cmd)
         source = cmd.add_mutually_exclusive_group(required=True)
@@ -343,6 +474,7 @@ def _parser() -> argparse.ArgumentParser:
     coverage = sub.add_parser("coverage", help="check that the engine supports a fight")
     fight(coverage)
     coverage.add_argument("--cap", type=int, default=None, help="with --save: the pool's level cap")
+    gauntlet_inputs(coverage)
 
     def budget(
         cmd: argparse.ArgumentParser,
@@ -405,8 +537,15 @@ def _parser() -> argparse.ArgumentParser:
     prep.add_argument(
         "--cap", type=int, default=None, help="level cap (default: config/level_caps.toml)"
     )
-    prep.add_argument("--deaths", type=int, default=0, help="player faints allowed, 0..3")
+    prep.add_argument(
+        "--deaths",
+        type=int,
+        default=0,
+        help="player faints allowed, 0..3 (read per the deaths_scope rule; on a re-run, with "
+        "--beaten, the deaths still allowed, not the run's total)",
+    )
     run_inputs(prep)
+    gauntlet_inputs(prep)
     for flag, what in (("--protect", "must not faint"), ("--exclude", "is not brought")):
         prep.add_argument(
             flag,
@@ -855,6 +994,7 @@ def _coverage(args) -> int:
     if args.cap is not None and args.save is None:
         raise ValueError("--cap needs --save")
     game, tables, names, trainer, player, opp, weather, save = _fight(args)
+    args.gauntlet = _gauntlet_setup(args, trainer, save, game)  # GT-5..GT-17 read it
     from nuzline.engine.coverage import check_coverage
 
     print(_trainer_line(trainer))
@@ -898,7 +1038,13 @@ def _print_pool(args, game, tables, names, player, trainer, opp, save) -> None:
 
 
 def _pct(p: float) -> str:
-    return f"{100 * p:5.1f} %"
+    """A win chance, rounded down (``nuzline.text.tenths``)."""
+    return f"{tenths(p):>5} %"
+
+
+def _interval(low: float, high: float, width: int = 4) -> str:
+    """A 95 % interval in percent: the low end rounded down, the high end up."""
+    return f"[{tenths(low):>4}, {tenths(high, up=True):>{width}}]"
 
 
 def _rank(args) -> int:
@@ -928,6 +1074,9 @@ def _rank(args) -> int:
         _print_report(e.report)
         return EXIT_REFUSED
     from nuzline.engine.coverage import start_gravity, start_trick_room
+    from nuzline.prep.friendship import battle_start_party
+
+    player = battle_start_party(tables, player, (trainer.class_id,), trainer.map_labels, opp)
 
     state = make_state(
         tables,
@@ -959,12 +1108,12 @@ def _rank(args) -> int:
     )
     for i, r in enumerate(ranking, 1):
         mark = "*" if r.tied_with_best else " "
-        odds = f"{_pct(r.score)} [{100 * r.ci_low:4.1f}, {100 * r.ci_high:5.1f}]"
+        odds = f"{_pct(r.score)} {_interval(r.ci_low, r.ci_high, 5)}"
         ladder = [_pct(v) for v in r.ladder] or ["-"] * (MAX_DEATHS + 1)
         cells = " ".join(f"{c:>7}" for c in ladder)
         _say(
             f"  {mark} {i:2d}  {r.label:<{width}}  {odds:<27}  {_pct(r.p_win):>7}  "
-            f"{r.e_faints:9.2f}  {cells}"
+            f"{decimals(r.e_faints, 2, up=True):>9}  {cells}"
         )
     if any(r.tied_with_best for r in ranking):
         print("* the interval overlaps the leader's: a statistical tie, not reordered")
@@ -1026,6 +1175,9 @@ def _solve(args) -> int:
         _print_report(e.report)
         return EXIT_REFUSED
     from nuzline.engine.coverage import start_gravity, start_trick_room
+    from nuzline.prep.friendship import battle_start_party
+
+    player = battle_start_party(tables, player, (trainer.class_id,), trainer.map_labels, opp)
 
     state = make_state(
         tables,
@@ -1143,6 +1295,7 @@ def _prep(args) -> int:
         trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
     )
     trainer = fight_terrain(trainer, args.terrain)
+    args.gauntlet = _gauntlet_setup(args, trainer, save, game, trainers)  # GT-5..GT-17 read it
     inter = IntermediateData(game.intermediate_dir, game.id)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
@@ -1346,6 +1499,9 @@ def line_setup(
     weather, _ = fight_start(trainer, names, save, field_defog, player, script_weather)
     require_coverage(tables, names, player, trainer, opp, weather, (0, 0), cry)
     from nuzline.engine.coverage import start_gravity, start_trick_room
+    from nuzline.prep.friendship import battle_start_party
+
+    player = battle_start_party(tables, player, (trainer.class_id,), trainer.map_labels, opp)
 
     state = make_state(
         tables,
@@ -1433,7 +1589,7 @@ def line_report_lines(setup: LineSetup, rules, odds, seed: int, deaths: int) -> 
         p = odds.wins_any / odds.n if k is None else odds.rung(k)
         low, high = odds.interval(k)
         # Width 16: "win, <=3 deaths" (15) keeps a space before "100.0 %".
-        out.append(f"  {label:<16} {_pct(p)} [{100 * low:4.1f}, {100 * high:4.1f}]")
+        out.append(f"  {label:<16} {_pct(p)} {_interval(low, high)}")
     out.append(distribution_line(odds.distribution, "deaths"))
     out.append(
         f"mean turns {odds.mean_turns:.1f}; default player decided "
@@ -1635,8 +1791,8 @@ def _listing_line(t: Trainer) -> str:
     if t.optional:
         marks += " [optional]"
     if t.gauntlet is not None:
-        group, position = t.gauntlet
-        marks += f" [gauntlet {group} #{position}]"
+        group, fight_id = t.gauntlet
+        marks += f" [gauntlet {group} fight {fight_id}]"
     if t.format != "single":
         marks += f" [{t.format}]"
     return ascii_text(f"{t.id:4d}  {t.label or t.name}{marks}  ({class_text(t.trainer_class)})")

@@ -30,9 +30,11 @@ def test_trainers_match_decomp_except_start(vanilla_files, decomp, symbols, char
     trainer_start_conditions(vanilla_files, decomp, symbols, maps=where)
     fog = trainer_fog_headers(vanilla_files, decomp, symbols, where, len(want))
     got = read_trainers(vanilla_files, decomp, symbols, charmap, starts, fog, layout="vanilla")
-    # The terrain fields are joined in by extract_rom (maps.trainer_terrain_rows); the
-    # round trip (test_extract_rom.py) compares them. fog_headers is compared here.
-    assert got == [{k: v for k, v in t.items() if k not in ("terrain", "terrains")} for t in want]
+    # The terrain fields and map labels are joined in by extract_rom (maps.trainer_terrain_rows,
+    # extract_decomp.map_label_fields); the round trip (test_extract_rom.py) compares them.
+    # fog_headers is compared here.
+    joined = ("terrain", "terrains", "map_labels")
+    assert got == [{k: v for k, v in t.items() if k not in joined} for t in want]
     # G-15: the ROM's header weather bytes give the decomp's fog headers (Luna, ROUTE_210_NORTH).
     assert got[66]["start_condition"] == "fog" and got[66]["fog_headers"] == [363]
     # The headers of weather OVERWORLD_WEATHER_FOG in include/data/map_headers.h that place a

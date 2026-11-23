@@ -641,6 +641,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     level_learnsets = _load(inter, "learnsets")
     tm_learnsets = _load(inter, "tm_learnsets")
     evolutions = _load(inter, "evolutions")
+    map_evolution_methods = _load(inter, "map_evolution_methods")
     egg_moves = _load(inter, "egg_moves")
     evolution_methods = _load(inter, "evolution_methods")
     tutor_moves = _load(inter, "tutor_moves")
@@ -796,6 +797,9 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         # the species that have any.
         "evolutions": evolutions,
         "evolution_methods": evolution_methods,
+        # Map header id -> evolution method (MapHeader_GetMapEvolutionMethod,
+        # src/map_header.c:251-303); a header not listed gives EVO_NONE (method 0).
+        "map_evolution_methods": map_evolution_methods,
         "egg_moves": egg_moves,
         # Move tutors (sTeachableMoves order): {move, costs: {red, blue, yellow, green},
         # location}; tutor_learnsets maps a personal row to indices into tutor_moves

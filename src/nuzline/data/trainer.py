@@ -37,6 +37,7 @@ from pathlib import Path
 
 from nuzline.data.forms import form_row
 from nuzline.data.games import KAIZO, game_of_intermediate
+from nuzline.data.gauntlet import GauntletFacts
 from nuzline.data.spec import PokemonSpec
 
 MAX_IV = 31  # MAX_IVS_SINGLE_STAT
@@ -226,13 +227,15 @@ class Trainer:
     one of several trainers sharing a name; ``pid_routine`` is "vanilla" when
     ``build_trainer_party`` may compute nature, gender and ability from the PID, None when
     every party member must carry them; ``player_starter`` is the starter species a rival
-    or partner variant is fought with; ``gauntlet`` is (group, position) in a chain of
-    fights with ``gauntlet_rules`` (``heal_between``, ``change_team``; empty: not
-    recorded); ``optional``, ``left_side`` (the split's Left Side AI) and ``tag_partner``
-    (every sheet header of the trainer carries a tag/partner tag, which enemy tag pairs carry
-    too: with the ally relation, a ``partner`` variant of another row, it marks the player's
-    tag partner, an ally and not a battle; None: headers disagree, no header, or vanilla)
-    come from the spreadsheet; ``area_condition`` is what the fight starts with (built from
+    or partner variant is fought with; ``gauntlet`` is (group, fight_id) in a chain of
+    fights, ``fight_id`` the first trainer id of the trainer's fight as the sheet lists it,
+    and ``gauntlet_facts`` the tracked game facts of that group (``data/gauntlet.py``;
+    None: not recorded); ``optional``, ``left_side`` (the split's Left Side AI) and
+    ``tag_partner`` (every sheet header of the trainer carries a tag/partner tag, which enemy
+    tag pairs carry too: with the ally relation, a ``partner`` variant of another row, it
+    marks the player's tag partner, an ally and not a battle; None: headers disagree, no
+    header, or vanilla) come from the spreadsheet; ``area_condition`` is what the fight
+    starts with (built from
     ``start_condition`` when the JSON has none); ``split`` and ``split_order`` (split
     index, line) place the fight in the level-cap splits; ``sources`` cites each field.
 
@@ -240,7 +243,12 @@ class Trainer:
     ``TERRAIN_UNKNOWN`` when ``terrains``, every terrain those maps can give, has several
     values (mixed) or none (no map places the trainer); tools/terrain.py, K3b2 Task 9.
 
-    A ``Trainer`` is unhashable: ``gauntlet_rules`` and ``sources`` are dicts, so the
+    ``map_labels`` are the map label text ids of the trainer's map headers (the same trainer ->
+    map join; ``extract_decomp.map_label_fields``): the battle's ``mapLabelTextID``, which the
+    battle-start friendship raise compares with the egg location (``prep.friendship``). Empty:
+    no map places the trainer.
+
+    A ``Trainer`` is unhashable: ``sources`` is a dict, so the
     derived ``__hash__`` raises ``TypeError``; key caches by ``Trainer.id``."""
 
     id: int
@@ -260,7 +268,7 @@ class Trainer:
     pid_routine: str | None = "vanilla"
     player_starter: int | None = None
     gauntlet: tuple[str, int] | None = None
-    gauntlet_rules: dict[str, bool] = field(default_factory=dict)
+    gauntlet_facts: GauntletFacts | None = None
     optional: bool = False
     left_side: bool = False
     tag_partner: bool | None = None
@@ -270,6 +278,7 @@ class Trainer:
     sources: dict[str, str] = field(default_factory=dict)
     terrain: int = TERRAIN_UNKNOWN
     terrains: tuple[int, ...] = ()
+    map_labels: tuple[int, ...] = ()
 
 
 def run_terrain(trainer: Trainer) -> bool:
@@ -313,6 +322,11 @@ def _pair(t: dict, key: str):
     return tuple(value)
 
 
+def _facts(t: dict) -> GauntletFacts | None:
+    value = t.get("gauntlet_facts")
+    return None if value is None else GauntletFacts.from_dict(value)
+
+
 def _read(dir: Path, name: str):
     return json.loads((Path(dir) / f"{name}.json").read_text(encoding="utf-8"))
 
@@ -331,6 +345,10 @@ def load_trainers(dir: Path) -> list[Trainer]:
     if rows and not {"terrain", "terrains"} <= rows[0].keys():
         raise ValueError(
             f"{Path(dir) / 'trainers.json'} has no battle terrain: re-run tools/extract_decomp.py"
+        )
+    if rows and "map_labels" not in rows[0]:
+        raise ValueError(
+            f"{Path(dir) / 'trainers.json'} has no map_labels: re-run tools/extract_decomp.py"
         )
     if rows and "walking_partner" not in rows[0]:
         raise ValueError(
@@ -359,7 +377,7 @@ def load_trainers(dir: Path) -> list[Trainer]:
             pid_routine=t.get("pid_routine", "vanilla"),
             player_starter=t.get("player_starter"),
             gauntlet=_pair(t, "gauntlet"),
-            gauntlet_rules=dict(t.get("gauntlet_rules", {})),
+            gauntlet_facts=_facts(t),
             optional=t.get("optional", False),
             left_side=t.get("left_side", False),
             tag_partner=t.get("tag_partner"),
@@ -369,6 +387,7 @@ def load_trainers(dir: Path) -> list[Trainer]:
             sources=dict(t.get("sources", {})),
             terrain=t["terrain"],
             terrains=tuple(t["terrains"]),
+            map_labels=tuple(t["map_labels"]),
         )
         for t in rows
     ]

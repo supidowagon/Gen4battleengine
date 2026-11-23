@@ -16,8 +16,40 @@ Tables (keys are ROM trainer ids unless said otherwise):
 - ``[area_exception.<id>]``: ``reason``. A ROM Trick Room trainer (``rom_field_effects.json``)
   deliberately left without a ``trick_room`` override, e.g. one whose start condition the
   evidence does not settle (``data/kaizo/start_conditions.json`` ``unknown``).
-- ``[[gauntlet]]``: ``name``, ``trainers`` (ids, fight order), ``rules`` (only
-  ``heal_between`` / ``change_team``, bool; empty until play reaches the group, spec 12.4).
+- ``[[gauntlet]]``: ``name``, ``trainers`` (ids in the sheet's order) and the game facts of the
+  group (design v5.3 section 2), all or none: ``orders`` (a list of orders, each a list of
+  fights, each a list of one or two trainer ids; or ``{ permutations = [<fights>] }`` for every
+  order of the fights), ``leave_gaps`` (the gaps where the player can leave the map on foot: one
+  list for every order, one list per order, or ``"all"``), ``escape`` (bool), ``pc_gaps``,
+  ``heal_gaps``, ``locked_gaps`` (a list of gaps or ``"all"``) and, optional, ``partner``
+  (``trainer``, ``join_before``: the one fight before which the game makes the partner join,
+  as a one-item list; ``source``) and ``fight_headers`` (the map header each fight starts on:
+  one integer for every fight, or one list per order; it takes ``orders_source``) and
+  ``live_next`` (the next-fight table by the live count, a list of rows ``{ fought, live,
+  next, headers }`` plus ``gap`` on a plain row after a fight and ``to``, ``at`` on a change
+  row: ``nuzline.data.gauntlet.LiveRow``; absent: the walk does not depend on the count and
+  the table is the orders' prefixes; ``GauntletFacts.live_next``) and ``skips`` (orders that
+  leave trainers out behind a pushed Strength boulder, each ``{ order, skipped, header,
+  boulder, boulder_from, boulder_to, hold }``: ``nuzline.data.gauntlet.Skip``; with
+  ``skips_source``). With ``live_next``,
+  ``leave_gaps``, ``heal_gaps`` and ``pc_gaps`` are present exactly when the table's gap
+  facts give one list for every order and live count (that list), and absent when they
+  depend on the order or the count (``nuzline.data.gauntlet.flat_gaps``); either way
+  round is an error. Optional ``field_moves`` (the relevant field moves, names of
+  ``nuzline.data.gauntlet.FIELD_MOVES`` in that order; the facts above are the walk's with
+  all of them) with ``field_moves_source`` (required with it), and one ``[[gauntlet.case]]``
+  table per other subset of them, in order (``moves``, then ``orders``, ``leave_gaps``,
+  ``pc_gaps``, ``heal_gaps``, ``locked_gaps``, ``fight_headers``, ``live_next`` as above, under
+  the same rules; ``orders = []`` and no other key: the case has no full sequence;
+  ``GauntletFacts.cases``, ``MoveCase``). Optional ``wild_levels`` (a list of tables
+  ``header``, ``kind``, ``rate``, ``max_level``, ``tiles``, ``examples``, optional ``roaming``:
+  ``WildLevel``; exactly when ``wild`` is a field move) with ``wild_levels_source``, and
+  ``repel_steps`` (a list of tables ``order``, ``steps``: ``RepelSteps``; with ``wild``: every
+  order, skip order and order of the other live count) with ``repel_steps_source``; a case
+  with ``wild`` and orders holds its own ``repel_steps``; ``repel_refusal`` (a reason) in
+  their place refuses ``wild = repel`` by name. Gap k follows
+  the k-th fight of an order. Each fact has a ``<key>_source`` (``orders_source`` is required; the others default to it). The facts are
+  read from the ROM by ``tools/kaizo/gauntlet_map.py``; user choices never appear here.
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
 - ``[sheet_unmapped."<sheet cite>"]``: ``kind`` and ``reason`` for a split-sheet header that
   maps to no trainer id on purpose (``SHEET_UNMAPPED_KINDS``): ``ally`` (the player's tag
@@ -53,8 +85,19 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
+from itertools import permutations
 from pathlib import Path
 
+from nuzline.data.gauntlet import (
+    FLAT_GAP_FIELDS,
+    GauntletFacts,
+    LiveRow,
+    MoveCase,
+    Partner,
+    RepelSteps,
+    Skip,
+    WildLevel,
+)
 from tools.kaizo.trainer_map import (
     Mapping,
     MappingError,
@@ -68,7 +111,8 @@ DEFAULT_PATH = REPO_ROOT / "data" / "kaizo" / "overrides.toml"
 DRAFT_PATH = REPO_ROOT / ".cache" / "kaizo" / "overrides.draft.toml"
 INTERMEDIATE = REPO_ROOT / "data" / "intermediate_kaizo"
 
-RULE_KEYS = ("heal_between", "change_team")
+FACT_KEYS = ("orders", "leave_gaps", "escape", "pc_gaps", "heal_gaps", "locked_gaps")
+FACT_SOURCES = tuple(f"{k}_source" for k in FACT_KEYS)
 WEATHERS = ("rain", "sun", "sandstorm", "hail", "fog", "none")
 MOVE_LIST_KEYS = ("sound", "punch")
 STARTERS = (387, 390, 393)
@@ -137,8 +181,8 @@ class SheetUnmapped:
 class Gauntlet:
     name: str
     trainers: tuple[int, ...]
-    rules: dict[str, bool]
     source: str
+    facts: GauntletFacts | None = None  # None: the game facts are not recorded (a draft)
 
 
 @dataclass(frozen=True)
@@ -158,6 +202,13 @@ class Overrides:
 
 
 # --- loader ---------------------------------------------------------------------------
+
+
+def _reason(entry: str, value: object) -> str:
+    """A plain-words reason (``repel_refusal``): a string, empty when absent."""
+    if not isinstance(value, str):
+        raise OverridesError(f"{entry}: repel_refusal must be a string")
+    return value
 
 
 def _source(entry: str, table: object) -> str:
@@ -221,6 +272,367 @@ def _area(raw: dict) -> dict[int, AreaOverride]:
     return out
 
 
+def _fight(entry: str, value: object) -> tuple[int, ...]:
+    ids = _ints(entry, "a fight", value)
+    if not 1 <= len(ids) <= 2 or len(set(ids)) != len(ids):
+        raise OverridesError(f"{entry}: a fight is one or two distinct trainer ids, not {ids}")
+    return tuple(ids)
+
+
+def _orders(
+    entry: str, raw: object, trainers: list[int], subset: bool = False
+) -> tuple[tuple[tuple[int, ...], ...], ...]:
+    """The orders; each covers ``trainers`` exactly once (``subset``: the same part of them,
+    every trainer at most once)."""
+    if isinstance(raw, dict):
+        if set(raw) != {"permutations"} or not isinstance(raw["permutations"], list):
+            raise OverridesError(f"{entry}: orders table is {{ permutations = [<fights>] }}")
+        fights = tuple(_fight(entry, f) for f in raw["permutations"])
+        orders = list(permutations(fights))
+    elif isinstance(raw, list) and raw and all(isinstance(o, list) and o for o in raw):
+        orders = [tuple(_fight(entry, f) for f in o) for o in raw]
+    else:
+        raise OverridesError(f"{entry}: orders must be a non-empty list of orders")
+    for o in orders:
+        ids = sorted(i for f in o for i in f)
+        if subset and len(set(ids)) == len(ids) and set(ids) <= set(trainers):
+            if ids != sorted(i for f in orders[0] for i in f):
+                raise OverridesError(f"{entry}: the orders cover different trainers")
+            continue
+        if ids != sorted(trainers):
+            raise OverridesError(
+                f"{entry}: order {[list(f) for f in o]} does not cover the group's trainers "
+                "exactly once"
+            )
+    if len(set(orders)) != len(orders):
+        raise OverridesError(f"{entry}: an order is listed twice")
+    return tuple(orders)
+
+
+def _gaps(entry: str, name: str, raw: object, n: int) -> tuple[int, ...]:
+    """A gap list within 1..n-1 (``"all"``: every gap)."""
+    if raw == "all":
+        return tuple(range(1, n))
+    gaps = _ints(entry, name, raw)
+    if any(not 1 <= k < n for k in gaps) or gaps != sorted(set(gaps)):
+        raise OverridesError(f"{entry}: {name} {gaps} is not an ascending list within 1..{n - 1}")
+    return tuple(gaps)
+
+
+def _fact_source(entry: str, t: dict, key: str, default: str) -> str:
+    return _source(f"{entry} {key}", {"source": t.get(key, default)})
+
+
+def _partner(entry: str, p: object, n: int, default_source: str) -> Partner:
+    if not isinstance(p, dict):
+        raise OverridesError(f"{entry}: partner must be a table")
+    _keys(f"{entry} partner", p, ("trainer", "join_before", "source"))
+    if not isinstance(p.get("trainer"), int) or isinstance(p.get("trainer"), bool):
+        raise OverridesError(f"{entry}: partner.trainer must be an integer")
+    join = _ints(entry, "partner.join_before", p.get("join_before"))
+    if len(join) != 1 or not 1 <= join[0] <= n:
+        raise OverridesError(
+            f"{entry}: partner.join_before {join} is not one fight within 1..{n} (the game "
+            "fixes the join point)"
+        )
+    source = _source(f"{entry} partner", {"source": p.get("source", default_source)})
+    return Partner(p["trainer"], tuple(join), source)
+
+
+def _facts(entry: str, name: str, src: str, t: dict, trainers: list[int]) -> GauntletFacts | None:
+    """The group's game facts, all or none (``FACT_KEYS``)."""
+    if not any(k in t for k in (*FACT_KEYS, *FACT_SOURCES, "partner")):
+        return None
+    # A gap field the group's live_next makes order- or count-dependent is absent: required
+    # without live_next, checked against it with one (GauntletFacts, flat_gaps).
+    optional = set(FLAT_GAP_FIELDS) if "live_next" in t else set()
+    missing = [k for k in (*FACT_KEYS, "orders_source") if k not in t and k not in optional]
+    if missing:
+        raise OverridesError(f"{entry}: facts are all or none; missing {', '.join(missing)}")
+    orders = _orders(entry, t["orders"], trainers)
+    sizes = [len(o) for o in orders]
+    n = min(sizes)
+    orders_source = _fact_source(entry, t, "orders_source", "")
+    leave = _leave_gaps(entry, t.get("leave_gaps"), sizes)
+    p = t.get("partner")
+    heads = _fight_headers(entry, t.get("fight_headers"), sizes)
+
+    def source(key: str) -> str:
+        return _fact_source(entry, t, f"{key}_source", orders_source)
+
+    live = _live_next(entry, t["live_next"]) if "live_next" in t else ()
+    field_moves = t.get("field_moves", [])
+    if not isinstance(field_moves, list) or not all(isinstance(m, str) for m in field_moves):
+        raise OverridesError(f"{entry}: field_moves must be a list of move names")
+    if "field_moves" in t and "field_moves_source" not in t:
+        raise OverridesError(f"{entry}: field_moves needs field_moves_source")
+    moves_source = (
+        _fact_source(entry, t, "field_moves_source", "") if "field_moves_source" in t else ""
+    )
+    cases = _cases(entry, t.get("case"), trainers)
+    wild = t.get("wild_levels", [])
+    if not isinstance(wild, list) or not all(isinstance(w, dict) for w in wild):
+        raise OverridesError(f"{entry}: wild_levels must be a list of tables")
+    if "wild_levels" in t and "wild_levels_source" not in t:
+        raise OverridesError(f"{entry}: wild_levels needs wild_levels_source")
+    if "repel_steps" in t and "repel_steps_source" not in t:
+        raise OverridesError(f"{entry}: repel_steps needs repel_steps_source")
+    repel = _repel_steps(entry, t["repel_steps"]) if "repel_steps" in t else ()
+    try:
+        return GauntletFacts(
+            name=name,
+            source=src,
+            orders=orders,
+            orders_source=orders_source,
+            leave_gaps=leave,
+            leave_gaps_source=source("leave_gaps"),
+            escape=_bool(entry, "escape", t["escape"]),
+            escape_source=source("escape"),
+            pc_gaps=_gaps(entry, "pc_gaps", t["pc_gaps"], n) if "pc_gaps" in t else None,
+            pc_gaps_source=source("pc_gaps"),
+            heal_gaps=_gaps(entry, "heal_gaps", t["heal_gaps"], n) if "heal_gaps" in t else None,
+            heal_gaps_source=source("heal_gaps"),
+            locked_gaps=_gaps(entry, "locked_gaps", t["locked_gaps"], n),
+            locked_gaps_source=source("locked_gaps"),
+            partner=None if p is None else _partner(entry, p, n, orders_source),
+            fight_headers=heads,
+            live_next=live,
+            field_moves=tuple(field_moves),
+            field_moves_source=moves_source,
+            cases=cases,
+            skips=_skips(entry, t["skips"]) if "skips" in t else (),
+            skips_source=_fact_source(entry, t, "skips_source", "") if "skips" in t else "",
+            requires_beaten=tuple(_ints(entry, "requires_beaten", t["requires_beaten"]))
+            if "requires_beaten" in t
+            else (),
+            requires_beaten_source=_fact_source(entry, t, "requires_beaten_source", "")
+            if "requires_beaten" in t
+            else "",
+            wild_levels=tuple(WildLevel.from_dict(w) for w in wild),
+            wild_levels_source=_fact_source(entry, t, "wild_levels_source", "")
+            if "wild_levels" in t
+            else "",
+            repel_steps=repel,
+            repel_steps_source=_fact_source(entry, t, "repel_steps_source", "")
+            if "repel_steps" in t
+            else "",
+            repel_refusal=_reason(entry, t.get("repel_refusal", "")),
+        )
+    except ValueError as e:
+        if isinstance(e, OverridesError):
+            raise
+        raise OverridesError(f"{entry}: {e}") from None
+
+
+def _leave_gaps(entry: str, raw: object, sizes: list[int]) -> tuple[tuple[int, ...], ...] | None:
+    """``leave_gaps``: absent (None), ``"all"``, one list per order or one list for every
+    order."""
+    if raw is None:
+        return None
+    if raw == "all":
+        return tuple(tuple(range(1, s)) for s in sizes)
+    if isinstance(raw, list) and raw and all(isinstance(g, list) for g in raw):
+        if len(raw) != len(sizes):
+            raise OverridesError(f"{entry}: leave_gaps needs one list per order")
+        return tuple(_gaps(entry, "leave_gaps", g, s) for g, s in zip(raw, sizes, strict=True))
+    return (_gaps(entry, "leave_gaps", raw, min(sizes)),) * len(sizes)
+
+
+CASE_KEYS = (
+    "moves",
+    "orders",
+    "leave_gaps",
+    "pc_gaps",
+    "heal_gaps",
+    "locked_gaps",
+    "fight_headers",
+    "live_next",
+    "repel_steps",
+)
+
+
+def _repel_steps(where: str, raw: object) -> tuple[RepelSteps, ...]:
+    """``repel_steps``: a list of tables ``{ order, steps }`` (``RepelSteps``)."""
+    if not isinstance(raw, list) or not all(isinstance(r, dict) for r in raw):
+        raise OverridesError(f"{where}: repel_steps must be a list of tables")
+    out = []
+    for r in raw:
+        if set(r) != {"order", "steps"}:
+            raise OverridesError(f"{where}: a repel_steps row holds order and steps only")
+        if not isinstance(r["order"], list) or not all(
+            isinstance(f, list) and f and all(isinstance(t, int) for t in f) for f in r["order"]
+        ):
+            raise OverridesError(f"{where}: repel_steps order must be a list of fights")
+        steps = _ints(where, "repel_steps steps", r["steps"])
+        try:
+            out.append(RepelSteps(tuple(tuple(f) for f in r["order"]), tuple(steps)))
+        except ValueError as e:
+            raise OverridesError(f"{where}: {e}") from None
+    return tuple(out)
+
+
+def _cases(entry: str, raw: object, trainers: list[int]) -> tuple[MoveCase, ...]:
+    """The ``[[gauntlet.case]]`` tables (``CASE_KEYS``): a field-move case's facts, read as the
+    group's own; ``orders = []`` alone is a case with no full sequence. The set of cases is
+    checked by ``GauntletFacts``."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(c, dict) for c in raw):
+        raise OverridesError(f"{entry}: case must be [[gauntlet.case]] tables")
+    out = []
+    for i, c in enumerate(raw):
+        where = f"{entry} case[{i}]"
+        bad = sorted(k for k in c if k not in CASE_KEYS)
+        if bad:
+            raise OverridesError(f"{where}: unknown key {', '.join(map(repr, bad))}")
+        moves = c.get("moves")
+        if not isinstance(moves, list) or not all(isinstance(m, str) for m in moves):
+            raise OverridesError(f"{where}: moves must be a list of move names")
+        where = f"{entry} case {moves}"
+        if c.get("orders") == []:
+            if set(c) != {"moves", "orders"}:
+                raise OverridesError(f"{where}: a case with no orders holds no other fact")
+            empty = ((), (), (), ())
+            out.append(MoveCase(tuple(moves), (), *empty))
+            continue
+        optional = set(FLAT_GAP_FIELDS) if "live_next" in c else set()
+        missing = [k for k in CASE_KEYS[:6] if k not in c and k not in optional]
+        if missing:
+            raise OverridesError(f"{where}: missing {', '.join(missing)}")
+        orders = _orders(where, c["orders"], trainers)
+        sizes = [len(o) for o in orders]
+        n = min(sizes)
+        try:
+            out.append(
+                MoveCase(
+                    moves=tuple(moves),
+                    orders=orders,
+                    leave_gaps=_leave_gaps(where, c.get("leave_gaps"), sizes),
+                    pc_gaps=_gaps(where, "pc_gaps", c["pc_gaps"], n) if "pc_gaps" in c else None,
+                    heal_gaps=_gaps(where, "heal_gaps", c["heal_gaps"], n)
+                    if "heal_gaps" in c
+                    else None,
+                    locked_gaps=_gaps(where, "locked_gaps", c["locked_gaps"], n),
+                    fight_headers=_fight_headers(where, c.get("fight_headers"), sizes),
+                    live_next=_live_next(where, c["live_next"]) if "live_next" in c else (),
+                    repel_steps=_repel_steps(where, c["repel_steps"])
+                    if "repel_steps" in c
+                    else (),
+                )
+            )
+        except ValueError as e:
+            if isinstance(e, OverridesError):
+                raise
+            raise OverridesError(f"{where}: {e}") from None
+    return tuple(out)
+
+
+SKIP_KEYS = ("order", "skipped", "header", "boulder", "boulder_from", "boulder_to", "hold")
+
+
+def _skips(entry: str, raw: object) -> tuple[Skip, ...]:
+    """``skips``: a non-empty list of tables (``SKIP_KEYS``, all required), each an order that
+    leaves trainers out behind a pushed boulder (``nuzline.data.gauntlet.Skip``); checked
+    against the orders by ``GauntletFacts``."""
+    entry = f"{entry} skips"
+    if not isinstance(raw, list) or not raw:
+        raise OverridesError(f"{entry}: must be a non-empty list of tables")
+    out = []
+    for i, r in enumerate(raw):
+        where = f"{entry}[{i}]"
+        if not isinstance(r, dict):
+            raise OverridesError(f"{where}: must be a table")
+        _keys(where, r, SKIP_KEYS)
+        missing = [k for k in SKIP_KEYS if k not in r]
+        if missing:
+            raise OverridesError(f"{where}: missing {', '.join(missing)}")
+        if not isinstance(r["order"], list) or not r["order"]:
+            raise OverridesError(f"{where}: order must be a non-empty list of fights")
+        if not isinstance(r["hold"], list) or not r["hold"]:
+            raise OverridesError(f"{where}: hold must be a non-empty list of tiles")
+        out.append(
+            Skip(
+                order=tuple(_fight(where, f) for f in r["order"]),
+                skipped=tuple(_ints(where, "skipped", r["skipped"])),
+                header=_ints(where, "header", [r["header"]])[0],
+                boulder=_ints(where, "boulder", [r["boulder"]])[0],
+                boulder_from=_skip_tile(where, r["boulder_from"]),
+                boulder_to=_skip_tile(where, r["boulder_to"]),
+                hold=tuple(_skip_tile(where, t) for t in r["hold"]),
+            )
+        )
+    return tuple(out)
+
+
+def _skip_tile(where: str, v: object) -> tuple[int, int]:
+    t = _ints(where, "a tile", v)
+    if len(t) != 2:
+        raise OverridesError(f"{where}: a tile is [x, z], not {t}")
+    return (t[0], t[1])
+
+
+LIVE_ROW_KEYS = ("fought", "live", "next", "headers", "to", "at", "gap")
+
+
+def _live_next(entry: str, raw: object) -> tuple[LiveRow, ...]:
+    """``live_next``: a non-empty list of rows (``LIVE_ROW_KEYS``; ``fought``, ``live``,
+    ``next`` and ``headers`` required), checked as a table by ``check_live_rows``."""
+    entry = f"{entry} live_next"
+    if not isinstance(raw, list) or not raw:
+        raise OverridesError(f"{entry}: must be a non-empty list of rows")
+    rows = []
+    for i, r in enumerate(raw):
+        where = f"{entry}[{i}]"
+        if not isinstance(r, dict):
+            raise OverridesError(f"{where}: must be a table")
+        _keys(where, r, LIVE_ROW_KEYS)
+        missing = [k for k in ("fought", "live", "next", "headers") if k not in r]
+        if missing:
+            raise OverridesError(f"{where}: missing {', '.join(missing)}")
+        fights = []
+        for key in ("fought", "next"):
+            v = r[key]
+            if not isinstance(v, list) or not all(isinstance(f, list) for f in v):
+                raise OverridesError(f"{where}: {key} must be a list of fights")
+            fights.append(tuple(tuple(_ints(where, key, f)) for f in v))
+        for key in ("live", "to"):
+            if key in r and (not isinstance(r[key], int) or isinstance(r[key], bool)):
+                raise OverridesError(f"{where}: {key} must be an integer")
+        if "at" in r and not isinstance(r["at"], str):
+            raise OverridesError(f"{where}: at must be a string")
+        gap = r.get("gap")
+        if gap is not None and (
+            not isinstance(gap, list) or not all(isinstance(g, str) for g in gap)
+        ):
+            raise OverridesError(f"{where}: gap must be a list of strings")
+        rows.append(
+            LiveRow(
+                fought=fights[0],
+                live=r["live"],
+                next=fights[1],
+                headers=tuple(_ints(where, "headers", r["headers"])),
+                to=r.get("to", r["live"]),
+                at=r.get("at", ""),
+                gap=None if gap is None else tuple(gap),
+            )
+        )
+    return tuple(rows)
+
+
+def _fight_headers(entry: str, raw: object, sizes: list[int]) -> tuple[tuple[int, ...], ...]:
+    """``fight_headers``: absent (not recorded), one header for every fight, or one list of
+    headers per order (as long as the order)."""
+    if raw is None:
+        return ()
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return tuple((raw,) * s for s in sizes)
+    if isinstance(raw, list) and len(raw) == len(sizes) and all(isinstance(h, list) for h in raw):
+        out = tuple(_ints(entry, "fight_headers", h) for h in raw)
+        if [len(h) for h in out] == sizes:
+            return tuple(tuple(h) for h in out)
+    raise OverridesError(f"{entry}: fight_headers is one header or one list per order")
+
+
 def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
     out = []
     for i, t in enumerate(raw):
@@ -228,24 +640,38 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
         if isinstance(t, dict) and isinstance(t.get("name"), str):
             entry = f"gauntlet {t['name']!r}"
         src = _source(entry, t)
-        _keys(entry, t, ("name", "trainers", "rules"))
+        _keys(
+            entry,
+            t,
+            (
+                "name",
+                "trainers",
+                "partner",
+                "fight_headers",
+                "live_next",
+                "field_moves",
+                "field_moves_source",
+                "case",
+                "skips",
+                "skips_source",
+                "requires_beaten",
+                "requires_beaten_source",
+                "wild_levels",
+                "wild_levels_source",
+                "repel_steps",
+                "repel_steps_source",
+                "repel_refusal",
+                *FACT_KEYS,
+                *FACT_SOURCES,
+            ),
+        )
         if not isinstance(t.get("name"), str) or not t["name"]:
             raise OverridesError(f"{entry}: name must be a non-empty string")
         trainers = _ints(entry, "trainers", t.get("trainers"))
         if len(trainers) < 2 or len(set(trainers)) != len(trainers):
             raise OverridesError(f"{entry}: trainers must be two or more distinct ids")
-        rules = t.get("rules", {})
-        if not isinstance(rules, dict):
-            raise OverridesError(f"{entry}: rules must be a table")
-        bad = sorted(k for k in rules if k not in RULE_KEYS)
-        if bad:
-            raise OverridesError(
-                f"{entry}: unknown rules key {', '.join(map(repr, bad))} "
-                f"(allowed: {', '.join(RULE_KEYS)})"
-            )
-        for k, v in rules.items():
-            _bool(entry, k, v)
-        out.append(Gauntlet(t["name"], tuple(trainers), dict(rules), src))
+        facts = _facts(entry, t["name"], src, t, trainers)
+        out.append(Gauntlet(t["name"], tuple(trainers), src, facts))
     owner: dict[int, str] = {}
     for g in out:
         for tid in g.trainers:
@@ -700,7 +1126,8 @@ HEADER = """\
 # sheet: a "Gauntlet Start" .. "Gauntlet End" chain, a "B2B With X" pair, a section tagged
 # "GYM TRAINERS ARE A GAUNTLET" (its trainers in sheet order, leader excluded) and a
 # "Gauntlet With X" section (its GAUNTLET-tagged trainers, the tag partner excluded).
-# Every group's rules stay {} until play reaches it (heal_between, change_team).
+# The game facts of each group (orders, gaps, escape, partner) are read from the ROM by
+# tools/kaizo/gauntlet_map.py and written by hand below the drafted entry; the draft has none.
 #
 # Level caps are not here: data/kaizo/level_caps.toml (read at runtime by prep).
 """
@@ -825,7 +1252,7 @@ def _gauntlet_groups(docs: dict) -> list[tuple[str, str, list[dict], str | None]
 def draft_overrides(docs: dict, mappings: Mappings) -> str:
     """TOML for every Trick Room trainer (ROM ``rom_field_effects.json`` -> ``rom:`` source;
     sheet-only -> the sheet header), Cynthia's Gravity and every gauntlet group, with
-    ``rules = {}``. A trainer claimed by two areas (two sheet rows with different area tags,
+    no game facts. A trainer claimed by two areas (two sheet rows with different area tags,
     or a ROM start condition ``unknown``) is drafted commented out with every citation, and
     a ROM Trick Room one gets an ``[area_exception]``. Groups or claims whose trainers do
     not map are drafted commented out too."""
@@ -930,7 +1357,7 @@ def draft_overrides(docs: dict, mappings: Mappings) -> str:
         out.append("")
     out += [line for line in unmapped_claims if "gravity" in line]
 
-    out.append("# --- Gauntlets (rules stay {} until play reaches each group) ----------\n")
+    out.append("# --- Gauntlets (game facts: tools/kaizo/gauntlet_map.py, added by hand) ---\n")
     seen: dict[int, str] = {}
     n_g = n_g_bad = 0
     for name, src, members, problem in _gauntlet_groups(docs):
@@ -947,7 +1374,6 @@ def draft_overrides(docs: dict, mappings: Mappings) -> str:
             "[[gauntlet]]",
             f"name = {_q(_ascii(name))}",
             f"trainers = [{', '.join(str(i) for i in ids)}]",
-            "rules = {}",
             f"source = {_q(src)}",
         ]
         texts = "; ".join(_ascii(h["text"]) for h in members)

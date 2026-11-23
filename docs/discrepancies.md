@@ -213,11 +213,12 @@ each; the test is fixed.
   either, and @smogon/calc 0.12.0 none in `gen4.js`. The oracle compares the damage of a hit,
   not whether the move succeeds (as Fake Out).
 - **Fling:** not generated (`_DEPARTED_EFFECTS`). Its power is the held item's
-  (`BattleSystem_FlingItem`, `src/battle/battle_lib.c:5859`); with no item it is 0 and
-  `TryFling` fails the move (`:5863-5865`; `effect_script_0233.s:7`, `:21-23`). The oracle's
-  mons hold no item: the table carries a placeholder 1 (`res/moves/fling/data.json:12`, the
-  engine passes the item's power, `step.py`'s `fling_power`), @smogon/calc 0
-  (`getFlingPower`, `gen4.js:315-316`).
+  (`BattleSystem_FlingItem`, `src/battle/battle_lib.c:5854`; `movePower` set at `:5859`); with
+  no item it is 0 and `TryFling` fails the move (`:5863-5865`; `effect_script_0233.s:7`,
+  `:21-23`). This is not a damage-calc disagreement. The move table holds a placeholder power
+  of 1 (`res/moves/fling/data.json:12`; the engine passes the item's power, `step.py`'s
+  `fling_power`), while the oracle's mons hold no item (item=0), so the decomp fails the move
+  and there is no hit to compare.
 
 ## JAX engine's trainer AI path vs the decomp (K3b1)
 

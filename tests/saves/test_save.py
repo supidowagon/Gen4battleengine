@@ -299,6 +299,20 @@ def test_vars_offset_matches_decomp_arithmetic():
     assert VAR_PLAYER_STARTER_INDEX == 0x4030 - 0x4000
 
 
+def test_flags_follow_the_vars_and_read_trainer_defeats(tmp_path, tables, names):
+    # VarsFlags: u16 vars[NUM_VARS] then u8 flags[NUM_FLAGS / 8] (include/vars_flags.h:12-14);
+    # a trainer's defeated flag is TRAINER_DEFEATED_FLAGS_START + id (script_manager.c:517-520)
+    from nuzline.saves.layout import FLAGS, NUM_VARS, TRAINER_DEFEATED_FLAGS_START
+
+    assert FLAGS == VARS + 2 * NUM_VARS and TRAINER_DEFEATED_FLAGS_START == 0x550
+    image = build_image(flags=[TRAINER_DEFEATED_FLAGS_START + 107, 3])
+    save = _load(tmp_path, image, tables, names)
+    assert save.trainer_defeated(107) and not save.trainer_defeated(108)
+    assert save.flag(3) and not save.flag(2)
+    with pytest.raises(ValueError, match="not a saved flag"):
+        save.flag(0)
+
+
 def test_player_starter_round_trip(tmp_path, tables, names):
     image = build_image(vars={VAR_PLAYER_STARTER_INDEX: 390})
     assert _load(tmp_path, image, tables, names).player_starter == 390
