@@ -127,7 +127,9 @@ def test_bond_takes_the_pursuer_before_rough_skin(tables, names, pursuer_hp):
     assert int(out.hp[0, 0]) == 0
     assert int(out.hp[1, 0]) == 0
     assert int(out.ai_ability_known[0]) == 0
-    assert int(_after_hit(tables, n, s).ai_ability_known[0]) == 0
+    hit = _after_hit(tables, n, s)
+    assert int(hit.hp[0, 0]) == 0  # the hit happened
+    assert int(hit.ai_ability_known[0]) == 0
     ev = _events(tables, s, (SWITCH, 0), _proc(1))
     assert int(ev["contact_ability"][0]) == 0
     # Without the bond Rough Skin reveals itself, after the KO's own clear (:85 before :86).
@@ -177,7 +179,9 @@ def test_static_switcher_with_bond_paralyzes_nobody_for_either_draw(tables, name
     for out in outs:
         assert int(out.hp[1, 0]) == 0
         assert int(out.status[1, 0]) == Status.NONE
-    assert int(_after_hit(tables, n, s).ai_ability_known[0]) == 0  # before the newcomer's entry
+    hit = _after_hit(tables, n, s)
+    assert int(hit.hp[0, 0]) == 0  # the hit happened
+    assert int(hit.ai_ability_known[0]) == 0  # before the newcomer's entry
     for x, y in zip(outs[0], outs[1], strict=True):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y))
     rows, _ = enumerate_turn(tables, s, (SWITCH, 0))
