@@ -263,6 +263,29 @@ def test_rom_only_items_weigh_six_until_measured():
     assert gate([light], free=13.1, rom_table={"tests/b/test_y.py": 7.0}, env=env)[0] == "GO"
 
 
+def test_a_non_rom_only_item_of_a_measured_file_weighs_the_file_figure_when_engine_free():
+    # tests/tools/rom/test_terrain.py::test_battle_terrain_code_guard holds no ROM fixture, so the
+    # pod key (6) outranked the file's rom_weights.txt line (4)
+    plain = item("tests/b/test_y.py::t", "tmp_path")  # pod table says 4
+    assert rg.item_weight(plain, TABLE, {"tests/b/test_y.py": 3.0}, engine_free=True) == 3.0
+    assert rg.item_weight(plain, TABLE, {"tests/b/test_y.py": 3.0}) == 4.0  # engine loaded: pod key
+    assert rg.item_weight(plain, TABLE, {}, engine_free=True) == 4.0  # no measured line: pod key
+    assert rg.item_weight(plain, TABLE, {"tests/other.py": 3.0}, engine_free=True) == 4.0
+
+
+def test_the_committed_lines_weigh_their_measured_figures():
+    rom, pod = rg.load_rom_weights(), rg.load_weights()
+    for ident, gb in (
+        ("tests/tools/rom/test_terrain.py::test_battle_terrain_code_guard", 4.0),
+        ("tests/tools/rom/test_terrain.py::test_terrain_code_guard", 4.0),
+        ("tests/kaizo/test_overrides.py::test_rules_left_unset_by_draft", 3.0),
+        ("tests/tools/rom/test_code_tables.py::test_tm_moves_match_decomp", 3.0),
+        ("tests/tools/rom/test_extract_rom.py::test_vanilla_round_trip", 3.0),
+        ("tests/tools/rom/test_offsets.py::test_no_field_accepts_another_fields_offset[platinum_us]", 3.0),
+    ):
+        assert rg.item_weight(item(ident, "tmp_path"), pod, rom, engine_free=True) == gb, ident
+
+
 def test_an_unmeasured_rom_only_item_weighs_fourteen_once_the_engine_is_loaded():
     light = item("tests/b/test_y.py::t[x]", "kaizo_inputs")  # pod table says 4
     assert rg.ROM_ENGINE_UNMEASURED_GB == 14.0

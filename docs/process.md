@@ -171,9 +171,9 @@ rate used for estimates.
 - **No engine tests on the PC.** The root `conftest.py` (`tools/ops/ramgate.py`) enforces it
   after collection. A local pytest run is allowed only when every selected test is ROM-only (its
   fixture closure holds a local-input fixture, `ROM_FIXTURES` in `ramgate.py`) or when
-  `nuzline.engine` was not imported by the collected modules (a tool test; the light modules
-  `nuzline.engine` and `nuzline.engine.ids` alone do not count, `LIGHT_ENGINE_MODULES` in
-  `ramgate.py`: they import only the standard library). Any other run exits
+  no engine module other than `LIGHT_ENGINE_MODULES` in `ramgate.py` (`nuzline.engine`,
+  `nuzline.engine.ids`; standard library imports only) was imported by the collected modules (a
+  tool test). Any other run exits
   at once, naming the first disallowed ids: send them to the quick lane below. The tests listed
   in `tools/ops/day/pod_only.txt` (JAX compiles without the engine: `tests/test_spike_step.py`,
   `tests/test_jaxcache.py`; manager ruling 22 Nov 2026) are refused on the PC the same way,

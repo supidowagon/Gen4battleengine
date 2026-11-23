@@ -735,7 +735,10 @@ def item_weight(
     """Pod weights come from runs where ROM-only tests skip: a ROM-only item weighs the figure of
     rom_weights.txt (measured locally), else 6 GB in an engine-free run (14 when the engine is
     loaded), or its pod weight (if it has a key) when higher.
-    Any other item weighs its weights.txt key; without one 6 GB in an engine-free run, else 20."""
+    Any other item weighs its weights.txt key; without one 6 GB in an engine-free run, else 20.
+    Exception: in an engine-free run a non-ROM-only item of a file with a rom_weights.txt line
+    weighs that line (the figure is the peak of one pytest process on that file; the weights.txt
+    nightly line of a ROM-only file counts skipped tests, so its 6 would otherwise outrank it)."""
     if is_rom_only(item):
         measured = lookup(item.nodeid, rom_table)
         if measured is not None:
@@ -743,6 +746,10 @@ def item_weight(
         base = ROM_UNMEASURED_GB if engine_free else ROM_ENGINE_UNMEASURED_GB
         pod = lookup(item.nodeid, table)
         return base if pod is None else max(base, pod)
+    if engine_free:
+        measured = lookup(item.nodeid, rom_table)
+        if measured is not None:
+            return measured
     return weight(item.nodeid, table, ENGINE_FREE_WEIGHT if engine_free else DEFAULT_WEIGHT)
 
 
