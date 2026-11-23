@@ -241,7 +241,7 @@ def test_prune_skips_while_another_pod_holds_the_lock(tmp_path):
     assert (old / "x-cache").is_file() and (jax / ".prune.lock").is_dir()
 
 
-def test_a_lock_with_an_empty_owner_file_is_stale_at_once(tmp_path):
+def test_a_lock_with_an_empty_owner_file_is_stale_after_a_grace_of_60_s(tmp_path):
     jax = tmp_path / "vol" / "jax"
     for owner in (None, ""):
         lock = jax / ".prune.lock"
@@ -249,16 +249,32 @@ def test_a_lock_with_an_empty_owner_file_is_stale_at_once(tmp_path):
         lock.mkdir(parents=True)
         if owner is not None:
             (lock / "owner").write_text(owner)
+        rc, out = _sync(tmp_path, "prune")                            # fresh: its holder may be mid-write
+        assert rc == 0 and "held" in out and "prune skipped" in out and "prune done" not in out, out
+        assert lock.is_dir()
+        _old(lock, 61)
         rc, out = _sync(tmp_path, "prune")
         assert rc == 0 and "taken over" in out and "owner none" in out and "prune done" in out, out
         assert not lock.exists()
+
+
+def test_a_lock_taken_between_mkdir_and_the_owner_write_is_not_ours(tmp_path):
+    """Another pod renamed the fresh lock away before our owner write: the write fails, so the
+    prune must not run (two prunes at once)."""
+    (tmp_path / "vol" / "jax").mkdir(parents=True)
+    body = ('/bin/mkdir "$@" || exit $?\n'
+            'case "${@: -1}" in */.prune.lock) rmdir "${@: -1}";; esac\n')
+    path = _shim(tmp_path, "mkdir", body)
+    rc, out = _sync(tmp_path, "prune", PATH=path)
+    assert rc == 0 and "taken by another pod before its owner file was written: prune skipped" in out, out
+    assert "prune done" not in out and "volume used" not in out, out
 
 
 def test_publish_prunes_before_the_copies_when_the_volume_is_over_the_warning_line(tmp_path):
     loc = tmp_path / "local" / VER
     _entry(loc, "good-cache", _blob(1))
     _entry(tmp_path / "vol" / "jax" / VT, "x-cache", _blob(2))
-    rc, out = _sync(tmp_path, "publish", CACHE_VOL_QUOTA_GB="3")     # ~1 GB used by du block rounding: 2 GB left
+    rc, out = _sync(tmp_path, "publish", CACHE_VOL_QUOTA_GB="3")     # a few KB used: just under 3 GB left
     assert rc == 0 and "publish: volume under 3 GB left: prune before the copies" in out, out
     assert out.index("prune before the copies") < out.index("prune done") < out.index(f"publish {VT}:"), out
     assert out.count("prune done") == 2, out                          # and the prune after the copies
