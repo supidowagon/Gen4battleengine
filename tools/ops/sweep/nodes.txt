@@ -1,0 +1,5 @@
+# Nodes of the nightly soundness sweep (tools/ops/nightly_brief.md, "Soundness sweep").
+# One line per node: <pytest node id> <short name>. The short name is the log and job name.
+# Each node runs alone in one pytest process per seed (about 20 min and 12 GB per process).
+tests/engine/test_enumerate.py::test_mask_sound test_mask_sound
+tests/engine/test_enumerate.py::test_mask_sound_with_a_trainer_item test_mask_sound_with_a_trainer_item

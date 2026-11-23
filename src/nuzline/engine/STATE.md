@@ -139,7 +139,7 @@ three structs has a row.
   3443-3459 / bcp.c:3218; zeroed with the volatiles at a switch or faint, battle_lib.c:2100-2104,
   and not Baton-passed, :2107-2115; zeroed by Transform, battle_script.c:5340, and a Mimic that
   copies Last Resort, :4514-4516; `effects.last_resort_fails` is BtlCmd_TryLastResort,
-  battle_script.c:7567-7579; the Sketch zeroing, :4876-4878, waits for Sketch). The rest (Heal
+  battle_script.c:7567-7579; Sketch zeroes it for a copied Last Resort, :4876-4878, `effects._sketch`, I-3). The rest (Heal
   Block) is later (M6).
 - **fieldConditionsMask -> `field_mask`** (int32, `_FIELD`, one per battle: BattleContext state,
   doubles-state-design section 5 convention 2): `BattleContext.fieldConditionsMask`
@@ -232,11 +232,11 @@ three structs has a row.
   (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
   whose Quick Claw activated this turn); `monSpeedValues` (mapped since E3-B2-15 to
   `speed_rec`, below), by `BtlCmd_CalcGyroBallPower`
-  (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
+  (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`; mapped since I-3 to `sketch_move`, below). M1 is
   unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw's
   activation is `qc_roll` (below; the flag `claw_flag` carries its animation and the
   Knock Off / Thief / Covet failures into the next turn when no BeforeMove cleared it,
-  SF2 (k)), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
+  SF2 (k)), and none of Thief, Covet, Gyro Ball or Sketch is in M1 (Sketch: I-3). M6's
   coverage work must add these fields before the mechanics that read them.
 - **Trace, the weather abilities and Truant (E2 batch 3).** `BattleMon.ability` is per
   battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
@@ -399,8 +399,12 @@ three structs has a row.
   the project's `% n` convention): k = 0 the turn's, which `step._action_phase` copies into
   `starf_roll` so `hooks.held_item_check` and `hooks.pluck_berry` read it; k = 1 a faint
   replacement's, which `step_events` keeps in `starf_roll` at the turn's end where a replacement
-  can send in a living Starf holder (`step.starf_kept`; `step.replace` reads it, then clears it),
-  else 0, and 0 at a pause (states merge). Per battler, hidden. The battle start's checks run with
+  can send in a living Starf holder, or where the side's active holder can eat at its pinch while
+  a replacement is pending or a newcomer's states wait (a Future Sight hit after its
+  ITEM_CONDITION; `step.starf_kept`, `step.starf_kept_active`; `step.replace` /
+  `switch_in.show_battle_mon4` read it, `replace` then clears it), else 0, and 0 at a pause
+  (states merge). Stored modulo 5 where the check meets five stats below +6 (a replacement; an
+  active holder with all five at +4 or below), else whole (the law's 60 values). Per battler, hidden. The battle start's checks run with
   `starf_roll` = `STARF_UNDRAWN`: a lead's berry is eaten and its stat waits in **`starf_open`**
   (per battler, no decomp field: the draw the decomp makes there, `battle_lib.c:5273-5294`) for
   the root's draw (`step.root_belief`, `step.sample_root`, `hooks.resolve_starf`).
@@ -476,6 +480,17 @@ three structs has a row.
   Spite (E3-B2-4, `effects._spite`) takes `min(4, ppCur)` from the BattleMon's slot of the target's
   `last_move` (BtlCmd_TrySpite, battle_script.c:4990-5016): it writes `pp` only, so a Mimic slot's
   `shadow_pp` stays (`BattleMon_CopyToParty` skips it).
+- **Sketch -> `sketch_move`** (I-3; `int16[B]`, per battler `[MAX_BATTLERS]`: `BattleContext.moveSketched`,
+  a battler array, doubles-state-design section 5 convention 2). `UpdateMoveBuffers` writes
+  `moveSketched[attacker] = moveTemp` when `SYSCTL_ATTACK_MESSAGE_SHOWN` (battle_controller_player.c:
+  3952-3954, outside the `SYSCTL_REUSE_LAST_MOVE` block) and otherwise keeps it, where
+  `movePrevByBattler` becomes MOVE_NONE (:3945-3949) (`step._use_move`, `_set_sketch`); cleared at a
+  switch-in and a faint with `last_move` (`UpdateAfterSwitch`, battle_lib.c:2130; `CleanupFaintedMon`,
+  :2208), so a VOLATILE field, not Baton-passed. `BtlCmd_TrySketch` (battle_script.c:4839-4884,
+  `effects._sketch`) copies it into the user's first Sketch slot with the move's table PP and no
+  shadow: the engine's `moves` / `pp` are the party Pokemon's, so the write is permanent (it needs no
+  `mimic_slots` bit, and `BtlIOCmd_UpdatePartyMon` writes every unflagged slot,
+  battle_io_command.c:575-587). The slot's `pp_ups` are untouched.
 - **aiContext**: per battler (`battlerMoves[MAX_BATTLERS][4]`, `battlerAbilities[MAX_BATTLERS]`,
   `battlerHeldItems[MAX_BATTLERS]`, ai_context.h:27-29; kept where `state.ai_record_kept`: B = 4
   every battler, B = 2 battler 0 (sheet D45-1 rule 6); read through `state.ai_record_moves /
@@ -960,9 +975,9 @@ three structs has a row.
 | `BattleContext.movePrevByBattler` | `last_move` | mapped |
 | `BattleContext.moveCopied` | `move_copied` | mapped |
 | `BattleContext.moveCopiedHit` | `move_copied_hit` | mapped |
-| `BattleContext.moveSketched` | — | later (M6) |
+| `BattleContext.moveSketched` | `sketch_move` | mapped |
 | `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.moveSlot` | — | not mapped (open, candidate B; e2-mechanics-ledger.md): NOT reset each turn. Written only at selection (bcp.c:445, :526), zeroed once at BattleContext_New (bcp.c:182), kept by BattleContext_Init (battle_lib.c:1974-2017); a locked battler skips selection (bcp.c:333-337) and keeps its last selection's slot, which CalcTurnOrder's priority reads (battle_lib.c:1375-1398). `step` takes the chosen action's slot (TryGrudge, PP) and the lock's move for the order |
+| `BattleContext.moveSlot` | — | later (candidate B, open; e2-mechanics-ledger.md: NOT reset each turn. Written only at selection [bcp.c:445, :526], zeroed once at BattleContext_New [bcp.c:182], kept by BattleContext_Init [battle_lib.c:1974-2017]; a locked battler skips selection [bcp.c:333-337] and keeps its last selection's slot, which CalcTurnOrder's priority reads [battle_lib.c:1375-1398]. `step` takes the chosen action's slot [TryGrudge, PP] and the lock's move for the order) |
 | `BattleContext.conversion2Move` | `conv2_move` | mapped |
 | `BattleContext.conversion2Battler` | `conv2_battler` | mapped |
 | `BattleContext.conversion2Type` | `conv2_type` | mapped |

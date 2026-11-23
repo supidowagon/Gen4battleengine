@@ -23,7 +23,7 @@ probability. Ranges and encodings are those of ``docs/ai/roark.md`` section 8:
   ``TrainerAI_ShouldSwitch`` (``trainer_ai.c:3894``; roark.md 8.5 and 11.1) that
   stops the check, 0..``sites - 1``, or ``sites`` when none does, where ``sites`` is the
   layout's ``switch_sites``: ``SWITCH_SITES`` (9, ``SWITCH_NONE`` = 9 none) for the flat
-  layout, 60 for Kaizo's party of six (docs/ai/kaizo_roark.md 11). A
+  layout, 69 for Kaizo's party of six (docs/ai/kaizo_roark.md 11). A
   keep draw that stops means "no switch", a party-pass draw that stops means "switch
   to that party member". Site i stops with ``prod_{h<i} (1 - p_h) * p_i``, where p
   depends on the site's ``SwitchSite`` kind, so one categorical is exact.
@@ -728,6 +728,11 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         215,  # GRAVITY: Basic_CheckGravityActive (:254); Expert_Gravity (:1759), :4795, :4799
         82,  # COPY_MOVE_FOR_BATTLE (Mimic): no Basic or Expert entry, no other script.s mention
         57,  # TRANSFORM: no Basic or Expert entry, no script.s mention
+        # SKETCH (I-3): no Basic or Expert entry; no Tag Strategy entry (script.s: no mention of
+        # effect 95 or move 166; Tag Strategy's FlagMoveDamageScore -> NO_COMPARISON ->
+        # CheckSpecialScoring, :6637-6752, matches no test and changes no score). A foe holds
+        # Sketch only through Transform, where it always fails (battle_script.c:4847).
+        95,
         267,  # CHATTER: no Basic or Expert entry; Basic_CheckSoundproof :131 by move id
         # E3-B2-3. No Basic_ScoreMoveEffect (:133-286), Expert_Main (:1623-1811) or other flag
         # entry names it: its move takes the generic paths (the tables that list it, Expert_
@@ -1213,7 +1218,7 @@ class AiOutcome(NamedTuple):
     script_rolls: jnp.ndarray
     tiebreak: jnp.ndarray  # int8[], RandNext % 12
     # int8[]: the first stopping switch draw, 0..sites - 1; sites (layout.switch_sites: 9
-    # vanilla, 60 Kaizo) = none; -1 refused
+    # vanilla, 69 Kaizo) = none; -1 refused
     switch_stop: jnp.ndarray
     # uint16[MOVES, slot_reads, CALC_DRAWS] (a sampled per-slot outcome): the raw RandNext()
     # draws of the damage commands among the reads (module docstring); uint16[MOVES,

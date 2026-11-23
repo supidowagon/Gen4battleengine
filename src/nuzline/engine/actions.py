@@ -132,6 +132,17 @@ def move_imprisoned(state: BattleState, side, move) -> jnp.ndarray:
     return out
 
 
+def sealed_mask(state: BattleState, side) -> jnp.ndarray:
+    """``int32``: bit ``k`` set where ``side``'s active battler's move slot ``k`` is one
+    ``move_imprisoned`` seals (CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290). Sleep Talk's
+    set reads the foes only through this test (``order.sleep_talk_slots``), so two states with
+    the same mask and the same user give the user the same set."""
+    fmt = format_of(state)
+    moves = state.moves[party(fmt, side), state.active[side]].astype(jnp.int32)
+    bits = move_imprisoned(state, side, moves).astype(jnp.int32)
+    return jnp.sum(bits << jnp.arange(moves.shape[-1], dtype=jnp.int32))
+
+
 def imprisoning_foe(state: BattleState, side) -> jnp.ndarray:
     """``bool``: a battler of the other side has ``MOVE_EFFECT_IMPRISON`` (the first test of
     ``Move_Imprisoned``, battle_lib.c:3325-3326)."""

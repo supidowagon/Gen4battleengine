@@ -1604,7 +1604,19 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     `enumerate.call_laws` offers `CALL_SEALED` only when no foe imprisons at the turn start (`can_seal`,
     enumerate.py:3701-3706) and `_split_events` sees only an Imprison landing (`sealed_at_move`, step.py:903). Needs a
     hypothetical state of the foe's moves after the copy and a step event of the sealed set at the action: not a
-    bounded change, left for the next batch.
+    bounded change, left for the next batch. A third copy source since I-3: an imprisoning Sketch user (either side: `can_sketch` and `sketched_events` take
+    both; only the coverage grading is player-side) that
+    moves first puts the Sleep Talk user's `moveSketched` into its Sketch slot (bs:4868; the copy is the move shown
+    last, kept through sleep turns, bcp.c:3952-3954), which Move_Imprisoned then seals (lib.c:3316-3338, bs:4927).
+    Built by the batch I gate fix: `CALL_SKETCHED` = 7 * `SLEEP_TALK_VALUES` (84), `CallLaws.sketched` /
+    `can_sketch`, `order.sketched_state` / `sketch_copy`, the step event `seal_mask_at_move` (`actions.sealed_mask`),
+    `enumerate.sketched_events`, the `sample_outcome` alternative.
+    NOT handled for this call law: Transform, Mimic and the imprisoner leaving. With a foe imprisoning at the turn
+    start `can_seal` is false (enumerate.py:4566-4570), so the variants are `CALL_KEEP` plus `CALL_SKETCHED` only
+    where the foe knows Sketch (:4577-4581, :4709-4712); `_split_events` drops `sealed` (`& ~start_sealed`, :4267),
+    `sketched_events` needs the mask after a Sketch (:4286), so `seen` is `CALL_KEEP` (:4333-4341) and
+    `call_consistent` keeps the KEEP rows (:4361-4362) with the turn-start weights. E2's D6-12 closes all three on
+    the `seal_mask_at_move` event (`_scratch/e1/i-next/note-for-e2-d6-12.md`).
   - Effect Spore's contact roll (battle_lib.c:4214-4335) and Suction Cups against Roar: both map to
     `AbilityId.UNSUPPORTED`, so coverage refuses every holder (`IMPLEMENTED_ABILITIES`, coverage.py:194, :743).
     Vanilla holders: 4 personal rows with Effect Spore, 3 with Suction Cups (`species_abilities_decomp` 27, 21); no
@@ -2868,6 +2880,168 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     (merge c592ddf9), which merges into main before batch H. Against main, the compare would also show the train's
     own changes. Against the train tip, every difference is batch H's.
   - Should-fix `REVEALS_ON` (Insomnia / Vital Spirit / Limber on `STATUS_CURE`) is batch I group I-6 (`_scratch/e1/i-next/sheets/ability-status-cure-reveals.md`).
+
+## Batch I
+
+First wave (builder brief `_scratch/e1/i-next/builder-brief.md`; family `_scratch/e1/i-next/family.md`). Branch
+`claude/e1-batch-i`, cut from batch H's tip 3b814681. I-1 (Weather Ball's AI type, needs `ai_ptr_class`) waits for E2.
+
+- I-9 (00be0535) `hooks.order_swaps`: the line `second = where(down[0] != down[1], down[0], second)` is deleted.
+  `order.compare_speed` already applies the dead-battler short-circuit (battle_lib.c:1204-1211: a fainted battler
+  is SLOWER than a living one), so the line was dead. Test `test_order_swaps_puts_a_fainted_battler_last`
+  (tests/engine/test_e1_batch_i.py): both fainted cases give ALL_SWAPS / 0 for every speed order.
+- I-2 (e17698dc) the AI's switch-trap gate reads `damage.battler_decomp_ability(tables, state, 0)`, not the raw
+  ability: `TrainerAI_ShouldSwitch` (trainer_ai.c:3906-3913) counts Shadow Tag, Arena Trap and Magnet Pull with
+  `CountAbility` (battle_lib.c:2896-2903, :2933-2940), which compares `Battler_Ability` (:3088-3106: none under
+  Gastro Acid unless Multitype, :3090-3093). Wonder Guard (trainer_ai.c:3298) and the party-data reads stay raw
+  (sheet's table). Tests: tests/ai/test_switching.py `test_gastro_acid_lifts_the_trap_gate` (Wobbuffet, Diglett,
+  Magnemite with a Steel active; gated raw, open suppressed), `test_gastro_acid_keeps_multitype_out_of_the_trap_gate`;
+  tests/ai/test_kaizo_switching.py `_loose_reads` applies `Battler_Ability`, `_switch_states` draws
+  `ability_suppressed[0]` (the sheet said it did already; it did not), `test_gastro_acid_trap_gate_matches_loose`.
+- I-1a (cee0ae88) `KAIZO_SWITCH_SITES` 60 -> 69 = guard 20 (trainer_ai.c:3315-3344) + keep 4 (:3576-3592) +
+  absorb 5 (:3681-3708) + passes 40 (:3756-3804). The `count > sites` refusal, its `_refusals` branch and the
+  docstrings (switching.py module doc, layout.py, outcome.py, coverage.py, docs/ai/kaizo_roark.md) are gone.
+  Tests: `test_kaizo_switch_sites_are_the_six_party_maximum` (69), `..._reach_sixty` (60 padded with NONE),
+  `test_kaizo_switch_sites_reach_sixty_five` (20 + 5 + 40 without Weather Ball). Deleted with the refusal:
+  `test_too_many_sites_are_refused` (vanilla, 12 > 9), `test_six_bench_under_vanilla_is_still_refused`, and the
+  switch half of `test_factored_distribution_refused_states_nan`. NOTE: the vanilla layout (9 sites) now drops
+  draws beyond 9 silently; only artificial vanilla states exceed 9 (roark.md 11.1). Snapshot: `AiOutcome.switch_stop`
+  for Kaizo has 69 as its "none" value (was 60): expect a layout-shape difference in a compare.
+- I-6 (4661ddd4) the STATUS_CURE reveals of Insomnia, Vital Spirit and Limber are removed:
+  `RecoverStatusByAbility` (battle_lib.c:4378-4452) tags `BTLSCR_MSG_TEMP` in subscript_ability_forbids_status.s:6,
+  which never reaches `BattleAI_SetAbility` (battle_script.c:11801-11802). `REVEALS_ON`: INSOMNIA / VITAL_SPIRIT
+  `{SLEEP_BLOCKED}`, LIMBER `{PARALYSIS_BLOCKED}`; `STATUS_CURE` only for Shed Skin and Hydration. The reveal at the end
+  of `hooks.recover_status_by_ability` and the reference `_know_ability` are deleted (stays in I-6, per E2). Flipped:
+  test_e1_batch_c vital spirit, test_k3b_abilities (Limber x2), test_m4_abilities (Insomnia x3). Added: pinned
+  `REVEALS_ON`, three cure cases, Shed Skin still reveals. Snapshot: `ai_ability_known` differs on boards with these cures.
+- I-3 (d6304843) Sketch (effect 95), player side. New state field `sketch_move` int16[B] = `moveSketched`
+  (written by UpdateMoveBuffers when the attack message shows, bcp.c:3952-3954, kept otherwise; VOLATILE, cleared at
+  switch-in and faint, lib.c:2130, :2208; not Baton-passed). `EffectId.SKETCH` = 143, `MOVE_SKETCH`,
+  `SKETCH_FORBIDDEN` (Struggle, Sketch, Chatter; bs:4848-4850), `tools/effect_map.py` 95, `MANIFEST_VERSION` 44.
+  `effects._sketch` (bs:4839-4884, subscript_sketch.s): substitute, Transformed user, none / forbidden / known move
+  fail; else the first Sketch slot takes the move with its table PP, Last Resort zeroes its count, permanent (no shadow,
+  no `mimic_slots`). Reference engine mirrors it. AI: effect 95 in `KAIZO_TRANSCRIBED` ("no Basic or Expert entry; no
+  Tag Strategy entry"; E4's cite checked: script.s:6637-6652 and TagStrategy_CheckSpecialScoring :6733-6752 name
+  neither effect 95 nor move 166 nor a Normal-type status, no score changes). Not added to a vanilla set: vanilla's
+  `transcribed` is keyed by Roark's move ids. Coverage: `coverage.sketch_calls` grades every foe move a Sketch holder can
+  copy (move effect, player-move AI refusal, halved Defense, Gyro, terrain, ROM changes through `extra`). Struggle:
+  checked outside the effect table (bcp.c:432-435, :1866-1867; engine actions.py / order.py / step.py `MOVE_STRUGGLE`
+  reads), complete, nothing to build. E3's B4-4 `carry_out` needs no change.
+  Tests: tests/engine/test_e1_batch_i.py (mapping, forbidden-id pin vs bs, copy with table PP and permanence, kept
+  with no message, failures, Last Resort, Sleep Talk calling Sketch, switch clears). Snapshot allow-new: `sketch_move`.
+  MANIFEST CLASH: `MANIFEST_VERSION` 44 here clashes with `claude/e3-batch3` (44 at ccf7150d, 45 at 2c485b5f; main
+  43). Whichever merges second renumbers above the other and rebuilds both tables.
+- Review fixes (I-3, I-1a):
+  - Fix 1 (930716b1) tests in test_e1_batch_i.py: `test_a_faint_clears_sketch_move` (lib.c:2208),
+    `test_a_shown_move_that_misses_is_sketched` (subscript_missed.s:5 PrintAttackMessage, bs:1432, bcp.c:3952-3954),
+    `test_the_choice_lock_on_sketch_is_released_next_turn` (bcp.c:3921-3930, lib.c:2307-2309),
+    `test_coverage_grades_the_moves_a_sketch_can_copy` (coverage.py "Sketch move effect" lines, `sketch_calls`).
+    Each failed on code with its rule removed (both engines mutated), passes on the tip.
+  - Fix 2 (84c5bed5) `docs/kaizo/mechanics_backlog.md` regenerated (`tools/kaizo/backlog.py`): the player-only row
+    "move effect #95: Sketch" is gone; opponent side unchanged. tests/tools/test_backlog.py 33 passed.
+  - Fix 3 (c809e81a) vanilla `SWITCH_SITES` stays 9 (option b: deriving it as Kaizo's would change `SWITCH_NONE`, the
+    switch-stop width and every vanilla AI outcome shape). The cited bound is beside it: at most 8 draws for every
+    vanilla trainer whose party fits `MOVE_EFFECTS` (Roark 246 plus one-Pokemon Tackle parties 2, 12, 355, 370);
+    Stealth Rock counts as super effective (lib.c:2681-2730, no power test). Fullset test
+    `tests/ai/test_switching.py::test_vanilla_switch_sites_bound_every_accepted_trainer` recomputes it. The I-1a NOTE
+    above is answered.
+  - Fix 4 (6b218822) Sketch's substitute test is `h.shielded` / `_shielded` (subscript_sketch.s:5 CheckSubstitute,
+    bs:9180-9181). Mimic keeps `substitute_hp`: subscript_mimic.s has no CheckSubstitute and `BtlCmd_TryMimic` reads
+    the volatile alone (bs:4483); the review's premise was wrong there. No test can show the Sketch change in any
+    format: SUBSTITUTE_HIT is set only by a damaging hit (bcp.c:3358-3371), selfTurnFlags clear after every action
+    (lib.c:2013-2015 from bcp.c:3998, :1855), and Sketch deals no damage.
+  - Fix 5 this ledger: the clash line and these lines.
+
+- I-S1 Batch I compare `snapcmp-e1i-bd2555b` (tip bd2555bc vs the main fd3c1fcc capture `snapmain-fd3c1fc`, 200 seeds, 122 parts, `--allow-new sketch_move`): COMPARE_RC=1, 110 ok, 12 diverged, 0 sampler or generator drift. Log `_scratch/rent/out/snapcmp-e1i-bd2555b/`. One class only:
+  - Diverged, class A (I-6): 6 `step` and 6 `jitstep` parts (seeds 0-9, 20-29, 30-39, 130-139, 160-169, 180-189). Each first diff is `ai_ability_known[slot]` 72 -> 0 or 1 at turn 1-4: seed 4 [0], seed 29 [2], seed 34 [0], seed 139 [3], seed 167 [1], seed 184 [2]. 72 is ABILITY_VITAL_SPIRIT (generated/abilities.txt line 73, NONE = 0). Main recorded Vital Spirit as revealed when it cured a status. Batch I keeps the slot's earlier value: 0 none, or the generator's drawn 1. The decomp gives that cure the forbids-status script (BattleSystem_RecoverStatusByAbility, battle_lib.c:4397-4410). Its message tags BTLSCR_MSG_TEMP (subscript_ability_forbids_status.s:6), so it skips `BattleAI_SetAbility` (battle_script.c:11799-11806): no reveal. Intended I-6 mechanic. No other group or field moved; `sketch_move` is the only new field. The `sample`, `rest`, `ai`, `gen` and `roark` groups are identical.
+- Batch I merge-gate fixes (`_scratch/manager/review_batch_i_2686deda.md`; report `_scratch/e1/i-next/gate-fix-report.md`):
+  - 4740944a Sleep Talk after an imprisoner's Sketch: `CALL_SKETCHED` (84), see Batch F's Open F. Before the fix,
+    `can_seal` was false once a foe imprisons, and the law kept the turn-start set: Tackle 2/3 where the game gives 1/2.
+    Tests: `test_a_faster_imprisoner_sketch_seals_its_copy_for_sleep_talk`,
+    `test_the_call_law_follows_an_imprisoners_sketch`. E2's D6-12 keeps it (`_scratch/e1/i-next/note-for-e2-d6-12.md`).
+  - 4c0f2fa4 `coverage.sketch_calls` adds the player's party moves when a foe holds Mimic, Transform or Metronome
+    (its moveTemp can be a copied party move). A Metronome gained in battle feeds its calls into the holder's
+    per-mon lines and into `extra`.
+  - ac8adc5f `test_sketch_forbidden_ids_match_the_decomp` keeps `fullset` (manager order; it matches the other decomp
+    pins) and skips without the decomp.
+  - Sketch during a Magic Coat reflection: LoopSpreadMoves swaps the attacker back to the mover (`magicCoatMon`,
+    bcp.c:3831-3835) before UpdateMoveBuffers writes moveSketched (:3952-3954). The mover records its own (reflected)
+    move, and the holder's reflected pass writes nothing. The holder keeps Magic Coat from its own action. JAX: the
+    reflected pass has `ready_t` False (step.py, `_set_sketch`). Reference: the nested holder pass runs no `_actions`
+    write. Sketch itself has no MOVE_FLAG_MAGIC_COAT (res/moves/sketch/data.json:21). Test:
+    `test_a_reflected_move_is_the_movers_sketch_move`.
+  - Max PP of a sketched slot: TrySketch writes `moves` and `ppCur` = table PP (bs:4868-4870), not `ppUps`.
+    UpdatePartyMon copies move and PP only (battle_io_command.c:581-582). So the max PP (`hooks.max_pp`,
+    MoveTable_CalcMaxPP, move_table.c:25-34) is the copy's table PP with the Sketch slot's PP Ups. That is 0 in
+    play: PP Up needs a max PP of 5 or more (item_use_pokemon.c:20, :187), and Sketch has 1; and each path that
+    puts Sketch in a slot zeroes its `ppUps` first (battle_script.c:10170, evolution.c:632, move_reminder.c:934,
+    party_menu/callbacks.c:1111), as `Pokemon_SetMoveSlot` alone keeps them (pokemon.c:3920-3933). Both engines leave
+    `pp_ups` alone. Test: `test_a_sketched_slot_keeps_its_pp_ups`.
+
+- Batch I delta-review fixes (`_scratch/e1/i-next/review-delta.md`; report `_scratch/e1/i-next/gate-fix-report.md`):
+  - SHOULD 1 `coverage.sketch_calls` closes its superset. (a) Copycat calls `movePrev` under `Move_CanBeMetronomed`
+    (battle_script.c:7333-7336); Transform is not in sCannotMetronomeMoves (battle_lib.c:7152-7177), so with a
+    Transform in the player's party a foe's Copycat joins the copiers and the party's moves join the pool. (b) A lock
+    or charge move sets `moveLockedInto = moveCur` (lib.c:1828-1832 via subscript_bide_start.s:6,
+    subscript_vanish_on_charge_turn.s:10, bs:5667-5669; `BTLVAR_ATTACKER_LOCKED_MOVE` in subscript_thrash.s:8,
+    subscript_uproar.s:5), a called move's `moveCur` is the called move (bs:2118), the next turn's `moveTemp` is it
+    (bcp.c:1885-1888) and UpdateMoveBuffers writes it to `moveSketched` (:3952-3954). New `LOCK_EFFECTS` (decomp
+    effects 26 27 39 75 117 145 151 155 159 255 256 263 272: 16 vanilla moves) and `locked_calls`: a pool with
+    Metronome, Copycat (bs:7333-7336), Mirror Move (`moveCopied` = `moveTemp`, bcp.c:4480-4485) or Me First
+    (bs:7286-7312) adds every lock move. Recharge (80) is left out: its turn prints no attack message
+    (subscript_recharging.s, bcp.c:2514-2522). Tests: `test_a_sketch_can_copy_a_party_move_a_foe_copycat_transformed_into`,
+    `test_a_sketch_can_copy_a_lock_move_a_foe_called`, `test_a_metronome_called_lock_move_is_graded_for_the_sketch_holder`.
+  - SHOULD 2 a gained Metronome's calls (`gained_calls`) leave `extra`: they go to the holder's per-mon lines and, as
+    the new `extra_calls` of `check_opponent` / `_check_trainer`, to the terrain and ROM-change lines only, as a known
+    Metronome's `fight_calls` do. `foe_moves` (the AI's Mimic / Transform pool) and `exp_refusals`' `fight_moves` no
+    longer read them: Mimic copies `movePrevByBattler` (DEFENDER_LAST_MOVE, common.h:19; bs:4481), which is
+    `moveTemp`, the Metronome itself (bcp.c:3945-3946), refused by Move_CanBeMimicked (lib.c:7182-7191); Transform
+    copies slots (bs:5346-5348). The one reachable call, a lock move (next turn's `moveTemp`, bcp.c:1885-1888), joins
+    `extra` through `locked_calls` over the player's moves and Sketch copies (a known invoker included). Width: the
+    lock moves' read rows sum to at most 6 (`read_bounds.READ_BOUNDS`, effects in `LOCK_EFFECTS`; the table's most is
+    18), so 4 * 2**6 stays far under `WIDTH_CAP` 131072; the removed gained calls could reach 18 reads. Test:
+    `test_a_gained_metronomes_calls_stay_on_the_holders_lines`.
+  - Commits: SHOULD 1 debebc81, SHOULD 2 f4ba0c2e; NITs 0fbf718a (the faster-imprisoner test is a draw pin), 3af34fac
+    (Open F: either side), 6f5c7f48 (ppUps zeroing cites), 1b2a436c (`replacement_known` docstring). No table rebuild:
+    no id or table input changed.
+  - Ruling on the known-Metronome gap (coordinator, 22 Nov): every move a line can reach goes through the ROM-change
+    check. New `coverage.reached_moves`: the moves plus, when one is Metronome, every call `metronome_calls` gives a
+    Pokemon knowing none (BtlCmd_Metronome, bs:4535-4562; the holder's own moves are in the list already).
+    `rom_change_refusals` and `terrain_refusal` read it, so a known Metronome on either side, a gained one, and
+    prep's per-candidate and per-move asks (`prep.pool`, `prep.problem._rom_change_refusal`, its `terrain`) all reach
+    the calls. The 16 lock moves stay in `extra` for a known caller. Added Kaizo ROM-change refusals today: none, since
+    neither condition in the built Kaizo manifest lists a move (`arm9 MapHeader_GetMapLabelTextID`, and
+    `arm9 gFieldScriptCommands` with its 240 trainers). Terrain: a prep candidate with Metronome against a trainer whose
+    terrain is unknown is now refused (Secret Power, Nature Power and Camouflage are calls). Tests:
+    `test_a_known_metronomes_calls_reach_the_rom_change_check[player|opp]`,
+    `test_a_metronome_reads_the_terrain_through_its_calls`.
+  - Refused trainers today (built intermediates of 22 Nov, `trainers.json` field `terrain` == `TERRAIN_UNKNOWN`, the
+    input `terrain_refusal` reads; `terrains` from tools/terrain.py): vanilla 456 of 928 (215 mixed, 241 unplaced),
+    Kaizo 522 of 928 (209 mixed, 313 unplaced). The 161 Kaizo trainers with a split are all mixed (Roark Split: Lass
+    Natalie 3, Youngster Michael 4, Lass Samantha 11, Bug Catcher Sebastian 356, ...); no split trainer is unplaced.
+    A mixed trainer's terrain is a run input (`--terrain`, `cli.fight_terrain`, manager ruling 1), not a data gap. An
+    unplaced split trainer would be a data gap (ROM, then the calc repo, then the docs sheet); there is none today.
+    Vanilla's `trainers.json` has no splits. Pin: `test_no_split_trainer_is_unplaced` (`fullset`, pod pending): Kaizo's
+    unplaced trainers among its split trainers = 0.
+  - OWED (batch 4): where the gauntlet walk fixes the fight tile (E3 batch 3's map facts, read by batch 4's planner), a
+    mixed trainer's terrain follows from that tile; the run input `--terrain` is needed only for fights outside a walked
+    group. To be built in batch 4.
+  - OWED (D11, the doubles enumeration): `enumerate.sketched_events` and `sample_outcome`'s alternative build
+    `order.sketched_state(state, _foe(side), side)`, the Sketch aimed at the sleeper. At B = 4 the Smeargle may
+    Sketch the sleeper's partner; the seen mask then misses `after`, the side reads `CALL_KEEP` and the KEEP row keeps
+    wrong weights silently. Needs the Sketch's chosen target and every imprisoning foe (the `TODO(D2)` at both calls).
+- I-S1 closing compare `snapcmp-e1c-830e730`: 830e7308 (bd2555bc with I-6's engine change reverted, throwaway
+  `e1-close-i-1`) vs `snapmain-fd3c1fc`, 200 seeds, 122 parts, `--allow-new sketch_move`: compare ok, 122 ok,
+  0 diverged, 0 error, 0 sampler or generator drift (`_scratch/rent/out/snapcmp-e1c-830e730/compare.log`). So class A
+  (I-6) is the whole of the `snapcmp-e1i-bd2555b` divergence; the only new field is `sketch_move`.
+- I-S1 re-compare after main d2ec0fc1 (candidate A): `snapcmp-e1i-5f5a203` (tip 5f5a2032 vs `snapmain-d2ec0fc`, 200 seeds, 122 parts, `--allow-new sketch_move,seal_mask_at_move,can_sketch,sketched`): COMPARE_RC=1, 12 diverged (6 `step`, 6 `jitstep`: seeds 0-9, 20-29, 30-39, 130-139, 160-169, 180-189), the same six cases as `snapcmp-e1i-bd2555b`. Log `_scratch/rent/out/snapcmp-e1i-5f5a203/`. One class, I-6: each first diff is `ai_ability_known[slot]` 72 -> the drawn input (0, or 1 at seeds 29 and 139; tests/strategies.py:2298-2299). The slot is the player's active Vital Spirit battler (engine 84, decomp 72, generated/abilities.txt line 73), asleep, cured at move end by BattleSystem_RecoverStatusByAbility (battle_lib.c:4404-4409, battle_controller_player.c:3965-3967). Its message tags BTLSCR_MSG_TEMP (subscript_ability_forbids_status.s:6), which skips BattleAI_SetAbility (battle_script.c:11801-11806): no reveal. Intended. The tool aligns by name (snap_compare.py:311-341, :353, :852-866): no shift. Closing compare `snapcmp-e1close-i2-931e77b` (931e77bd = tip + I-6 revert): compare ok, 122 ok, 0 diverged, 0 error, 0 sampler or generator drift (`_scratch/rent/out/snapcmp-e1close-i2-931e77b/`); new keys seen only `sketch_move` and the step event `seal_mask_at_move`. So I-6 is the whole divergence on main d2ec0fc1 too.
+- Merge of main d2ec0fc1 (merge candidate A: e2-lawsbag, e2-tracelaws, the quick lane; e2-mechanics-ledger.md
+  "Merge candidate A") into batch I at 86b0faec. One conflict, the import lines of `src/nuzline/engine/effects.py`:
+  both kept (batch I's `order.sketch_copy` for `_sketch`; main's `outcome.secondary_procs`, the secondary chance read
+  at the hit with the live Serene Grace, battle_lib.c:1552-1556, :1571-1575, battle_script.c:8369-8378). The rest
+  auto-merged; no read of `outcome.secondary` / `fang_flinch` outside `secondary_procs` / reference `_passes_chance`
+  remains, and `sketch_move` is outside `settle_traces` (Trace invariant, STATE.md). `MANIFEST_VERSION` stays 44 (main
+  43). Tables rebuilt; the merge's allow-new fields are in `_scratch/e1/i-next/merge-candidate-report.md`.
 
 ## Stream state (restart point, 2026-11-19)
 

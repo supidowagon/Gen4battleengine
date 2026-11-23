@@ -66,7 +66,8 @@ def test_tracked_defaults_load_with_one_entry_per_id():
     table = w.load(POD / "weights.txt")
     entries = [e for e, _ in table]
     assert len(entries) == len(set(entries))
-    assert all(e.startswith("tests/") and gb >= 1 for e, gb in table)
+    # the one non-test entry is the local table build (tools/ops/ramgate.py BUILD_KEY)
+    assert all((e.startswith("tests/") or e == "tools/build_tables.py") and gb >= 1 for e, gb in table)
     assert w.id_weight("tests/prep/test_search.py::test_team_phase_halving", table) > 80
 
 
@@ -81,3 +82,17 @@ def test_the_entry_index_finds_what_the_longest_match_finds():
         assert w.id_weight(test_id, table) == want == w.id_weight(test_id, list(table)), test_id
     assert w.id_weight("tests/search/test_x.py::test_big[3]", table) == 95
     assert w.id_weight("tests/search/test_y.py::t", table) == 20
+
+
+def test_the_build_entry_weighs_no_test_id():
+    """The tools/build_tables.py line is for the local build gate only: the pod runner's longest match
+    never picks it for a test id, so a unit's weight is the same with or without it."""
+    table = w.load(POD / "weights.txt")
+    assert ("tools/build_tables.py", 3) in table
+    without = [(e, g) for e, g in table if e != "tools/build_tables.py"]
+    for test_id in (
+        "tests/tools/test_ramgate.py::test_x",
+        "tests/prep/test_search.py::test_team_phase_halving",
+        "tests/never_measured.py::t",
+    ):
+        assert w.id_weight(test_id, table) == w.id_weight(test_id, without)

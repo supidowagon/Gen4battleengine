@@ -539,8 +539,10 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # magnetRiseTurns on its user, no stage.
     EffectId.MAGNET_RISE,
     # Mimic (effect_script_0082.s:5) runs subscript_mimic (:5-11): BtlCmd_TryMimic
-    # (battle_script.c:4476-4524) writes a move slot, no stage.
+    # (battle_script.c:4476-4524) writes a move slot, no stage; Sketch (effect_script_0095.s:5,
+    # BtlCmd_TrySketch, :4839-4884) writes a move slot and its PP, no stage (I-3).
     EffectId.MIMIC,
+    EffectId.SKETCH,
     # Chatter (effect_script_0267.s:5-7) is a hit whose subscript_chatter (:5-6) confuses the
     # defender through subscript_confuse: a volatile status, no stage.
     EffectId.CHATTER,

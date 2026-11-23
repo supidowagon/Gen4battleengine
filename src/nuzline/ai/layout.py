@@ -34,7 +34,7 @@ The fields:
   (``AiContext.missing_read``). 0 for the flat layout.
 * ``switch_sites``: the voluntary-switch draw sites ``AiOutcome.switch_stop`` encodes:
   ``switching.SWITCH_SITES`` (9) for vanilla Roark's three Pokemon,
-  ``switching.KAIZO_SWITCH_SITES`` (60, every candidate draw of a party of six) for Kaizo.
+  ``switching.KAIZO_SWITCH_SITES`` (69, every candidate draw of a party of six) for Kaizo.
 * ``water2_ability``: the ability ``Basic_CheckForImmunity``'s last compare tests
   (script.s:78): Levitate (26) in vanilla, a second Levitate test that never matches (the
   decomp's bug, since :77 already takes Levitate), and Dry Skin (87) in Kaizo (overlay14
@@ -204,8 +204,9 @@ KAIZO = AiLayout(
     per_slot_sites=True,
     max_script_rolls=MAX_SCRIPT_ROLLS,  # unused: the per-slot layout is not flat
     slot_reads=KAIZO_SLOT_READS,
-    # 4 keep draws + 2 passes x 5 bench Pokemon x 4 moves (trainer_ai.c:3576-3592,
-    # :3756-3804; docs/ai/kaizo_roark.md 11): a party of six never has more.
+    # 5 x 4 Wonder Guard + 4 keep + 5 absorb draws + 2 passes x 5 bench Pokemon x 4 moves
+    # (trainer_ai.c:3315-3344, :3576-3592, :3681-3708, :3756-3804; docs/ai/kaizo_roark.md 11):
+    # a party of six never has more.
     switch_sites=KAIZO_SWITCH_SITES,
     flags=0b10111,
     water2_ability=87,  # ABILITY_DRY_SKIN
