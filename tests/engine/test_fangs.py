@@ -240,12 +240,14 @@ def test_limber_blocks_the_paralysis_silently(tables, names):
     out = assert_matches_reference(tables, s, acts, _o(1, 0, side=1))
     assert int(out.status[0, 0]) == Status.NONE
     assert int(out.ai_ability_known[0]) == int(s.ai_ability_known[0])
-    # Mold Breaker pierces it; Limber then cures it at the move end, with its message
-    # (hooks.recover_status_by_ability, battle_lib.c:4397).
+    # Mold Breaker pierces it; Limber then cures it at the move end
+    # (hooks.recover_status_by_ability, battle_lib.c:4397). The cure's message tags
+    # BTLSCR_MSG_TEMP (subscript_ability_forbids_status.s:6), which skips BattleAI_SetAbility
+    # (battle_script.c:11801-11802): the AI learns nothing (I-6).
     pierced = _ability(s, 1, AbilityId.MOLD_BREAKER)
     out = assert_matches_reference(tables, pierced, acts, _o(1, 0, side=1))
     assert int(out.status[0, 0]) == Status.NONE
-    assert int(out.ai_ability_known[0]) != 0
+    assert int(out.ai_ability_known[0]) == int(pierced.ai_ability_known[0])
 
 
 # --- contact abilities ---------------------------------------------------------------------
