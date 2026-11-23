@@ -1,4 +1,5 @@
 # Local peak per ROM-only file, read by tools/ops/ramgate.py (rom_weights.txt; same format as pod/weights.txt).
+# These lines also set the weight of non-ROM-only ids of the same key in an engine-free run (longest key wins across this file and pod/weights.txt; equal length: this file), tools/ops/ramgate.py item_weight.
 # Line: <test file or node id> <GB> <tag>. Longest matching key wins; an id with no line weighs 6 (ROM_UNMEASURED_GB; the run gets the engine blocker), 14 when the engine loaded at collection (ROM_ENGINE_UNMEASURED_GB; the light modules nuzline.engine and nuzline.engine.ids do not count, tools/ops/ramgate.py LIGHT_ENGINE_MODULES).
 # GB = ceil(max(1.25 m, m + 2)), m = peak summed RSS of the pytest tree in GB (10^9 bytes), polled every 0.5 s,
 # one file's non-slow ROM-only ids per process (measuring harness tools/ops/ramgate_measure.py: NUZLINE_RAMGATE_NO_WAIT=1, watchdog at 4 GB free).
