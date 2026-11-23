@@ -230,6 +230,7 @@ def _old(p: Path, seconds: float) -> None:
 def test_prune_skips_while_another_pod_holds_the_lock(tmp_path):
     jax = tmp_path / "vol" / "jax"
     (jax / ".prune.lock").mkdir(parents=True)
+    (jax / ".prune.lock" / "owner").write_text(f"podb 7 {int(time.time())}\n")  # an empty owner is stale
     old = jax / f"1111111111111111-{HOST}"
     _entry(old, "x-cache", _blob(1))
     (old / f"used-{_days_ago(30)}").touch()
