@@ -236,20 +236,31 @@ def test_an_engine_free_item_without_a_key_weighs_six():
     assert gate([new_tool_test], free=11.9, modules=NO_ENGINE, env=env)[0] == "TIMEOUT"
 
 
-def test_rom_only_items_weigh_fourteen_until_measured():
+def test_rom_only_items_weigh_six_until_measured():
     light = item("tests/b/test_y.py::t[x]", "kaizo_inputs")  # pod table says 4
-    assert rg.ROM_UNMEASURED_GB == 14.0
-    assert rg.item_weight(light, TABLE, {}) == 14.0
-    assert rg.item_weight(item("tests/zzz.py::t", "docs"), TABLE, {}) == 14.0  # no pod key
-    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}) == 30.0
+    assert rg.ROM_UNMEASURED_GB == 6.0
+    assert rg.item_weight(light, TABLE, {}, engine_free=True) == 6.0
+    assert rg.item_weight(item("tests/zzz.py::t", "docs"), TABLE, {}, engine_free=True) == 6.0  # no pod key
+    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}, engine_free=True) == 30.0
     assert rg.item_weight(item("tests/b/test_y.py::t", "tmp_path"), TABLE, {}) == 4.0
     measured = {"tests/b/test_y.py": 7.0, "tests/b/test_y.py::t": 9.0}
     assert rg.item_weight(light, TABLE, measured) == 9.0  # longest prefix wins
     assert rg.item_weight(item("tests/b/test_y.py::u", "docs"), TABLE, measured) == 7.0
     env = {rg.ENV_TIMEOUT: "0"}
-    assert gate([light], free=20.1, rom_table={}, env=env)[0] == "GO"  # needs > 20
-    assert gate([light], free=19.9, rom_table={}, env=env)[0] == "TIMEOUT"
+    assert gate([light], free=12.1, rom_table={}, env=env)[0] == "GO"  # needs > 12
+    assert gate([light], free=11.9, rom_table={}, env=env)[0] == "TIMEOUT"
     assert gate([light], free=13.1, rom_table={"tests/b/test_y.py": 7.0}, env=env)[0] == "GO"
+
+
+def test_an_unmeasured_rom_only_item_weighs_fourteen_once_the_engine_is_loaded():
+    light = item("tests/b/test_y.py::t[x]", "kaizo_inputs")  # pod table says 4
+    assert rg.ROM_ENGINE_UNMEASURED_GB == 14.0
+    assert rg.item_weight(light, TABLE, {}) == 14.0
+    assert rg.item_weight(item("tests/heavy.py::t", "docs"), TABLE, {}) == 30.0  # a higher pod key wins
+    assert rg.item_weight(light, TABLE, {"tests/b/test_y.py": 3.0}) == 3.0  # measured wins
+    env = {rg.ENV_TIMEOUT: "0"}
+    assert gate([light], free=19.9, modules=ENGINE, env=env)[0] == "TIMEOUT"  # needs > 20
+    assert gate([light], free=20.1, modules=ENGINE, env=env)[0] == "GO"
 
 
 def test_load_rom_weights(tmp_path):
@@ -329,8 +340,8 @@ def test_cli_pod_rom_gate_and_build(monkeypatch, tmp_path):
     assert run(["tests/heavy.py"]) == 13 and out[-1] == "POD 30"
     assert run(["tests/heavy.py", "--rom-gate"]) == 0 and out[-1] == "GO 30"
     assert run(["tools.kaizo.x", "--weight", "9"]) == 13 and out[-1] == "POD 9"
-    # a build never goes to the pod: 14 without a tools/build_tables.py line, only the RAM wait applies
-    assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 14"
+    # a build never goes to the pod: 6 without a tools/build_tables.py line, only the RAM wait applies
+    assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 6"
     assert run(["--build", "--weight", "12", "--", *OK_CHILD]) == 0 and out[-1] == "GO 12"
     monkeypatch.setattr(rg, "load_weights", lambda: {**TABLE, "tools/build_tables.py": 11.0})
     assert run(["--build", "--", *OK_CHILD]) == 0 and out[-1] == "GO 11"  # the measured line
@@ -360,19 +371,19 @@ def test_cli_honours_the_timeout_env(monkeypatch, tmp_path):
         ["--build", "--", *OK_CHILD], free=lambda: 1.0, sleep=clock.sleep, clock=clock.now,
         say=out.append, lock=rg.MachineLock(tmp_path / "l"), platform="win32",
     )  # fmt: skip
-    assert code == 14 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 14"
+    assert code == 14 and clock.sleeps == [60.0, 60.0] and out[-1] == "TIMEOUT 6"
 
 
 def test_cli_build_waits_for_ram(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "load_weights", lambda: TABLE)
-    seq = iter([10.0, 19.0, 20.5])
+    seq = iter([10.0, 11.5, 12.5])  # need > 6 + 6 (the unlisted-build default)
     sleeps = []
     out = []
     code = rg.main(
         ["--build", "--", *OK_CHILD], free=lambda: next(seq), sleep=sleeps.append,
         say=out.append, lock=rg.MachineLock(tmp_path / "l"), platform="win32",
     )  # fmt: skip
-    assert code == 0 and sleeps == [60.0, 60.0] and out[-1] == "GO 14"
+    assert code == 0 and sleeps == [60.0, 60.0] and out[-1] == "GO 6"
     assert not any(m.startswith("POD") for m in out)
 
 
@@ -410,7 +421,7 @@ def test_cli_build_waits_for_the_lock_within_the_timeout(monkeypatch, tmp_path):
         say=out.append, platform="win32",
         lock=rg.MachineLock(lock_file, procs=lambda: procs, started=born.get, me=100),
     )  # fmt: skip
-    assert code == 14 and out[-1] == "TIMEOUT 14"
+    assert code == 14 and out[-1] == "TIMEOUT 6"
     assert clock.sleeps == [10.0] * 6  # 10 s polls, up to the 1 minute timeout
     told = [m for m in out if "holds the lock" in m]
     assert len(told) == 1 and "pid 4242" in told[0] and str(lock_file) in told[0]
@@ -623,10 +634,14 @@ def test_blocker_in_a_fake_run_stops_the_import_and_is_removed(monkeypatch):
     rg.remove_blocker(b, path)  # twice is harmless
 
 
-def test_blocker_wanted_only_for_engine_free_runs():
-    assert rg.blocker_wanted([PLAIN, ROM], {})
-    assert rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "1"})  # no override any more
-    assert not rg.blocker_wanted([ROM, ROM], {})
+def test_blocker_wanted_for_engine_free_runs_and_unmeasured_rom_only_runs():
+    listed = {ROM.nodeid: 3.0}
+    no = lambda: False  # noqa: E731
+    assert rg.blocker_wanted([PLAIN, ROM], {}, listed, no)
+    assert rg.blocker_wanted([PLAIN], {rg.ENV_ROM_GATE: "1"}, listed, no)  # no override any more
+    assert not rg.blocker_wanted([ROM, ROM], {}, listed, no)  # measured: the engine may load
+    assert rg.blocker_wanted([ROM], {}, {}, no)  # unmeasured: its 6 GB assumes no engine
+    assert not rg.blocker_wanted([ROM], {}, {}, lambda: True)  # the measuring harness runs it
 
 
 def test_blocker_sets_the_child_env_and_removal_unsets_it(monkeypatch):
@@ -1079,7 +1094,7 @@ def test_the_measuring_harness_figures_and_reads_rss():
     assert harness.figure(2.0) == 4 and harness.figure(10.0) == 13 and harness.figure(0.5) == 3
     assert harness.rss_bytes(os.getpid()) > 10_000_000  # this pytest process
     assert harness.tree_pids(os.getpid())[0] == os.getpid()
-    assert harness.START_FREE_GB - rg.RESERVE_GB == 14.0
+    assert harness.START_FREE_GB == 20.0  # fixed: an unmeasured test may load the engine
     text = (ROOT / "tools/ops/ramgate_measure.py").read_text(encoding="utf-8")
     assert 'kind="measure"' in text and "rg.ENV_NO_WAIT" in text
 

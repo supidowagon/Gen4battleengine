@@ -113,12 +113,16 @@ Encodings:
   (battle_script.c:5039-5070) and a bag sleep cure (battle_system.c:469-472) clear it; a
   volatile, not Baton-passed (condition.h:72-76), not copied by Transform (battle_mon.h:115
   lies past ``ability``, battle_script.c:5346-5348).
-* ``ai_item_known`` is ``aiContext.battlerHeldItems`` of the player's party slot: the held item
+* ``ai_item_known`` is ``aiContext.battlerHeldItems[b]`` of battler ``b`` (ai_context.h:27-29;
+  kept where ``ai_record_kept``, sheet D45-1): the held item
   a battle message named (``BattleAI_SetHeldItem``, battle_script.c:11726-11745, :12119-12122;
   ``effects.reveal_item``), 0 when none. It is cleared when the Pokemon loses its item (every
   removal runs ``BattleMon_CopyToParty``, battle_lib.c:1819-1823; ``effects.forget_item``) and
-  when it enters (``BattleSystem_UpdateAfterSwitch``, :2153; ``step._forget``). The AI reads it
-  for the other side's battlers only (trainer_ai.c:1901-1934), so the opponent's is not kept.
+  when it enters (``BattleSystem_UpdateAfterSwitch``, :2153) or faints
+  (``BattleSystem_CleanupFaintedMon``, :2223-2225; ``step._forget``). The AI reads it for any
+  battler but the attacker (``LoadHeldItemEffect``, trainer_ai.c:1908: the ally's too) and the
+  other side's (``IfHeldItemEqualTo``, :1925-1929); at B = 2 the opponent's is not read, so not
+  kept.
 * E2 batch 7, the state the trainer AI reads (rulings B7-n). ``ingrain`` is the active battler's
   ``MOVE_EFFECT_INGRAIN`` (moves.h:18), 0/1. ``mean_look`` is its ``VOLATILE_CONDITION_MEAN_LOOK``
   (condition.h:58), 0/1, and ``mean_look_target`` its ``MoveEffectsData.meanLookTarget``
@@ -211,7 +215,7 @@ Encodings:
   level-up's learn writes the party only (:10168-10176) and ``ReloadPokemon`` reloads the other
   slots (:183-191), and the next ``InitBattleMon`` brings the party's back (``step._restore_moves``
   on leaving, ``moveEffectsData`` is cleared, :2100-2104). ``ai_seen_moves`` holds
-  ``battlerMoves`` as move ids (``TrainerAI_RecordLastMove``, trainer_ai.c:2705-2716): a slot's
+  ``battlerMoves[b]`` of battler ``b`` (kept where ``ai_record_kept``) as move ids (``TrainerAI_RecordLastMove``, trainer_ai.c:2705-2716): a slot's
   move can change under Mimic, so the record cannot be flags.
 * E1 trial batch (G-69, Transform). ``transformed`` is VOLATILE_CONDITION_TRANSFORM: the active slot's
   species, form, stats, IVs, ability slot / form, types, ability, moves and PP are then the copied
@@ -219,7 +223,7 @@ Encodings:
   the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot, ``mimic_slots`` all four).
   They are restored on leaving like the Mimic shadow (``step._restore_transform``), not volatile: a
   fainted battler keeps the copy until its replacement enters (the exp payout reads it). ``truant`` is
-  ``MoveEffectsData.truant``. ``ai_ability_known`` is ``battlerAbilities`` as the decomp ability id.
+  ``MoveEffectsData.truant``. ``ai_ability_known`` is ``battlerAbilities[b]`` as the decomp ability id.
 * ``trainer_items`` / ``trainer_item_count`` are ``aiContext.trainerItems[battler >> 1]`` /
   ``trainerItemCounts[battler >> 1]`` (the bag's size at battle start, never decremented), held
   on the opposing battler ``b`` whose ``b >> 1`` it is (1 -> bag 0, 3 -> bag 1): one bag per
@@ -285,7 +289,8 @@ Encodings:
   level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
   ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask`` as a
   bitmask over the player's party slots, one entry per enemy battler at B = 4 (D3-8b): the
-  player's leads at the start, then written by every send-out (``step._switch_in``).
+  player's leads at the start, then written by every send-out (``step._switch_in``). ``sent_out``
+  is ``battleParticipantMask``, per battler, not ``exp_mask`` (``STATE.md`` "sent_out").
   ``learn_level`` / ``learn_cursor`` (the pending learnset scan) are 0 until the payout and the
   learn resolve set them. E3-B2-21: a payout's learn prompt pauses the turn
   (``learn_site``, ``levelup.LEARN_*``), with the scratch ``ts_ran``, ``ts_move_cur``,
@@ -627,11 +632,11 @@ class BattleState(NamedTuple):
     over: jnp.ndarray  # int8
     winner: jnp.ndarray  # int8
     player_faints: jnp.ndarray  # int8
-    # AI knowledge of the player
-    # int16[6,4], battlerMoves of the player's slot: move ids in first-free order (G-68)
+    # The AI's record, per battler (ai_context.h:27-29; sheet D45-1; rows kept where ai_record_kept)
+    # int16[B,4], battlerMoves[b]: move ids in first-free order (G-68)
     ai_seen_moves: jnp.ndarray
-    ai_item_known: jnp.ndarray  # int16[6], battlerHeldItems: the item id a message named, 0 none
-    # int16[6], battlerAbilities: the decomp ability id a message named, 0 = none (G-69)
+    ai_item_known: jnp.ndarray  # int16[B], battlerHeldItems[b]: the item id a message named, 0 none
+    # int16[B], battlerAbilities[b]: the decomp ability id a message named, 0 = none (G-69)
     ai_ability_known: jnp.ndarray
     # experience (K3d-exp, design §2.1; see the module docstring)
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
@@ -745,6 +750,10 @@ class BattleState(NamedTuple):
     # Struggling battler keeps it, nothing resets it. Me First and Pursuit read it
     # (``order.battler_selected_move``)
     selected_temp: jnp.ndarray
+    # int8[B], BattleSystem.battleParticipantMask[b] (battle_system.h:118; battle_system.c:973-976):
+    # bit i = party slot i of b's party was sent out by b this battle; set at every send-out, the
+    # start's included, never cleared (D45-18)
+    sent_out: jnp.ndarray
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
@@ -783,7 +792,7 @@ class BattleState(NamedTuple):
 
 def record_seen_move(row, move):
     """``TrainerAI_RecordLastMove``'s list update (trainer_ai.c:2705-2716) on one battler's
-    ``battlerMoves`` ``row`` (``ai_seen_moves[slot]``, move ids in first-free order): ``move``
+    ``battlerMoves`` ``row`` (``ai_seen_moves[b]``, move ids in first-free order): ``move``
     goes into the first empty entry unless the list already holds it or is full; MOVE_NONE
     matches the first empty entry and records nothing (G-68)."""
     row = jnp.asarray(row)
@@ -792,6 +801,61 @@ def record_seen_move(row, move):
     add = ~jnp.any(row == move) & jnp.any(free) & (move != 0)
     first = jnp.arange(row.shape[0]) == jnp.argmax(free)
     return jnp.where(add & first, move, row)
+
+
+def ai_record_kept(fmt: Format, b) -> jnp.ndarray:
+    """bool: battler ``b``'s record row is one some trainer-AI battler reads, so the engine keeps it
+    (sheet D45-1 rule 6, manager ruling Q1): every battler at B = 4; at B = 2 the player's battler
+    (party 0) only: the AI battler 1 reads its own record never (trainer_ai.c:1179, :1908, :1925)."""
+    if fmt.B == 4:
+        return jnp.asarray(True)
+    return party(fmt, jnp.asarray(b, jnp.int32)) == 0
+
+
+def _record_row(rows, b):
+    n = rows.shape[0]
+    b = jnp.asarray(b, jnp.int32)
+    row = rows[jnp.clip(b, 0, n - 1)]
+    # zeros for a battler the format lacks (b >= B) and for no battler (b < 0, e.g. -1)
+    return jnp.where((b >= 0) & (b < n), row, jnp.zeros_like(row))
+
+
+def ai_record_moves(state, b):
+    """``aiContext.battlerMoves[b]`` (ai_context.h:27-29), int16[MOVES]; zeros for a battler the
+    format lacks (``b >= B``: InitAI's zeros, sheet D45-1 rule 6)."""
+    return _record_row(state.ai_seen_moves, b)
+
+
+def ai_record_ability(state, b):
+    """``aiContext.battlerAbilities[b]`` (ai_context.h:28), int16; 0 for ``b >= B`` (rule 6)."""
+    return _record_row(state.ai_ability_known, b)
+
+
+def ai_record_item(state, b):
+    """``aiContext.battlerHeldItems[b]`` (ai_context.h:29), int16; 0 for ``b >= B`` (rule 6)."""
+    return _record_row(state.ai_item_known, b)
+
+
+def ai_record_write(state, field: str, b, mon, value, cond) -> BattleState:
+    """``field[b] = value`` where ``cond`` and battler ``b`` holds party slot ``mon`` (sheet D45-1
+    rule 7: the record is of the Pokemon now in ``b``; a write naming a benched slot is masked)."""
+    rows = getattr(state, field)
+    b = jnp.asarray(b, jnp.int32)
+    on = jnp.asarray(cond) & (state.active[b] == mon)
+    return state._replace(
+        **{field: rows.at[b].set(jnp.where(on, value, rows[b]).astype(rows.dtype))}
+    )
+
+
+def ai_record_clear(state, b, cond) -> BattleState:
+    """Battler ``b``'s three record rows to 0 where ``cond``: ``BattleSystem_UpdateAfterSwitch``
+    (battle_lib.c:2151-2153) and ``BattleSystem_CleanupFaintedMon`` (:2223-2225), any battler."""
+    b = jnp.asarray(b, jnp.int32)
+    out = {}
+    for field in ("ai_seen_moves", "ai_ability_known", "ai_item_known"):
+        rows = getattr(state, field)
+        out[field] = rows.at[b].set(jnp.where(cond, 0, rows[b]).astype(rows.dtype))
+    return state._replace(**out)
 
 
 def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
@@ -1101,9 +1165,9 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),
     "player_faints": (_FIELD, np.int8),
-    "ai_seen_moves": ((SLOTS, MOVES), np.int16),
-    "ai_item_known": ((SLOTS,), np.int16),
-    "ai_ability_known": ((SLOTS,), np.int16),
+    "ai_seen_moves": ((*_BATTLER, MOVES), np.int16),
+    "ai_item_known": (_BATTLER, np.int16),
+    "ai_ability_known": (_BATTLER, np.int16),
     "exp": ((SLOTS,), np.int32),
     "evs": ((*_MON, 6), np.int16),
     "nature": (_MON, np.int8),
@@ -1161,6 +1225,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "last_hit_by": (_BATTLER, np.int8),
     "move_slot": (_BATTLER, np.int8),
     "selected_temp": (_BATTLER, np.int8),
+    "sent_out": (_BATTLER, np.int8),
 }
 
 
@@ -1440,7 +1505,9 @@ def initial_arrays(
     ``trainer_item_count[1]``; the player's battlers' bags stay empty (only ``battler &
     BATTLER_THEM`` is filled, :4803). With four battlers, battler 3's bag is ``opp2_items``
     (``trainers[3]``), which every four-battler fight must give (``ValueError`` otherwise):
-    ``TWO_TRAINERS`` / ``MULTI`` the second opposing trainer's bag; a plain ``DOUBLES`` either
+    ``TWO_TRAINERS`` the second opposing trainer's bag; ``MULTI`` loads neither bag (``opp_items``
+    and ``opp2_items`` are accepted and dropped: ``BATTLE_TYPE_NO_AI_ITEMS``, bcp.c:4801,
+    battle.h:46-51, encounter.c:732-735; sheet D45-6); a plain ``DOUBLES`` either
     ``opp_items`` again, when both trainer ids are the trainer's (a scripted
     ``StartTrainerBattle t, t`` or the spotted pair, scripts_battles.s:156-173 with
     trainer_encounter.c:356-371; encounter.c:736, :751-752), or ``()`` when the player talks
@@ -1460,7 +1527,7 @@ def initial_arrays(
     battle_lib.c:1461-1479). At B = 4 (D3-8b) both entries (one per enemy battler) hold the bits
     of the player battlers' leads: battler 0's, and battler 2's unless the format is ``MULTI``
     (the loop stops after player battler 0 for ``BATTLE_TYPE_TRAINER_WITH_AI_PARTNER``,
-    battle_lib.c:1475-1477). The learn fields start at 0."""
+    battle_lib.c:1475-1477). ``sent_out[b] = 1 << leads[b]`` (D45-18). The learn fields start at 0."""
     if len(parties) != fmt.P:
         raise ValueError(f"a {fmt.B}-battler fight has {fmt.P} parties, got {len(parties)}")
     if leads is None:
@@ -1490,14 +1557,24 @@ def initial_arrays(
     if fmt.B == 4 and fmt != MULTI:
         bits |= 1 << leads[2]
     a["exp_mask"][...] = bits
+    # D45-18: the start's PokemonSlideIn of every battler (subscript_start_encounter.s:84, :91;
+    # BattleController_EmitShowEncounter, battle_controller.c:282) sets its lead's bit.
+    for b in range(fmt.B):
+        a["sent_out"][b] = 1 << leads[b]
     # D2-1 rule 8: the game's zero is never read (every battler selects on turn 1); b ^ 1 keeps
     # a hand-built state's lock on today's defender.
     a["chosen_target"][...] = np.arange(fmt.B) ^ 1
-    bags = {1: opp_items}
+    # D45-6 initial_arrays: InitAI loads the enemy bags unless the battle type has
+    # BATTLE_TYPE_NO_AI_ITEMS (bcp.c:4801; constants/battle.h:51): MULTI is TRAINER_WITH_AI_PARTNER,
+    # which has BATTLE_TYPE_AI (encounter.c:732-735; battle.h:46-47), so no battler has a bag
+    # (sheet D45-6 R1-R2).
+    bags = {} if fmt == MULTI else {1: opp_items}
     if fmt.B == 4:
         if opp2_items is None:
             raise ValueError("a four-battler fight needs battler 3's bag (opp2_items; D1-5)")
-        bags[3] = opp2_items
+        if fmt != MULTI:
+            bags[3] = opp2_items
+    # end D45-6 initial_arrays
     for b, items in bags.items():
         bag = [item for item in items if item]
         if len(bag) > BAG_SLOTS:

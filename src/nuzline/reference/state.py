@@ -204,6 +204,7 @@ class RefBattler:
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
     move_slot: int  # BattleContext.moveSlot[b], written at a FIGHT's selection (E2-ML-5)
     selected_temp: int  # battlerActions[b][TEMP_VALUE] as Battler_SelectedMove reads it (E2-ML-8)
+    sent_out: int  # battleParticipantMask[b]: bit = party slot sent out by b this battle (D45-18)
 
 
 @dataclass
@@ -238,8 +239,10 @@ class RefState:
     over: int
     winner: int
     player_faints: int
+    # The AI's record per battler (ai_context.h:27-29, sheet D45-1): battlerMoves[b] / battlerHeldItems[b]
+    # (item ids) / battlerAbilities[b], length B
     ai_seen_moves: list[list[int]]
-    ai_item_known: list[int]  # battlerHeldItems of the player's slots (item ids)
+    ai_item_known: list[int]
     ai_ability_known: list[int]
     # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask: an int at B = 2
     # (entry 0), a list of 2 at B = 4 (entry (b >> 1) & 1 of enemy battler b).

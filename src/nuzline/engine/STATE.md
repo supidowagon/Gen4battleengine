@@ -453,7 +453,7 @@ three structs has a row.
   (`step._restore_transform`, `_restore_moves`) or the player's battle ends; a fainted one keeps the
   copy until its replacement enters (the exp payout reads its copied species, :2216). A level-up
   reloads the battler's own stats, level and HP, not its moves (battle_lib.c:169-194):
-  `levelup.party_identity`. `ai_ability_known` is `battlerAbilities`: the decomp id the AI
+  `levelup.party_identity`. `ai_ability_known` is `battlerAbilities[b]`: the decomp id the AI
   recorded, 0 none, -1 known but not named by the engine (settled to its id by a Transform).
 - **formNum -> `form_num`** (H-5, per battler, `BattleMon.formNum`, battle_mon.h:79): the party's form at the
   send-out (`BattleSystem_InitBattleMon`, battle_lib.c:132: `initial_arrays` for the leads, `step._switch_in`
@@ -468,6 +468,10 @@ three structs has a row.
   Chatter's parameter 0 / 1 / 2 (`ids.CHATTER_CHANCES`, sound_chatot.c:193-213), a battle constant
   like `terrain`: every enemy's is 0 (`ChatotCry_New` is invalid, field_battle_data_transfer.c:97,
   chatot_cry.c:13-25), the player's is the save's (`make_state(chatot_cry=...)`, party 0 (`[P]`, battle_system.c:915-924)).
+- **battleParticipantMask -> `sent_out`** (D45-18): per battler (`u8[MAX_BATTLERS]`, battle_system.h:118),
+  bit = the battler's party slot; set by both send-out emitters (battle_controller.c:282, :332), the start
+  included, never cleared. Read only by `BattleSystem_SetBurmyForm` (battle_system.c:926-971, `mask[0]` only)
+  at the battle's end; not `exp_mask` (`sideGetExpMask`), whose bits it contains.
 - **BattleMon vs. party moves** (G-68): `moves` / `pp` of the active slot are the BattleMon's;
   Mimic writes only those (battle_script.c:4502-4516), flags the slot in `mimic_slots` and keeps the
   party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots
@@ -487,14 +491,18 @@ three structs has a row.
   shadow: the engine's `moves` / `pp` are the party Pokemon's, so the write is permanent (it needs no
   `mimic_slots` bit, and `BtlIOCmd_UpdatePartyMon` writes every unflagged slot,
   battle_io_command.c:575-587). The slot's `pp_ups` are untouched.
-- **aiContext**: `battlerMoves` (moves the AI has seen, as move ids in first-free order,
+- **aiContext**: per battler (`battlerMoves[MAX_BATTLERS][4]`, `battlerAbilities[MAX_BATTLERS]`,
+  `battlerHeldItems[MAX_BATTLERS]`, ai_context.h:27-29; kept where `state.ai_record_kept`: B = 4
+  every battler, B = 2 battler 0 (sheet D45-1 rule 6); read through `state.ai_record_moves /
+  ability / item(state, b)`, 0 for `b >= B`; cleared on entry and on a faint, battle_lib.c:2151-2153,
+  :2223-2225, `step._forget`). `battlerMoves` (moves the AI has seen, as move ids in first-free order,
   `TrainerAI_RecordLastMove`, trainer_ai.c:2705-2716) -> `ai_seen_moves`,
-  `battlerHeldItems` (the player's held items a message named, E2 batch 7) -> `ai_item_known`
-  (per player party slot, an item id; set by `effects.reveal_item` where an item tag of
+  `battlerHeldItems` (the held item a message named of any kept battler, E2 batch 7, sheet D45-3; the ally's record is read, trainer_ai.c:1908) -> `ai_item_known`
+  (an item id; set by `effects.reveal_item` where an item tag of
   `BTLSCR_ATTACKER` / `DEFENDER` / `MSG_BATTLER_TEMP` names it, battle_script.c:11726-11745:
   Leftovers and Black Sludge at the turn end, Sticky Barb's damage, Shell Bell's heal; cleared by
   `effects.forget_item` when the item goes, battle_lib.c:1819-1823, and on entry, :2153),
-  `battlerAbilities` (revealed abilities) -> `ai_ability_known`, `trainerItems`
+  `battlerAbilities` (abilities a message tagged or a script set, any kept battler: `hooks.reveal_ability` / `_know`, `effects.know_ability`, sheet D45-2) -> `ai_ability_known`, `trainerItems`
   -> `trainer_items`, `trainerItemCounts` (the bag's size at battle start, never
   decremented, read by `TrainerAI_ShouldUseItem`'s gate, trainer_ai.c:4092) ->
   `trainer_item_count`. Its scoring scratch is rebuilt every decision.
@@ -1075,3 +1083,4 @@ three structs has a row.
 | Struct.field | pytree field | status |
 |---|---|---|
 | `BattleSystem.terrain` | `terrain` | mapped |
+| `BattleSystem.battleParticipantMask` | `sent_out` | mapped |

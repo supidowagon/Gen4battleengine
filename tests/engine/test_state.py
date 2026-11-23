@@ -37,7 +37,7 @@ def test_shapes_dtypes_and_no_64bit(state):
     assert s.stats.shape == (2, 6, 5) and s.moves.shape == (2, 6, 4)
     assert s.ivs.shape == (2, 6, 6) and s.ivs.dtype == jnp.int8
     assert s.stages.shape == (2, 8) and s.trainer_items.shape == (2, 4)
-    assert s.ai_seen_moves.shape == (6, 4) and s.field_mask.shape == ()
+    assert s.ai_seen_moves.shape == (2, 4) and s.field_mask.shape == ()
     assert all(x.dtype.itemsize <= 4 for x in s)
 
 

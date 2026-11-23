@@ -157,7 +157,8 @@ sums them. Today's rows: ``starf_roll`` (B,) -> (B, 3) and ``Outcome.starf`` (B,
 ``camouflage`` from the old types against the personal rows of the part's own game (Kaizo for
 "roark.trace", vanilla for every other part: ``Ctx.tables_for``; G-20); ``acid_rain`` dropped,
 no successor (G-12, G-13); ``learn_pin``, ``exp_refused`` dropped, no successor (E3-B2-21);
-``leech_seed_recipient`` = 1 + (b ^ 1) where ``leech_seed[b]`` (D3-11b).
+``leech_seed_recipient`` = 1 + (b ^ 1) where ``leech_seed[b]`` (D3-11b); the AI record by
+party slot -> per battler (D45-1).
 
 Outputs (states, Outcomes, events, reference outputs) are flattened to "path" -> (kind, dtype,
 shape, bytes) entries keyed by name. compare checks the entries present on both sides byte for
@@ -788,6 +789,36 @@ def _move_temp(a, lead, tables):
         out[i] = move
     return {"ts_move_temp": out}
 
+# --- D45-1-R begin: the AI record per battler (sheet D45-1) -------------------------------------
+def _ai_record_by_battler(a, lead, tables):
+    """D45-1: the AI record per player party slot (int16[6, 4] / [6]) -> per battler ([2, 4] / [2]):
+    row 0 = the old row of active[0] unless that Pokemon's CleanupFaintedMon has run (it clears the
+    row, battle_lib.c:2223-2225): kept while it has HP, and at a pivot pause while its faint is
+    still pending (0 HP with its ``ts_alive`` bit set: an enemy U-turn's hit fainted it, and its
+    PlayFaintAnimation, battle_script.c:1803, comes at the action's faint check after the switch,
+    subscript_attack_then_switch_out.s:71 -> subscript_show_party_list.s:9 SwitchAndUpdateMon,
+    then :23-24 FAINT_MON); row 1 = 0 (never kept at B = 2, sheet D45-1 rule
+    6). B = 2 only: no capture holds a B = 4 state; any other battler count raises."""
+    import numpy as np
+
+    active, hp = np.asarray(a["active"]), np.asarray(a["hp"])
+    alive = np.asarray(a["ts_alive"])
+    if active.shape[len(lead) :] != (2,):
+        raise ValueError("ai record relayout: only a B = 2 state is re-keyed (sheet D45-1)")
+    out = {}
+    for f in ("ai_seen_moves", "ai_item_known", "ai_ability_known"):
+        old = np.asarray(a[f])
+        new = np.zeros((*lead, 2, *old.shape[len(lead) + 1 :]), old.dtype)
+        for i in np.ndindex(*lead):
+            slot = int(active[(*i, 0)])
+            pending = (int(alive[(*i, 0)]) >> slot) & 1
+            if hp[(*i, 0, slot)] > 0 or pending:
+                new[(*i, 0)] = old[(*i, slot)]
+        out[f] = new
+    return out
+
+
+# --- D45-1-R end ---------------------------------------------------------------------------------
 
 _I1, _I2 = "|i1", "<i2"
 _MON_READS = tuple(
@@ -828,6 +859,8 @@ UPGRADES = (
     derive("state", _SLOT_READS, ("move_slot",), _move_slot, "E2-ML-5", "the old engine had no moveSlot: a locked battler's lock slot (its old priority), a paused battler's ts_actions slot (its old TryGrudge slot), else 0", tuple(r[0] for r in _SLOT_READS), outputs=False),
     derive("state", _SLOT_READS, ("selected_temp",), _selected_temp, "E2-ML-8", "the old engine had no TEMP_VALUE: Battler_SelectedMove read a locked battler's lock move, a paused battler's action move, else none; 1 + that slot, else 0", tuple(r[0] for r in _SLOT_READS), outputs=False),
     derive("state", _TEMP_READS, ("ts_move_temp",), _move_temp, "E2-ML-4", "the old tail's move: the paused battler's ts_move, the Encore's move where its slot held it; 0 off a pause", tuple(r[0] for r in _TEMP_READS), outputs=False),
+    # D45-1-R: the literal 6 never matches a new state ((2, 4) / (4, 4)), so the row runs on old captures only
+    derive("state", (("ai_seen_moves", _I2, (6, 4)), ("ai_item_known", _I2, (6,)), ("ai_ability_known", _I2, (6,)), ("active", _I1, ("B",)), ("hp", _I2, ("P", 6)), ("ts_alive", _I1, ("P",))), ("ai_seen_moves", "ai_item_known", "ai_ability_known"), _ai_record_by_battler, "D45-1", "the record per battler (ai_context.h:27-29): row 0 = the old row of active[0] while it has HP or its faint is pending at a pivot pause (ts_alive), row 1 never kept at B = 2", ("active", "hp", "ts_alive")),
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}

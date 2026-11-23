@@ -971,7 +971,7 @@ def test_the_resumed_u_turn_never_reads_its_users_cute_charm_flag(tables, names)
     assert int(paused.pivot_battler) == 1 and np.asarray(paused.ts_loved).tolist() == [0, 0]
     out = _resume(tables, paused, 1, _procs(opp=1))
     assert int(out.active[0]) == 1 and int(out.infatuated[1]) == 0
-    assert int(out.ai_item_known[1]) == 0
+    assert int(out.ai_item_known[0]) == 0
 
 
 def _pursued_u_turn(tables, names, bench="Geodude", **start):
@@ -1233,7 +1233,7 @@ def test_a_blocked_flame_body_trigger_moves_side_effect_mon_off_a_synchronize_pu
     out, _ = play(tables, s, [0, 0, 0, 0], None, targets=targets, outcome=outcome)
     assert hp(out, 1) == 0 and int(out.pivot_battler) == 0
     assert int(out.status[0, int(s.active[0])]) == Status.BURN
-    assert int(out.ai_ability_known[int(s.active[0])]) == 0
+    assert int(out.ai_ability_known[0]) == 0
 
 
 def test_the_h4_items_have_their_own_ids_and_the_inert_ones_one_shared_set(tables, names):

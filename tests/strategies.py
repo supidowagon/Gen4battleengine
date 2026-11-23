@@ -75,6 +75,7 @@ from nuzline.engine.state import (
     STAGE_MAX,
     STAGE_MIN,
     BattleState,
+    ai_record_kept,
     initial_arrays,
     make_state,
 )
@@ -1356,21 +1357,67 @@ BATCH12_MOVES = (
 )
 
 
-def draw_seen_moves(draw, a: dict) -> None:
-    """``a["ai_seen_moves"]``: per player slot the move ids the AI has seen (``battlerMoves``,
-    first-free order, G-68): a drawn subset of the slot's moves in a drawn order, and sometimes a
-    move the slot no longer has (a Mimic copy, a replaced move)."""
-    seen = a["ai_seen_moves"]
-    seen[...] = 0
+# --- D45-1-S begin: the AI's record per battler (sheet D45-1; ai_context.h:27-29) ---------------
+def draw_seen_moves(draw, a: dict, fmt: Format) -> None:
+    """``a["ai_seen_moves"]``: per battler (D45-1) the move ids the AI has seen
+    (``battlerMoves``, first-free order, G-68). Party 0's rows are drawn per slot as before: a
+    drawn subset of the slot's moves in a drawn order, and sometimes a move the slot no longer has
+    (a Mimic copy, a replaced move); battler ``b`` of party 0 takes the row of its active slot
+    while that Pokemon has HP (CleanupFaintedMon clears it). At four battlers MULTI's other
+    battlers are recorded too (the partner records 1 and 3, the enemies record 2:
+    trainer_ai.c:362-375, :4001): each draws a row from its own active Pokemon's moves."""
+    slots = np.zeros((SLOTS, a["ai_seen_moves"].shape[1]), np.int16)
     stale = int(a["moves"][1, 0, 0])
-    for slot in range(seen.shape[0]):
+    for slot in range(slots.shape[0]):
         pool = [int(m) for m in a["moves"][0, slot] if m] + ([stale] if stale else [])
         ids = (
-            draw(st.lists(st.sampled_from(pool), unique=True, max_size=seen.shape[1]))
+            draw(st.lists(st.sampled_from(pool), unique=True, max_size=slots.shape[1]))
             if pool
             else []
         )
-        seen[slot, : len(ids)] = ids
+        slots[slot, : len(ids)] = ids
+    seen = a["ai_seen_moves"]
+    seen[...] = 0
+    for b in range(fmt.B):
+        active = int(a["active"][b])
+        if fmt.party_of[b] == 0 and a["hp"][0, active] > 0:
+            seen[b] = slots[active]
+    if fmt != MULTI:
+        return
+    for b in (1, 2, 3):
+        p, active = fmt.party_of[b], int(a["active"][b])
+        if a["hp"][p, active] <= 0:
+            continue
+        pool = [int(m) for m in a["moves"][p, active] if m]
+        ids = (
+            draw(st.lists(st.sampled_from(pool), unique=True, max_size=slots.shape[1]))
+            if pool
+            else []
+        )
+        seen[b, : len(ids)] = ids
+
+
+def draw_ai_record(draw, a: dict, fmt: Format, flags, known) -> None:
+    """``a["ai_ability_known"]`` / ``a["ai_item_known"]`` per battler (D45-1): ``flags`` and
+    ``known`` are the draws over the player's party slots as before; a battler of party 0 whose
+    ``ai_record_kept`` row holds a living Pokemon takes its active slot's flag, and its item when
+    ``known`` (the Pokemon holds it, every removal clears the record). At four battlers every
+    other kept battler with a living Pokemon draws one flag and one bool for its own."""
+    a["ai_ability_known"][...] = 0
+    a["ai_item_known"][...] = 0
+    for b in range(fmt.B):
+        p, active = fmt.party_of[b], int(a["active"][b])
+        if not bool(ai_record_kept(fmt, b)) or a["hp"][p, active] <= 0:
+            continue
+        if p == 0:
+            flag, named = flags[active], known[active]
+        else:
+            flag, named = draw(st.integers(0, 1)), draw(st.booleans())
+        a["ai_ability_known"][b] = flag
+        a["ai_item_known"][b] = a["item"][p, active] if named else 0
+
+
+# --- D45-1-S end -------------------------------------------------------------------------------
 
 
 def _draw_mimic(draw, a: dict, side: int, active: int) -> None:
@@ -2336,13 +2383,12 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     # E1 trial batch (G-70): the player's Chatot cry parameter (an enemy's is always 0).
     a["chatot_cry"][0] = draw(st.integers(0, 2))
     a["turn"][...] = turn
-    draw_seen_moves(draw, a)
+    draw_seen_moves(draw, a, SINGLES)
     flags = draw(st.lists(st.integers(0, 1), min_size=SLOTS, max_size=SLOTS))
-    a["ai_ability_known"][...] = np.reshape(flags, a["ai_ability_known"].shape)
     # The AI's record of each player item (batch 7): none, or the item a message named, which
     # the Pokemon still holds (every removal clears the record, effects.forget_item).
     known = draw(st.lists(st.booleans(), min_size=SLOTS, max_size=SLOTS))
-    a["ai_item_known"][...] = np.where(known, a["item"][0], 0)
+    draw_ai_record(draw, a, SINGLES, flags, known)
     fainted = (a["species"][0] > 0) & (a["hp"][0] == 0)
     a["player_faints"][...] = int(np.sum(fainted))
     a["deaths"][...] = fainted
@@ -2351,6 +2397,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
     a["replace_mul"][...] = 0
     _draw_exp(draw, tables, a)
+    _set_sent_out(a)  # D45-18-S
     # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
     a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
     a["weather_turns"][...] = timer
@@ -2360,6 +2407,22 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     return settle_traces(
         tables, BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     )
+
+
+# --- D45-18-S: sent_out ---------------------------------------------------------------------------
+def _set_sent_out(a: dict) -> None:
+    """D45-18: each battler's active slot was sent out by it; at B = 2 the player battler also sent
+    out every ``exp_mask`` slot (``sideGetExpMask``'s bits are slots battler 0 showed, sheet D45-18
+    rule 7). At B = 4 an ``exp_mask`` bit may be battler 2's, so only the active slots (the
+    ``1 << leads[b]`` of ``state.initial_arrays``). No draw: ``supported_state`` and ``four_state``
+    draw as before."""
+    for b in range(len(a["active"])):
+        a["sent_out"][b] = 1 << int(a["active"][b])
+    if a["exp_mask"].ndim == 0:
+        a["sent_out"][0] |= int(a["exp_mask"])
+
+
+# --- end D45-18-S ----------------------------------------------------------------------------------
 
 
 def _draw_exp(draw, tables: Tables, a: dict) -> None:
@@ -2722,7 +2785,8 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     battler's lead on its own slot (no two battlers of a party share one), random PP, status
     counters, stages, confusion, Taunt, ``last_move``, Disable, ``fake_out_turn``, the sides'
     screens, Tailwind and Stealth Rock, weather and its timer, Trick Room, Gravity, the turn,
-    the enemy battlers' bags (``trainer_items[b]``, ruling D1-5; the player's are empty), the
+    the enemy battlers' bags (``trainer_items[b]``, ruling D1-5; none in MULTI, D45-6; the player's
+    are empty), the
     AI's knowledge of the player and the player's experience block, as ``supported_state``
     draws them. Per side, one battler is absent (0 HP, D3-1 rule 3) with probability 1/4 for
     battler ``side``, 1/4 for battler ``side + 2``, and none with probability 1/2: only a
@@ -2788,7 +2852,8 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
             a["status_counter"][p, slot] = _status_counter(draw, int(a["status"][p, slot]))
     for b in range(fmt.B):
         _draw_battler(draw, tables, a, fmt, b)
-    for b in (1, 3):  # the enemy battlers' bags (the player's stay empty)
+    # D45-6 strategies: MULTI loads no AI bag (sheet D45-6 R2)
+    for b in () if fmt == MULTI else (1, 3):  # the enemy battlers' bags (the player's stay empty)
         count = draw(st.integers(0, BAG_SLOTS))
         bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
         a["trainer_items"][b] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
@@ -2798,11 +2863,10 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     timer = draw(st.integers(0, 8)) if timed else 0
     trick_room = draw(st.integers(0, _TIMER_MAX))
     gravity = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
-    draw_seen_moves(draw, a)
+    draw_seen_moves(draw, a, fmt)
     flags = draw(st.lists(st.integers(0, 1), min_size=SLOTS, max_size=SLOTS))
-    a["ai_ability_known"][...] = np.reshape(flags, a["ai_ability_known"].shape)
     known = draw(st.lists(st.booleans(), min_size=SLOTS, max_size=SLOTS))
-    a["ai_item_known"][...] = np.where(known, a["item"][0], 0)
+    draw_ai_record(draw, a, fmt, flags, known)
     fainted = (a["species"][0] > 0) & (a["hp"][0] == 0)
     a["player_faints"][...] = int(np.sum(fainted))
     a["deaths"][...] = fainted
@@ -2811,6 +2875,7 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
     a["replace_mul"][...] = 0
     _draw_exp(draw, tables, a)
+    _set_sent_out(a)  # D45-18-S
     # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
     a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
     a["weather_turns"][...] = timer
