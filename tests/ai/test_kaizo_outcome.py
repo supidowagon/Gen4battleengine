@@ -751,11 +751,12 @@ PSYWAVE_ID = 149  # MOVE_PSYWAVE's id (Kaizo's Triple Axel): TrainerAI_CalcDamag
 def _slot_read_pieces(t):
     """The shared static half of the slot-read checks (E1 Ruling R6, rulings G-37, G-39).
 
-    Every transcribed flag, in four sets: all of them at once bound ACC_DOWN's fight at 18
+    Every transcribed flag, in five sets: all of them at once bound ACC_DOWN's fight at 18
     reads, past WIDTH_CAP's 14, a set no Kaizo trainer has (the widest real fights, Jason 82
     and Danny 725, bound at 14). BASIC and EXPERT with SETUP_FIRST_TURN, RISKY and
     PRIORITIZE_EXTREMES (0x3D), BASIC and EXPERT with HARRASSMENT (0x405), BASIC with
-    EVAL_ATTACK and CHECK_HP (0x103), BASIC with BATON_PASS and WEATHER (0x241): small pieces,
+    EVAL_ATTACK and CHECK_HP (0x103), BASIC with BATON_PASS and WEATHER (0x241), BASIC with
+    TAG_STRATEGY (0x81, E4-A0): small pieces,
     so each fight's loose program stays small. Asserts the pieces' union is
     ``KAIZO_FLAG_BITS`` exactly, that each piece's widest bound over every row of
     ``READ_BOUNDS`` and ``DRAWN_READ_BOUNDS`` fits WIDTH_CAP (``kaizo_layout`` raises
@@ -764,7 +765,7 @@ def _slot_read_pieces(t):
     from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_slot_reads
     from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS, READ_BOUND_BITS, READ_BOUNDS
 
-    pieces = (0x3D, 0x405, 0x103, 0x241)
+    pieces = (0x3D, 0x405, 0x103, 0x241, 0x81)
     assert functools.reduce(operator.or_, pieces) == sum(1 << b for b in KAIZO_FLAG_BITS)
     assert len(READ_BOUND_BITS) == len(KAIZO_FLAG_BITS)
     rows = (*READ_BOUNDS.values(), *DRAWN_READ_BOUNDS.values())
@@ -856,7 +857,7 @@ def _check_fight_reads(t, party, every: int, moves, rng, species, n: int = 4):
 
 @pytest.mark.slow
 @pytest.mark.fullset
-@pytest.mark.parametrize("fight", [0, 1, 2, 3, 4, "roark"])
+@pytest.mark.parametrize("fight", [0, 1, 2, 3, 4, 5, "roark"])
 def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party, fight):
     """E1 Ruling R6 against the data, the fast version: one fight per flag piece (the full
     sweep is ``test_slot_reads_fit_every_transcribed_effect_full``, slow). One test per fight
@@ -865,7 +866,7 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
     path makes more reads than its fight's bound is the walk of script.s
     (tests/ai/test_read_bounds.py regenerates its table); this checks it on the transcription.
 
-    Covers: the four pieces' union is ``KAIZO_FLAG_BITS`` exactly and each fits WIDTH_CAP
+    Covers: the five pieces' union is ``KAIZO_FLAG_BITS`` exactly and each fits WIDTH_CAP
     (``_slot_read_pieces``); every transcribed flag runs in a fight (at least one fight per
     piece), each piece's led by the effect whose walked bound under that piece is largest;
     HARRASSMENT's read (script.s:8030, Harrassment_Main :8022-8031) is reached under 0x405,
@@ -898,13 +899,18 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
         (0x103, [lead(0x103, first), ACCELEROCK, MAGNITUDE, 0]),
         (0x103, [PSYWAVE_ID, HEADBUTT, 0, 0]),
         (0x241, [lead(0x241, first), ACCELEROCK, HEADBUTT, 0]),
+        # TagStrategy_Main (E4-A0): Magnitude's id takes the Earthquake block (script.s:6737)
+        # and draws in both CheckIfHighestDamageWithPartner sweeps (s:6684)
+        (0x81, [lead(0x81, first), ACCELEROCK, MAGNITUDE, 0]),
     ]
     assert {every for every, _ in fights} >= set(pieces)
     if fight != "roark":
         every, moves = fights[fight]
         rng = np.random.default_rng(11 + fight)
         species = _two_ability_species(t)
-        n_states = 1 if PSYWAVE_ID in moves else 4
+        # one state where a draw meets a heavy loose program: Psywave's 11 classes, and Tag
+        # Strategy's two sweeps beside Magnitude (four states peaked at 14.3 GB)
+        n_states = 1 if PSYWAVE_ID in moves or every == 0x81 else 4
         lines, kinds = _check_fight_reads(
             t, kaizo_roark_party, every, moves, rng, species, n_states
         )
@@ -914,6 +920,8 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
             assert ReadKind.CALC_MAGNITUDE in kinds
         if fight == 3:
             assert ReadKind.CALC_PSYWAVE in kinds
+        if fight == 5:
+            assert ReadKind.CALC_MAGNITUDE in kinds
         return
     # Roark's bound by hand: Selfdestruct, a guessed two-ability player, evasion +4 (decomp
     # stage 10, script.s:1857), Bonsly at 10 % HP.
@@ -937,7 +945,7 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
 def test_slot_reads_fit_every_transcribed_effect_full(kaizo_tables, kaizo_roark_party):
     """E1 Ruling R6 against the data, the full sweep (about 20 minutes; the fast version is
     ``test_slot_reads_fit_every_transcribed_effect``, which also holds Roark's bound by hand).
-    Under each of the four flag pieces (``_slot_read_pieces``): a fight of each of the eight
+    Under each of the five flag pieces (``_slot_read_pieces``): a fight of each of the eight
     transcribed effects whose walked bound under every flag is largest, Selfdestruct's
     (HALVE_DEFENSE) and Tailwind's (a FASTER tie), with Roark's Accelerock and Headbutt;
     Magnitude itself, and the four effects whose drawn rows (``read_bounds.DRAWN_READ_BOUNDS``,

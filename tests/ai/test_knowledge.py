@@ -53,8 +53,8 @@ def _both(tables, s, acts, o=None):
 
 
 def _seen(s) -> list[int]:
-    """The ``ai_seen_moves`` row of the player's active Pokemon."""
-    return np.asarray(s.ai_seen_moves[int(s.active[0])]).tolist()
+    """The ``ai_seen_moves`` row of battler 0."""
+    return np.asarray(s.ai_seen_moves[0]).tolist()
 
 
 @pytest.mark.slow
@@ -173,8 +173,10 @@ def test_player_switch_in_resets_last_move(tables, names):
     s = roark_state(tables, names)
     s = s._replace(last_move=s.last_move.at[0].set(names.move("Scratch")))
     out = _both(tables, s, A(SWITCH_TO_1, "Leer", s, names))
-    # Committed for the Pokemon that was active when the AI decided, then reset.
-    assert np.asarray(out.ai_seen_moves[0]).tolist() == [names.move("Scratch"), 0, 0, 0]
+    # Recorded into battler 0's row at the AI's command selection (trainer_ai.c:2705-2716),
+    # then cleared by the newcomer's entry (BattleSystem_UpdateAfterSwitch, battle_lib.c:
+    # 2151-2153; D45-1 rule 3); last_move reset with it.
+    assert np.asarray(out.ai_seen_moves[0]).tolist() == [0, 0, 0, 0]
     assert int(out.last_move[0]) == 0
 
 
@@ -195,17 +197,17 @@ def test_scores_include_the_pending_move(tables, names):
 
 
 def test_switch_in_clears_the_newcomers_knowledge(tables, names):
+    """UpdateAfterSwitch clears battler 0's row when the newcomer enters (battle_lib.c:2151-2153):
+    what the AI knew of the Pokemon that left is gone (D45-1 rule 3)."""
     s = roark_state(tables, names)
     row = jnp.asarray([11, 12, 13, 14], jnp.int16)
     s = s._replace(
-        ai_seen_moves=s.ai_seen_moves.at[:2].set(row),
-        ai_ability_known=s.ai_ability_known.at[:2].set(1),
+        ai_seen_moves=s.ai_seen_moves.at[0].set(row),
+        ai_ability_known=s.ai_ability_known.at[0].set(1),
     )
     out = _both(tables, s, A(SWITCH_TO_1, "Leer", s, names))
-    assert np.asarray(out.ai_seen_moves[1]).tolist() == [0, 0, 0, 0]
-    assert int(out.ai_ability_known[1]) == 0
-    assert np.asarray(out.ai_seen_moves[0]).tolist() == [11, 12, 13, 14]  # the one that left
-    assert int(out.ai_ability_known[0]) != 0
+    assert np.asarray(out.ai_seen_moves[0]).tolist() == [0, 0, 0, 0]
+    assert int(out.ai_ability_known[0]) == 0
 
 
 @pytest.mark.slow
@@ -268,7 +270,6 @@ def test_mold_breaker_reveals_on_switch_in(tables, names):
     BTLSCR_MSG_BATTLER_TEMP`` tags the announcing battler's ability."""
     s = roark_state(tables, names, player_species="Cranidos")
     assert int(s.ai_ability_known[0]) != 0
-    assert int(s.ai_ability_known[1]) == 0
 
 
 @pytest.mark.slow

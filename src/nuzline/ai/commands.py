@@ -72,7 +72,7 @@ from nuzline.ai.switching import (
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
-from nuzline.engine.actions import usable_moves
+from nuzline.engine.actions import absent_now, usable_moves
 from nuzline.engine.damage import (
     AI_GYRO_BALL,
     AI_MAGNITUDE,
@@ -82,16 +82,28 @@ from nuzline.engine.damage import (
     decomp_abilities,
 )
 from nuzline.engine.format import format_of, party, side_of
+from nuzline.engine.hooks import max_pp
 from nuzline.engine.ids import AbilityId, Stat, Status
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
     COMPARE_SPEED_SLOWER,
     COMPARE_SPEED_TIE,
-    battler_slower,
+    PAIRS,
+    compare_full,
     compare_speed,
     effective_speed,
+    sort_mon_speed,
 )
-from nuzline.engine.state import MOVES, BattleState, held_item, record_seen_move
+from nuzline.engine.state import (
+    MOVES,
+    BattleState,
+    ai_record_ability,
+    ai_record_item,
+    ai_record_moves,
+    held_item,
+    party_held_item,
+    record_seen_move,
+)
 
 _I32 = jnp.int32
 
@@ -106,10 +118,13 @@ STAGE_NEUTRAL = 6  # decomp stat stages run 0..12 with 6 neutral (engine 0)
 
 
 class Battler(IntEnum):
-    """Script battler argument, as the engine side it names (singles)."""
+    """Script battler argument (include/constants/battle/trainer_ai.h:28-31), resolved to a
+    battler by ``_battler`` (``AIScript_Battler``, trainer_ai.c:2765-2782)."""
 
     DEFENDER = 0  # AI_BATTLER_DEFENDER: the player's active Pokemon
     ATTACKER = 1  # AI_BATTLER_ATTACKER: the AI's active Pokemon
+    DEFENDER_PARTNER = 2  # AI_BATTLER_DEFENDER ^ 2
+    ATTACKER_PARTNER = 3  # AI_BATTLER_ATTACKER ^ 2
 
 
 class LoadType(IntEnum):
@@ -121,6 +136,10 @@ class LoadType(IntEnum):
     DEFENDER_TYPE_2 = 2  # LOAD_DEFENDER_TYPE_2
     ATTACKER_TYPE_2 = 3  # LOAD_ATTACKER_TYPE_2
     MOVE_TYPE = 4  # LOAD_MOVE_TYPE
+    DEFENDER_PARTNER_TYPE_1 = 5  # LOAD_DEFENDER_PARTNER_TYPE_1
+    ATTACKER_PARTNER_TYPE_1 = 6  # LOAD_ATTACKER_PARTNER_TYPE_1
+    DEFENDER_PARTNER_TYPE_2 = 7  # LOAD_DEFENDER_PARTNER_TYPE_2 (reads TYPE_1, :980-983)
+    ATTACKER_PARTNER_TYPE_2 = 8  # LOAD_ATTACKER_PARTNER_TYPE_2
 
 
 class SideCondition(IntEnum):
@@ -1146,6 +1165,14 @@ ABILITY_IDS = {
     # Immunity, Magic Guard and Water Veil above).
     "Klutz": 103,
     "Guts": 62,
+    # E4-A0, TagStrategy_Main (script.s:6637-7338); generated/abilities.txt (line - 1).
+    "Dry Skin": 87,
+    "Snow Cloak": 81,
+    "Sand Veil": 8,
+    "Pure Power": 74,
+    "Huge Power": 37,
+    "Lightningrod": 31,
+    "Storm Drain": 114,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -1197,7 +1224,24 @@ MOVE_IDS = {
     # E3-2-2: Basic_CheckWorrySeed (script.s:1436-1437, with Snore above), Expert_WorrySeed (:5979).
     "Sleep Talk": 214,
     "Rest": 156,
+    # E4-A0, TagStrategy_Main (script.s:6732-6752, :7215-7304); generated/moves.txt (line - 1).
+    "Skill Swap": 285,
+    "Future Sight": 248,
+    "Doom Desire": 353,
+    "Rain Dance": 240,
+    "Sunny Day": 241,
+    "Hail": 258,
+    "Sandstorm": 201,
+    "Gravity": 356,
+    "Follow Me": 266,
+    "Helping Hand": 270,
+    "Discharge": 435,
+    "Surf": 57,
+    "Lava Plume": 436,
 }
+# TagStrategy_Main's IfMoveEqualTo MOVE_MAGNITUDE (script.s:6737) compares the id
+# (trainer_ai.c:834-844); Kaizo's move on id 222 is Bulldoze and takes the same block.
+MOVE_MAGNITUDE = 222
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
     for n in (
@@ -1272,6 +1316,11 @@ class ReadKind(IntEnum):
     # outcome.CALC_DRAW_P[CALC_PSYWAVE] (11 classes) or [CALC_MAGNITUDE] (7)
     CALC_PSYWAVE = 5
     CALC_MAGNITUDE = 6
+    # LoadBattlerSpeedRank at B = 4 (E4-A decision 6): the call's rank, its law the joint law of
+    # the call's tie bits (``speed_rank_law``), read as up to two binary reads (the pair {0, 1}
+    # or {2, 3}, then which of the pair), each with its conditional probability. The loose oracle
+    # draws the same two bits (the second at one of two indices, by pair).
+    SPEED_RANK = 7
 
 
 def read_radix(kind: int) -> int:
@@ -1290,6 +1339,7 @@ def read_radix(kind: int) -> int:
 # adds a column per move each damage command estimates: four per FlagMoveDamageScore, one per
 # IfCurrentMoveKills, five per IfBattlerDealsMoreDamage, MOVES * (1 + SLOTS) = 28 per
 # IfPartyMemberDealsMoreDamage (the active's four moves, then each party slot's four).
+# CheckIfHighestDamageWithPartner adds eight (the attacker's four moves in each of its two sweeps).
 LOOSE_READS = 160
 
 
@@ -1338,6 +1388,12 @@ class CalcEstimate(NamedTuple):
     kind: jnp.ndarray  # int32[...]
 
 
+@jax.tree_util.register_static
+class StaticBattler(int):
+    """A battler index held as pytree auxiliary data (no children): it survives ``fori_loop`` and
+    ``vmap`` as a Python int (E4-A decision 2), so it picks the party row and the layout."""
+
+
 class AiContext(NamedTuple):
     """The decomp's ``AIContext`` for one decision, plus the masks of the straight-line
     scripts."""
@@ -1372,15 +1428,26 @@ class AiContext(NamedTuple):
     # int32: 0, or 1 + slot of the first read on a path past the slot's slot_reads draws
     # (_slot_read); the per-slot layout refuses the decision
     missing_read: jnp.ndarray
+    # AI_CONTEXT.attacker and .defender (trainer_ai.c:264-265; MainDoubles sets the defender per
+    # target, :371): the AI battler (static, a ``StaticBattler``) and its target (int32, traced:
+    # the target loop is one vmap). The target is never the attacker (trainer_ai.c:363).
+    attacker: int
+    defender: jnp.ndarray
     loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
     # E3-B2-15, monSpeedValues (battle_lib.c:1372-1373). ``speeds`` int32[B]: the battlers'
-    # speeds as CompareBattlerSpeed computes them now (``order.effective_speed``). ``written``:
-    # an IfSpeedCompare* ran earlier in this decision (trainer_ai.c:1109, :1121), so the
-    # record holds ``speeds`` instead of ``state.speed_rec`` (``seen_state``); threaded in the
-    # decomp's order, flags in bit order and slots 0-3 in each (``start_run``).
+    # speeds as CompareBattlerSpeed computes them now (``order.effective_speed``). ``written``
+    # bool[B] (E4-A decision 4): per battler, an IfSpeedCompare* or LoadBattlerSpeedRank compare
+    # that included it ran earlier in this decision (trainer_ai.c:1109, :1121, :2076), so the
+    # record holds its entry of ``speeds`` instead of ``state.speed_rec`` (``seen_state``); a
+    # compare writes its two battlers only when both or neither have no HP (:1204-1211, :1372-1373).
+    # Threaded in the decomp's order, flags in bit order and slots 0-3 in each (``start_run``). At
+    # B = 2 the two entries always move together.
     speeds: jnp.ndarray | None = None
-    written: jnp.ndarray | None = None  # bool
-    # ``damage`` with ``speeds`` in the record (``seen_damage``): only a Gyro Ball slot differs
+    written: jnp.ndarray | None = None  # bool[B]
+    # ``damage`` with ``speeds`` in the record (``seen_damage``): only a Gyro Ball slot differs.
+    # B = 2: one estimate (both entries written). B = 4: ``[4, ...]`` by the pattern
+    # ``2 * written[defender] + written[attacker]`` of the two entries Gyro Ball reads
+    # (:2995-3003); pattern 0 is ``damage``.
     damage_w: CalcEstimate | None = None
     # int32: the flag bit of the script running, AI_CONTEXT.thinkingBitShift (trainer_ai.c:307
     # increments it, :488 reads it; ``start_run``): the bit, not an index in the layout's list,
@@ -1418,8 +1485,16 @@ def seen_state(ctx: AiContext) -> BattleState:
 
 
 def seen_damage(ctx: AiContext) -> CalcEstimate:
-    """``ctx.damage`` (``_slot_damage`` at USE_MAX_DAMAGE) in ``seen_state``'s speeds."""
-    return jax.tree.map(lambda w, r: jnp.where(ctx.written, w, r), ctx.damage_w, ctx.damage)
+    """``ctx.damage`` (``_slot_damage`` at USE_MAX_DAMAGE) in ``seen_state``'s speeds. Gyro Ball's
+    estimate reads ``monSpeedValues[defender]`` and ``[attacker]`` only (:2995-3003): at B = 4
+    ``damage_w`` holds the four patterns of those two entries; at B = 2 they are written together."""
+    if format_of(ctx.state).B == 4:
+        pattern = 2 * ctx.written[ctx.defender].astype(_I32) + ctx.written[ctx.attacker].astype(
+            _I32
+        )
+        return jax.tree.map(lambda w: w[pattern], ctx.damage_w)
+    written = ctx.written[ctx.attacker]
+    return jax.tree.map(lambda w, r: jnp.where(written, w, r), ctx.damage_w, ctx.damage)
 
 
 def start_run(ctx: AiContext, flag: int) -> AiContext:
@@ -1431,7 +1506,9 @@ def start_run(ctx: AiContext, flag: int) -> AiContext:
     return ctx._replace(flag=flag, written=written)
 
 
-def ai_damage(tables: Tables, state: BattleState, move, roll, draw=0) -> jnp.ndarray:
+def ai_damage(
+    tables: Tables, state: BattleState, move, roll, draw=0, *, atk_side=1, def_side=None
+) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868) of ``move`` by the AI's
     active Pokemon against the player's, with variance ``85 + roll`` percent applied
     after STAB and the type chart (:3109; the battle applies it before them): the
@@ -1439,7 +1516,7 @@ def ai_damage(tables: Tables, state: BattleState, move, roll, draw=0) -> jnp.nda
     (``is_damaging``) and for an immunity. ``draw``: the class of Psywave's or Magnitude's
     ``RandNext`` draw (``estimate`` has every class)."""
     move = jnp.asarray(move, _I32)
-    damage = ai_damage_for_roll(tables, state, 1, move, roll, draw=draw)
+    damage = ai_damage_for_roll(tables, state, atk_side, move, roll, def_side=def_side, draw=draw)
     return jnp.where(is_damaging(tables, move), damage, 0)
 
 
@@ -1608,16 +1685,24 @@ def is_damaging(tables: Tables, move) -> jnp.ndarray:
     return alt | ((move != 0) & (tables.move_power[move] > 1) & ~no_calc)
 
 
-def _slot_damage(tables: Tables, state: BattleState, rolls) -> CalcEstimate:
-    """``CalcEstimate [4, C]``: ``TrainerAI_CalcAllDamage`` (trainer_ai.c:2799) over the AI's
-    true moveset, whatever the PP, with ``rolls[i]`` for slot i (or one roll for all), every
-    class of each draw."""
-    moves = state.moves[1, state.active[1]].astype(_I32)
+def _slot_damage(
+    tables: Tables, state: BattleState, rolls, attacker: int = 1, defender=0
+) -> CalcEstimate:
+    """``CalcEstimate [4, C]``: ``TrainerAI_CalcAllDamage`` (trainer_ai.c:2799) over the
+    ``attacker``'s true moveset against ``defender``, whatever the PP, with ``rolls[i]`` for slot i
+    (or one roll for all), every class of each draw."""
+    moves = state.moves[_row(state, attacker), state.active[attacker]].astype(_I32)
     rolls = jnp.asarray(rolls, _I32)
     if rolls.ndim == 0:  # one roll for every slot (USE_MAX_DAMAGE): the drawing cases once
-        cases = drawn_cases(tables, state, rolls)
-        return jax.vmap(lambda m: estimate(tables, state, m, rolls, cases=cases))(moves)
-    return jax.vmap(lambda m, r: estimate(tables, state, m, r))(moves, rolls)
+        cases = drawn_cases(tables, state, rolls, atk_side=attacker, def_side=defender)
+        return jax.vmap(
+            lambda m: estimate(
+                tables, state, m, rolls, atk_side=attacker, def_side=defender, cases=cases
+            )
+        )(moves)
+    return jax.vmap(
+        lambda m, r: estimate(tables, state, m, r, atk_side=attacker, def_side=defender)
+    )(moves, rolls)
 
 
 def if_has_super_effective_move(ctx: AiContext) -> AiContext:
@@ -1627,8 +1712,14 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     ``MOVE_STATUS_SUPER_EFFECTIVE`` against the player's active. That battler is never in
     ``battlersSwitchingMask`` while its side has HP left (battle_controller_player.c:
     4108-4110, :4133-4134), and the partner check needs a doubles battle (:3597)."""
+    # Stays a stub in W1: E4-A W4 (A-11) models the opposite slot and the partner sweep.
     tables, state = ctx.tables, ctx.state
-    a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
+    if format_of(state).B == 4:
+        raise NotImplementedError(
+            "IfHasSuperEffectiveMove at B = 4: the opposite slot and the partner sweep "
+            "(trainer_ai.c:3560-3622) are A-11 (E4-A W4)'s"
+        )
+    a, d = ctx.attacker, ctx.attacker ^ 1  # the opposite slot (:3568-3569)
     moves = state.moves[_row(state, a), state.active[a]].astype(_I32)
     d_types = state.types[_row(state, d), state.active[d]]
     cf = chart_flags(tables, state, a, d)
@@ -1665,27 +1756,29 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     assert int(use_damage_roll) == USE_MAX_DAMAGE, use_damage_roll
     # A bench member's Gyro Ball reads monSpeedValues as the active's does (seen_state).
     tables, state = ctx.tables, seen_state(ctx)
-    a = _side(Battler.ATTACKER)
+    a, d = ctx.attacker, ctx.defender
     active = state.active[a]
 
-    cases = drawn_cases(tables, state, SIM_ROLL_MAX)  # IVs reach Hidden Power's case only
+    # IVs reach Hidden Power's case only
+    cases = drawn_cases(tables, state, SIM_ROLL_MAX, atk_side=a, def_side=d)
 
     def estimates(moves, ivs, item):
         as_active = state._replace(ivs=state.ivs.at[_row(state, a), active].set(ivs))
         return jax.vmap(
-            lambda m: estimate(tables, as_active, m, SIM_ROLL_MAX, cases=cases, item=item)
+            lambda m: estimate(
+                tables, as_active, m, SIM_ROLL_MAX, atk_side=a, def_side=d, cases=cases, item=item
+            )
         )(moves.astype(_I32))
 
     mine = estimates(
         state.moves[_row(state, a), active], state.ivs[_row(state, a), active], held_item(state, a)
     )
-    # The bench's own MON_DATA_ABILITY (trainer_ai.c:2162): raw party data.
-    member_items = jnp.where(
-        state.ability[_row(state, a)] == AbilityId.KLUTZ, 0, state.item[_row(state, a)]
-    )
-    theirs = jax.vmap(estimates)(
-        state.moves[_row(state, a)], state.ivs[_row(state, a)], member_items
-    )  # [SLOTS, 4, C]
+    # The members' party data (MON_DATA_MOVE1 + j, MON_DATA_HP_IV + j, MON_DATA_HELD_ITEM,
+    # MON_DATA_ABILITY; trainer_ai.c:2149-2162): ``_party_copy``, so the DOUBLES partner's active
+    # is read as its party Pokemon (not its Transform or Mimic copy, nor a Knock Off's 0).
+    mons = _party_copy(tables, state, a)
+    member_items = jnp.where(mons.ability == AbilityId.KLUTZ, 0, mons.item)
+    theirs = jax.vmap(estimates)(mons.moves, mons.ivs, member_items)  # [SLOTS, 4, C]
     slots = jnp.arange(state.species.shape[1])
     alive = (state.species[_row(state, a)] > 0) & (state.hp[_row(state, a)] > 0) & (slots != active)
     # A member that is not estimated draws nothing (:2145-2148).
@@ -1734,7 +1827,7 @@ def if_battler_deals_more_damage(
     assert int(use_damage_roll) == USE_MAX_DAMAGE, use_damage_roll
     assert battler == Battler.DEFENDER, battler
     tables, state = ctx.tables, ctx.state
-    a, d = _side(Battler.ATTACKER), _side(battler)
+    a, d = ctx.attacker, _battler(ctx, battler)
     mine = seen_damage(ctx)  # _slot_damage at USE_MAX_DAMAGE (new_context)
     theirs = estimate(
         tables,
@@ -1742,7 +1835,7 @@ def if_battler_deals_more_damage(
         state.last_move[d].astype(_I32),
         SIM_ROLL_MAX,
         atk_side=d,
-        def_side=_side(Battler.DEFENDER),
+        def_side=ctx.defender,
         ivs=state.ivs[_row(state, a), state.active[a]],
         damaging_test=False,
     )
@@ -1763,7 +1856,9 @@ def move_effect(tables: Tables, move) -> jnp.ndarray:
     return tables.move_ai_effect[jnp.asarray(move, _I32)].astype(_I32)
 
 
-def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray:
+def effectiveness_class(
+    tables: Tables, state: BattleState, move, attacker: int = 1, defender=0
+) -> jnp.ndarray:
     """``int32``: the ``TypeMulti`` class of ``move`` by the AI's active Pokemon against
     the player's (``IfMoveEffectivenessEquals``, trainer_ai.c:1311; roark.md 7.2): 40
     through ``BattleSystem_ApplyTypeChart`` (STAB x15/10, then each chart entry with
@@ -1776,8 +1871,8 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     move, battle_lib.c:2657-2660) are read (``switching.chart_flags``, ``apply_type_chart``;
     H-6)."""
     move = jnp.asarray(move, _I32)
-    d_types = state.types[0, state.active[0]]
-    value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
+    d_types = state.types[_row(state, defender), state.active[defender]]
+    value = apply_type_chart(tables, state, attacker, move, TypeMulti.BASE, def_side=defender)
     stab_value = int(TypeMulti.STAB)
     mapped = jnp.select(
         [
@@ -1794,27 +1889,31 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         move,
         d_types,
         fcm.gravity_count(state),
-        move_type=ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
-        **chart_flags(tables, state, 1, 0)._asdict(),
+        move_type=ai_move_type(tables, state, attacker, move),  # TrainerAI_MoveType (:1323)
+        **chart_flags(tables, state, attacker, defender)._asdict(),
     )
     # MOVE_STATUS_IMMUNE (moves.h:87): INEFFECTIVE, LEVITATED, Magnet Rise's or Wonder Guard's bit.
-    immune = ((flags & IMMUNE_CHART) != 0) | wonder_guard_bit(tables, state, 1, 0, move, flags)
+    immune = ((flags & IMMUNE_CHART) != 0) | wonder_guard_bit(
+        tables, state, attacker, defender, move, flags
+    )
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 
 
-def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
+def attacker_ability(tables: Tables, state: BattleState, attacker: int = 1) -> jnp.ndarray:
     """``int32``: the AI's active Pokemon's current ability (decomp id): ``ABILITY_NONE`` (0)
     while its ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit is set (trainer_ai.c:1177-1178, :1221-1222:
     the bit alone, no Multitype exception), else the raw ``battleMons[battler].ability``
     (:1208, :1256): ``damage.decomp_abilities``, the engine's current ability (a change in
     battle such as Trace's copy follows it once the engine models the change)."""
-    raw = decomp_abilities(tables, state)[1, state.active[1].astype(_I32)]
-    return jnp.where(state.ability_suppressed[1] != 0, 0, raw)
+    row, mon = _row(state, attacker), state.active[attacker].astype(_I32)
+    raw = decomp_abilities(tables, state)[row, mon]
+    return jnp.where(state.ability_suppressed[attacker] != 0, 0, raw)
 
 
-def _defender_abilities(tables: Tables, state: BattleState):
-    """``(value, known, base)`` of the player's active Pokemon: the ability
+def _defender_abilities(tables: Tables, state: BattleState, b=0, cleared: bool = False):
+    """``(value, known, base)`` of battler ``b`` (default the player's active Pokemon; ``cleared``:
+    a battler the format lacks, which reads ``CLEARED``, ``_is_cleared``): the ability
     ``LoadBattlerAbility DEFENDER`` returns without a guess, whether it does, and the base
     species' two abilities ``int32[2]`` (``defender_ability``). It returns the id the AI recorded
     (``battlerAbilities``, ``BattleAI_SetAbility``, battle_script.c:3401-3403, :12106-12109; a
@@ -1824,29 +1923,40 @@ def _defender_abilities(tables: Tables, state: BattleState):
     ``base`` follows the BattleMon's species, the copied one after a Transform (:1191-1192).
     A battler with its ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit reads ``ABILITY_NONE`` (0), known,
     before any of that (:1177-1178, :1221-1222: the bit alone, no Multitype exception; no coin)."""
-    d = state.active[0].astype(_I32)
-    species = state.species[0, d].astype(_I32)
-    # Raw battleMons[].ability (:1185-1188, :1230-1233), not Battler_Ability.
-    current = decomp_abilities(tables, state)[0, d]
-    recorded = state.ai_ability_known[d].astype(_I32)  # -1: known, not named by the engine
-    suppressed = state.ability_suppressed[0] != 0
+    recorded = ai_record_ability(state, b).astype(_I32)  # -1: known, not named by the engine
+    if cleared:
+        species = jnp.asarray(CLEARED.species, _I32)
+        current = jnp.asarray(CLEARED.ability, _I32)
+        suppressed = jnp.asarray(
+            (CLEARED.move_effects_mask & MoveEffectMask.ABILITY_SUPPRESSED) != 0
+        )
+    else:
+        row, d = _row(state, b), state.active[b].astype(_I32)
+        species = state.species[row, d].astype(_I32)
+        # Raw battleMons[].ability (:1185-1188, :1230-1233), not Battler_Ability.
+        current = decomp_abilities(tables, state)[row, d]
+        suppressed = state.ability_suppressed[b] != 0
     true = jnp.where(suppressed, 0, jnp.where(recorded > 0, recorded, current))
     known = suppressed | (recorded != 0) | jnp.isin(current, _TRAPPING)
     base = tables.species_abilities_decomp[species].astype(_I32)
     return true, known, base
 
 
-def ability_guessed(tables: Tables, state: BattleState) -> jnp.ndarray:
+def ability_guessed(
+    tables: Tables, state: BattleState, defender=0, cleared: bool = False
+) -> jnp.ndarray:
     """``bool``: a ``LoadBattlerAbility DEFENDER`` read of this decision draws its coin,
     ``BattleSystem_RandNext() & 1`` (trainer_ai.c:1194-1198): the AI does not know the
     player's ability, it is not Shadow Tag, Magnet Pull or Arena Trap (:1181-1188), and the
     base species has two nonzero abilities (:1191-1194; even when they are the same
     ability). It is the same for every read of the decision."""
-    _, known, base = _defender_abilities(tables, state)
+    _, known, base = _defender_abilities(tables, state, defender, cleared)
     return ~known & (base[0] != 0) & (base[1] != 0)
 
 
-def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.ndarray:
+def defender_ability(
+    tables: Tables, state: BattleState, ability_guess, defender=0, cleared: bool = False
+) -> jnp.ndarray:
     """``int32``: ``LoadBattlerAbility DEFENDER`` (trainer_ai.c:1170; roark.md 9.2): the
     true ability when the AI has learned it or when it is Shadow Tag, Magnet Pull or
     Arena Trap; else the guessed species slot ``ability_guess`` when the species has two
@@ -1859,7 +1969,7 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
     ``SpeciesData_GetSpeciesValue(species, SPECIES_DATA_ABILITY_1/2)``
     (``trainer_ai.c:1191-1192``; ``AICmd_CheckBattlerAbility`` likewise, ``:1236-1237``),
     which loads the personal data of the species id (``src/pokemon.c:2283``)."""
-    true, known, base = _defender_abilities(tables, state)
+    true, known, base = _defender_abilities(tables, state, defender, cleared)
     guess = base[jnp.clip(jnp.asarray(ability_guess, _I32), 0, 1)]
     only = jnp.where(base[0] != 0, base[0], base[1])
     resolved = jnp.where((base[0] != 0) & (base[1] != 0), guess, only)
@@ -1870,6 +1980,8 @@ def new_context(
     tables: Tables,
     state: BattleState,
     outcome: AiOutcome,
+    attacker: int = 1,
+    defender=0,
     sites=None,
     loose: LooseDraws | None = None,
 ) -> AiContext:
@@ -1882,17 +1994,29 @@ def new_context(
     line per slot, ``sites`` (default ``outcome.line_sites``). ``loose``: the loose oracle's
     draws (module docstring), else None.
 
+    ``attacker`` is the deciding AI battler (static) and ``defender`` its target
+    (``AI_CONTEXT.attacker`` / ``.defender``, trainer_ai.c:264-265, :371): the scores are of the
+    attacker's usable moves, the damage of its moves against the defender, the defender's abilities
+    its guessed ones. B = 2: attacker 1, defender 0 (the defaults).
+
     ``player_ability`` is the flat layout's one resolution for the decision (its scalar
     ``ability_guess``); a per-slot layout resolves each guessing read from its own draw
     (``load_battler_ability``), and ``player_ability`` is -1.
 
-    The seen moves are the stored ``ai_seen_moves`` plus the player's pending
-    ``last_move``: ``TrainerAI_MainSingles`` runs ``TrainerAI_RecordLastMove`` (:295)
-    before scoring, so the scores already know the move the player used last turn;
-    ``step`` commits it to ``ai_seen_moves`` when the AI fights."""
-    d = state.active[0]
-    seen = record_seen_move(state.ai_seen_moves[d], state.last_move[0]).astype(_I32)
-    scores = jnp.where(usable_moves(tables, state, 1), 100, 0).astype(_I32)
+    The seen moves are the stored record row of the defender (``ai_record_moves``) plus, when the
+    defender is on the other side, its pending ``last_move``: ``TrainerAI_MainSingles`` runs
+    ``TrainerAI_RecordLastMove`` (:295) before scoring, and ``MainDoubles`` records every living
+    target of the other side (:372-375; the ally is not recorded, :2705-2717), so the scores
+    already know the move the target used last turn; ``step`` commits it to the record when the AI
+    fights."""
+    attacker = StaticBattler(attacker)
+    defender = jnp.asarray(defender, _I32)
+    other_side = ((defender ^ attacker) & 1) == 1
+    record = ai_record_moves(state, defender)
+    seen = jnp.where(
+        other_side, record_seen_move(record, state.last_move[defender]), record
+    ).astype(_I32)
+    scores = jnp.where(usable_moves(tables, state, attacker), 100, 0).astype(_I32)
     false = jnp.asarray(False)
     slotted = jnp.ndim(outcome.script_rolls) == 2
     if slotted:
@@ -1902,20 +2026,47 @@ def new_context(
     # E3-B2-15: Gyro Ball's estimate in the current speeds is the one estimate that differs once
     # the decision has compared speeds; the other moves' are the same (``seen_damage``).
     speeds = current_speeds(tables, state)
-    damage = _slot_damage(tables, state, SIM_ROLL_MAX)
-    moves = state.moves[1, state.active[1]].astype(_I32)
+    damage = _slot_damage(tables, state, SIM_ROLL_MAX, attacker, defender)
+    moves = state.moves[_row(state, attacker), state.active[attacker]].astype(_I32)
     gyro = estimate(
         tables,
         state._replace(speed_rec=speeds.astype(state.speed_rec.dtype)),
         AI_GYRO_BALL,
         SIM_ROLL_MAX,
+        atk_side=attacker,
+        def_side=defender,
     )
     gyro_slot = moves == AI_GYRO_BALL
-    damage_w = jax.tree.map(
-        lambda g, d: jnp.where(gyro_slot.reshape((-1,) + (1,) * (d.ndim - 1)), g[None], d),
-        gyro,
-        damage,
-    )
+
+    def with_gyro(g):
+        return jax.tree.map(
+            lambda gv, d: jnp.where(gyro_slot.reshape((-1,) + (1,) * (d.ndim - 1)), gv[None], d),
+            g,
+            damage,
+        )
+
+    if format_of(state).B == 2:
+        damage_w = with_gyro(gyro)
+    else:
+        # the four patterns of the entries Gyro Ball reads, [defender] (bit 1) and [attacker]
+        # (bit 0): each is the record's, or the current speed (seen_damage)
+        patterns = [damage]
+        for pattern in (1, 2, 3):
+            rec = state.speed_rec
+            for entry, bit in ((attacker, 1), (defender, 2)):
+                rec = rec.at[entry].set(
+                    jnp.where(pattern & bit != 0, speeds[entry], rec[entry]).astype(rec.dtype)
+                )
+            g = estimate(
+                tables,
+                state._replace(speed_rec=rec),
+                AI_GYRO_BALL,
+                SIM_ROLL_MAX,
+                atk_side=attacker,
+                def_side=defender,
+            )
+            patterns.append(with_gyro(g))
+        damage_w = jax.tree.map(lambda *xs: jnp.stack(xs), *patterns)
     return AiContext(
         tables=tables,
         state=state,
@@ -1930,18 +2081,20 @@ def new_context(
         player_ability=(
             jnp.asarray(-1, _I32)
             if slotted
-            else defender_ability(tables, state, outcome.ability_guess)
+            else defender_ability(tables, state, outcome.ability_guess, defender)
         ),
         damage=damage,
         sites=jnp.asarray(sites, _I32),
-        guess_abilities=jnp.stack([defender_ability(tables, state, g) for g in (0, 1)]),
-        guessing=ability_guessed(tables, state),
+        guess_abilities=jnp.stack([defender_ability(tables, state, g, defender) for g in (0, 1)]),
+        guessing=ability_guessed(tables, state, defender),
         reads=jnp.zeros(MOVES, _I32),
         weight=jnp.ones(MOVES, jnp.float32),
         missing_read=jnp.asarray(0, _I32),
+        attacker=attacker,
+        defender=defender,
         loose=loose,
         speeds=speeds,
-        written=false,
+        written=jnp.zeros(format_of(state).B, bool),
         damage_w=damage_w,
         flag=jnp.asarray(0, _I32),
         inject=jnp.asarray(-1, _I32),
@@ -1952,21 +2105,155 @@ def new_context(
 def at_slot(ctx: AiContext, slot: int) -> AiContext:
     """``AI_EVAL_STEP_INIT`` (trainer_ai.c:487): the move of ``slot``, ``MOVE_NONE`` when
     it has no PP; a ``MOVE_NONE`` slot runs no command."""
-    state = ctx.state
-    a = state.active[1]
-    move = jnp.where(state.pp[1, a, slot] > 0, state.moves[1, a, slot], 0).astype(_I32)
+    state, b = ctx.state, ctx.attacker
+    row, a = _row(state, b), state.active[b]
+    move = jnp.where(state.pp[row, a, slot] > 0, state.moves[row, a, slot], 0).astype(_I32)
     return ctx._replace(
         slot=jnp.asarray(slot, _I32), move=move, live=move != 0, jump=jnp.asarray(False)
     )
 
 
-def _side(battler: Battler) -> int:
-    return int(battler)
+def _battler(ctx: AiContext, arg) -> int | jnp.ndarray:
+    """``AIScript_Battler`` (trainer_ai.c:2765-2782): the battler a script argument names.
+    ATTACKER ``ctx.attacker``, DEFENDER (and any other value) ``ctx.defender``, the partner
+    arguments those ``^ 2`` (pure XOR: no format or HP test). The one resolver of every command
+    (docs/doubles-state-design.md section 5, rule 7). A static Python int for the attacker's
+    arguments, an int32 for the defender's (traced: the target loop is one vmap)."""
+    arg = int(arg)
+    if arg == Battler.ATTACKER:
+        return int(ctx.attacker)
+    if arg == Battler.ATTACKER_PARTNER:
+        return int(ctx.attacker) ^ 2
+    if arg == Battler.DEFENDER_PARTNER:
+        return ctx.defender ^ 2
+    return ctx.defender
+
+
+def _is_cleared(ctx: AiContext, arg) -> bool:
+    """The argument names a battler the format lacks (static): at B = 2 (attacker 1, defender 0)
+    the partner arguments, battlers 3 and 2, whose reads are ``CLEARED``'s and whose AI record is 0
+    (``state.ai_record_*``, sheet D45-1 rule 6). B = 4 has none."""
+    partner_arg = int(arg) in (Battler.ATTACKER_PARTNER, Battler.DEFENDER_PARTNER)
+    return format_of(ctx.state).B == 2 and partner_arg
+
+
+class ClearedBattler(NamedTuple):
+    """What the AI reads of a battler the format lacks (battlers 2 and 3 of a single battle):
+    ``BattleContext_New`` clears the whole context (battle_controller_player.c:180-182) and
+    ``BattleControllerPlayer_InitBattleMons`` fills ``battleMons[i]`` for ``i < maxBattlers``
+    only (:223-227), so ``battleMons[2]`` and ``[3]`` are all zero. This is the game's own state at
+    B = 2, not a coverage guard. Decomp units: ``stat_stage`` is the raw stored ``statBoosts``
+    (0, not the neutral 6)."""
+
+    cur_hp: int = 0
+    max_hp: int = 0
+    hp_percent: int = 0  # 0 * 100 / 0: the ROM's division returns the dividend (ruling G-53)
+    ability: int = 0  # battleMons[b].ability
+    species: int = 0  # battleMons[b].species: SPECIES_NONE, whose two abilities are 0, 0
+    types: tuple[int, int] = (0, 0)  # TYPE_NORMAL twice (generated/pokemon_types.txt:1)
+    status: int = 0
+    status_volatile: int = 0
+    move_effects_mask: int = 0
+    stat_stage: int = 0
+    moves: tuple[int, int, int, int] = (0, 0, 0, 0)
+    held_item: int = 0
+    flash_fire: int = 0
+
+
+CLEARED = ClearedBattler()
+
+
+def _get_partner(state: BattleState, b):
+    """``BattleSystem_GetPartner`` (battle_system.c:394-411): ``b`` itself in a single battle
+    (:400-402), else the other battler of its side (``b ^ 2``)."""
+    return b ^ 2 if format_of(state).B == 4 else b
+
+
+def _selected_slot(state: BattleState, b) -> jnp.ndarray:
+    """``battleCtx->selectedPartySlot[b]``: the party slot of ``b``'s active Pokemon, 6 (none) for
+    an absent battler (``battlersSwitchingMask``; battle_controller_player.c:4108-4111,
+    :4133-4135), which ``actions.absent_now`` equals. 6 excludes no slot of any party."""
+    return jnp.where(absent_now(state, b), 6, state.active[b]).astype(_I32)
+
+
+def _excluded(tables: Tables, state: BattleState, b) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(slot1, slot2)``: the two party slots ``CountAlivePartyBattlers``, ``IfPartyMemberStatus``
+    and ``NotStatus`` skip (trainer_ai.c:1138-1143, :1356-1362, :1389-1395): ``selectedPartySlot`` of
+    ``b`` and of ``BattleSystem_GetPartner(b)`` when the battle's ``BATTLE_TYPE_DOUBLES`` bit is
+    set, else ``b``'s twice. The bit alone decides: no TAG or 2vs2 test, so in MULTI and on TAG's
+    enemy side the partner's slot index also excludes that index of ``b``'s own party (the
+    decomp's cross-party quirk, kept: A-6). An absent partner is slot 6 (``_selected_slot``)."""
+    own = _selected_slot(state, b)
+    doubles = (jnp.asarray(tables.battle_type) & BATTLE_TYPE_DOUBLES) != 0
+    return own, jnp.where(doubles, _selected_slot(state, _get_partner(state, b)), own)
 
 
 def _row(state: BattleState, battler):
-    """The party index of ``battler`` (``engine.format.party``)."""
+    """The party index of ``battler`` (``engine.format.party``); a battler the format lacks has
+    none (``_cleared``)."""
     return party(format_of(state), battler)
+
+
+class PartyCopy(NamedTuple):
+    """The party ``Pokemon`` data of one party row (``[SLOTS, ...]``), as ``Pokemon_GetValue``
+    reads it (``_party_copy``)."""
+
+    moves: jnp.ndarray  # int32[SLOTS, MOVES], MON_DATA_MOVE1 + k
+    pp: jnp.ndarray  # int32[SLOTS, MOVES], MON_DATA_MOVE1_PP + k
+    max_pp: jnp.ndarray  # int32[SLOTS, MOVES], MON_DATA_MOVE1_MAX_PP + k
+    ivs: jnp.ndarray  # int[SLOTS, 6], MON_DATA_HP_IV + k
+    ability: jnp.ndarray  # int[SLOTS], MON_DATA_ABILITY
+    item: jnp.ndarray  # int32[SLOTS], MON_DATA_HELD_ITEM
+
+
+def _party_copy(tables: Tables, state: BattleState, b) -> PartyCopy:
+    """The party Pokemon of battler ``b``'s party row as the AI's party commands read them
+    (``BattleSystem_GetPartyPokemon`` + ``Pokemon_GetValue``; IfAnyPartyMemberUsedPP,
+    trainer_ai.c:1997-2001; IfPartyMemberDealsMoreDamage, :2145-2162).
+
+    A bench slot's engine values are the party's. The active slot of a battler is its
+    ``BattleMon``; ``BattleMon_CopyToParty`` sends it to the party through
+    ``BtlIOCmd_UpdatePartyMon`` (battle_io_command.c:575-603), which writes no move or PP while the
+    battler is Transformed (:579) and none of a ``mimickedMoveSlot`` slot (:581), the held item
+    only without the slot's ``knockedOffItemsMask`` bit (:590-592), and the ability only on a stat
+    recalculation (:601-603, ``party_ability``). The party keeps its own IVs and species under
+    Transform (BtlCmd_Transform writes the BattleMon only, battle_script.c:5342-5370). So for the
+    active slot of the one other battler that sends from ``b``'s row (``b ^ 2`` when the format
+    gives both one party: DOUBLES, and TWO_TRAINERS' player side): moves and PP from
+    ``shadow_moves`` / ``shadow_pp`` where ``mimic_slots`` is set (all four under Transform, G-68 /
+    G-69), IVs from ``shadow_ivs`` and the ability (``step._party_ability``: ``party_ability``, else
+    the species' at its ability slot and form) from the ``shadow_*`` while ``transformed``. The
+    max PP is ``MoveTable_CalcMaxPP`` of the party move with the slot's PP Ups (``hooks.max_pp``).
+    The held item is ``state.party_held_item`` for every slot. ``b``'s own active slot is the
+    caller's to skip (``selectedPartySlot[b]``)."""
+    fmt = format_of(state)
+    row = _row(state, b)
+    slots = jnp.arange(state.species.shape[1])
+    moves = state.moves[row].astype(_I32)
+    pp = state.pp[row].astype(_I32)
+    ivs = state.ivs[row]
+    ability = state.ability[row]
+    if fmt.B == 4:
+        o = b ^ 2
+        mon = state.active[o]
+        at = (slots == mon) & (party(fmt, o) == row)  # [SLOTS]
+        masked = ((state.mimic_slots[o].astype(_I32) >> jnp.arange(MOVES)) & 1) == 1
+        copied = at[:, None] & masked[None, :]
+        moves = jnp.where(copied, state.shadow_moves[o].astype(_I32)[None, :], moves)
+        pp = jnp.where(copied, state.shadow_pp[o].astype(_I32)[None, :], pp)
+        tf = state.transformed[o] != 0
+        ivs = jnp.where((at & tf)[:, None], state.shadow_ivs[o][None, :], ivs)
+        species = jnp.where(tf, state.shadow_species[o], state.species[row, mon])
+        form = jnp.where(tf, state.shadow_ability_form[o], state.ability_form[row, mon])
+        slot = jnp.where(tf, state.shadow_ability_slot[o], state.ability_slot[row, mon])
+        own = tables.species_abilities[tables.species_form_row[species, form], slot]
+        written = state.party_ability[row, mon]
+        party_ab = jnp.where(written != 0, written, own).astype(ability.dtype)
+        ability = jnp.where(at, party_ab, ability)
+    party_moves = state._replace(moves=state.moves.at[row].set(moves.astype(state.moves.dtype)))
+    full = max_pp(tables, party_moves, b, slots)  # [SLOTS, MOVES]
+    item = party_held_item(state, row, slots).astype(_I32)
+    return PartyCopy(moves, pp, full, ivs, ability, item)
 
 
 def _jump(ctx: AiContext, cond) -> AiContext:
@@ -2032,12 +2319,13 @@ def _slot_read(ctx: AiContext, takes) -> tuple[AiContext, jnp.ndarray]:
 def if_target_is_not_taunted(ctx: AiContext) -> AiContext:
     """``IfTargetIsNotTaunted`` (trainer_ai.c:2620-2628): jumps when the defender's
     ``moveEffectsData.tauntedTurns`` is 0 (``BattleState.taunt``, turns left)."""
-    return _jump(ctx, ctx.state.taunt[_side(Battler.DEFENDER)] == 0)
+    return _jump(ctx, ctx.state.taunt[ctx.defender] == 0)
 
 
 def if_target_is_partner(ctx: AiContext) -> AiContext:
-    """``IfTargetIsPartner`` (trainer_ai.c:2630): never in a single battle."""
-    return _jump(ctx, False)
+    """``IfTargetIsPartner`` (trainer_ai.c:2630-2639): the target is on the attacker's side,
+    ``(attacker & 1) == (defender & 1)``; never in a single battle."""
+    return _jump(ctx, (ctx.attacker & 1) == (ctx.defender & 1))
 
 
 def if_move_equal_to(ctx: AiContext, move: int) -> AiContext:
@@ -2059,7 +2347,9 @@ def flag_move_damage_score(
     anew before reading it again (script.s:62-67, :112-117, :6511-6512, :6572-6573), so the
     draws are no read (the loose oracle still draws them)."""
     if use_damage_roll == ROLL_FOR_DAMAGE:
-        damage = _slot_damage(ctx.tables, seen_state(ctx), ctx.outcome.sim_roll)
+        damage = _slot_damage(
+            ctx.tables, seen_state(ctx), ctx.outcome.sim_roll, ctx.attacker, ctx.defender
+        )
     else:
         damage = seen_damage(ctx)
     mine = jax.tree.map(lambda x: jnp.take(x, ctx.slot, axis=0), damage)
@@ -2077,6 +2367,50 @@ def flag_move_damage_score(
     return ctx._replace(calc_temp=value.astype(_I32))
 
 
+def check_if_highest_damage_with_partner(ctx: AiContext, use_damage_roll: int) -> AiContext:
+    """``CheckIfHighestDamageWithPartner`` (trainer_ai.c:2369-2436), at B = 2. The gate is
+    ``FlagMoveDamageScore``'s (:2393-2394): a move that is not damaging gives
+    ``AI_NO_COMPARISON_MADE``. Two sweeps (``j`` = 0, 1, ``MAX_BATTLERS_PER_SIDE``): the
+    ``TrainerAI_CalcAllDamage`` of the attacker's moves, then of ``BattleSystem_GetPartner(
+    attacker)``'s (:2398-2414), which in a single battle is the attacker itself (battle_system.c:
+    400-402), against the same defender with the attacker's own ``moveDamageRolls`` (:2829-2833).
+    ``moveDamage`` is the slot's value of sweep 1 (:2416-2418); the result is HIGHEST iff no value
+    of either sweep exceeds it (:2420-2431), NOT_HIGHEST at the first that does.
+
+    Sweep 2 estimates the same four moves again, so each Psywave or Magnitude id (Kaizo's Triple
+    Axel, Bulldoze) draws a second, independent ``RandNext()``: eight estimates, ``_calc_read``
+    one read of the path. Highest with probability ``sum_c P(D_slot = d_c) prod_{i != slot}
+    P(D_i <= d_c) prod_i P(D'_i <= d_c)`` over the slot's sweep-1 classes c. Without a drawing id
+    that is ``FlagMoveDamageScore``'s HIGHEST and no read is made. B = 2 only: at B = 4 sweep 2 is
+    the partner's own moveset, a fainted partner's moves counting too (no HP test), which is
+    E4-A's; the format gate refuses B = 4 until then."""
+    if format_of(ctx.state).B == 4:
+        # Stays a stub in W1: E4-A W2 models the partner sweep (A-10 s3, A-7).
+        raise NotImplementedError("CheckIfHighestDamageWithPartner at B = 4: E4-A-W2's sweep")
+    if use_damage_roll == ROLL_FOR_DAMAGE:
+        damage = _slot_damage(
+            ctx.tables, seen_state(ctx), ctx.outcome.sim_roll, ctx.attacker, ctx.defender
+        )
+    else:
+        damage = seen_damage(ctx)
+    both = jax.tree.map(lambda x: jnp.concatenate([x, x], axis=0), damage)  # sweep 1, sweep 2
+    mine = jax.tree.map(lambda x: jnp.take(x, ctx.slot, axis=0), damage)
+    others = jnp.arange(MOVES) != ctx.slot
+    le = _at_most(damage, mine.value[:, None])  # [C, MOVES]: P(D_i <= d_c), either sweep
+    first = jnp.prod(jnp.where(others[None, :], le, 1.0), axis=1)  # sweep 1, without the slot
+    second = jnp.prod(le, axis=1)  # sweep 2: every move, the slot's own included
+    p_high = jnp.sum(mine.prob * first * second)
+    damaging = is_damaging(ctx.tables, ctx.move)
+
+    def decide(d):
+        return ~jnp.any(d > jnp.take(d, ctx.slot))
+
+    ctx, highest = _calc_read(ctx, both, damaging, p_high, decide)
+    flag = jnp.where(highest, AI_MOVE_IS_HIGHEST_DAMAGE, AI_NOT_HIGHEST_DAMAGE)
+    value = jnp.where(damaging, flag, AI_NO_COMPARISON_MADE)
+    return ctx._replace(calc_temp=value.astype(_I32))
+
+
 def if_loaded_equal_to(ctx: AiContext, value: int) -> AiContext:
     """``IfLoadedEqualTo`` (trainer_ai.c:786)."""
     return _jump(ctx, ctx.calc_temp == value)
@@ -2084,45 +2418,119 @@ def if_loaded_equal_to(ctx: AiContext, value: int) -> AiContext:
 
 def if_move_effectiveness_equals(ctx: AiContext, cls: TypeMulti) -> AiContext:
     """``IfMoveEffectivenessEquals`` (trainer_ai.c:1311)."""
-    return _jump(ctx, effectiveness_class(ctx.tables, ctx.state, ctx.move) == int(cls))
+    got = effectiveness_class(ctx.tables, ctx.state, ctx.move, ctx.attacker, ctx.defender)
+    return _jump(ctx, got == int(cls))
 
 
 def load_battler_ability(ctx: AiContext, battler: Battler) -> AiContext:
-    """``LoadBattlerAbility`` (trainer_ai.c:1170): the attacker's true ability, or the
-    defender's ability as the AI resolves it (``defender_ability``). Its coin flip,
-    ``RandNext() & 1`` (:1194-1198), is fresh at every read that guesses
-    (``ability_guessed``):
+    """``LoadBattlerAbility`` (trainer_ai.c:1170-1210): 0 under the suppression bit (:1177-1178);
+    else, when the resolved battler is not the attacker and the argument is not ATTACKER_PARTNER
+    (:1179), the AI's knowledge of it (``defender_ability``: the record, a trapping ability, a
+    coin between the species' two abilities); else the true ability (:1208). The knowledge branch
+    is taken for DEFENDER and, by the resolved battler, for DEFENDER_PARTNER (not when an ally
+    target makes it the attacker itself). Its coin flip, ``RandNext() & 1`` (:1194-1198), is fresh
+    at every read that guesses (``ability_guessed``):
     - flat layout (scalar ``AiOutcome.ability_guess``): one guess for the decision,
-      ``AiContext.player_ability`` (roark.md 8.2);
+      ``AiContext.player_ability`` (roark.md 8.2), DEFENDER at B = 2 only;
     - per-slot layout (E1 Rulings R1, R4; docs/ai/kaizo_roark.md 8.4): a guessing read is
       the slot's next random read (``_slot_read``): ability 1 when the draw's low bit is set,
       else ability 2 (:1195-1199), probability 1/2;
     - loose: its own draw."""
+    battler = Battler(int(battler))
+    b, cleared = _battler(ctx, battler), _is_cleared(ctx, battler)
+    state, tables = ctx.state, ctx.tables
     if battler == Battler.ATTACKER:
-        value = attacker_ability(ctx.tables, ctx.state)
-    elif ctx.loose is not None:  # its own coin flip (trainer_ai.c:1191-1198)
-        ctx, bit = _loose_read(ctx, 0.5, ReadKind.ABILITY)
-        value = defender_ability(ctx.tables, ctx.state, bit)
-    elif not per_slot(ctx):
-        value = ctx.player_ability
-    else:
-        ctx, r = _slot_read(ctx, lambda r: (0.5, ctx.guessing))
-        # RandNext() & 1 set: SPECIES_DATA_ABILITY_1, the species' slot 0 (:1191-1197).
-        value = ctx.guess_abilities[jnp.where((r & 1) == 1, 0, 1)]
+        value = attacker_ability(tables, state, ctx.attacker)
+    elif battler == Battler.ATTACKER_PARTNER:
+        # Not the knowledge branch (:1179): the raw ability, 0 once the suppression bit is set.
+        value = _partner_raw_ability(ctx, b, cleared)
+    elif cleared:
+        # A battler the format lacks (the ally of DEFENDER's coin, :1179-1206): no recorded
+        # ability, not trapping, species 0 whose two abilities are 0 and 0: no coin (:1202-1206).
+        true, known, base = _defender_abilities(tables, state, b, True)
+        value = jnp.where(known, true, jnp.where(base[0] != 0, base[0], base[1]))
+    elif battler == Battler.DEFENDER:
+        if ctx.loose is not None:  # its own coin flip (trainer_ai.c:1191-1198)
+            ctx, bit = _loose_read(ctx, 0.5, ReadKind.ABILITY)
+            value = defender_ability(tables, state, bit, ctx.defender)
+        elif not per_slot(ctx):
+            value = ctx.player_ability
+        else:
+            ctx, r = _slot_read(ctx, lambda r: (0.5, ctx.guessing))
+            # RandNext() & 1 set: SPECIES_DATA_ABILITY_1, the species' slot 0 (:1191-1197).
+            value = ctx.guess_abilities[jnp.where((r & 1) == 1, 0, 1)]
+    else:  # DEFENDER_PARTNER at B = 4: knowledge unless it is the attacker (an ally target)
+        knows = b != ctx.attacker
+        guessing = ability_guessed(tables, state, b) & knows
+        raw = _partner_raw_ability(ctx, b, False)
+        if ctx.loose is not None:
+            ctx, bit = _loose_read(ctx, 0.5, ReadKind.ABILITY, live=ctx.live & knows)
+            guess = defender_ability(tables, state, bit, b)
+        elif per_slot(ctx):
+            ctx, r = _slot_read(ctx, lambda r: (0.5, guessing))
+            guesses = jnp.stack([defender_ability(tables, state, g, b) for g in (0, 1)])
+            guess = guesses[jnp.where((r & 1) == 1, 0, 1)]
+        else:
+            raise AssertionError("DEFENDER_PARTNER's ability is read in the per-slot layout only")
+        suppressed = state.ability_suppressed[b] != 0
+        value = jnp.where(suppressed, 0, jnp.where(knows, guess, raw))
     return ctx._replace(calc_temp=jnp.asarray(value, _I32))
 
 
+def _partner_raw_ability(ctx: AiContext, b, cleared: bool) -> jnp.ndarray:
+    """``int32``: the raw ``battleMons[b].ability`` of a battler the script reads without the
+    AI's knowledge (:1208, :1255-1256): ``ABILITY_NONE`` while its ``MOVE_EFFECT_ABILITY_SUPPRESSED``
+    bit is set (:1177-1178, :1221-1222), and for a battler the format lacks (``CLEARED``) 0."""
+    state = ctx.state
+    if cleared:
+        return jnp.asarray(CLEARED.ability, _I32)
+    raw = decomp_abilities(ctx.tables, state)[_row(state, b), state.active[b]]
+    return jnp.where(state.ability_suppressed[b] != 0, 0, raw).astype(_I32)
+
+
 def load_type_from(ctx: AiContext, target: LoadType) -> AiContext:
-    """``LoadTypeFrom`` (trainer_ai.c:937): the move's type, or the defender's or the
-    attacker's true type 1 or 2 (``BattleMon_Get``, ``BATTLEMON_TYPE_1/2``, :945-959)."""
+    """``LoadTypeFrom`` (trainer_ai.c:937-988): the move's type, or the defender's or the
+    attacker's true type 1 or 2 (``BattleMon_Get``, ``BATTLEMON_TYPE_1/2``, :945-959), or a
+    partner's through ``BattleSystem_GetPartner`` of the attacker or the defender (:965-986;
+    ``_get_partner``). ``LOAD_DEFENDER_PARTNER_TYPE_2`` reads ``BATTLEMON_TYPE_1`` (:980-983), a
+    decomp bug kept."""
     state = ctx.state
     if target == LoadType.MOVE_TYPE:
         return ctx._replace(calc_temp=ctx.tables.move_type[ctx.move].astype(_I32))
     target = LoadType(target)
-    side = 1 if target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2) else 0
-    types = state.types[_row(state, side), state.active[side]].astype(_I32)
-    index = 0 if target in (LoadType.DEFENDER_TYPE_1, LoadType.ATTACKER_TYPE_1) else 1
+    if target in (LoadType.ATTACKER_PARTNER_TYPE_1, LoadType.ATTACKER_PARTNER_TYPE_2):
+        # BattleSystem_GetPartner(attacker): the attacker itself in a single battle (:965-978)
+        side = _get_partner(state, int(ctx.attacker))
+    elif target in (LoadType.DEFENDER_PARTNER_TYPE_1, LoadType.DEFENDER_PARTNER_TYPE_2):
+        side = _get_partner(state, ctx.defender)
+    elif target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+        side = int(ctx.attacker)
+    else:
+        side = ctx.defender
+    types = _types(state, side)
+    index = (
+        0
+        if target
+        in (
+            LoadType.DEFENDER_TYPE_1,
+            LoadType.ATTACKER_TYPE_1,
+            LoadType.ATTACKER_PARTNER_TYPE_1,
+            LoadType.DEFENDER_PARTNER_TYPE_1,
+            LoadType.DEFENDER_PARTNER_TYPE_2,
+        )
+        else 1
+    )
     return ctx._replace(calc_temp=types[index])
+
+
+def _types(state: BattleState, side, cleared: bool = False) -> jnp.ndarray:
+    """``int32[2]``: ``BattleMon_Get`` ``BATTLEMON_TYPE_1`` / ``_2`` of battler ``side``
+    (``Battler_MonType``, battle_lib.c:7618-7703: the engine's current types, a Multitype Arceus'
+    being its plate's, ``damage.multitype_plate``); ``cleared``: a battler the format lacks reads
+    ``CLEARED.types``."""
+    if cleared:
+        return jnp.asarray(CLEARED.types, _I32)
+    return state.types[_row(state, side), state.active[side]].astype(_I32)
 
 
 def if_temp_equal_to(ctx: AiContext, value: int) -> AiContext:
@@ -2144,7 +2552,7 @@ def if_level(ctx: AiContext, op: int) -> AiContext:
     defender's (``battleMons[...].level``): higher, lower or equal by ``op``; any other
     ``op`` never jumps."""
     state = ctx.state
-    a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
+    a, d = ctx.attacker, ctx.defender
     mine = state.level[_row(state, a), state.active[a]].astype(_I32)
     theirs = state.level[_row(state, d), state.active[d]].astype(_I32)
     jump = {
@@ -2158,7 +2566,7 @@ def if_level(ctx: AiContext, op: int) -> AiContext:
 def load_battler_turn_count(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadBattlerTurnCount`` (trainer_ai.c): ``totalTurns - fakeOutTurnNumber`` of the
     battler, its turns since it came in (``BattleState.turn``, ``.fake_out_turn``)."""
-    state, side = ctx.state, _side(battler)
+    state, side = ctx.state, _battler(ctx, battler)
     turns = state.turn.astype(_I32) - state.fake_out_turn[side].astype(_I32)
     return ctx._replace(calc_temp=turns)
 
@@ -2172,15 +2580,24 @@ def load_effect_of_loaded_move(ctx: AiContext) -> AiContext:
 ITEM_SHINY_STONE = 107  # Basic_CheckMetalBurst (script.s:1169, :1176; generated/items.txt)
 
 
+def _true_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:
+    """``battleMons[battler].heldItem``: the true item of the resolved battler; 0 for a battler
+    the format lacks (``CLEARED``)."""
+    state, b = ctx.state, _battler(ctx, battler)
+    if _is_cleared(ctx, battler):
+        return jnp.asarray(CLEARED.held_item, _I32)
+    return state.item[_row(state, b), state.active[b]].astype(_I32)
+
+
 def _held_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:
     """The battler's held item as the AI sees it for ``IfHeldItemEqualTo`` (trainer_ai.c:
-    1915-1934): its own side's true ``heldItem``; the other side's
-    ``aiContext.battlerHeldItems`` (``BattleState.ai_item_known`` of the active slot, the
-    item a message named, 0 none)."""
-    state, side = ctx.state, _side(battler)
-    if side == _side(Battler.ATTACKER):
-        return state.item[_row(state, side), state.active[side]].astype(_I32)
-    return state.ai_item_known[state.active[side]].astype(_I32)
+    1915-1934): the true ``heldItem`` of a battler on the attacker's side (``(battler & 1) ==
+    (attacker & 1)``, its partner too; 0 for a battler the format lacks, ``CLEARED``); the other
+    side's ``aiContext.battlerHeldItems`` (``ai_record_item`` of the battler, the item a message
+    named, 0 none)."""
+    b = _battler(ctx, battler)
+    same_side = (b & 1) == (ctx.attacker & 1)  # :1925, the resolved battler only (rule 7)
+    return jnp.where(same_side, _true_item(ctx, battler), ai_record_item(ctx.state, b).astype(_I32))
 
 
 def if_held_item_equal_to(ctx: AiContext, battler: Battler, item: int) -> AiContext:
@@ -2192,7 +2609,7 @@ def load_fling_power(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadFlingPower`` (trainer_ai.c:2014-2022): ``Battler_ItemFlingPower`` of the battler
     (battle_lib.c:5491-5498): 0 under its Embargo, else the true ``heldItem``'s ``flingPower``
     (``Tables.item_fling_power``), whichever side (E3-B2-1)."""
-    state, side = ctx.state, _side(battler)
+    state, side = ctx.state, _battler(ctx, battler)
     item = state.item[_row(state, side), state.active[side]]
     power = jnp.where(state.embargo[side] != 0, 0, ctx.tables.item_fling_power[item])
     return ctx._replace(calc_temp=power.astype(_I32))
@@ -2200,29 +2617,34 @@ def load_fling_power(ctx: AiContext, battler: Battler) -> AiContext:
 
 def load_held_item(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadHeldItem`` (trainer_ai.c:1891-1899): ``battleMons[battler].heldItem``, the true item of
-    either side (unlike ``IfHeldItemEqualTo``)."""
-    state, side = ctx.state, _side(battler)
-    return ctx._replace(calc_temp=state.item[_row(state, side), state.active[side]].astype(_I32))
+    any battler (unlike ``IfHeldItemEqualTo``); a battler the format lacks holds none."""
+    return ctx._replace(calc_temp=_true_item(ctx, battler))
 
 
 def load_held_item_effect(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadHeldItemEffect`` (trainer_ai.c:1901-1913): the hold effect
-    (``Tables.item_hold_effect``) of the attacker's true ``heldItem``, or of
-    ``battlerHeldItems`` (``_held_item``'s) for another battler."""
-    item = _held_item(ctx, battler)
+    (``Tables.item_hold_effect``) of the attacker's own true ``heldItem`` when the resolved battler
+    is the attacker, else of ``battlerHeldItems[battler]`` (``ai_record_item``), for the AI's own
+    ally too (the resolved battler, not the argument: DEFENDER_PARTNER under an ally target is the
+    attacker)."""
+    b = _battler(ctx, battler)
+    # :1908, the resolved battler only (doubles design rule 7)
+    item = jnp.where(
+        b == ctx.attacker, _true_item(ctx, battler), ai_record_item(ctx.state, b).astype(_I32)
+    )
     return ctx._replace(calc_temp=ctx.tables.item_hold_effect[item].astype(_I32))
 
 
 def load_recycle_item(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadRecycleItem`` (trainer_ai.c:2510-2518): ``battleCtx->recycleItem[battler]``
     (``BattleState.recycle_item``, B13-19)."""
-    return ctx._replace(calc_temp=ctx.state.recycle_item[_side(battler)].astype(_I32))
+    return ctx._replace(calc_temp=ctx.state.recycle_item[_battler(ctx, battler)].astype(_I32))
 
 
 def load_current_move_pp(ctx: AiContext) -> AiContext:
     """``LoadCurrentMovePP`` (trainer_ai.c:2024-2028): the attacker's
     ``ppCur[AI_CONTEXT.moveSlot]``."""
-    state, a = ctx.state, _side(Battler.ATTACKER)
+    state, a = ctx.state, ctx.attacker
     return ctx._replace(calc_temp=state.pp[_row(state, a), state.active[a], ctx.slot].astype(_I32))
 
 
@@ -2230,7 +2652,7 @@ def sum_positive_stat_stages(ctx: AiContext, battler: Battler) -> AiContext:
     """``SumPositiveStatStages`` (trainer_ai.c:2243-2257): the sum of ``statBoosts[stat] - 6``
     over the stages above 6, ``BATTLE_STAT_HP`` through accuracy and evasion (the HP entry
     never moves)."""
-    stages = ctx.state.stages[_side(battler)].astype(_I32)  # engine units, 0 = neutral
+    stages = ctx.state.stages[_battler(ctx, battler)].astype(_I32)  # engine units, 0 = neutral
     return ctx._replace(calc_temp=jnp.sum(jnp.maximum(stages, 0)))
 
 
@@ -2271,7 +2693,7 @@ def load_protect_chain(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadProtectChain`` (trainer_ai.c:2538-2552): ``protectSuccessTurns``, or 0 when the
     battler's ``moveProtect`` is not Protect, Detect or Endure; ``BattleState.protect_count``
     folds that reset in (engine/STATE.md, moveProtect)."""
-    return ctx._replace(calc_temp=ctx.state.protect_count[_side(battler)].astype(_I32))
+    return ctx._replace(calc_temp=ctx.state.protect_count[_battler(ctx, battler)].astype(_I32))
 
 
 def if_loaded_not_equal_to(ctx: AiContext, value: int) -> AiContext:
@@ -2285,8 +2707,12 @@ def if_current_move_effect_equal_to(ctx: AiContext, effect: BattleEffect) -> AiC
 
 
 def _stage(ctx: AiContext, battler: Battler, stat: Stat) -> jnp.ndarray:
-    """The battler's true stat stage in decomp units (engine + 6)."""
-    return ctx.state.stages[_side(battler), stat].astype(_I32) + STAGE_NEUTRAL
+    """The battler's true stat stage in decomp units (engine + 6); a battler the format lacks
+    holds the stored 0 (``CLEARED.stat_stage``: the cleared ``BattleMon``, not the neutral 6)."""
+    side = _battler(ctx, battler)
+    if _is_cleared(ctx, battler):
+        return jnp.asarray(CLEARED.stat_stage, _I32)
+    return ctx.state.stages[side, stat].astype(_I32) + STAGE_NEUTRAL
 
 
 def diff_stat_stages(ctx: AiContext, battler: Battler, stat: Stat) -> AiContext:
@@ -2316,7 +2742,7 @@ def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     mask = int(mask)
     known = sum(int(m) for m in SideCondition)
     assert mask and not mask & ~known, f"unsupported side condition mask {mask:#x}"
-    side = _side(battler)
+    side = _battler(ctx, battler)
     on = jnp.asarray(False)
     for member, field in _SIDE_CONDITION_FIELDS.items():
         if mask & member:
@@ -2332,11 +2758,15 @@ def check_battler_ability(ctx: AiContext, battler: Battler, expected: int) -> Ai
     The player's: the one the AI knows (learned, or a trapping ability, :1224-1233); else, for
     a species of two abilities, ability 1 when neither is ``expected`` and unknown when one
     is (:1238-1246), for a species of one, that one (:1247-1251). No draw."""
-    # The decomp branches on the player's side (DEFENDER or DEFENDER_PARTNER, :1223).
-    if _side(battler) == _side(Battler.ATTACKER):
-        ability = attacker_ability(ctx.tables, ctx.state)
+    # The decomp branches on the argument, DEFENDER or DEFENDER_PARTNER (:1223), not the battler.
+    battler = Battler(int(battler))
+    b, cleared = _battler(ctx, battler), _is_cleared(ctx, battler)
+    if battler == Battler.ATTACKER:
+        ability = attacker_ability(ctx.tables, ctx.state, ctx.attacker)
+    elif battler == Battler.ATTACKER_PARTNER:
+        ability = _partner_raw_ability(ctx, b, cleared)  # :1255-1256
     else:
-        true, known, base = _defender_abilities(ctx.tables, ctx.state)
+        true, known, base = _defender_abilities(ctx.tables, ctx.state, b, cleared)
         two = (base[0] != 0) & (base[1] != 0)
         neither = (base[0] != expected) & (base[1] != expected)
         guess = jnp.where(
@@ -2357,16 +2787,28 @@ def load_spikes_layers(ctx: AiContext, battler: Battler, condition: SideConditio
     field = {SideCondition.SPIKES: "spikes", SideCondition.TOXIC_SPIKES: "toxic_spikes"}[
         SideCondition(int(condition))
     ]
-    return ctx._replace(calc_temp=getattr(ctx.state, field)[side_of(_side(battler))].astype(_I32))
+    side = side_of(_battler(ctx, battler))
+    return ctx._replace(calc_temp=getattr(ctx.state, field)[side].astype(_I32))
+
+
+def _member_alive(state: BattleState, row, b, tables: Tables) -> jnp.ndarray:
+    """``bool[SLOTS]``: the party members of ``b``'s party ``row`` the three group-1 commands
+    consider: HP and a species (an egg is not modelled), other than ``_excluded``'s two slots."""
+    slots = jnp.arange(state.species.shape[1])
+    slot1, slot2 = _excluded(tables, state, b)
+    return (slots != slot1) & (slots != slot2) & (state.hp[row] != 0) & (state.species[row] != 0)
 
 
 def count_alive_party_battlers(ctx: AiContext, battler: Battler) -> AiContext:
-    """``CountAlivePartyBattlers`` (trainer_ai.c:1126): the side's living party members
-    other than the active one."""
-    state, side = ctx.state, _side(battler)
-    alive = (state.species[_row(state, side)] > 0) & (state.hp[_row(state, side)] > 0)
-    alive = alive & (jnp.arange(alive.shape[0]) != state.active[side])
-    return ctx._replace(calc_temp=jnp.sum(alive.astype(_I32)))
+    """``CountAlivePartyBattlers`` (trainer_ai.c:1126-1155): the party members of the battler's
+    party with HP and a species, other than the two slots ``_excluded`` names: ``selectedPartySlot``
+    of the battler and of its partner under ``BATTLE_TYPE_DOUBLES`` (:1138-1143), the one slot
+    otherwise. A shared party (DOUBLES) loses both actives; MULTI and TAG's enemy side keep the
+    cross-party quirk (A-6)."""
+    state, b = ctx.state, _battler(ctx, battler)
+    return ctx._replace(
+        calc_temp=jnp.sum(_member_alive(state, _row(state, b), b, ctx.tables).astype(_I32))
+    )
 
 
 def add_to_move_score(ctx: AiContext, value: int) -> AiContext:
@@ -2392,9 +2834,10 @@ def if_current_move_kills(ctx: AiContext, use_damage_roll: int) -> AiContext:
         roll = ctx.outcome.sim_roll[ctx.slot]
     else:
         roll = SIM_ROLL_MAX
-    est = estimate(ctx.tables, seen_state(ctx), ctx.move, roll)
+    a, d = ctx.attacker, ctx.defender
+    est = estimate(ctx.tables, seen_state(ctx), ctx.move, roll, atk_side=a, def_side=d)
     state = ctx.state
-    hp = state.hp[0, state.active[0]].astype(_I32)
+    hp = state.hp[_row(state, d), state.active[d]].astype(_I32)
     p_kill = jnp.sum(jnp.where(hp <= est.value, est.prob, 0.0))
     damaging = is_damaging(ctx.tables, ctx.move)
     one = jax.tree.map(lambda x: x[None], est)
@@ -2424,23 +2867,41 @@ def if_random_less_than(ctx: AiContext, n: int, line: int) -> AiContext:
     return _jump(ctx, roll == 1)
 
 
-def _knows(ctx: AiContext, battler: Battler, move: int) -> jnp.ndarray:
-    state = ctx.state
+def _knows(ctx: AiContext, battler: Battler, move: int) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(applies, found)`` of ``IfMoveKnown`` / ``IfMoveNotKnown`` (trainer_ai.c:1627-1735): the
+    switch is on the argument. ATTACKER: the true moves (:1637-1648). ATTACKER_PARTNER: the
+    partner's true moves unless its ``curHP`` is 0, then no jump either way (:1650-1664; a battler
+    the format lacks has ``CLEARED.cur_hp`` 0). DEFENDER: ``AI_CONTEXT.battlerMoves`` of the
+    defender (:1666-1676), the record ``new_context`` read (``ai_record_moves``).
+    DEFENDER_PARTNER and any other argument: no case, no jump (:1678-1679)."""
+    state, battler = ctx.state, Battler(int(battler))
+    yes, no = jnp.asarray(True), jnp.asarray(False)
     if battler == Battler.ATTACKER:
-        moves = state.moves[1, state.active[1]].astype(_I32)
-    else:
-        moves = ctx.seen_moves  # AI_CONTEXT.battlerMoves (trainer_ai.c:1665)
-    return jnp.any(moves == move)
+        side = _battler(ctx, battler)
+        row, mon = _row(state, side), state.active[side]
+        return yes, jnp.any(state.moves[row, mon].astype(_I32) == move)
+    if battler == Battler.ATTACKER_PARTNER:
+        if _is_cleared(ctx, battler):
+            return jnp.asarray(CLEARED.cur_hp != 0), jnp.asarray(move in CLEARED.moves)
+        side = _battler(ctx, battler)
+        row, mon = _row(state, side), state.active[side]
+        return state.hp[row, mon] != 0, jnp.any(state.moves[row, mon].astype(_I32) == move)
+    if battler == Battler.DEFENDER:
+        return yes, jnp.any(ctx.seen_moves == move)  # AI_CONTEXT.battlerMoves (:1665)
+    return no, no
 
 
 def if_move_known(ctx: AiContext, battler: Battler, move: int) -> AiContext:
-    """``IfMoveKnown`` (trainer_ai.c:1627): the attacker's true moveset, or the moves the
-    AI has seen from the defender."""
-    return _jump(ctx, _knows(ctx, battler, move))
+    """``IfMoveKnown`` (trainer_ai.c:1627): the attacker's true moveset, its partner's while it
+    has HP, or the moves the AI has seen from the defender (``_knows``)."""
+    applies, found = _knows(ctx, battler, move)
+    return _jump(ctx, applies & found)
 
 
 def _hp_percent(ctx: AiContext, battler: Battler) -> jnp.ndarray:
-    state, side = ctx.state, _side(battler)
+    state, side = ctx.state, _battler(ctx, battler)
+    if _is_cleared(ctx, battler):  # 0 / 0: CLEARED.hp_percent
+        return jnp.asarray(CLEARED.hp_percent, _I32)
     mon = state.active[side]
     return (
         state.hp[_row(state, side), mon].astype(_I32)
@@ -2470,13 +2931,15 @@ def load_is_first_turn_in_battle(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadIsFirstTurnInBattle`` (trainer_ai.c:2480): TRUE (1) unless
     ``fakeOutTurnNumber < totalTurns`` (``BattleState.fake_out_turn``, ``turn``)."""
     state = ctx.state
-    first = state.fake_out_turn[_side(battler)].astype(_I32) >= state.turn.astype(_I32)
+    first = state.fake_out_turn[_battler(ctx, battler)].astype(_I32) >= state.turn.astype(_I32)
     return ctx._replace(calc_temp=first.astype(_I32))
 
 
 def if_move_not_known(ctx: AiContext, battler: Battler, move: int) -> AiContext:
-    """``IfMoveNotKnown`` (trainer_ai.c:1683): the negation of ``IfMoveKnown``."""
-    return _jump(ctx, ~_knows(ctx, battler, move))
+    """``IfMoveNotKnown`` (trainer_ai.c:1683-1735): ``IfMoveKnown``'s cases, jumping where the
+    move is not found; the cases that never jump never jump here either."""
+    applies, found = _knows(ctx, battler, move)
+    return _jump(ctx, applies & ~found)
 
 
 def if_hp_percent_equal_to(ctx: AiContext, battler: Battler, percent: int) -> AiContext:
@@ -2526,26 +2989,64 @@ def if_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     (``battleMons[battler].status & mask``, :657), a union of ``MonCondition`` groups. An
     asleep Pokemon meets the whole ``SLEEP`` group: the battle tests sleep as
     ``status & MON_CONDITION_SLEEP`` (e.g. battle_lib.c:1845)."""
-    side = _side(battler)
+    side = _battler(ctx, battler)
+    statuses = jnp.asarray(_condition_statuses(mask), _I32)
+    if _is_cleared(ctx, battler):
+        return _jump(ctx, (CLEARED.status & int(mask)) != 0)
     status = ctx.state.status[_row(ctx.state, side), ctx.state.active[side]].astype(_I32)
-    return _jump(ctx, jnp.isin(status, jnp.asarray(_condition_statuses(mask), _I32)))
+    return _jump(ctx, jnp.isin(status, statuses))
 
 
 def if_party_member_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
-    """``IfPartyMemberStatus`` (trainer_ai.c:1348-1379): in singles, a party member other than
-    the battler's selected slot, with HP and a species, whose party status meets ``mask``
-    (``_condition_statuses``), B12-18."""
-    side = _side(battler)
-    state = ctx.state
+    """``IfPartyMemberStatus`` (trainer_ai.c:1348-1379): a party member of the battler's party
+    other than the two slots ``_excluded`` names (the count command's), with HP and a species,
+    whose party status meets ``mask`` (``_condition_statuses``), B12-18."""
+    state, b = ctx.state, _battler(ctx, battler)
     statuses = jnp.asarray(_condition_statuses(mask), _I32)
-    status = state.status[_row(state, side)].astype(_I32)
-    slots = jnp.arange(status.shape[0])
-    member = (
-        (slots != state.active[side])
-        & (state.hp[_row(state, side)] != 0)
-        & (state.species[_row(state, side)] != 0)
-    )
-    return _jump(ctx, jnp.any(member & jnp.isin(status, statuses)))
+    row = _row(state, b)
+    member = _member_alive(state, row, b, ctx.tables)
+    return _jump(ctx, jnp.any(member & jnp.isin(state.status[row].astype(_I32), statuses)))
+
+
+def if_party_member_not_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfPartyMemberNotStatus`` (trainer_ai.c:1381-1412): ``IfPartyMemberStatus``'s members,
+    those whose party status misses ``mask`` (``(status & mask) == FALSE``, :1409)."""
+    state, b = ctx.state, _battler(ctx, battler)
+    statuses = jnp.asarray(_condition_statuses(mask), _I32)
+    row = _row(state, b)
+    member = _member_alive(state, row, b, ctx.tables)
+    return _jump(ctx, jnp.any(member & ~jnp.isin(state.status[row].astype(_I32), statuses)))
+
+
+def if_any_party_member_is_wounded(ctx: AiContext, battler: Battler) -> AiContext:
+    """``IfAnyPartyMemberIsWounded`` (trainer_ai.c:1968-1985): a party member of the battler's
+    party other than ``selectedPartySlot[battler]`` whose HP is not its max HP. No HP or species
+    test: a fainted member counts, and so does the partner's active in a shared party (only the
+    battler's own slot is skipped; an absent battler's is 6, so skips none). The ``species != 0``
+    test stands in for the loop's ``BattleSystem_GetPartyCount`` bound (:1976) and changes
+    nothing: a padded slot has HP 0 of max HP 0."""
+    state, b = ctx.state, _battler(ctx, battler)
+    row = _row(state, b)
+    slots = jnp.arange(state.species.shape[1])
+    member = (slots != _selected_slot(state, b)) & (state.species[row] != 0)
+    return _jump(ctx, jnp.any(member & (state.hp[row] != state.max_hp[row])))
+
+
+def if_any_party_member_used_pp(ctx: AiContext, battler: Battler) -> AiContext:
+    """``IfAnyPartyMemberUsedPP`` (trainer_ai.c:1987-2012): a party member of the battler's party
+    other than ``selectedPartySlot[battler]`` with a move whose PP is not its max PP
+    (``MoveTable_CalcMaxPP`` with the PP Ups, ``hooks.max_pp``); an empty move slot has 0 of 0.
+    The values are the party copy's (``Pokemon_GetValue``, :1999; ``_party_copy``): the
+    partner's active in a shared party counts with its party moves and PP, so a Mimic slot or a
+    Transformed partner reads the ``shadow_*``. The ``species != 0`` test stands in for the loop's
+    ``BattleSystem_GetPartyCount`` bound (:1996) and changes nothing: a padded slot has no moves,
+    PP 0 of max PP 0."""
+    state, b = ctx.state, _battler(ctx, battler)
+    row = _row(state, b)
+    slots = jnp.arange(state.species.shape[1])
+    mons = _party_copy(ctx.tables, state, b)
+    member = (slots != _selected_slot(state, b)) & (state.species[row] != 0)
+    return _jump(ctx, jnp.any(member & jnp.any(mons.pp != mons.max_pp, axis=1)))
 
 
 def if_not_volatile_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
@@ -2622,60 +3123,104 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
     ``SPEED_TIE_DRAWN`` for the compares that the exact layout reads it for), on the path
     where the decomp makes it (equal speed in a branch that reads it, which is where
     ``compare_speed`` gives TIE for a 1), and the decomp's three-valued result is compared
-    with ``value``."""
+    with ``value``.
+
+    B = 4 (E4-A decision 4): the compare is ``order.compare_full(attacker, defender)``, the defender
+    traced. The two battlers' ``written`` entries are set only when both or neither have HP
+    (:1204-1211 return before the stores, :1372-1373). Here the gate never acts:
+    ``TrainerAI_MainDoubles`` evaluates no target without HP (trainer_ai.c:362-367) and the
+    attacker has HP. It matters for ``LoadBattlerSpeedRank``, whose sort compares all four
+    battlers, a fainted unreplaced one among them (``_sort_four``)."""
     value = int(value)
     assert value in (COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE), value
     tables, state = ctx.tables, ctx.state
-    a = _side(Battler.ATTACKER)
+    a, d = ctx.attacker, ctx.defender
+    if format_of(state).B == 2:
+
+        def compare(bit):
+            return compare_speed(tables, state, a, bit, state.qc_roll)
+
+    else:  # ``compare_full`` takes the traced defender; its dead-battler rule is :1204-1211
+
+        def compare(bit):
+            return compare_full(tables, state, a, d, bit, state.qc_roll)[0]
+
     slower = value == COMPARE_SPEED_SLOWER
     # The compare writes both battlers' speeds to monSpeedValues (battle_lib.c:1372-1373) before
-    # it returns: what the estimates after it read (E3-B2-15, ``seen_state``).
-    first = jnp.minimum(ctx.first_cmp[ctx.slot], ctx.flag)
-    first = jnp.where(ctx.live, first, ctx.first_cmp[ctx.slot])
-    ctx = ctx._replace(
-        written=ctx.written | ctx.live, first_cmp=ctx.first_cmp.at[ctx.slot].set(first.astype(_I32))
-    )
+    # it returns, unless exactly one of them has no HP (:1204-1211): what the estimates after it
+    # read (E3-B2-15, ``seen_state``).
+    ids = jnp.arange(ctx.written.shape[0])
+    both = (ids == a) | (ids == d)
+    ctx = _write_compares(ctx, ctx.live & (_alive(state, a) == _alive(state, d)), both)
     if ctx.loose is not None:
-        reads = compare_speed(tables, state, a, 1, state.qc_roll) == COMPARE_SPEED_TIE
+        reads = compare(1) == COMPARE_SPEED_TIE
         kind = ReadKind.SPEED_TIE if slower else ReadKind.SPEED_TIE_DRAWN
         ctx, bit = _loose_read(ctx, 0.5, kind, live=ctx.live & reads)
-        return _jump(ctx, compare_speed(tables, state, a, bit, state.qc_roll) == value)
+        return _jump(ctx, compare(bit) == value)
     if slower:
-        return _jump(ctx, battler_slower(tables, state, a, 0, state.qc_roll))
+        return _jump(ctx, compare(0) != COMPARE_SPEED_FASTER)
     if not per_slot(ctx):
         raise AssertionError("a FASTER or TIE compare is transcribed for the per-slot layout only")
-    tie = compare_speed(tables, state, a, 1, state.qc_roll) == COMPARE_SPEED_TIE
+    tie = compare(1) == COMPARE_SPEED_TIE
     ctx, r = _slot_read(ctx, lambda r: (0.5, tie))
-    return _jump(ctx, compare_speed(tables, state, a, r & 1, state.qc_roll) == value)
+    return _jump(ctx, compare(r & 1) == value)
 
 
-def _knows_effect(ctx: AiContext, battler: Battler, effect: int) -> jnp.ndarray:
-    state = ctx.state
+def _alive(state: BattleState, b) -> jnp.ndarray:
+    """``bool``: battler ``b``'s ``battleMons[b].curHP != 0``."""
+    return state.hp[_row(state, b), state.active[b]] > 0
+
+
+def _write_compares(ctx: AiContext, gate, battlers) -> AiContext:
+    """``monSpeedValues[x] = speed(x)`` for the battlers ``x`` of ``battlers`` (``bool[B]``) where
+    ``gate`` (``BattleSystem_CompareBattlerSpeed``'s two stores, battle_lib.c:1372-1373, only past
+    the dead-battler short-circuit, :1204-1211): ``AiContext.written`` and the slot's ``first_cmp``
+    (the least flag bit of a run that made one)."""
+    first = jnp.minimum(ctx.first_cmp[ctx.slot], ctx.flag)
+    first = jnp.where(gate, first, ctx.first_cmp[ctx.slot])
+    return ctx._replace(
+        written=ctx.written | (battlers & gate),
+        first_cmp=ctx.first_cmp.at[ctx.slot].set(first.astype(_I32)),
+    )
+
+
+def _knows_effect(ctx: AiContext, battler: Battler, effect: int) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(applies, found)`` of ``IfMoveEffectKnown`` / ``NotKnown`` (trainer_ai.c:1739-1820): ATTACKER
+    the true moves (:1752-1753), DEFENDER ``battlerMoves`` of the defender (:1765-1766, the record
+    ``new_context`` read); both partner arguments have no case: no jump either way (:1771-1772)."""
+    state, battler = ctx.state, Battler(int(battler))
+    yes, no = jnp.asarray(True), jnp.asarray(False)
     if battler == Battler.ATTACKER:
-        moves = state.moves[1, state.active[1]].astype(_I32)
-    else:
+        a = ctx.attacker
+        moves = state.moves[_row(state, a), state.active[a]].astype(_I32)
+    elif battler == Battler.DEFENDER:
         moves = ctx.seen_moves  # AI_CONTEXT.battlerMoves
-    return jnp.any((moves != 0) & (move_effect(ctx.tables, moves) == effect))
+    else:
+        return no, no
+    return yes, jnp.any((moves != 0) & (move_effect(ctx.tables, moves) == effect))
 
 
 def if_move_effect_known(ctx: AiContext, battler: Battler, effect: int) -> AiContext:
     """``IfMoveEffectKnown`` (trainer_ai.c:1739): a nonzero move whose effect
     (``move_effect``, the game's own) is ``effect``, in the attacker's true moveset
     (:1752-1753) or among the defender's moves the AI has seen (:1765-1766)."""
-    return _jump(ctx, _knows_effect(ctx, battler, effect))
+    applies, found = _knows_effect(ctx, battler, effect)
+    return _jump(ctx, applies & found)
 
 
 def if_move_effect_not_known(ctx: AiContext, battler: Battler, effect: int) -> AiContext:
-    """``IfMoveEffectNotKnown`` (trainer_ai.c:1781): the negation of ``IfMoveEffectKnown``."""
-    return _jump(ctx, ~_knows_effect(ctx, battler, effect))
+    """``IfMoveEffectNotKnown`` (trainer_ai.c:1781): ``IfMoveEffectKnown``'s cases, jumping where
+    the effect is not found; the partner arguments never jump."""
+    applies, found = _knows_effect(ctx, battler, effect)
+    return _jump(ctx, applies & ~found)
 
 
 def if_attacker_has_no_damaging_moves(ctx: AiContext) -> AiContext:
     """``IfAttackerHasNoDamagingMoves`` (trainer_ai.c:913-929): no move of the attacker's
     true moveset is nonzero with ``MOVE_DATA(move).power`` nonzero (:920-921). Power 1
     counts, unlike ``is_damaging``'s ``> 1``."""
-    state = ctx.state
-    moves = state.moves[1, state.active[1]].astype(_I32)
+    state, a = ctx.state, ctx.attacker
+    moves = state.moves[_row(state, a), state.active[a]].astype(_I32)
     damaging = (moves != 0) & (ctx.tables.move_power[moves] != 0)
     return _jump(ctx, ~jnp.any(damaging))
 
@@ -2684,7 +3229,7 @@ def load_battler_previous_move(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadBattlerPreviousMove`` (trainer_ai.c:1068-1076): ``calcTemp =
     movePrevByBattler[battler]`` (``BattleState.last_move`` of the battler's side; the
     selected move on success, else ``MOVE_NONE``, battle_controller_player.c:3944-3949)."""
-    return ctx._replace(calc_temp=ctx.state.last_move[_side(battler)].astype(_I32))
+    return ctx._replace(calc_temp=ctx.state.last_move[_battler(ctx, battler)].astype(_I32))
 
 
 # IfBattlerUnderEffect's checks (include/constants/battle/trainer_ai.h:48-49).
@@ -2699,7 +3244,7 @@ def if_battler_under_effect(ctx: AiContext, battler: Battler, check: int) -> AiC
     check = int(check)
     assert check in (CHECK_DISABLE, CHECK_ENCORE), check
     field = "disable_turns" if check == CHECK_DISABLE else "encore_turns"
-    return _jump(ctx, getattr(ctx.state, field)[_side(battler)] != 0)
+    return _jump(ctx, getattr(ctx.state, field)[_battler(ctx, battler)] != 0)
 
 
 def load_power_of_loaded_move(ctx: AiContext) -> AiContext:
@@ -2711,15 +3256,221 @@ def load_power_of_loaded_move(ctx: AiContext) -> AiContext:
 def if_volatile_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     """``IfVolatileStatus`` (trainer_ai.c:676-686): ``statusVolatile & mask``. ``mask`` must
     be one ``VolatileCondition`` (refused at trace time otherwise), read from its field."""
-    field = _VOLATILE_FIELDS[VolatileCondition(int(mask))]
-    return _jump(ctx, getattr(ctx.state, field)[_side(battler)] > 0)
+    kind = VolatileCondition(int(mask))
+    value = getattr(ctx.state, _VOLATILE_FIELDS[kind])[_battler(ctx, battler)]
+    # ``infatuated`` is 1 + the source battler at B = 4 (D45-14): read as != 0
+    return _jump(ctx, (value != 0) if kind == VolatileCondition.ATTRACT else (value > 0))
 
 
 def if_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     """``IfMoveEffect`` (trainer_ai.c:704-714): ``moveEffectsMask & mask``. ``mask`` must be
     one ``MoveEffectMask`` (refused at trace time otherwise), read from its field."""
     field = _MOVE_EFFECT_FIELDS[MoveEffectMask(int(mask))]
-    return _jump(ctx, getattr(ctx.state, field)[_side(battler)] > 0)
+    side = _battler(ctx, battler)
+    if _is_cleared(ctx, battler):
+        return _jump(ctx, (CLEARED.move_effects_mask & int(mask)) != 0)
+    return _jump(ctx, getattr(ctx.state, field)[side] > 0)
+
+
+def flag_battler_is_type(ctx: AiContext, battler: Battler, type_: int) -> AiContext:
+    """``FlagBattlerIsType`` (trainer_ai.c:991-1004): ``calcTemp`` 1 when ``MON_HAS_TYPE(battler,
+    type)`` (include/battle/common.h:53), else 0: ``BattleMon_Get`` type 1 or type 2 of the
+    battler (``_types``: the current types, an Arceus' Multitype plate type as the engine models
+    it) equals ``type_``. No draw and no HP test. A battler the format lacks has types 0, 0:
+    TYPE_NORMAL."""
+    types = _types(ctx.state, _battler(ctx, battler), _is_cleared(ctx, battler))
+    has = jnp.any(types == int(type_))
+    return ctx._replace(calc_temp=has.astype(_I32))
+
+
+def if_activated_flash_fire(ctx: AiContext, battler: Battler) -> AiContext:
+    """``IfActivatedFlashFire`` (trainer_ai.c:2641-2652): jumps when the battler's
+    ``moveEffectsData.flashFire`` is set (``BattleState.flash_fire``); never for a battler the
+    format lacks. No draw."""
+    side = _battler(ctx, battler)
+    if _is_cleared(ctx, battler):
+        return _jump(ctx, CLEARED.flash_fire != 0)
+    return _jump(ctx, ctx.state.flash_fire[side] != 0)
+
+
+def if_battler_fainted(ctx: AiContext, battler: Battler) -> AiContext:
+    """``IfBattlerFainted`` (trainer_ai.c:2438-2452): partner arguments only (``GF_ASSERT``,
+    :2445-2446); jumps when ``battlersSwitchingMask`` has the battler's bit: a fainted battler
+    whose side has no replacement (battle_controller_player.c:4110, :4134), which is
+    ``actions.absent_now`` (its docstring's premise). A single battle sets the bits of
+    battlers 2 and 3 from the start (battle_lib.c:2031-2034): a battler the format lacks always
+    jumps. No draw."""
+    battler = Battler(int(battler))
+    assert battler not in (Battler.ATTACKER, Battler.DEFENDER), "IfBattlerFainted: partner args"
+    side = _battler(ctx, battler)
+    if _is_cleared(ctx, battler):
+        return _jump(ctx, True)
+    return _jump(ctx, absent_now(ctx.state, side))
+
+
+def speed_rank_law(tables: Tables, state: BattleState, battler) -> jnp.ndarray:
+    """``float32[4]``: the law of ``LoadBattlerSpeedRank``'s ``calcTemp`` for ``battler`` at B = 4
+    (E4-A decision 6; ``AICmd_LoadBattlerSpeedRank``, trainer_ai.c:2056-2094): its position in
+    ``order.sort_mon_speed`` (the loop of :2076-2086 over ``BattleSystem_CompareBattlerSpeed(..,
+    TRUE)``, ``qc = state.qc_roll``, Custap's pinch on the current HP, both priorities 0).
+
+    Every compare that sees equal speed in a branch that tests it draws ``RandNext() & 1`` and
+    TIE swaps (lib.c:1401-1447); which compares draw depends on the earlier swaps, but the script
+    reads only the rank (never a tie bit), so the call's one random quantity is the rank, whose law
+    is the joint law of all its tie bits. A bit is exactly 1/2, so the law is the mean of the sort
+    over all ``2**6`` assignments of the six pair bits (a pair that does not draw ignores its
+    bit): every probability a multiple of 1/64. The ``monSpeedValues`` writes of the call do not
+    depend on the bits (``_sort_four``), so they are not part of the law."""
+    ties = (jnp.arange(2 ** len(PAIRS))[:, None] >> jnp.arange(len(PAIRS))) & 1  # [64, 6]
+    orders = jax.vmap(lambda t: sort_mon_speed(tables, state, state.qc_roll, t)[0])(ties)
+    rank = jnp.argmax(orders == battler, axis=1)  # [64]
+    counts = jnp.sum(rank[:, None] == jnp.arange(4), axis=0)
+    return (counts / ties.shape[0]).astype(jnp.float32)
+
+
+def _rank_of_draw(law: jnp.ndarray, r) -> jnp.ndarray:
+    """The rank a uniform u8 ``r`` stands for in a sampled outcome: the classes of ``law`` (a
+    multiple of 1/64 each, so of 4 draws) in rank order, a rank with no mass skipped. Its pair
+    ({0, 1} or {2, 3}) is the one ``r < round((law[0] + law[1]) * 256)`` gives
+    (``_speed_rank_four``)."""
+    first_of_next = jnp.round(jnp.cumsum(law[:-1]) * 256).astype(_I32)
+    return jnp.sum(jnp.asarray(r, _I32) >= first_of_next).astype(_I32)
+
+
+def _sort_four(tables: Tables, state: BattleState, bit_of):
+    """``(order int32[4], written bool[4])``: ``AICmd_LoadBattlerSpeedRank``'s sort at B = 4 (the six
+    compares of ``PAIRS``, each of the battlers *currently* at the two positions, swapped on a
+    result other than FASTER) with ``bit_of(pair, reads)`` the pair's ``RandNext() & 1`` (``reads``:
+    the compare's result depends on it). ``written``: the battlers some compare of the sort stored
+    to ``monSpeedValues`` (both alive or both dead, :1204-1211, :1372-1373); it does not depend on
+    the bits (tests/ai/test_commands_four.py::
+    test_sort_four_matches_the_engine_sort_and_the_decomp)."""
+    qc = state.qc_roll
+    alive = jnp.stack([_alive(state, b) for b in range(4)])
+    ids = jnp.arange(4)
+    order, written = jnp.arange(4, dtype=_I32), jnp.zeros(4, bool)
+    for p, (i, j) in enumerate(PAIRS):
+        b1, b2 = order[i], order[j]
+        reads = compare_full(tables, state, b1, b2, 1, qc)[0] == COMPARE_SPEED_TIE
+        result = compare_full(tables, state, b1, b2, bit_of(p, reads), qc)[0]
+        written = written | (((ids == b1) | (ids == b2)) & (alive[b1] == alive[b2]))
+        swap = result != COMPARE_SPEED_FASTER
+        order = order.at[i].set(jnp.where(swap, b2, b1)).at[j].set(jnp.where(swap, b1, b2))
+    return order, written
+
+
+def load_battler_speed_rank(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadBattlerSpeedRank`` (trainer_ai.c:2056-2094), B = 2: ``speedOrder`` is ``[0, 1]`` and
+    the sort's one compare, ``BattleSystem_CompareBattlerSpeed(0, 1, TRUE)``, swaps the two on any
+    result but FASTER (:2076-2086; the loop of ``BattleSystem_SortMonSpeedOrder``,
+    battle_lib.c:3364-3382). ``calcTemp`` is the position of the argument's battler in the
+    order; a battler that is not in it (a partner argument, battler 2 or 3) leaves ``calcTemp``
+    unchanged (:2088-2093).
+
+    The compare is ``order.compare_speed`` with battler1 0 and Quick Claw read from ``qc_roll`` as
+    ``IfSpeedCompareEqualTo`` does (``ignoreQuickClaw`` TRUE, both priorities 0). One battler
+    without HP is SLOWER or FASTER at once, with no draw and no ``monSpeedValues`` write; else
+    both speeds are written (battle_lib.c:1372-1373: ``AiContext.written``, ``speeds``,
+    ``first_cmp``) and, at equal speed in a branch that tests it, ``RandNext() & 1`` decides TIE
+    (a swap): one read, a per-slot ``_slot_read`` of probability 1/2 (``ReadKind.SPEED_TIE_DRAWN``
+    in the loose oracle). The draw is made whatever the argument; for a partner argument, whose
+    result goes unused, it is no read of the exact layout (the loose oracle still draws it,
+    ``ReadKind.SPEED_TIE``).
+
+    B = 4 (E4-A decision 6, manager ruling 21 Nov): the sort runs over the four battlers (six
+    compares, the dead-battler rule and the record gate of ``compare_full``); ``calcTemp`` is the
+    argument battler's position, always found. Its law is ``speed_rank_law`` (the joint law of the
+    call's tie bits), read as up to two binary reads (``ReadKind.SPEED_RANK``, decision 6): the
+    first, the pair {0, 1} against {2, 3} with probability ``law[0] + law[1]``; the second, which
+    of that pair, with the pair's conditional law; each read skipped when its split is certain,
+    so a call makes 0, 1 or 2 reads and the read bound counts 2 per call (decision 10). Exact
+    layout: each a ``_slot_read`` like the other binary reads: an enumeration pattern's draw
+    (``READ_DRAWS``: 1 the lower side, 254 the upper) is below the split's threshold
+    ``round(p * 256)`` or not, every threshold of a split that draws lying in 4..252, and each
+    read's weight is its conditional probability, so the path weights of a call sum to 1 and
+    give ``speed_rank_law``. A sampled outcome (raw ``calc_draws``) takes the rank from the
+    first draw's class (``_rank_of_draw``; the second draw when the first split is certain, at
+    the same read index), exact for a uniform u8, and the second read only counts. The loose
+    oracle draws the same two bits (the second at one of two indices, by pair, each live only in
+    its pair). Every pair past the dead rule writes both its speeds to ``written``
+    (:1372-1373)."""
+    battler = Battler(int(battler))
+    tables, state = ctx.tables, ctx.state
+    side = _battler(ctx, battler)
+    if format_of(state).B == 4:
+        return _speed_rank_four(ctx, side)
+    in_order = not _is_cleared(ctx, battler)
+    fmt = format_of(state)
+    alive = [state.hp[party(fmt, b), state.active[b]] > 0 for b in (0, 1)]
+    compares = ctx.live & (alive[0] == alive[1])  # past the dead short-circuit (:1204-1211)
+    ctx = _write_compares(ctx, compares, jnp.ones(2, bool))
+    reads = compare_speed(tables, state, 0, 1, state.qc_roll) == COMPARE_SPEED_TIE
+    if ctx.loose is not None:
+        kind = ReadKind.SPEED_TIE_DRAWN if in_order else ReadKind.SPEED_TIE
+        ctx, bit = _loose_read(ctx, 0.5, kind, live=ctx.live & reads)
+    elif not in_order:
+        bit = jnp.asarray(0)  # the result goes unused: no read of the exact layout
+    elif per_slot(ctx):
+        ctx, r = _slot_read(ctx, lambda r: (0.5, reads))
+        bit = r & 1
+    else:
+        raise AssertionError("a speed rank is transcribed for the per-slot layout only")
+    swapped = compare_speed(tables, state, 0, bit, state.qc_roll) != COMPARE_SPEED_FASTER
+    if not in_order:
+        return ctx
+    # order = [0, 1], or [1, 0] swapped: battler 0 at position 1 when swapped, battler 1 at 0
+    rank = jnp.where(swapped, side ^ 1, side)
+    return ctx._replace(calc_temp=rank.astype(_I32))
+
+
+def _speed_rank_four(ctx: AiContext, battler) -> AiContext:
+    """``load_battler_speed_rank`` at B = 4 (its docstring)."""
+    tables, state = ctx.tables, ctx.state
+    _, written = _sort_four(tables, state, lambda p, reads: 0)
+    ctx = _write_compares(ctx, ctx.live & jnp.any(written), written)
+    law = speed_rank_law(tables, state, battler)
+    p_low = law[0] + law[1]  # the first split: the pair {0, 1}
+    first = (p_low > 0) & (p_low < 1)
+
+    def pair_split(high):
+        lo, hi = jnp.where(high, law[2], law[0]), jnp.where(high, law[3], law[1])
+        mass = jnp.where(lo + hi > 0, lo + hi, 1.0)
+        return lo / mass, (lo > 0) & (hi > 0), lo == 0  # P(lower), drawn, upper when certain
+
+    if ctx.loose is not None:
+        ctx, bit = _loose_read(ctx, 1 - p_low, ReadKind.SPEED_RANK, live=ctx.live & first)
+        high = jnp.where(first, bit == 1, p_low == 0)
+        members = []
+        for pair in (False, True):
+            p_lower, second, upper = pair_split(jnp.asarray(pair))
+            live = ctx.live & second & (high == pair)
+            ctx, bit = _loose_read(ctx, 1 - p_lower, ReadKind.SPEED_RANK, live=live)
+            members.append(jnp.where(second, bit == 1, upper))
+        rank = 2 * high.astype(_I32) + jnp.where(high, members[1], members[0]).astype(_I32)
+        return ctx._replace(calc_temp=rank)
+    if not per_slot(ctx):
+        raise AssertionError("a speed rank is transcribed for the per-slot layout only")
+    calc = ctx.outcome.calc_draws
+    if calc is None:
+        raise ValueError("an AiOutcome carries calc_draws (outcome.no_calc_draws)")
+    pattern = calc.shape[-1] == 0  # an enumeration pattern, else a sampled outcome (static)
+
+    def below(r, p):
+        return jnp.asarray(r, _I32) < jnp.round(p * 256).astype(_I32)
+
+    ctx, r1 = _slot_read(ctx, lambda r: (jnp.where(below(r, p_low), p_low, 1 - p_low), first))
+    sampled = _rank_of_draw(law, r1)
+    high = sampled >= 2 if not pattern else jnp.where(first, ~below(r1, p_low), p_low == 0)
+    p_lower, second, upper = pair_split(high)
+
+    def member(r):
+        if not pattern:
+            return (sampled & 1) == 1
+        return jnp.where(second, ~below(r, p_lower), upper)
+
+    ctx, r2 = _slot_read(ctx, lambda r: (jnp.where(member(r), 1 - p_lower, p_lower), second))
+    rank = 2 * high.astype(_I32) + member(r2).astype(_I32)
+    return ctx._replace(calc_temp=rank)
 
 
 def if_can_use_last_resort(ctx: AiContext, battler: Battler) -> AiContext:
@@ -2728,7 +3479,7 @@ def if_can_use_last_resort(ctx: AiContext, battler: Battler) -> AiContext:
     one move, ``numKnownMoves`` being ``Battler_CountMoves`` (battle_lib.c:3461-3471) of its true
     moves (the index of the first empty slot), the test ``BtlCmd_TryLastResort`` makes
     (battle_script.c:7573-7574; ``BattleState.last_resort_count``, E3-B2-11)."""
-    state, side = ctx.state, _side(battler)
+    state, side = ctx.state, _battler(ctx, battler)
     moves = state.moves[_row(state, side), state.active[side]]
     known = jnp.sum(jnp.cumprod((moves != 0).astype(_I32)))
     count = state.last_resort_count[side].astype(_I32)
@@ -2738,7 +3489,7 @@ def if_can_use_last_resort(ctx: AiContext, battler: Battler) -> AiContext:
 def load_gender(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadGender`` (trainer_ai.c:2470-2477): ``battleMons[battler].gender``
     (``BattleState.gender`` of the side's active Pokemon; ``Gender``)."""
-    side = _side(battler)
+    side = _battler(ctx, battler)
     state = ctx.state
     return ctx._replace(calc_temp=state.gender[_row(state, side), state.active[side]].astype(_I32))
 
@@ -2749,7 +3500,7 @@ def load_defender_last_used_move_class(ctx: AiContext) -> AiContext:
     physical, 1 special, 2 status). ``movePrevByBattler`` is the selected move on success,
     else ``MOVE_NONE`` (battle_controller_player.c:3944-3949), whose class is physical
     (res/moves/none/data.json); for Nature Power it is Nature Power."""
-    move = ctx.state.last_move[0].astype(_I32)
+    move = ctx.state.last_move[ctx.defender].astype(_I32)
     return ctx._replace(calc_temp=ctx.tables.move_category[move].astype(_I32))
 
 

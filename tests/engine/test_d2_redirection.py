@@ -144,16 +144,20 @@ def test_reveal_names_the_player_holder(tables, names):
         s = ability(four(tables, names), 2, holder)
         slot = int(s.active[2])
         out = reveal_ability(s, 2, slot, REDIRECTED, True)
-        assert int(out.ai_ability_known[slot]) == decomp
+        assert int(out.ai_ability_known[2]) == decomp
         r = to_ref(s)
         ref._reveal_redirect(r, to_numpy(tables), 2)
-        assert r.ai_ability_known[slot] == decomp
+        assert r.ai_ability_known[2] == decomp
         off = reveal_ability(s, 2, slot, REDIRECTED, False)
         assert np.array_equal(off.ai_ability_known, s.ai_ability_known)
-    # a foe's holder is not tracked (the AI only follows the player's Pokemon)
+    # At four battlers every battler's row is kept (sheet D45-2 rule 4 and B = 4 note, manager
+    # ruling Q1: one AIContext serves the battle, ai_context.h:27-29): a foe's holder is recorded too.
     foe = ability(four(tables, names), 3, LR)
     out = reveal_ability(foe, 3, int(foe.active[3]), REDIRECTED, True)
-    assert np.array_equal(out.ai_ability_known, foe.ai_ability_known)
+    assert np.asarray(out.ai_ability_known).tolist() == [0, 0, 0, 31]
+    r = to_ref(foe)
+    ref._reveal_redirect(r, to_numpy(tables), 3)
+    assert r.ai_ability_known == [0, 0, 0, 31]
 
 
 def test_storm_drain_is_a_supported_ability():

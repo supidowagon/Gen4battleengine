@@ -23,7 +23,7 @@ The fields:
 * ``name``: the policy, ``game_constants.POLICY``'s value for the game.
 * ``flags``: the trainer AI flags the policy runs (``policy._flags``), in bit order
   (``generated/ai_flags.txt``: bit 0 BASIC, 1 EVAL_ATTACK, 2 EXPERT, 3 SETUP_FIRST_TURN,
-  4 RISKY, 5 PRIORITIZE_EXTREMES, 6 BATON_PASS, 8 CHECK_HP, 9 WEATHER, 10 HARRASSMENT).
+  4 RISKY, 5 PRIORITIZE_EXTREMES, 6 BATON_PASS, 7 TAG_STRATEGY, 8 CHECK_HP, 9 WEATHER, 10 HARRASSMENT).
 * ``per_slot_sites``: the random reads are keyed by move slot (K3c Task 3) and by their
   order on the slot's path (E1 Ruling R4; ``outcome`` docstring).
 * ``max_script_rolls``: the flat ``AiOutcome.script_rolls`` width (vanilla).
@@ -130,6 +130,7 @@ KAIZO_FLAG_BITS = frozenset(
         RISKY,
         PRIORITIZE_EXTREMES,
         BATON_PASS,
+        TAG_STRATEGY,
         CHECK_HP,
         WEATHER,
         HARRASSMENT,

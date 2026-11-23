@@ -223,6 +223,7 @@ def test_vanilla_trainers_load_with_defaults(trainers):  # data/intermediate tra
         and t.gauntlet_rules == {}
         and t.player_starter is None
         and not t.left_side
+        and t.tag_partner is None
         and t.split is None
         and t.split_order is None
         for t in trainers

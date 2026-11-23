@@ -18,6 +18,7 @@ from nuzline.ai.policy import (
     ai_refusals,
     ai_scores,
 )
+from nuzline.engine.format import SINGLES
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 from tests.ai.fixtures import CRANIDOS, outcome, trace_a, trace_e, trace_f, versus
 from tests.strategies import draw_seen_moves, supported_state
@@ -65,8 +66,13 @@ def roark_states(draw, tables, names) -> BattleState:
     bag = draw(st.lists(st.sampled_from([0, names.item("Potion")]), min_size=count, max_size=count))
     a["trainer_items"][1] = bag + [0] * (BAG_SLOTS - count)
     a["trainer_item_count"][1] = count
-    draw_seen_moves(draw, a)
-    a["ai_ability_known"][...] = _flags(draw, a["ai_ability_known"].shape)
+    draw_seen_moves(draw, a, SINGLES)
+    # One flag per player party slot, as before D45-1 (the same draws); battler 0's row takes its
+    # active slot's flag (the Pokemon has HP), the AI battler's own row is not kept at B = 2
+    # (D45-1 rule 6).
+    flags = _flags(draw, (SLOTS,))
+    a["ai_ability_known"][...] = 0
+    a["ai_ability_known"][0] = flags[int(a["active"][0])]
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 
