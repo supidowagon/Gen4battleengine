@@ -86,3 +86,70 @@ ATTACKER_PARTNER` jumps. Each add clamps at 0 (`ai:583-585`).
 | 7187 | 128 | FutureSight_SelfMovesFirst | never reached |
 
 The speed-rank tie draws (`s:6986-7018`, `:7162-7188`) are no `IfRandomLessThan` lines (A-10 section 2).
+
+# Partner reads at B = 4 (E4-A W2: 2.2, 2.5.5, 2.6-2.14, 2.16, 2.18-2.20, section 5 of A-8)
+
+Rules sheet `_scratch/e4/rules/A-8.md` sections 1, 2, 5. One scoring is one attacker `a` (static) against one
+enemy target `d`; the four script battlers are `a`, `d`, `a ^ 2`, `d ^ 2` (`ai:2765-2782`, `commands._battler`).
+No block here changes with the code at B = 2: the blocks were written over the partner arguments, which at B = 2
+name the zeroed battlers 2 and 3 (table above) and at B = 4 name the real ones. Tests: `tests/ai/test_tag_doubles.py`
+(the scoring is run directly on test-built B = 4 contexts; `CheckIfHighestDamageWithPartner` is pinned to NOT_HIGHEST
+there, its B = 4 sweep is A-7's).
+
+## What each partner argument reads at B = 4
+
+| command, argument | read | cite |
+|---|---|---|
+| `IfHPPercentEqualTo/GreaterThan/LessThan X_PARTNER` | `curHP * 100 / maxHP` of the real battler: 0 when fainted, and 0 when `curHP * 100 < maxHP` | `ai:596`, `:611`, `:626` |
+| `CheckBattlerAbility ATTACKER_PARTNER` | raw `battleMons[a ^ 2].ability`, no AI knowledge (suppressed: NONE, so UNKNOWN) | `ai:1221-1222`, `:1255-1256` |
+| `CheckBattlerAbility DEFENDER_PARTNER` | the AI's record of `d ^ 2`, else a trapping ability, else the species' two abilities (neither is the tested one: ability 1; one is: UNKNOWN; one ability: it) | `ai:1223-1253` |
+| `FlagBattlerIsType X_PARTNER` | the real battler's current types, no HP test | `ai:999-1003` |
+| `IfMoveEffect X_PARTNER MAGNET_RISE` | that battler's `moveEffectsMask` bit | `ai:704-714` |
+| `IfMoveKnown ATTACKER_PARTNER` | its true moves, no jump while its `curHP` is 0 | `ai:1650-1664` |
+| `IfNotStatus / IfStatus ATTACKER_PARTNER` | its `status` | `ai:648-674` |
+| `LoadTypeFrom ATTACKER_PARTNER_TYPE_1/_2` | `BattleSystem_GetPartner(a)` = `a ^ 2` | `sys:394-411`, `ai:965-978` |
+| `LoadBattlerSpeedRank` | one read per call, its own sort (A-10 section 2) | `ai:2056-2094` |
+| `IfTargetIsPartner` | `(a & 1) == (d & 1)`: the ally part (A-9), not these blocks | `ai:2630-2639` |
+
+MULTI and TWO_TRAINERS read the same way: the partner of battler 2 is battler 0 (the player's Pokemon), of
+battler 1 and of battler 3 the other trainer's or the same trainer's Pokemon; a partner on the attacker's side is
+read as true data, never through the AI's record (`ai:1255-1256`, `:1650-1664`, `:1925-1926`).
+
+## B = 4 score laws
+
+`P` = the change is made when the roll does NOT jump (`R@L(N)` jumps w.p. N/256), so P = (256 - N) / 256.
+
+| block (`s`) | partner reads | law |
+|---|---|---|
+| TryScoreMinus1 / 2 (6658-6680) | `IfHPPercentEqualTo DEFENDER_PARTNER 0` | partner hp% != 0 and the move does not kill: -1 / -2 with P 192/256 (R@6666, R@6678); hp% 0: no change, no roll |
+| RainDance (6754-6786) | partner Hydration (statused) or Dry Skin | +2 each of self and partner; no roll |
+| SunnyDay (6788-6855) | partner Leaf Guard (no status, hp% >= 30) / Flower Gift +2; Dry Skin -2; Solar Power hp% >= 50 +1 then R@6851(128) -2 (1/2), hp% < 50 R@6851(128) -2 (1/2) | first HAVE of the four |
+| Hail (6857-6884) | partner Ice Body, Snow Cloak, knows Blizzard (alive) | +2 |
+| Sandstorm (6886-6916) | partner Sand Veil, type 1 or 2 Rock (its own types, not the attacker's) | +2 once |
+| Gravity (6918-6977) | partner and defender partner: Levitate (HAVE), Flying, Magnet Rise | partner -5; defender partner R@6972(64) +3 (192/256), defender R@6959(64) +3 |
+| TrickRoom (6979-7030) | hp% 0 of partner, defender partner, defender: -30; ranks r = rank(a), q = rank(a ^ 2), one sort per call | r0: q 1 or 0 -30 else -5; r1: q 0 -30 else -5; r2: q != 3 -5, else R@7012(64) -5 / +5 (192/256); r3: q != 2 -5, else R@7022(64) |
+| FollowMe (7032-7100) | partner hp% bands (strict `>` 90, 50, 30) | as the table in A-8 2.12, each change P 192/256 (R@7075-7095) |
+| Earthquake, id 222 (7127-7148) | partner Magnet Rise, Levitate, Flying +2; Fire, Electric, Poison, Rock -10; else -3 | first match, no HP test, no roll |
+| PartnerKnowsHelpingHand (7102-7114) | `IfMoveKnown ATTACKER_PARTNER HELPING_HAND` (alive partner) | damaging non-flat move not matched above: +1 |
+| FutureSight (7150-7193) | partner alive and knows Future Sight or Doom Desire; ranks r, q, q' (a new sort per call) | r3 -3; r2: q 0 or 1 -3, R@7173(128), q' == 2 -3; r1: q 0 -3, R@7181(128), q' == 1 -3; r0: R@7187(128), q' == 0 -3 |
+| Electric (7215-7263) | defender partner Lightning Rod (HAVE only) -1, and -8 more unless it is not Ground; partner Lightning Rod -10; Discharge: SpreadElectric | Motor Drive / Volt Absorb +3, Water / Flying -10, Ground +3, else -3 |
+| Water (7265-7302) | defender partner Storm Drain NOT_HAVE: 0, else (HAVE or UNKNOWN) -1; partner Storm Drain -10; Surf: SpreadWater | Dry Skin / Water Absorb +3, Ground / Fire -10, else -3 |
+| Fire (7304-7337) | Lava Plume: SpreadFire | Dry Skin -3 (`s:7322-7323`), Flash Fire +3, Grass / Steel / Ice / Bug -10, else -3 |
+
+Each add clamps at 0 (`ai:583-585`).
+
+## A fainted partner at B = 4 (A-8 section 5)
+
+`BattleSystem_CleanupFaintedMon` (`lib:2156-2226`) leaves species, types, ability, moves, item and `status` in
+`battleMons`, clears stat stages, `moveEffectsMask`, `moveEffectsData` (Flash Fire, Magnet Rise) and the AI record
+of that battler (`lib:2223-2225`; engine: `state.ai_record_clear`). So: hp% reads 0 (Trick Room -30, Future Sight
+End, Follow Me with q = 0, the TryScoreMinus skip); ability and type blocks still score it (Rain, Sun, Hail,
+Sandstorm, Gravity Levitate / Flying, Earthquake, Discharge, Surf, Lava Plume, Lightning Rod, Storm Drain of the
+attacker's partner); its Magnet Rise reads false; `IfMoveKnown ATTACKER_PARTNER` does not jump; a fainted defender
+partner's `CheckBattlerAbility` takes the guess path (its record is gone, so a recorded Lightning Rod or Storm Drain
+no longer reads HAVE).
+
+## Roll sites reached at B = 4
+
+6666, 6678, 6851, 6972, 7012, 7022, 7075, 7080, 7085, 7173, 7181, 7187 join the B = 2 sites (the table above:
+"never reached" at B = 2). Reads per call of `LoadBattlerSpeedRank`: at most 2 (A-10 section 2, decision 6).
