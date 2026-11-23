@@ -112,7 +112,7 @@ from nuzline.engine.bag import bag_item_category
 from nuzline.engine.damage import AI_GYRO_BALL, ai_weather_ball_typed, decomp_abilities
 from nuzline.engine.effects import ghost_user
 from nuzline.engine.enumerate import WIDTH_CAP
-from nuzline.engine.format import MULTI, format_of, party, side_of
+from nuzline.engine.format import MULTI, ai_battlers, format_of, party, side_of
 from nuzline.engine.ids import MOVE_CURSE, ItemAiCategory, MoveTarget, Stat
 from nuzline.engine.order import COMPARE_SPEED_SLOWER
 from nuzline.engine.state import BAG_SLOTS, MOVES, BattleState
@@ -169,7 +169,10 @@ def _score(ctx: AiContext, taken, value: int) -> AiContext:
 
 
 def _terminate(ctx: AiContext) -> AiContext:
-    """``IfTargetIsPartner Terminate``: drop the (never taken) jump."""
+    """``IfTargetIsPartner Terminate`` (script.s:54, :1625, :6355, :6418, :6501, :6523, :6565,
+    :7980, :8022; ``Terminate`` = ``PopOrEnd``, :8105-8106): ``_split`` keeps the fall-through
+    path and drops the taken one, which is the ally target's (trainer_ai.c:2630-2639; B = 4
+    only): its flag script ends with the slot's score unchanged. Never taken at B = 2."""
     ctx, _ = _split(c.if_target_is_partner(ctx))
     return ctx
 
@@ -4473,9 +4476,10 @@ def _check_hp(ctx: AiContext) -> AiContext:
     never taken in singles), then the attacker's round (bands at :7700-7701, CheckHP_Discourage*
     tables, roll :7718) and the target's round (:7724-7725, CheckHP_Target_Discourage*, roll
     :7742), each -2 for a discouraged effect unless its roll jumps."""
-    # IfTargetIsPartner TagStrategy_Partner (:7697), not Terminate: never taken in singles,
-    # and the doubles work must send its path to TagStrategy_Partner.
-    ctx, _ = _split(c.if_target_is_partner(ctx))
+    # IfTargetIsPartner TagStrategy_Partner (:7697), not Terminate: never taken in singles; at
+    # B = 4 the ally target runs the Tag Strategy ally part (a second time after bit 7's own run,
+    # A-9 0.4), whose every path ends (PopOrEnd).
+    ctx = _tag_partner_entry(ctx)
     ctx, high = _split(c.if_hp_percent_greater_than(ctx, _A, 70))
     ctx, medium = _split(c.if_hp_percent_greater_than(ctx, _A, 30))
     ctx = _check_hp_round(ctx, high, medium, "CheckHP_", 7718)
@@ -4543,12 +4547,12 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
     with ``ctx.live``, and a path that reaches ``PopOrEnd`` is dropped. The partner arguments
     (``AIScript_Battler``) read the zeroed battlers 2 and 3 at B = 2 (``commands.CLEARED``), so
     the partner blocks run and change nothing on a singles path. ``IfTargetIsPartner`` (:6638)
-    never jumps in singles: ``TagStrategy_Partner`` (:7339) is not transcribed. The unused
+    never jumps in singles; at B = 4 the ally target runs ``_tag_strategy_partner`` (:7339). The unused
     labels ``TagStrategy_Unused_1`` / ``_2`` (:7116-7125) have no jump to them. Fall-throughs
     the decomp's comments omit: ``SunnyDay_SelfHasSolarPower`` falls into the 50 % roll
     (:6815-6821); ``SpreadFire``'s Dry Skin is ``ScoreMinus3`` (:7322-7323, the comment :7308 says +3)."""
     # TagStrategy_Main (:6637)
-    ctx, _ = _split(c.if_target_is_partner(ctx))  # -> TagStrategy_Partner
+    ctx = _tag_partner_entry(ctx)  # IfTargetIsPartner -> TagStrategy_Partner
     ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)  # :6641
     ctx, special = _split(c.if_loaded_equal_to(ctx, c.AI_NO_COMPARISON_MADE))  # :6642
     ctx, score_move = _tag_flat(ctx)
@@ -4922,6 +4926,235 @@ def _tag_strategy(ctx: AiContext) -> AiContext:
     return _add_end(ctx, minus10, -10)
 
 
+def _tag_partner_entry(ctx: AiContext) -> AiContext:
+    """``IfTargetIsPartner TagStrategy_Partner`` (script.s:6638 in ``TagStrategy_Main``, :7697 in
+    ``CheckHP_Main``; trainer_ai.c:2630-2639): the paths whose target is the ally (B = 4 only)
+    run ``_tag_strategy_partner``, every path of which ends (PopOrEnd), and the fall-through
+    paths go on. At B = 2 the jump is never taken (the entry is not built, A-9 0.3)."""
+    ctx, taken = _split(c.if_target_is_partner(ctx))
+    if format_of(ctx.state).B != 4:
+        return ctx
+    rest = ctx.live
+    return _at(_tag_strategy_partner(_at(ctx, taken)), rest)
+
+
+def _partner_absorb_ladder(ctx: AiContext, reached, lines: tuple[int, int, int]) -> AiContext:
+    """``TagStrategy_PartnerVoltAbsorb`` (script.s:7388-7406) / ``_PartnerWaterAbsorb``
+    (:7422-7441), the same ladder on the ally's hp% (``lines``: the three rolls): 100 % -10, above
+    90 % nothing, above 75 % / 50 % / the rest ``IfRandomLessThan 64 / 128 / 192, ScorePlus3``
+    (the jump is the +3, P n / 256), else nothing."""
+    ctx, full = _split(c.if_hp_percent_equal_to(_at(ctx, reached), _AP, 100))
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _AP, 90))  # -> _End
+    ctx, b75 = _split(c.if_hp_percent_greater_than(ctx, _AP, 75))
+    ctx, b50 = _split(c.if_hp_percent_greater_than(ctx, _AP, 50))
+    plus3 = jnp.zeros_like(ctx.live)
+    for band, n, line in zip((b75, b50, ctx.live), (64, 128, 192), lines, strict=True):
+        ctx, t = _split(c.if_random_less_than(_at(ctx, band), n, line))  # jump -> ScorePlus3
+        plus3 = plus3 | t
+    ctx = _add_end(ctx, plus3, 3)
+    return _add_end(ctx, full, -10)
+
+
+def _tag_strategy_partner(ctx: AiContext) -> AiContext:
+    """``TagStrategy_Partner`` (script.s:7339-7694; A-9 section 1), the Tag Strategy ally part,
+    run for the ally target (the defender is the attacker's partner, ``attacker ^ 2``) at B = 4,
+    from bit 7 and again from bit 8 (``CheckHP_Main``, :7697). Label block by label block in
+    script order as ``_tag_strategy`` (every jump is forward; ``_at`` enters a block under the
+    union of the paths that reach it; every path ends in a ``PopOrEnd``; the labels shared by
+    several jumps, ``ScorePlus3`` ... ``PartnerScoreMinus30``, run once at the end on the
+    union). The ally is ``ATTACKER_PARTNER`` and ``DEFENDER`` at once: the ability tests are
+    ``CheckBattlerAbility ATTACKER_PARTNER`` (the true ability, trainer_ai.c:1255-1256), the
+    ``LoadBattlerAbility DEFENDER`` of Skill Swap is the knowledge branch (:1179-1206, with its
+    coins). The script's comments are wrong in two places, transcribed as written: Poison Heal's
+    ``+5`` needs hp% <= 91 (:7578, the comment says 81), Acupressure's chances are 176/256 above
+    90 % and 88/256 between 51 and 90 % (:7678-7683)."""
+    zero = jnp.zeros_like(ctx.live)
+    plus3 = plus5 = plus10 = minus10 = minus30 = zero
+    # TagStrategy_Partner (:7339)
+    ctx, fainted = _split(c.if_battler_fainted(ctx, _AP))  # -> PartnerScoreMinus30
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)  # :7341
+    ctx, status = _split(c.if_loaded_equal_to(ctx, c.AI_NO_COMPARISON_MADE))
+    ctx = c.load_type_from(ctx, LoadType.MOVE_TYPE)
+    ctx, fire = _split(c.if_loaded_equal_to(ctx, _TYPE["Fire"]))
+    ctx, electric = _split(c.if_loaded_equal_to(ctx, _TYPE["Electric"]))
+    ctx, water = _split(c.if_loaded_equal_to(ctx, _TYPE["Water"]))
+    ctx, _ = _split(c.if_move_equal_to(ctx, _MOVE["Fling"]))  # -> PartnerTrick: End
+    minus30 = fainted | ctx.live  # TagStrategy_ScoreMinus30 (:7349): GoTo ScoreMinus30
+
+    # TagStrategy_PartnerStatusMove (:7444), first match
+    ctx, skill_swap = _split(c.if_move_equal_to(_at(ctx, status), _MOVE["Skill Swap"]))
+    ctx, will_o_wisp = _split(c.if_move_equal_to(ctx, _MOVE["Will-O-Wisp"]))
+    ctx, thunder_wave = _split(c.if_move_equal_to(ctx, _MOVE["Thunder Wave"]))
+    ctx, poison = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STATUS_BADLY_POISON))
+    ctx, t = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STATUS_POISON))
+    poison = poison | t
+    ctx, helping_hand = _split(c.if_move_equal_to(ctx, _MOVE["Helping Hand"]))
+    ctx, swagger = _split(c.if_move_equal_to(ctx, _MOVE["Swagger"]))
+    ctx, _ = _split(c.if_move_equal_to(ctx, c.MOVE_TRICK))  # -> PartnerTrick: End
+    ctx, _ = _split(c.if_move_equal_to(ctx, c.MOVE_SWITCHEROO))
+    ctx, gastro = _split(c.if_move_equal_to(ctx, _MOVE["Gastro Acid"]))
+    ctx, acupressure = _split(c.if_move_equal_to(ctx, _MOVE["Acupressure"]))
+    minus30 = minus30 | ctx.live  # GoTo TagStrategy_PartnerScoreMinus30
+
+    # TagStrategy_PartnerSkillSwap (:7458)
+    ctx = c.load_battler_ability(_at(ctx, skill_swap), _D)  # the ally: knowledge branch, a coin
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Truant"]))
+    plus10 = plus10 | t
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Slow Start"]))
+    plus10 = plus10 | t  # ScorePlus10
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, accuracy = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Levitate"]))
+    ctx = c.load_battler_ability(ctx, _D)  # a second coin when the ally's ability is guessed
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Levitate"]))
+    minus30 = minus30 | t
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_not_equal_to(ctx, _TYPE["Electric"]))
+        accuracy = accuracy | t
+        ctx = c.add_to_move_score(ctx, 1)
+    ctx = c.pop_or_end(ctx)
+    # TagStrategy_PartnerSkillSwap_GiveAccuracyIncrease (:7487-7491)
+    ctx = c.load_battler_ability(_at(ctx, accuracy), _A)
+    ctx, inaccurate = _split(c.if_loaded_equal_to(ctx, _ABILITY["Compoundeyes"]))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["No Guard"]))
+    inaccurate = inaccurate | t
+    minus30 = minus30 | ctx.live
+    # _PartnerHasInaccurateMove (:7497): the ally's true moves while it has HP
+    ctx = _at(ctx, inaccurate)
+    for name in (
+        "Fire Blast",
+        "Thunder",
+        "Cross Chop",
+        "Hydro Pump",
+        "DynamicPunch",
+        "Blizzard",
+        "Zap Cannon",
+        "Megahorn",
+        "Focus Blast",
+        "Gunk Shot",
+        "Magma Storm",
+        "Power Whip",
+        "Seed Flare",
+        "Head Smash",
+    ):
+        ctx, t = _split(c.if_move_known(ctx, _AP, _MOVE[name]))
+        plus3 = plus3 | t
+    minus30 = minus30 | ctx.live
+
+    # TagStrategy_PartnerWillOWisp (:7513)
+    ctx, flash_fire = _tag_have(_at(ctx, will_o_wisp), _AP, "Flash Fire")  # -> _FireAbsorption
+    fire = fire | flash_fire
+    ctx = c.check_battler_ability(ctx, _AP, _ABILITY["Guts"])
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, c.AI_HAVE))
+    minus30 = minus30 | t
+    ctx, t = _split(c.if_status(ctx, _AP, c.MonCondition.ANY))
+    minus30 = minus30 | t
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx, t = _split(c.if_loaded_equal_to(c.load_type_from(ctx, target), _TYPE["Fire"]))
+        minus30 = minus30 | t
+    for item in (c.ITEM_FLAME_ORB, c.ITEM_TOXIC_ORB):
+        ctx, t = _split(c.if_held_item_equal_to(ctx, _AP, item))
+        minus30 = minus30 | t
+    ctx, t = _split(c.if_hp_percent_less_than(ctx, _AP, 81))
+    minus30 = minus30 | t
+    plus5 = plus5 | ctx.live  # GoTo ScorePlus5
+
+    # TagStrategy_PartnerThunderWave (:7544)
+    ctx = _at(ctx, thunder_wave)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx, t = _split(c.if_loaded_equal_to(c.load_type_from(ctx, target), _TYPE["Ground"]))
+        minus30 = minus30 | t
+    ctx, motor = _tag_have(ctx, _AP, "Motor Drive")
+    ctx, t = _tag_have(ctx, _AP, "Volt Absorb")
+    electric = electric | motor | t  # -> _CheckPartnerElectricAbsorption
+    minus30 = minus30 | ctx.live
+
+    # TagStrategy_PartnerPoisonStatus (:7561); the BUG (no Poison / Steel type test) is the script's
+    ctx = c.check_battler_ability(_at(ctx, poison), _AP, _ABILITY["Poison Heal"])
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, c.AI_HAVE))
+    minus30 = minus30 | t
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))  # DEFENDER: the ally again
+    minus30 = minus30 | t
+    ctx, t = _split(c.if_held_item_equal_to(ctx, _AP, c.ITEM_TOXIC_ORB))
+    minus30 = minus30 | t
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _AP, 91))  # not 81 (the comment, :7566)
+    minus30 = minus30 | t
+    plus5 = plus5 | ctx.live
+
+    # TagStrategy_PartnerUsingHelpingHand (:7582): one speed-rank call (A-10 section 2)
+    ctx, t = _split(c.if_hp_percent_equal_to(_at(ctx, helping_hand), _AP, 0))
+    minus30 = minus30 | t
+    ctx, try_plus2 = _split(c.if_hp_percent_greater_than(ctx, _AP, 50))
+    ctx = c.load_battler_speed_rank(ctx, _AP)
+    ctx, t = _split(c.if_loaded_less_than(ctx, 1))
+    try_plus2 = try_plus2 | t  # GoTo _End for the rest
+    ctx, minus1 = _split(c.if_random_less_than(_at(ctx, try_plus2), 64, 7596))  # -> ScoreMinus1
+    ctx = _add_end(ctx, ctx.live, 2)
+
+    # TagStrategy_PartnerSwagger (:7602): the ally's own Persim / Lum Berry (same side, true item)
+    ctx, berry = _split(c.if_held_item_equal_to(_at(ctx, swagger), _D, c.ITEM_PERSIM_BERRY))
+    ctx, t = _split(c.if_held_item_equal_to(ctx, _D, c.ITEM_LUM_BERRY))
+    berry = berry | t
+    minus30 = minus30 | ctx.live
+    ctx, _ = _split(c.if_stat_stage_greater_than(_at(ctx, berry), _D, Stat.ATK, 7))  # -> _End
+    ctx = _add_end(ctx, ctx.live, 3)
+
+    # TagStrategy_PartnerGastroAcid (:7624)
+    ctx, t = _split(c.if_move_effect(_at(ctx, gastro), _AP, c.MoveEffectMask.ABILITY_SUPPRESSED))
+    minus30 = minus30 | t
+    ctx, slow = _tag_have(ctx, _AP, "Truant")
+    ctx, t = _tag_have(ctx, _AP, "Slow Start")  # GoTo _End for the rest
+    ctx = _add_end(ctx, slow | t, 5)
+
+    # TagStrategy_PartnerAcupressure (:7646)
+    stats = (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD, Stat.EVA, Stat.ACC)
+    ctx, simple = _tag_have(_at(ctx, acupressure), _AP, "Simple")
+    for stat in stats:  # +6 (decomp stage 12)
+        ctx, t = _split(c.if_stat_stage_equal_to(ctx, _AP, stat, 12))
+        minus30 = minus30 | t
+    check_hp = ctx.live  # GoTo _CheckHP
+    ctx = _at(ctx, simple)  # _PartnerAcupressureSimple (:7671): +3 or more, falls into _CheckHP
+    for stat in stats:
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _AP, stat, 8))
+        minus10 = minus10 | t
+    ctx, low = _split(c.if_hp_percent_less_than(_at(ctx, check_hp | ctx.live), _AP, 51))
+    ctx, high = _split(c.if_hp_percent_greater_than(ctx, _AP, 90))
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 7679))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, high | ctx.live), 80, 7682))  # _TryScorePlus2
+    ctx = _add_end(ctx, ctx.live, 2)
+    ctx = _add_end(ctx, low, -1)
+
+    # The labels the blocks above jump to, in script order
+    # TagStrategy_CheckPartnerFireAbsorption (:7352)
+    ctx, have = _tag_have(_at(ctx, fire), _AP, "Flash Fire")
+    no_flash_fire = ctx.live  # GoTo TagStrategy_ScoreMinus30
+    ctx, active = _split(c.if_activated_flash_fire(_at(ctx, have), _AP))
+    ctx = _add_end(ctx, ctx.live, 3)
+    minus30 = minus30 | active | no_flash_fire
+    # TagStrategy_CheckPartnerElectricAbsorption (:7364)
+    ctx, motor = _tag_have(_at(ctx, electric), _AP, "Motor Drive")
+    ctx, volt = _tag_have(ctx, _AP, "Volt Absorb")
+    minus30 = minus30 | ctx.live
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, motor), 160, 7383))  # -> _End
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _AP, Stat.SPE, 12))
+    minus30 = minus30 | t
+    ctx = _add_end(ctx, ctx.live, 3)
+    ctx = _partner_absorb_ladder(ctx, volt, (7395, 7399, 7403))
+    # TagStrategy_CheckPartnerWaterAbsorption (:7409)
+    ctx, absorb = _tag_have(_at(ctx, water), _AP, "Water Absorb")
+    ctx, t = _tag_have(ctx, _AP, "Dry Skin")
+    minus30 = minus30 | ctx.live
+    ctx = _partner_absorb_ladder(ctx, absorb | t, (7430, 7434, 7438))
+
+    # ScorePlus3 / ScorePlus5 / ScorePlus10 / ScoreMinus1 / ScoreMinus10 / PartnerScoreMinus30
+    ctx = _add_end(ctx, plus3, 3)
+    ctx = _add_end(ctx, plus5, 5)
+    ctx = _add_end(ctx, plus10, 10)
+    ctx = _add_end(ctx, minus1, -1)
+    ctx = _add_end(ctx, minus10, -10)
+    return _add_end(ctx, minus30, -30)
+
+
 def _flags(layout: AiLayout) -> tuple:
     """The flag scripts the policy runs: those of ``layout.flags``' set bits, in bit order
     (``TrainerAI_MainSingles`` runs a flag's script only when its bit is set, low bit first,
@@ -5013,8 +5246,63 @@ class _Refused(NamedTuple):
     item: jnp.ndarray  # bool[2, SLOTS]
     state_move: jnp.ndarray  # bool[2, SLOTS, MOVES]
     copied: jnp.ndarray  # bool[SLOTS, MOVES]: a player move Copycat's damage test calculates
+    doubles_damage: jnp.ndarray  # bool: a doubles damage factor (E2 D45-8) the estimate lacks
     scoring: jnp.ndarray  # bool: ai_scores is refused
     any: jnp.ndarray  # bool: ai_policy is refused (switching aside)
+
+
+def _doubles_damage(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool``: the B = 4 state has a doubles damage factor the AI's estimate (``damage.
+    ai_damage_for_roll``) does not carry yet (E2 D45-8: screens x2/3 and spread x3/4 inside
+    ``_pre_random``; the estimate still halves a screen, singles' rule). Decision 12 of the E4-A
+    plan: a move the AI's scoring may estimate through ``BattleSystem_CalcMoveDamage`` has range
+    RANGE_ADJACENT_OPPONENTS (a side with two living battlers, ``CountAliveBattlers(TRUE,
+    defender) == 2``, battle_lib.c:7035-7039) or RANGE_ALL_ADJACENT (three or more living
+    battlers, ``CountAliveBattlers(FALSE, defender) >= 2``, :7040-7044), or a side with two living
+    battlers has Reflect / Light Screen (:6982-6990, :7023-7032). Always False at B = 2 (no
+    ``BATTLE_TYPE_DOUBLES``). The factor depends only on ``MOVE_DATA(move).range`` and the alive
+    counts, so every estimate that can reach such a move counts:
+
+    - the active moves of every AI battler and of its ``GetPartner`` (``FlagMoveDamageScore``,
+      ``IfCurrentMoveKills``, the two sweeps of ``CheckIfHighestDamageWithPartner``,
+      trainer_ai.c:1041, :1560, :1611, :2398-2414; in MULTI battler 2's partner is the player's
+      battler 0), when damaging (``TrainerAI_CalcAllDamage``'s test, :2823-2828);
+    - every party member of every AI battler's party (``IfPartyMemberDealsMoreDamage``, :2142-2165,
+      each living bench member's moves as the AI's active; the party copy of ``commands.
+      _party_copy``, the partner's Mimic / Transform slots as the party holds them), damaging, HP
+      not tested (a superset of the living members);
+    - ``movePrevByBattler`` of every battler (``IfBattlerDealsMoreDamage``, :2228-2237, the
+      defender's last move, enemy or ally, with no damaging test): any move with power > 0 or a
+      damaging one (``CalcMoveDamage`` of power 0 is 0 before its ``+ 2``, :7078).
+    No other scoring estimate goes through ``CalcMoveDamage`` (its callers in trainer_ai.c: :3082
+    inside ``TrainerAI_CalcDamage``, reached from :1041, :1560, :1611, :2130, :2156, :2210, :2228,
+    :2402). The post-KO replacement pick also calls it (``BattleAI_PostKOSwitchIn``,
+    battle_lib.c:8054, reached from trainer_ai.c:4005), with the spread factor: ``ai/replacement.py``
+    is singles-only, and its B = 4 form takes the same factor (ledger E4-17)."""
+    fmt = format_of(state)
+    if fmt.B != 4:
+        return jnp.asarray(False)
+    alive = [state.hp[party(fmt, b), state.active[b]] > 0 for b in range(4)]
+    side_alive = [alive[s].astype(_I32) + alive[s + 2].astype(_I32) for s in (0, 1)]
+    two = [n == 2 for n in side_alive]
+    pairs = {b for a in ai_battlers(fmt) for b in (a, a ^ 2)}
+    estimated = [state.moves[party(fmt, b), state.active[b]].astype(_I32) for b in sorted(pairs)]
+    estimated += [c._party_copy(tables, state, a).moves.reshape(-1) for a in ai_battlers(fmt)]
+    damaging = [c.is_damaging(tables, m) for m in estimated]
+    last = state.last_move.astype(_I32)
+    estimated.append(last)
+    damaging.append(c.is_damaging(tables, last) | ((last != 0) & (tables.move_power[last] > 0)))
+    spread_opponents = spread_all = jnp.asarray(False)
+    for moves, hits in zip(estimated, damaging, strict=True):
+        target = tables.move_target[moves]
+        spread_opponents |= jnp.any(hits & (target == MoveTarget.RANGE_ADJACENT_OPPONENTS))
+        spread_all |= jnp.any(hits & (target == MoveTarget.RANGE_ALL_ADJACENT))
+    screens = jnp.asarray(False)
+    for side in (0, 1):
+        screened = (state.reflect[side] > 0) | (state.light_screen[side] > 0)
+        screens |= screened & two[side]
+    living = side_alive[0] + side_alive[1]
+    return screens | (spread_opponents & (two[0] | two[1])) | (spread_all & (living >= 3))
 
 
 @partial(jax.jit, static_argnames="layout")
@@ -5093,8 +5381,10 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
     # The player's Gyro Ball is 1 + 25 * v / v there (attacker = defender = the player): v = 0
     copied = copied | (present[0][:, None] & (moves[0] == AI_GYRO_BALL) & copycat & zero[0])
+    doubles_damage = _doubles_damage(tables, state)
     scoring = (
-        jnp.any(move)
+        doubles_damage
+        | jnp.any(move)
         | jnp.any(expert)
         | jnp.any(calc_damage)
         | jnp.any(move_type)
@@ -5116,6 +5406,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         item_bad,
         state_move,
         copied,
+        doubles_damage,
         scoring,
         scoring,
     )
@@ -5254,6 +5545,14 @@ def _scoring_refusals(
             f"ai scoring: opponent slot {s}: its moveset has more IfRandomLessThan sites "
             f"than the {MAX_SCRIPT_ROLLS} AiOutcome.script_rolls encodes"
         )
+    if bool(r.doubles_damage):
+        out.append(
+            "ai scoring: doubles damage factor (E2 D45-8): the estimate lacks the doubles screens "
+            "(x2/3) and spread (x3/4) factors of CalcMoveDamage (battle_lib.c:6982-6990, "
+            ":7023-7044), and a damaging spread move of an AI battler, its partner, its party, "
+            "or a battler's last move (IfBattlerDealsMoreDamage), or a screen on a side of two "
+            "living battlers, needs them"
+        )
     ability = np.asarray(decomp_abilities(tables, state))
     ability_names = {v: k for k, v in _ABILITY.items()}
     for side, s in zip(*np.nonzero(np.asarray(r.ability)), strict=True):
@@ -5323,7 +5622,14 @@ _PATH_REFUSAL = (
 def _exact_layout(layout: AiLayout) -> AiLayout:
     """``layout`` for an exact distribution: ``ValueError`` for a ``runtime_flags`` layout
     (``layout.ALLIN`` serves the sampled AI; its ``2**slot_reads`` scorings pass WIDTH_CAP),
-    whose exact distribution is the fight's own layout's (``layout_of``)."""
+    whose exact distribution is the fight's own layout's (``layout_of``), and for a ``sampled``
+    B = 4 layout (its bound passes WIDTH_CAP, A-10 section 2.9: its law is the marked empirical
+    one of ``layout.sample_seeds``, never ``4 * 2**slot_reads`` exact scorings)."""
+    if layout.sampled:
+        raise ValueError(
+            f"the {layout.key} layout is sampled (its read bound passes WIDTH_CAP, A-10 2.9): "
+            "it has no exact AI distribution"
+        )
     if layout.runtime_flags:
         raise ValueError(
             f"the exact AI distribution is per fight (ai.layout.layout_of); the {layout.key} "

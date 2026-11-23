@@ -493,6 +493,19 @@ SITE_N: dict[int, int] = {
     7173: 128,  # TagStrategy_FutureSight_SelfMovesThird (B = 2: never reached)
     7181: 128,  # TagStrategy_FutureSight_SelfMovesSecond (B = 2: never reached)
     7187: 128,  # TagStrategy_FutureSight_SelfMovesFirst (B = 2: never reached)
+    # E4-A W2: TagStrategy_Partner (script.s:7339-7694), A-9 section 2; the ally part is reached
+    # at B = 4 only. Each jump skips the label's change or ends the script, except the ladders'
+    # (the jump is the +3) and Helping Hand's (the jump is the -1).
+    7383: 160,  # TagStrategy_CheckPartnerMotorDrive (jump: no change)
+    7395: 64,  # TagStrategy_PartnerVoltAbsorb_75PercentHP (jump: +3)
+    7399: 128,  # TagStrategy_PartnerVoltAbsorb_50PercentHP (jump: +3)
+    7403: 192,  # TagStrategy_PartnerVoltAbsorb_LessThan50PercentHP (jump: +3)
+    7430: 64,  # TagStrategy_PartnerWaterAbsorb_75PercentHP (jump: +3)
+    7434: 128,  # TagStrategy_PartnerWaterAbsorb_50PercentHP (jump: +3)
+    7438: 192,  # TagStrategy_PartnerWaterAbsorb_LessThan50PercentHP (jump: +3)
+    7596: 64,  # TagStrategy_PartnerUsingHelpingHand_TryScorePlus2 (jump: -1, else +2)
+    7679: 128,  # TagStrategy_PartnerAcupressure_CheckHP (jump: no change)
+    7682: 80,  # TagStrategy_PartnerAcupressure_TryScorePlus2 (jump: no change, else +2)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is

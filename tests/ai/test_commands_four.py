@@ -681,33 +681,58 @@ FASTER, SLOWER, TIE = c.COMPARE_SPEED_FASTER, c.COMPARE_SPEED_SLOWER, c.COMPARE_
 ORDER_PAIRS = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))  # the decomp's i < j loop
 
 
-def _speed_state(tables, names, speeds, fmt=DOUBLES, alive=(1, 1, 1, 1), trick_room=False):
+def _speed_state(
+    tables,
+    names,
+    speeds,
+    fmt=DOUBLES,
+    alive=(1, 1, 1, 1),
+    trick_room=False,
+    claw=(0, 0, 0, 0),
+    lag=(0, 0, 0, 0),
+):
     """A four-battler state whose battlers have the Speed stat ``speeds`` (all else equal) and HP
-    only where ``alive``."""
+    only where ``alive``; a ``claw`` battler holds a Quick Claw whose ``qc_roll`` activates it, a
+    ``lag`` battler a Lagging Tail."""
     s = four(tables, names, fmt)
     for b in range(4):
         p = format_of(s).party_of[b]
         slot = int(s.active[b])
         s = _put(s, p, slot, stats=s.stats[p, slot].at[Stat.SPE - 1].set(speeds[b]))
+        if claw[b]:
+            s = _put(s, p, slot, item=names.item("Quick Claw"))
+            s = s._replace(qc_roll=s.qc_roll.at[b].set(1))
+        if lag[b]:
+            s = _put(s, p, slot, item=names.item("Lagging Tail"))
         if not alive[b]:
             s = with_hp(s, b, 0)
     return with_trick_room(s, 3) if trick_room else s
 
 
-def _py_compare(speed, alive, trick, b1, b2):
-    """``BattleSystem_CompareBattlerSpeed(b1, b2, TRUE)`` (battle_lib.c:1204-1211, :1401-1447) for
-    plain battlers: ``(result, draws)``, ``result`` a function of the tie bit, ``draws`` whether the
-    compare reaches ``RandNext() & 1`` (equal speeds, both alive or both dead)."""
+def _py_compare(speed, alive, trick, b1, b2, claw=(0, 0, 0, 0), lag=(0, 0, 0, 0)):
+    """``BattleSystem_CompareBattlerSpeed(b1, b2, TRUE)`` (battle_lib.c:1204-1211, :1401-1447):
+    ``(result, draws)``, ``result`` a function of the tie bit, ``draws`` whether the compare reaches
+    ``RandNext() & 1`` (equal speeds, in a two-sided branch). ``claw`` marks an activated Quick Claw
+    (``speedRand`` from ``qc_roll``, :1278-1286), ``lag`` a Lagging Tail holder (:1299-1301)."""
     if alive[b1] != alive[b2]:
         return (lambda bit: FASTER if alive[b1] else SLOWER), False
     s1, s2 = speed[b1], speed[b2]
+    if claw[b1] and claw[b2]:  # both claws (:1402-1407): plain speed, Trick Room not read
+        slower = s1 < s2
+    elif claw[b1] or claw[b2]:  # one claw (:1408-1411): fixed, no draw
+        return (lambda bit: FASTER if claw[b1] else SLOWER), False
+    elif lag[b1] and lag[b2]:  # both Lagging Tails (:1412-1417): reversed speed
+        slower = s1 > s2
+    elif lag[b1] or lag[b2]:  # one Lagging Tail (:1418-1421): fixed, no draw
+        return (lambda bit: SLOWER if lag[b1] else FASTER), False
+    else:  # plain (:1432-1447)
+        slower = s1 > s2 if trick else s1 < s2
     if s1 == s2:
         return (lambda bit: TIE if bit else FASTER), True
-    slower = s1 > s2 if trick else s1 < s2
     return (lambda bit: SLOWER if slower else FASTER), False
 
 
-def _py_rank_laws(speed, alive, trick=False):
+def _py_rank_laws(speed, alive, trick=False, claw=(0, 0, 0, 0), lag=(0, 0, 0, 0)):
     """Brute force over the decomp's own draw process: the sort of ``AICmd_LoadBattlerSpeedRank``
     (trainer_ai.c:2056-2094) with a fresh ``RandNext() & 1`` at each compare that reaches the tie
     test, a branch tree of probability 1/2 per draw. ``{battler: [P(rank 0..3)]}`` (Fractions)."""
@@ -721,7 +746,7 @@ def _py_rank_laws(speed, alive, trick=False):
                 law[b][pos] += weight
             return
         (i, j), rest = pairs[0], pairs[1:]
-        result, draws = _py_compare(speed, alive, trick, order[i], order[j])
+        result, draws = _py_compare(speed, alive, trick, order[i], order[j], claw, lag)
         for bit in (0, 1) if draws else (0,):
             o = list(order)
             if result(bit) != FASTER:
@@ -750,14 +775,7 @@ SPEED_CASES = [
 _law = jax.jit(c.speed_rank_law)
 
 
-@pytest.mark.parametrize("speeds, alive, trick", SPEED_CASES)
-def test_speed_rank_law_equals_the_brute_force(tables, names, speeds, alive, trick):
-    # speed_rank_law (the mean of the sort over the 2**6 assignments of the pair bits) equals the
-    # decomp's draw process enumerated as a tree (a bit only at a compare that reaches the tie
-    # test), for every battler: the joint law of every tie bit of the call, exactly.
-    t = _tables4(tables, DOUBLES)
-    s = _speed_state(t, names, speeds, alive=alive, trick_room=trick)
-    want = _py_rank_laws(speeds, alive, trick)
+def _assert_law_is_the_brute_force(t, s, want):
     total = np.zeros(4)
     for b in range(4):
         got = np.asarray(_law(t, s, b), np.float64)
@@ -767,6 +785,44 @@ def test_speed_rank_law_equals_the_brute_force(tables, names, speeds, alive, tri
         total += got
     # the four battlers fill every position exactly once in each outcome
     np.testing.assert_allclose(total, 1.0)
+
+
+@pytest.mark.parametrize("speeds, alive, trick", SPEED_CASES)
+def test_speed_rank_law_equals_the_brute_force(tables, names, speeds, alive, trick):
+    # speed_rank_law (the mean of the sort over the 2**6 assignments of the pair bits) equals the
+    # decomp's draw process enumerated as a tree (a bit only at a compare that reaches the tie
+    # test), for every battler: the joint law of every tie bit of the call, exactly.
+    t = _tables4(tables, DOUBLES)
+    s = _speed_state(t, names, speeds, alive=alive, trick_room=trick)
+    _assert_law_is_the_brute_force(t, s, _py_rank_laws(speeds, alive, trick))
+
+
+# W2-15 (A-10 2.6, 2.10 item 1): Quick Claw (activated from qc_roll) and Lagging Tail ladders,
+# battle_lib.c:1402-1421. (speeds, alive, trick, claw, lag)
+ITEM_SPEED_CASES = [
+    ((50, 50, 30, 20), (1, 1, 1, 1), False, (1, 1, 0, 0), (0, 0, 0, 0)),  # claw vs claw tie: draws
+    ((50, 50, 30, 20), (1, 1, 1, 1), True, (1, 1, 0, 0), (0, 0, 0, 0)),  # ... Trick Room not read
+    ((40, 50, 50, 40), (1, 1, 1, 1), True, (1, 1, 0, 0), (0, 0, 0, 0)),  # claw pair by plain speed
+    ((50, 50, 50, 50), (1, 1, 1, 1), False, (1, 1, 1, 1), (0, 0, 0, 0)),  # four claws, all tied
+    ((50, 50, 50, 50), (1, 1, 1, 1), False, (1, 0, 0, 0), (0, 0, 0, 0)),  # claw vs none: no draw
+    ((10, 50, 50, 50), (1, 1, 1, 1), False, (1, 0, 0, 0), (0, 0, 0, 0)),  # a slow lone claw first
+    ((50, 50, 50, 50), (1, 1, 1, 1), True, (0, 0, 1, 0), (0, 0, 0, 0)),  # lone claw in Trick Room
+    ((50, 50, 50, 50), (1, 1, 1, 1), False, (0, 0, 0, 0), (1, 1, 0, 0)),  # Lagging Tail pair draws
+    ((30, 40, 50, 50), (1, 1, 1, 1), False, (0, 0, 0, 0), (1, 1, 0, 0)),  # tail pair: slower first
+    ((50, 50, 50, 50), (1, 1, 1, 1), False, (0, 0, 0, 0), (0, 0, 1, 0)),  # one tail: last, no draw
+    ((50, 50, 50, 50), (1, 1, 1, 1), True, (0, 0, 0, 0), (0, 1, 0, 0)),  # one tail, Trick Room
+    ((50, 50, 50, 50), (1, 1, 1, 1), False, (1, 0, 0, 0), (0, 0, 0, 1)),  # claw first, tail last
+    ((50, 50, 50, 50), (1, 0, 1, 1), False, (1, 0, 0, 0), (0, 0, 1, 0)),  # claw, tail, one dead
+]
+
+
+@pytest.mark.parametrize("speeds, alive, trick, claw, lag", ITEM_SPEED_CASES)
+def test_speed_rank_law_claws_and_lagging_tail(tables, names, speeds, alive, trick, claw, lag):
+    # The two-sided branches (both claws :1402-1407, both tails :1412-1417) draw at equal speed;
+    # the one-sided ones (:1408-1411, :1418-1421) never do; the claw bit is the state's qc_roll.
+    t = _tables4(tables, DOUBLES)
+    s = _speed_state(t, names, speeds, alive=alive, trick_room=trick, claw=claw, lag=lag)
+    _assert_law_is_the_brute_force(t, s, _py_rank_laws(speeds, alive, trick, claw, lag))
 
 
 def test_speed_rank_law_known_values(tables, names):

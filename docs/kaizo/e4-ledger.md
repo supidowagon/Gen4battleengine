@@ -158,3 +158,44 @@ Rules sheets: `_scratch/e4/rules/A-8.md`, `A-10.md`. Decomp paths are relative t
   of the `shadow_*` under Mimic / Transform, battle_io_command.c:579-586), for this command and
   `IfAnyPartyMemberUsedPP` (:1999). Tests: tests/ai/test_commands_four.py `test_used_pp_reads_the_party_copy`,
   `test_party_copy_values`, `test_party_member_deals_more_reads_the_party_copy`.
+
+- **E4-16. B = 4 read bounds and the width of the real split fights** (E4-A W2, A-10 sections 2.7-2.9,
+  A-15 section 5). `tools/ai_read_bounds.py` walks script.s at B = 4 with the target kind in the key
+  (`READ_BOUNDS_B4`, `DRAWN_READ_BOUNDS_B4` in `ai/read_bounds.py`): `IfTargetIsPartner` is decided by the
+  kind (trainer_ai.c:2630-2639), an ally path ends at the nine Terminate lines and enters
+  `TagStrategy_Partner` at script.s:6638 and :7697 (bit 8 counts the part again), every partner read is
+  open (the B = 2 constants of the zeroed partners do not apply), and each `LoadBattlerSpeedRank` call counts
+  2 reads (four ranks, two pattern bits). The walk is an upper bound: partner-dependent branches are not
+  decided by the actual partner. Measurement (`_scratch/e4/width/report.md`, walker `measure_b4.py`):
+  the most reads per slot over the split B = 4 fights (DOUBLES, TWO_TRAINERS, MULTI per partner variant,
+  every AI battler with its own flags | Tag Strategy, its party's moves, the whole fight's moves deciding
+  the drawing rows) is **14** = 65597 scorings, half `WIDTH_CAP`, set by non-rank paths (trainers 79, 435,
+  583). A battler whose partner is the player's (MULTI battler 2; partner battler 0, battle_system.c:394-411)
+  sweeps unknown moves that may draw in `CheckIfHighestDamageWithPartner` (trainer_ai.c:2414, :3014-3048), so it
+  takes the drawing rows always (`move_read_rows(.., partner_unknown=True)`): 43 (fight, partner) bounds rise by
+  1-2, partner 612's to 14 in six fights, the maximum stays 14 (`_scratch/e4/width/partner_drawn_b4.py`,
+  engine-free, from the committed tables). One read per tied compare (6 per call) would put 22 nodes over the cap. Pinned by
+  `tests/ai/test_layout.py::test_b4_split_width` (`fullset`). Copied moves (A-10 section 2.8,
+  `fight_tables(.., fellow_moves=..)`): the pool at B = 4 is every battler the copier can target; a copied
+  Future Sight reads 14 (exact); under 0x7ff (trainer 455) a Mimicked Sand Attack, Smoke Screen, Flash or Double
+  Team passes the cap and the layout is sampled and marked (`AiLayout.sampled`, `sample_n`, `sample_seed`;
+  `BEYOND_CAP_REFUSE` raises instead; `policy._exact_layout` refuses a sampled layout). `WIDTH_CAP` 18 measured
+  (run e4-w2width-4723845, `_scratch/e4/width/cap18_cost.md`; `policy._slot_histograms`, every Kaizo bit, B = 2):
+  peak RSS 30.4 / 44.5 / 72.6 / 126.8 GB at 14-17 reads, XLA temp doubling per read (14.06e9 to 112.5e9 bytes),
+  18 reads killed at 238-254 GB twice (about 225e9 temp per call); a B = 4 battler costs about 3x (one program per
+  target). Not cheap: the cap constant stays, and the fights past it (trainer 455 under 0x7ff) stay sampled and
+  marked (A-10 section 2.9).
+- **E4-17. Doubles damage refusal kept (E4-A W2, W2-16, plan decision 12).** E2's D45-8 doubles factors are not in
+  `main`: `damage._pre_random` halves a screen (singles) and has no spread factor. `CheckIfHighestDamageWithPartner`
+  reads the right battlers at B = 4, but the factor depends only on `MOVE_DATA(move).range` and the alive counts
+  (battle_lib.c:7035-7044), so every estimate that can reach a spread move counts: a state where a move with range
+  RANGE_ADJACENT_OPPONENTS (a side of two living battlers) or RANGE_ALL_ADJACENT (three or more living) is a damaging
+  active move of an AI battler or its partner (trainer_ai.c:1041, :1560, :1611, :2398-2414), a damaging move of any
+  member of an AI battler's party (`IfPartyMemberDealsMoreDamage`, :2142-2165), or any battler's last move with power
+  (`IfBattlerDealsMoreDamage`, :2228-2237, no damaging test), or a side of two living battlers has Reflect /
+  Light Screen, is a named refusal `policy._doubles_damage`
+  ("doubles damage factor (E2 D45-8)", `_Refused.doubles_damage`; battle_lib.c:6982-6990, :7023-7044), with a
+  `fullset` test. The step that rebases on D45-8 deletes all three: the `policy._doubles_damage` refusal (`_Refused.doubles_damage`), the `"_doubles_damage"` entry in `prep/variants.py`, and `tests/ai/test_doubles_damage.py::test_spread_refused_until_d45_8`, and uses the factors (managing-session ruling 23 Nov).
+  A third consumer of the factor: the post-KO replacement pick `BattleAI_PostKOSwitchIn` (battle_lib.c:8054,
+  reached from trainer_ai.c:4005) estimates the bench moves with `BattleSystem_CalcMoveDamage`; `ai/replacement.py` is
+  singles-only today, and its B = 4 form (W4, A-13) needs the D45-8 factors or the same refusal. W4's B = 4 post-KO replacement is not written on this refusal without asking the managing session (ruling 23 Nov).

@@ -50,6 +50,17 @@ The fields:
   Expert path is refused, never scored. Kaizo's holds all nine since K3c Task 6.
 * ``runtime_flags``: the trainer's flags are read at run time from ``tables.ai_flags``
   instead of fixed in ``flags`` (``ALLIN``, below).
+* ``b4``: a B = 4 layout (DOUBLES, TWO_TRAINERS, MULTI): its ``slot_reads`` is the B = 4 bound
+  (``fight_slot_reads(.., b4=True)``: the most over the target kinds, 2 reads per
+  ``LoadBattlerSpeedRank`` call; E4-A W2, A-15 section 5). B = 2 layouts keep ``b4`` False and
+  every B = 2 value.
+* ``sampled``, ``sample_n``, ``sample_seed``: the bound passes ``WIDTH_CAP`` at B = 4 (A-10
+  section 2.9), so the exact law is not built: the AI law is the empirical law of ``sample_n``
+  loose-oracle runs with the fixed seeds ``sample_seeds`` (base seed ``sample_seed``, folded
+  with the decision's node index), and it is marked approximate in every result built on it. The
+  exact entry points refuse a sampled layout (``policy._exact_layout``); the sampled law's entry
+  points (W3 / W5) and the search and report hops (E4-S) are later waves'.
+  The other setting, ``BEYOND_CAP_REFUSE``, raises past the cap as a B = 2 layout does.
 
 **Two shapes of one transcription (user decision, 2026-11-15).** The exact distribution
 (search) is per fight: ``layout_of`` gives the fight's flags, own effects (R7) and read bound
@@ -84,7 +95,13 @@ from nuzline.ai.outcome import (
     KAIZO_TRANSCRIBED,
     MAX_SCRIPT_ROLLS,
 )
-from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS, READ_BOUND_BITS, READ_BOUNDS
+from nuzline.ai.read_bounds import (
+    DRAWN_READ_BOUNDS,
+    DRAWN_READ_BOUNDS_B4,
+    READ_BOUND_BITS,
+    READ_BOUNDS,
+    READ_BOUNDS_B4,
+)
 from nuzline.ai.switching import KAIZO_SWITCH_SITES, SWITCH_SITES
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import (
@@ -100,9 +117,14 @@ from nuzline.engine.enumerate import WIDTH_CAP
 
 __all__ = [
     "ALLIN",
+    "ALLIN4",
     "ALLIN_READS",
+    "ALLIN_READS_B4",
+    "BEYOND_CAP_REFUSE",
+    "BEYOND_CAP_SAMPLE",
     "KAIZO",
     "KAIZO_FLAG_BITS",
+    "SAMPLE_N",
     "VANILLA",
     "AiLayout",
     "fight_effects",
@@ -112,6 +134,7 @@ __all__ = [
     "kaizo_layout",
     "layout_of",
     "move_read_rows",
+    "sample_seeds",
     "thinking_mask",
 ]
 
@@ -150,6 +173,10 @@ class AiLayout(NamedTuple):
     transcribed: frozenset[int]
     expert_transcribed: frozenset[int] = frozenset()
     runtime_flags: bool = False
+    b4: bool = False
+    sampled: bool = False
+    sample_n: int = 0
+    sample_seed: int = 0
 
     def runs(self, bit: int) -> bool:
         """The policy traces flag ``bit``'s script (with ``runtime_flags``, every transcribed
@@ -178,6 +205,10 @@ class AiLayout(NamedTuple):
                 key += "-e" + hashlib.sha1(text.encode()).hexdigest()[:10]
             if self.runtime_flags:
                 key += "-run"
+            if self.b4:
+                key += "-b4"  # the B = 4 read bound (target kinds, 2 reads per rank call)
+            if self.sampled:
+                key += f"-s{self.sample_n}x{self.sample_seed}"
             return key
         return f"{self.name}-{self.flags:#x}"
 
@@ -234,6 +265,8 @@ def thinking_mask(tables: Tables, battler: int = 1):
 # so no fight's path, under any of its flags, passes it (each fight's own bound,
 # fight_slot_reads, is a row sum over a subset).
 ALLIN_READS = max(sum(row) for row in (*READ_BOUNDS.values(), *DRAWN_READ_BOUNDS.values()))
+# The same at B = 4: the largest row sum of the B = 4 tables (every target kind).
+ALLIN_READS_B4 = max(sum(row) for row in (*READ_BOUNDS_B4.values(), *DRAWN_READ_BOUNDS_B4.values()))
 
 # The sampled AI of every Kaizo fight in one program (module docstring): all transcribed flag
 # bits and effects, the read bound ALLIN_READS, the trainer's flags read at run time. Built
@@ -242,21 +275,82 @@ ALLIN_READS = max(sum(row) for row in (*READ_BOUNDS.values(), *DRAWN_READ_BOUNDS
 ALLIN = KAIZO._replace(
     flags=sum(1 << bit for bit in KAIZO_FLAG_BITS), slot_reads=ALLIN_READS, runtime_flags=True
 )
+# ALLIN at B = 4 (A-15 section 5): the B = 4 bound ``ALLIN_READS_B4``, ``b4`` set.
+ALLIN4 = ALLIN._replace(slot_reads=ALLIN_READS_B4, b4=True)
 
 
-def kaizo_layout(flags: int, slot_reads: int, effects=None) -> AiLayout:
+# What a B = 4 layout does with a bound past WIDTH_CAP (A-10 section 2.9): the default samples and
+# marks the law approximate; a fight setting (E4-D's) refuses instead. B = 2 layouts always refuse.
+BEYOND_CAP_SAMPLE = "sample"
+BEYOND_CAP_REFUSE = "refuse"
+# Loose-oracle runs of a sampled law (no sheet value: the builder's choice, A-10 section 2.9 sets
+# none). The standard error of an empirical probability p is sqrt(p * (1 - p) / N), at most
+# 0.5 / sqrt(N) (N = 4096: 0.78 %); one number for every fight so the marked law repeats.
+SAMPLE_N = 4096
+
+
+def sample_seeds(layout: AiLayout, node: int) -> np.ndarray:
+    """``uint32[layout.sample_n]``: the fixed seeds of a sampled layout's loose runs at decision
+    node ``node`` (one base seed per fight folded with the node index, A-10 section 2.9), the
+    same on every call."""
+    if not layout.sampled:
+        raise ValueError(f"layout {layout.key} is exact: it has no sampled runs")
+    return np.random.SeedSequence([layout.sample_seed, int(node)]).generate_state(
+        layout.sample_n, np.uint32
+    )
+
+
+def kaizo_layout(
+    flags: int,
+    slot_reads: int,
+    effects=None,
+    *,
+    b4: bool = False,
+    beyond_cap: str | None = None,
+    sample_seed: int = 0,
+    sample_n: int = SAMPLE_N,
+) -> AiLayout:
     """The Kaizo layout that runs the trainer AI flags ``flags`` (E1 Ruling R2) with the read
     bound ``slot_reads`` (E1 Ruling R6; ``fight_slot_reads``) and, when ``effects`` (battle
     effects) is given, only those of the transcribed effects (E1 Ruling R7: a fight's
     programs trace the labels of its own moves only). ``ValueError`` for a set with a bit
     outside ``KAIZO_FLAG_BITS``, or a bound whose scoring width (``switch_sites + 1 + 4 *
-    2**slot_reads``, ``policy.ai_width``) passes ``WIDTH_CAP``."""
+    2**slot_reads``, ``policy.ai_width``) passes ``WIDTH_CAP``.
+
+    ``b4``: a B = 4 layout (``slot_reads`` from ``fight_slot_reads(.., b4=True)``). ``beyond_cap``
+    (B = 4 only): ``BEYOND_CAP_SAMPLE`` (the B = 4 default) returns a sampled layout for a bound
+    past the cap (``sample_n`` runs, base seed ``sample_seed``), ``BEYOND_CAP_REFUSE`` raises as
+    B = 2 does. A bound under the cap is exact either way."""
     effects = None if effects is None else frozenset(int(e) for e in effects)
-    return _with(KAIZO, int(flags), int(slot_reads), effects)
+    if beyond_cap is None:
+        beyond_cap = BEYOND_CAP_SAMPLE if b4 else BEYOND_CAP_REFUSE
+    if beyond_cap not in (BEYOND_CAP_SAMPLE, BEYOND_CAP_REFUSE):
+        raise ValueError(f"beyond_cap {beyond_cap!r}: use BEYOND_CAP_SAMPLE or BEYOND_CAP_REFUSE")
+    if beyond_cap == BEYOND_CAP_SAMPLE and not b4:
+        raise ValueError("a sampled law past WIDTH_CAP is a B = 4 setting (A-10 section 2.11)")
+    return _with(
+        KAIZO,
+        int(flags),
+        int(slot_reads),
+        effects,
+        bool(b4),
+        beyond_cap,
+        int(sample_seed),
+        sample_n,
+    )
 
 
 @cache
-def _with(layout: AiLayout, flags: int, slot_reads: int, effects=None) -> AiLayout:
+def _with(
+    layout: AiLayout,
+    flags: int,
+    slot_reads: int,
+    effects=None,
+    b4: bool = False,
+    beyond_cap: str = BEYOND_CAP_REFUSE,
+    sample_seed: int = 0,
+    sample_n: int = SAMPLE_N,
+) -> AiLayout:
     """``layout`` (a per-slot policy's) running ``flags`` with ``slot_reads`` reads a slot and
     the transcribed effects among ``effects`` (all of them when None)."""
     bits = {b for b in range(max(flags.bit_length(), 1)) if flags >> b & 1}
@@ -265,7 +359,9 @@ def _with(layout: AiLayout, flags: int, slot_reads: int, effects=None) -> AiLayo
             f"AI flags {flags:#x}: the Kaizo policy transcribes only the flag bits "
             f"{sorted(KAIZO_FLAG_BITS)} (engine/coverage.py refuses the trainer)"
         )
-    if layout.switch_sites + 1 + 4 * 2**slot_reads > WIDTH_CAP:
+    past_cap = layout.switch_sites + 1 + 4 * 2**slot_reads > WIDTH_CAP
+    sampled = past_cap and beyond_cap == BEYOND_CAP_SAMPLE
+    if past_cap and not sampled:
         raise ValueError(
             f"AI read bound {slot_reads}: {4 * 2**slot_reads} scorings per decision pass "
             f"WIDTH_CAP {WIDTH_CAP} (E1 Ruling R6)"
@@ -273,12 +369,21 @@ def _with(layout: AiLayout, flags: int, slot_reads: int, effects=None) -> AiLayo
     transcribed = layout.transcribed if effects is None else layout.transcribed & effects
     expert = layout.expert_transcribed if effects is None else layout.expert_transcribed & effects
     out = layout._replace(
-        flags=flags, slot_reads=slot_reads, transcribed=transcribed, expert_transcribed=expert
+        flags=flags,
+        slot_reads=slot_reads,
+        transcribed=transcribed,
+        expert_transcribed=expert,
+        b4=b4,
+        sampled=sampled,
+        sample_n=sample_n if sampled else 0,
+        sample_seed=sample_seed if sampled else 0,
     )
     return layout if out == layout else out
 
 
-def move_read_rows(tables: Tables, moves) -> np.ndarray:
+def move_read_rows(
+    tables: Tables, moves, *, b4: bool = False, pool=(), partner_unknown: bool = False
+) -> np.ndarray:
     """``int8[n, 8]``: per move of ``moves`` (move ids, 0 or less for none), the most
     random reads each transcribed flag script makes on its path (``read_bounds.READ_BOUNDS``,
     by its battle effect, whether it is damaging, and whether its type can be quadruple
@@ -286,7 +391,17 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
     (Psywave's or Magnitude's id case, a damaging move: trainer_ai.c:2827-2835, :3014-3048;
     E1 ruling G-39) the damage commands read too: ``read_bounds.DRAWN_READ_BOUNDS``, keyed
     also by whether the move itself draws. A move whose effect is not transcribed is refused
-    (``policy._refused``), and its row is 0."""
+    (``policy._refused``), and its row is 0.
+
+    ``b4``: the B = 4 tables (``READ_BOUNDS_B4``, ``DRAWN_READ_BOUNDS_B4``): ``int8[n, 2, 11]``,
+    axis 1 the target kind (0 enemy, 1 ally); ``fight_slot_reads(.., b4=True)`` takes the most.
+    ``pool``: further move ids of the fight (its other AI battlers' parties) that decide whether
+    the fight has a drawing move (``CheckIfHighestDamageWithPartner`` sweeps the partner's
+    moves); their rows are not returned. ``partner_unknown``: the battler's ``GetPartner`` is on the
+    player's side (MULTI battler 2, whose partner is the player's battler 0: battle_system.c:394-411,
+    trainer_ai.c:2414), so its second sweep estimates moves the layout does not know, which may draw
+    (trainer_ai.c:3014-3048): the drawn rows count whatever ``moves`` and ``pool`` hold, as
+    ``IfBattlerDealsMoreDamage``'s read always counts (tools/ai_read_bounds.py)."""
     effect = np.asarray(tables.move_ai_effect)
     power = np.asarray(tables.move_power)
     move_type = np.asarray(tables.move_type)
@@ -295,6 +410,9 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
 
     moves = [int(m) for m in np.asarray(moves).ravel() if int(m) > 0]
     rows = np.zeros((max(len(moves), 1), len(READ_BOUND_BITS)), np.int8)
+    if b4:
+        rows = np.zeros((max(len(moves), 1), 2, len(READ_BOUND_BITS)), np.int8)
+    pool = [int(m) for m in np.asarray(pool).ravel() if int(m) > 0]
 
     def is_damaging(move: int) -> bool:
         # FlagMoveDamageScore's test (trainer_ai.c:1035-1036), as commands.is_damaging:
@@ -302,7 +420,8 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
         e = int(effect[move])
         return e in ALT_POWER_EFFECTS or (bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS)
 
-    drawing = {m for m in moves if m in AI_DRAWN_MOVES and is_damaging(m)}
+    drawing = {m for m in (*moves, *pool) if m in AI_DRAWN_MOVES and is_damaging(m)}
+    drawn = bool(drawing) or partner_unknown
     for i, move in enumerate(moves):
         e = int(effect[move])
         damaging = is_damaging(move)
@@ -311,6 +430,16 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
         # an AI Adaptability Pokemon stays refused (its STAB of 2, :2592-2594, makes one
         # super-effective type QUADRUPLE: then this must allow one).
         can_quad = int((chart[int(move_type[move])] == 20).sum()) >= 2
+        if b4:
+            for ally in (False, True):
+                reads = READ_BOUNDS_B4.get((e, damaging, can_quad, ally))
+                if reads is not None and drawn:
+                    reads = DRAWN_READ_BOUNDS_B4.get(
+                        (e, damaging, can_quad, move in drawing, ally), reads
+                    )
+                if reads is not None:
+                    rows[i, int(ally)] = reads
+            continue
         reads = READ_BOUNDS.get((e, damaging, can_quad))
         if reads is not None and drawing:
             reads = DRAWN_READ_BOUNDS.get((e, damaging, can_quad, move in drawing), reads)
@@ -319,12 +448,16 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
     return rows
 
 
-def fight_slot_reads(rows, flags: int) -> int:
+def fight_slot_reads(rows, flags: int, b4: bool = False) -> int:
     """The read bound of a fight (E1 Ruling R6): the most, over its opponents' moves
     (``move_read_rows``), of the reads the flag scripts of ``flags`` make on one path; at
-    least 1."""
+    least 1. ``b4``: ``rows`` are the B = 4 rows (``move_read_rows(.., b4=True)``, ``[n, 2,
+    bits]``) and the bound is the most over both target kinds too (A-15 section 5); ``flags``
+    then include Tag Strategy (bit 7, forced in doubles, trainer_ai.c:253-255)."""
     rows = np.asarray(rows, np.int32)
     columns = [i for i, bit in enumerate(READ_BOUND_BITS) if flags >> bit & 1]
+    if b4:
+        return max(1, int(rows[..., columns].sum(axis=-1).max()))
     return max(1, int(rows[:, columns].sum(axis=1).max()))
 
 
@@ -351,9 +484,35 @@ def fight_effects(tables: Tables, moves) -> frozenset[int]:
     return frozenset(int(effect[int(m)]) for m in np.asarray(moves).ravel() if int(m) > 0)
 
 
-def fight_layout(tables: Tables, flags: int, moves) -> AiLayout:
+def fight_layout(
+    tables: Tables,
+    flags: int,
+    moves,
+    *,
+    b4: bool = False,
+    pool=(),
+    partner_unknown: bool = False,
+    beyond_cap: str | None = None,
+    sample_seed: int = 0,
+) -> AiLayout:
     """The Kaizo layout of a fight with the flag set ``flags`` against opponents whose moves
-    are ``moves``: their read bound (E1 Ruling R6) and their transcribed effects (R7)."""
+    are ``moves``: their read bound (E1 Ruling R6) and their transcribed effects (R7).
+
+    ``b4``: the B = 4 layout of one AI battler (``flags`` get Tag Strategy, trainer_ai.c:253-255;
+    ``pool``: the other AI battlers' party moves, which decide the drawing-move rows;
+    ``partner_unknown``: its partner is the player's battler (MULTI battler 2, ``move_read_rows``);
+    ``beyond_cap`` and ``sample_seed`` as ``kaizo_layout``)."""
+    if b4:
+        flags = int(flags) | 1 << TAG_STRATEGY
+        rows = move_read_rows(tables, moves, b4=True, pool=pool, partner_unknown=partner_unknown)
+        return kaizo_layout(
+            flags,
+            fight_slot_reads(rows, flags, b4=True),
+            fight_effects(tables, moves),
+            b4=True,
+            beyond_cap=beyond_cap,
+            sample_seed=sample_seed,
+        )
     rows = move_read_rows(tables, moves)
     return kaizo_layout(flags, fight_slot_reads(rows, flags), fight_effects(tables, moves))
 
@@ -386,7 +545,9 @@ def layout_of(tables: Tables) -> AiLayout:
     return fight_layout(tables, flags, moves)
 
 
-def fight_tables(tables: Tables, trainer, party, flags: int | None = None, foe_moves=()) -> Tables:
+def fight_tables(
+    tables: Tables, trainer, party, flags: int | None = None, foe_moves=(), fellow_moves=()
+) -> Tables:
     """``tables`` for a fight against ``trainer`` (a ``data.trainer.Trainer``) with its
     ``party`` (``PokemonSpec``s): its AI flags (``Tables.ai_flags``; ``flags`` overrides
     them) and its moves (``Tables.ai_moves``), so ``layout_of`` gives the fight's layout
@@ -395,11 +556,15 @@ def fight_tables(tables: Tables, trainer, party, flags: int | None = None, foe_m
     ids, or a callable returning one, called only when it is needed); when the AI's party has a
     Transform or Mimic user (``copies_moves``) they join ``ai_moves`` (distinct, after the AI's
     own), so the layout holds the effects and read bounds of what it can copy (G-68).
+    At B = 4 a copier can target every other battler (A-2: both enemies and its ally; A-10
+    section 2.8), so the pool is ``foe_moves`` (the player side's battlers) plus ``fellow_moves``
+    (the AI side's other battler: its partner's party moves; the player's partner in MULTI is
+    among ``foe_moves``); a B = 2 caller passes none and gets today's pool.
     ``AI_MOVES_ROWS`` holds the party's slots and every move id, so any pool fits."""
     moves = [m for spec in party for m in spec.moves]
     if copies_moves(tables, moves):
         pool = foe_moves() if callable(foe_moves) else foe_moves
-        moves += [int(m) for m in dict.fromkeys(pool) if m and m not in moves]
+        moves += [int(m) for m in dict.fromkeys([*pool, *fellow_moves]) if m and m not in moves]
     assert len(moves) <= AI_MOVES_ROWS, (len(moves), AI_MOVES_ROWS)
     padded = np.zeros(AI_MOVES_ROWS, np.int16)
     padded[: len(moves)] = moves

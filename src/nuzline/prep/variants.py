@@ -151,6 +151,10 @@ AI_HP_READERS: dict[str, str] = {
     # E4-A0: LoadBattlerSpeedRank's CompareBattlerSpeed short-circuits on a dead battler
     # (battle_lib.c:1204-1211): HP > 0 only
     "load_battler_speed_rank": "alive",
+    # E4-A W2 (A-7): the doubles damage refusal tests which battlers are alive, as
+    # BattleSystem_CountAliveBattlers (battleMons[i].curHP != 0, battle_lib.c:2825-2847) for the
+    # spread factors (:7035-7044): HP > 0 only
+    "_doubles_damage": "alive",
 }
 
 _STATUS_BLOCKING_TYPES = {
