@@ -1,0 +1,52 @@
+# Local peak per ROM-only file, read by tools/ops/ramgate.py (rom_weights.txt; same format as pod/weights.txt).
+# Line: <test file or node id> <GB> <tag>. Longest matching key wins; an id with no line weighs 6 (ROM_UNMEASURED_GB; the run gets the engine blocker), 14 when the engine loaded at collection (ROM_ENGINE_UNMEASURED_GB).
+# GB = ceil(max(1.25 m, m + 2)), m = peak summed RSS of the pytest tree in GB (10^9 bytes), polled every 0.5 s,
+# one file's non-slow ROM-only ids per process (measuring harness tools/ops/ramgate_measure.py: NUZLINE_RAMGATE_NO_WAIT=1, watchdog at 4 GB free).
+# A figure comes only from a run where the test ran (passed). An id that skipped while measured keeps 14 with tag `unmeasured-skipped-<why>` until a checkout with its inputs measures it.
+# Exception: tests/saves/test_exp_boost.py: its one ROM-only id needs `kaizo_save_probe`, which data/local.toml on the PC does not set, so on the PC it always skips; the skip-time peak (0.21 GB) is its real local weight, figure 3.
+# `engine-test-pod`: an engine test (step, enumerate, playouts, prep search) that belongs on the pod list, not a local ROM-only run: weight 14, never measured locally; refused by the gate (pod_only.txt). Never in a merge-gate ROM-only run. Running them on the PC at a split close is against the owner's no-engine-tests order as it stands: the managing session puts that question to the owner at the first split close (manager ruling, 22 Nov 2026); there is no standing slot.
+
+tests/kaizo/test_extract_kaizo_docs.py 3 local-measure-c66b229-20261122
+tests/kaizo/test_extract_pkcalc.py 3 local-measure-c66b229-20261122
+tests/kaizo/test_overrides.py 3 local-measure-c66b229-20261122
+tests/kaizo/test_rows_tables.py 3 local-measure-c66b229-20261122
+tests/kaizo/test_rows_trainers.py 3 local-measure-c66b229-20261122
+tests/kaizo/test_sheet_unmapped.py 3 local-measure-c66b229-20261122
+tests/kaizo/test_trainer_map.py 3 local-measure-c66b229-20261122
+tests/saves/test_exp_boost.py 3 local-measure-c479eff-20261122
+tests/saves/test_kaizo_save.py 3 local-measure-d6c7d50-20261122
+tests/test_cli.py 3 local-measure-d6c7d50-20261122
+tests/test_trace_to_state.py 3 local-measure-d6c7d50-20261122
+tests/tools/rom/test_code_tables.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_decode.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_diff_kaizo.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_extract_rom.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_game_language.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_inputs.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_kaizo_rom.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_kaizo_trainer_party.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_maps.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_move_lists.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_moves_items.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_nds.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_offsets.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_personal.py 3 local-measure-d6c7d50-20261122
+tests/tools/rom/test_symbols.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_terrain.py 4 local-measure-c66b229-20261122
+tests/tools/rom/test_terrain_narrowing.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_text.py 3 local-measure-c66b229-20261122
+tests/tools/rom/test_trainers.py 3 local-measure-c66b229-20261122
+
+tests/kaizo/test_extract_kaizo_docs.py::test_label_map_is_one_to_one 3 local-measure-c479eff-20261122
+tests/kaizo/test_line_roark.py::test_user_line_reproduces_roark_odds 14 engine-test-pod
+tests/kaizo/test_overrides.py::test_rules_left_unset_by_draft 14 unmeasured-skipped-inputs-absent-in-wt_w3
+tests/kaizo/test_roark_ai_audit.py::test_roark_ai_against_the_pool 14 engine-test-pod
+tests/kaizo/test_roark_widths.py::test_roark_pairs_fit_the_width_cap 14 engine-test-pod
+tests/test_cli.py::test_kaizo_roark_coverage_on_the_saves_is_exact 14 engine-test-pod
+tests/test_players_benchmark.py::test_scoreboard_on_roark 14 engine-test-pod
+tests/tools/rom/test_code_tables.py::test_tm_moves_match_decomp 14 unmeasured-skipped-inputs-absent-in-wt_w3
+tests/tools/rom/test_extract_rom.py::test_vanilla_round_trip 14 unmeasured-skipped-inputs-absent-in-wt_w3
+tests/tools/rom/test_offsets.py::test_no_field_accepts_another_fields_offset 14 unmeasured-skipped-inputs-absent-in-wt_w3
+tests/tools/rom/test_patch.py::test_cache_hit_and_corrupt_cache_rebuilt 3 local-measure-c479eff-20261122
+tests/tools/rom/test_patch.py::test_foreign_sidecar_rebuilt 3 local-measure-c479eff-20261122
+tests/tools/rom/test_patch.py::test_kaizo_rom_and_header 3 local-measure-c479eff-20261122

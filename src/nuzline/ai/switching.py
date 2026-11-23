@@ -13,7 +13,7 @@ means. Both come from the same layout, so the sampler, the enumerator and Task 3
 
 How many sites the outcome encodes is the AI layout's ``switch_sites`` (``ai.layout``),
 passed to the functions here as ``sites`` (static): ``SWITCH_SITES`` (9) for vanilla
-Roark's three Pokemon, ``KAIZO_SWITCH_SITES`` (60) for a party of six. The candidate draws
+Roark's three Pokemon, ``KAIZO_SWITCH_SITES`` (69) for a party of six. The candidate draws
 are the same for both: one Wonder Guard draw per (bench Pokemon, move slot)
 (``AI_CannotDamageWonderGuard``, :3315-3344, the draw at :3338), the keep draw of each of the
 active's four move slots (``AI_HasSuperEffectiveMove``, trainer_ai.c:3576-3592, the draw at
@@ -29,11 +29,13 @@ row cleared it (Ground on Flying/Bug), and Wonder Guard's ``INEFFECTIVE`` (:2734
 clears ``NOT_VERY_EFFECTIVE``; so the passes hold up to ``2 * 5 * 4 = 40`` draws. The Wonder
 Guard draws (step 4) exist only when no move of ``A`` is super effective (:3300-3311), so never
 beside a keep draw: at most ``max(4, 5 * 4) + 40 = 60`` candidates without the absorb draws
-(ruling G-33; ``tests/ai/test_kaizo_switching.py::test_kaizo_switch_sites_reach_sixty``). The
-absorb draws (step 6, at most 5) exist with or without a keep draw: beside the keep draws that is
-at most ``5 + 4 + 40 = 49``; with the Wonder Guard draws a party of six could pass 60 only for a
-Wonder Guard player, an absorbable ``moveHit`` and bench absorb holders together: refused by the
-count test, never approximated.
+(ruling G-33). The absorb draws (step 6, at most 5, :3681-3708) exist with or without a keep
+draw: beside the keep draws that is at most ``5 + 4 + 40 = 49``; with the Wonder Guard draws,
+``20 + 5 + 40 = 65`` for a Wonder Guard player, an absorbable ``moveHit`` and bench absorb
+holders together. ``KAIZO_SWITCH_SITES`` (69, ruling 19 Nov) is the sum of the four parts, each
+at its own bound: the guard draws ``(SLOTS - 1) * MOVES`` (:3315-3344), the keep draws ``MOVES``
+(:3576-3592), the absorb draws ``SLOTS - 1`` (:3681-3708) and the two passes
+``2 * (SLOTS - 1) * MOVES`` (:3756-3804), so no state of a party of six has more.
 
 Step 6, ``AI_HasAbsorbAbilityInParty`` (trainer_ai.c:3640-3713; ruling G-36). When ``A`` has a
 super-effective move (``AI_HasSuperEffectiveMove(..., TRUE)``, no draw inside, :3586-3587) it
@@ -66,7 +68,9 @@ The gates in steps 1, 2 and 9 are implemented from the state (``_layout``): ``A`
 ``VOLATILE_CONDITION_BIND`` (``trapped > 0``) or ``VOLATILE_CONDITION_MEAN_LOOK``
 (``mean_look``) (condition.h:77-78); ``A`` ingrained, ``moveEffectsMask &
 MOVE_EFFECT_INGRAIN`` (``ingrain``, :3907); Shadow Tag or Arena Trap on ``D`` (:3908-3909);
-Magnet Pull on ``D`` with ``A`` Steel type (:3910-3911); no other living party member; and
+Magnet Pull on ``D`` with ``A`` Steel type (:3910-3911); the three abilities are read by
+``CountAbility`` through ``Battler_Ability`` (battle_lib.c:2896-2903, :2933-2940, :3088-3106), so
+a ``D`` under Gastro Acid (``ability_suppressed[0]``, not Multitype) gates nothing; no other living party member; and
 positive stages summing to 4 or more (which ends the check after the keep draws).
 
 Step 3, ``AI_PerishSongKO`` (trainer_ai.c:3263-3272), runs after the trap gate and with a bench
@@ -92,17 +96,14 @@ Refused, never approximated (``switching_refusals`` names each one):
 * abilities on either side that change these masks: Normalize (Levitate and Scrappy are read
   since H-6: ``chart_flags``, ``calc_effectiveness_flags``); and on
   the AI's side step 7's Natural Cure (``AI_IsAsleepWithNaturalCure``), whose draws are not
-  modelled (step 6, every absorb case, is: above). A state with more candidates than the
-  layout's sites is refused (Wonder Guard, absorb and both passes together can exceed 60);
+  modelled (step 6, every absorb case, is: above);
 * moves whose state the engine does not carry: none now (Miracle Eye's bit is read since E3-B2-10,
   ``chart_flags``); the variable-type moves are
   modelled (``TrainerAI_MoveType``, :3127, ``damage.ai_move_type`` for the AI's active and the
   player's ``moveHit``; ``Move_CalcVariableType``, battle_lib.c:8097, ``party_move_types`` for
   a bench member: Hidden Power, Natural Gift, Judgment, Weather Ball, B13-35), except Weather
   Ball where its case assigns no type (``weather_ball_refused``);
-* a state where ``AI_OnlyIneffectiveMoves`` (step 5, :3361) applies;
-* a layout with more than ``sites`` sites (never under ``KAIZO_SWITCH_SITES``, which is the
-  six-party maximum).
+* a state where ``AI_OnlyIneffectiveMoves`` (step 5, :3361) applies.
 
 Called on concrete arrays, ``switch_sites`` and ``switch_action`` raise
 ``UnsupportedSwitching`` for these. Traced (jit, vmap) they cannot raise, so every
@@ -147,12 +148,31 @@ from nuzline.engine.format import foe, format_of, party
 from nuzline.engine.ids import AbilityId, ItemId, Type
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
-SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
+SWITCH_SITES = 9  # the vanilla layout's width (roark.md 11.1); the bound below is 8
+# Its bound for every vanilla trainer the flat layout accepts (every party move in
+# ``commands.MOVE_EFFECTS``: Roark, id 246, and four one-Pokemon parties with Tackle): a draw needs
+# a move flagged SUPER_EFFECTIVE (``BattleSystem_CalcEffectiveness``, battle_lib.c:2681-2730, no
+# power test, so Stealth Rock counts): Geodude and Onix hold two (Rock), Cranidos one (Pursuit).
+# The keep draws (trainer_ai.c:3576-3592) are the active's, at most 2; the Wonder Guard draws
+# (:3315-3344) only when the active has none (:3300-3311), at most 2 + 2 from the bench; no bench
+# Pokemon can be in both passes (:3756-3804; that needs one attacking type immune on one of its
+# types and resisted on the other, battle_lib.c:2782-2805: none for Rock / Ground, and Cranidos
+# has one type) and none has an absorb ability (:3681-3708): passes at most 2 + 2. So at most
+# max(2, 4) + 4 = 8 draws; not relied on: Roark's every Pokemon has a move super effective on a
+# Bug / Ghost Shedinja, which drops the guard draws and leaves 5.
+# ``tests/ai/test_switching.py::test_vanilla_switch_sites_bound_every_accepted_trainer``
+# recomputes it from the trainer data.
 SWITCH_NONE = SWITCH_SITES  # switch_stop when no draw stops the check (vanilla layout)
-# Every candidate draw of a party of six (module docstring, ruling G-33): the Wonder Guard draws
-# (5 bench Pokemon x 4 moves) or the 4 keep draws, never both, then 5 x 4 in each of the two
-# passes: 20 + 40 = 60. A layout's switch_stop is ``sites`` when none stops.
-KAIZO_SWITCH_SITES = max(MOVES, (SLOTS - 1) * MOVES) + 2 * (SLOTS - 1) * MOVES
+# Every candidate draw of a party of six (module docstring; rulings G-33 and 19 Nov), the four
+# parts each at its bound: the Wonder Guard draws (5 bench Pokemon x 4 moves, trainer_ai.c:
+# 3315-3344), the keep draws (4 moves, :3576-3592), the absorb draws (5 bench Pokemon,
+# :3681-3708) and the two passes (5 x 4 each, :3756-3804): 20 + 4 + 5 + 40 = 69. A layout's
+# switch_stop is ``sites`` when none stops.
+_GUARD_SITES = (SLOTS - 1) * MOVES
+_KEEP_SITES = MOVES
+_ABSORB_SITES = SLOTS - 1
+_PASS_SITES = 2 * (SLOTS - 1) * MOVES
+KAIZO_SWITCH_SITES = _GUARD_SITES + _KEEP_SITES + _ABSORB_SITES + _PASS_SITES
 SWITCH_REFUSED = -1  # switch_stop of a refused layout (traced only)
 NO_SWITCH = -1  # switch_action: the AI does not switch
 REFUSED_ACTION = -2  # switch_action of a refused layout (traced only)
@@ -646,6 +666,10 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     # AI_CannotDamageWonderGuard reads battleMons[].ability (trainer_ai.c:3298).
     ability = decomp_abilities(tables, state)
     d_ability = ability[0, d]
+    # The trap gate reads ``CountAbility`` -> ``Battler_Ability`` (battle_lib.c:2896-2903,
+    # :2933-2940; :3088-3106), not the raw field: Gastro Acid (ability suppressed) on the
+    # player's active empties it, except Multitype (:3090-3093), so no trap ability gates.
+    d_trap = battler_decomp_ability(tables, state, 0)
     present = species > 0
 
     # Step 1 (:3906-3913) and step 2 (:3915-3940). VOLATILE_CONDITION_TRAPPED is Bind's
@@ -655,9 +679,9 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         (state.trapped[1] > 0)
         | (state.mean_look[1] != 0)
         | (state.ingrain[1] != 0)
-        | (d_ability == ABILITY_IDS["Shadow Tag"])
-        | (d_ability == ABILITY_IDS["Arena Trap"])
-        | ((d_ability == ABILITY_IDS["Magnet Pull"]) & steel)
+        | (d_trap == ABILITY_IDS["Shadow Tag"])
+        | (d_trap == ABILITY_IDS["Arena Trap"])
+        | ((d_trap == ABILITY_IDS["Magnet Pull"]) & steel)
     )
     bench = (jnp.arange(SLOTS) != a) & present[1] & (state.hp[1] > 0)
     gate = gate | ~jnp.any(bench)
@@ -775,7 +799,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     )
     move_refused = present[..., None] & jnp.isin(state.moves.astype(_I32), _MOVE_REFUSED_IDS)
     weather_ball = weather_ball_refused(tables, state)
-    refused = (count > sites) | only_ineffective | jnp.any(ability_refused) | jnp.any(move_refused)
+    refused = only_ineffective | jnp.any(ability_refused) | jnp.any(move_refused)
     refused = refused | weather_ball
     kinds = jnp.where(refused, jnp.asarray(SwitchSite.REFUSED, _I8), kinds)
     return _Layout(
@@ -791,7 +815,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     )
 
 
-def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> list[str]:
+def _refusals(lay: _Layout, state: BattleState, tables: Tables) -> list[str]:
     out: list[str] = []
     ability = np.asarray(decomp_abilities(tables, state))
     for side, s in zip(*np.nonzero(np.asarray(lay.ability_refused)), strict=True):
@@ -815,24 +839,19 @@ def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> l
             "switching: AI_OnlyIneffectiveMoves (trainer_ai.c:3361) applies to the AI's "
             "active Pokemon and is not implemented"
         )
-    if int(lay.count) > sites:
-        out.append(
-            f"switching: {int(lay.count)} voluntary-switch draws exceed the "
-            f"{sites} sites AiOutcome.switch_stop encodes"
-        )
     return out
 
 
 def switching_refusals(tables: Tables, state: BattleState, sites: int = SWITCH_SITES) -> list[str]:
     """Every reason the voluntary-switch layout of this (concrete) state is refused under
     a layout of ``sites`` sites, one human-readable line each; empty when it is supported."""
-    return _refusals(_layout(tables, state, sites), state, tables, sites)
+    return _refusals(_layout(tables, state, sites), state, tables)
 
 
 def _checked_layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     lay = _layout(tables, state, sites)
     if not isinstance(lay.refused, jax.core.Tracer) and bool(lay.refused):
-        raise UnsupportedSwitching("; ".join(_refusals(lay, state, tables, sites)))
+        raise UnsupportedSwitching("; ".join(_refusals(lay, state, tables)))
     return lay
 
 

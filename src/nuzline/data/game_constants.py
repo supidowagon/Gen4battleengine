@@ -918,6 +918,9 @@ EXEMPT: dict[str, str] = {
     # Move_CanBeMimicked's sCannotMetronomeMoves prefix (battle_lib.c:7152-7158, :7182-7192), by id
     # in both games (E1 trial batch, G-68).
     "nuzline.engine.ids.MIMIC_FORBIDDEN": _CODE_MOVE_IDS,
+    # BtlCmd_TrySketch's Struggle, Sketch and Chatter tests on moveSketched
+    # (battle_script.c:4848-4850), by id in both games (I-3).
+    "nuzline.engine.ids.SKETCH_FORBIDDEN": _CODE_MOVE_IDS,
     # BATTLE_EFFECT_TRANSFORM and _COPY_MOVE_FOR_BATTLE (G-68, G-69): the AI's copier moves.
     "nuzline.ai.layout.COPIER_EFFECTS": _KEYED_BY_EFFECT,
     # Chatter's effectChance per Chatot cry parameter (battle_script.c:8413-8426), G-70: engine

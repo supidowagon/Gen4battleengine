@@ -1,0 +1,16 @@
+# Tests the local gate (tools/ops/ramgate.py) refuses on the PC whatever they import: they run JAX
+# compiles, or collect engine test modules, without importing nuzline.engine in their own module.
+# Line: <test file or node id> <reason>. The id and every id under it ("::", "[" or "/") count.
+# Manager ruling of 22 Nov 2026 on review a217982f, SHOULD 8. Send them to the quick lane.
+
+tests/test_spike_step.py jit-of-benchmarks.spike_step
+tests/test_jaxcache.py cached-jax-exports
+tests/tools/test_ramgate_collect.py collects-the-engine-test-modules
+
+# ROM + engine tests (rom_weights.txt `engine-test-pod`): they need the ROM, which never leaves the PC, so the
+# quick lane cannot run them either. Never in a merge-gate ROM-only run. Running them on the PC at a split close is against the owner's no-engine-tests order as it stands: the managing session puts that question to the owner at the first split close (manager ruling, 22 Nov 2026); there is no standing slot.
+tests/kaizo/test_line_roark.py::test_user_line_reproduces_roark_odds rom-and-engine-split-close-owner-question
+tests/kaizo/test_roark_ai_audit.py::test_roark_ai_against_the_pool rom-and-engine-split-close-owner-question
+tests/kaizo/test_roark_widths.py::test_roark_pairs_fit_the_width_cap rom-and-engine-split-close-owner-question
+tests/test_cli.py::test_kaizo_roark_coverage_on_the_saves_is_exact rom-and-engine-split-close-owner-question
+tests/test_players_benchmark.py::test_scoreboard_on_roark rom-and-engine-split-close-owner-question
