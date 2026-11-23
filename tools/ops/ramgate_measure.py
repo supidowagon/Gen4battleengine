@@ -39,7 +39,7 @@ _spec.loader.exec_module(rg)
 START_FREE_GB = 20.0  # free RAM before each file; fixed, not tied to the gate's defaults
 POLL_S = 0.5
 PEAK_KILLED_WEIGHT = 20
-UNMEASURED_WEIGHT = 14  # a run that did not run every id: one loaded step, as rom_weights.txt
+UNMEASURED_WEIGHT = int(rg.ROM_ENGINE_UNMEASURED_GB)  # a run that did not run every id: one loaded step (14)
 
 
 def rss_bytes(pid: int) -> int:
