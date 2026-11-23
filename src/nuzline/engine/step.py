@@ -93,6 +93,7 @@ from nuzline.engine.actions import (
     locked_slot,
     move_imprisoned,
     replacement_bench,
+    sealed_mask,
 )
 from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
@@ -281,6 +282,8 @@ from nuzline.engine.order import (
     is_item,
     is_switch,
     me_first_copy,
+    pinch_divisor,
+    pinch_limit,
     player_second,
     qc_recycle,
     qc_transfer,
@@ -572,6 +575,14 @@ def _set_last_move(state: BattleState, side, move, cond) -> BattleState:
     """``movePrevByBattler[side] = move`` where ``cond`` (``BattleState.last_move``)."""
     value = jnp.where(cond, move, state.last_move[side]).astype(state.last_move.dtype)
     return state._replace(last_move=state.last_move.at[side].set(value))
+
+
+def _set_sketch(state: BattleState, side, move, cond) -> BattleState:
+    """``moveSketched[side] = move`` where ``cond`` (``BattleState.sketch_move``): UpdateMoveBuffers
+    writes it when the attack message showed (battle_controller_player.c:3952-3954) and keeps the
+    old value otherwise (``movePrevByBattler`` would become MOVE_NONE, :3945-3949)."""
+    value = jnp.where(cond, move, state.sketch_move[side]).astype(state.sketch_move.dtype)
+    return state._replace(sketch_move=state.sketch_move.at[side].set(value))
 
 
 def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
@@ -982,6 +993,7 @@ def _empty_events(fmt: Format) -> dict:
             "move_failed",
             "disabled_at_move",
             "sealed_at_move",
+            "seal_mask_at_move",
             "encored_at_move",
             "gravity_at_move",
             *EVENT_FLAGS,
@@ -1247,6 +1259,10 @@ def _use_move(
     # Likewise a battler of the other side imprisoning (the Sleep Talk set's other change within
     # the turn, ruling B7-13).
     sealed_at_move = ready & imprisoning_foe(state, side)
+    # The battler's sealed slots when its action starts (``actions.sealed_mask``): a faster
+    # imprisoning foe's Sketch changes them while the bit stays (battle_script.c:4868; the event
+    # the Sketch call variants split on, enumerate.sketched_events).
+    seal_mask_at_move = jnp.where(ready, sealed_mask(state, side), 0)
     # Gravity is up when the action starts: a faster foe's Gravity this turn changes the
     # invokers' sets (G-67), the event their Gravity call variants split on.
     gravity_at_move = ready & fcm.gravity_on(state)
@@ -3206,6 +3222,15 @@ def _use_move(
     prev = jnp.where(ready_t, jnp.where(shown_t, move, 0), state.move_prev)
     prev = jnp.where(tail, prev, state.move_prev)
     state = state._replace(move_prev=prev.astype(state.move_prev.dtype))
+    # UpdateMoveBuffers' moveSketched (bcp.c:3952-3954), I-3: moveTemp where the attack message
+    # showed, outside the REUSE_LAST_MOVE block and kept otherwise (``_set_sketch``). The same
+    # battler and move as ``movePrevByBattler``; Pursuit's pre-switch hit never reaches it. A
+    # Magic Coat reflection: LoopSpreadMoves swaps the attacker back to the mover
+    # (``magicCoatMon``, bcp.c:3831-3835) before UpdateMoveBuffers, so the mover records its own
+    # move (this pass) and the holder's reflected pass writes nothing (``ready_t`` is False
+    # there); the holder's moveSketched stays Magic Coat from its own action. Sketch has no
+    # MOVE_FLAG_MAGIC_COAT (res/moves/sketch/data.json:21), so it is never reflected.
+    state = _set_sketch(state, side, move, ready_t & tail & shown_t)
     # UpdateFlagsWhenHit's conversion2 fields (bcp.c:4509-4533, E3-B2-3) for the foe defender
     # (``record``): where SYSCTL_MOVE_SUCCEEDED is set and the move has no MOVE_STATUS_NO_EFFECTS
     # (``succeeded`` and ``worked``: a hit that connected; the tail modes' U-turn landed) and its
@@ -3305,6 +3330,7 @@ def _use_move(
         "move_failed": move_failed,
         "disabled_at_move": disabled_at_move,
         "sealed_at_move": sealed_at_move,
+        "seal_mask_at_move": seal_mask_at_move,
         "encored_at_move": encored_at_move,
         "gravity_at_move": gravity_at_move,
     }
@@ -5841,11 +5867,21 @@ def step_events(
     all_halted = halted | bc_pause
     # The faint replacement's Starf Berry draw, kept for ``replace`` where it can be read; 0 at a
     # pause and elsewhere, so states merge (F-10).
-    # Stored modulo 5: a replacement's check always meets five stats below +6 (a fresh battler;
-    # at most an Intimidate or Download stage before it), so states that read alike merge.
-    # The kept draw sits in the queue's entry 0 with ``starf_taken`` 0 (F-O3).
+    # Stored modulo 5 where the check meets five stats below +6, so states that read alike merge
+    # (the law gives that cell five values, ``enumerate._starf_reads``): a replacement always (a
+    # fresh battler; at most an Intimidate or Download stage before it), and an active holder
+    # (``starf_kept_active``) whose five stats are all at +4 or below now. Before its eat at the
+    # next ShowBattleMon only the switch-in states run (battle_lib.c:3711-4165): Intimidate only
+    # lowers, and an armed Trace copying a newcomer's Download gives one +1 (downloadAnnounced,
+    # :3838), so +5 at most. An active holder with a stat at +5 or +6 keeps the whole draw: its
+    # count can be below 5 (the law's 60 values). The kept draw sits in the queue's entry 0 with
+    # ``starf_taken`` 0 (F-O3).
     kept = starf_kept(tables, s) & ~all_halted
-    replacement_draw = jnp.asarray(outcome.starf)[:, 1].astype(_I32) % len(STARF_STATS)
+    draw1 = jnp.asarray(outcome.starf)[:, 1].astype(_I32)
+    five = jnp.asarray([int(x) for x in STARF_STATS], _I32)
+    high = jnp.any(s.stages[:, five].astype(_I32) > STAGE_MAX - 2, axis=1)
+    whole = starf_kept_active(tables, s) & high
+    replacement_draw = jnp.where(whole, draw1, draw1 % len(STARF_STATS))
     entry0 = jnp.arange(len(STARF_QUEUE))[None, :] == 0
     roll = jnp.where(kept[:, None] & entry0, replacement_draw[:, None], 0)
     s = s._replace(
@@ -5867,8 +5903,68 @@ def starf_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     rows = party(fmt, jnp.arange(fmt.B))
     holds, pinched = starf_holders(tables, state)
     can = pinched[rows] | (holds[rows] & entry_damage_up(state)[:, None])
-    bench = jnp.arange(state.hp.shape[1])[None, :] != state.active[:, None]
-    return (needs_replacement(state) != 0) & jnp.any(can & bench, axis=1)
+    # ``actions.replacement_bench``: at B = 4 a shared party's partner active slot is not on it
+    # (ReplaceFainted, bcp.c:4096-4107), as in the law's ``rep``.
+    bench = jnp.stack([replacement_bench(state, b) for b in range(fmt.B)])
+    benched = (needs_replacement(state) != 0) & jnp.any(can & bench, axis=1)
+    return benched | starf_kept_active(tables, state)
+
+
+def starf_kept_active(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the battler's active Pokemon holds a Starf Berry it can eat, at its pinch,
+    while a faint replacement is pending (``needs_replacement``) or a newcomer's switch-in states
+    wait (``entry_pending``), and the battle goes on. A Future Sight hit (SIDE_COND_CHECK_STATE_
+    FUTURE_SIGHT, bcp.c:1758-1783) comes after the holder's MON_COND_CHECK_STATE_ITEM_CONDITION
+    (bcp.c:1283, :1699) and subscript_future_sight_damage.s has no held-item check, so the holder
+    can stand at its pinch with its berry at TurnEnd. ``_turn_start_items`` then eats it with the
+    turn's queue; with a replacement pending, the next ShowBattleMon's
+    SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (bcp.c:256, battle_lib.c:4151-4165, every battler)
+    eats it first: in ``replace`` (``hooks.switch_in_effects``' ``after_damage_items`` of the
+    foe) or ``switch_in.show_battle_mon4``. That check draws ``RandNext() % 5``
+    (battle_lib.c:5273-5294), the replacement's draw (``Outcome.starf[:, 1]``), kept: modulo 5
+    where its five stats are all at +4 or below, whole where one is at +5 or +6 (``step_events``).
+
+    Only a holder that can eat keeps it, as the law's ``standing`` reads: its item as
+    ``Battler_HeldItem`` gives it (``state.held_item``: no Klutz, no Embargo, lib.c:5352-5363,
+    read by TriggerHeldItemOnStatus at :4970) is the Starf Berry, and one of its five stats is below +6 (lib.c:5281-5286).
+    A holder with all five at +6 that a newcomer's Intimidate lowers before the check eats with
+    one stat below +6: count 1, every draw the same, so the 0 kept is exact.
+
+    Not modelled: Liquid Ooze (no ``AbilityId`` member), a second way to stand at the pinch
+    with the berry at TurnEnd: a slower seeded battler's Liquid Ooze hurts the seeder after its
+    own ITEM_CONDITION (battler-major MON_COND loop, bcp.c:1302-1310, :1720-1724;
+    subscript_leech_seed_effect.s:23, :41-43, UPDATE_HP with no item check). Add it here and in
+    the law's ``standing`` with the mechanic."""
+    fmt = format_of(state)
+    rows = party(fmt, jnp.arange(fmt.B))
+    holds, _ = starf_holders(tables, state)
+    waiting = jnp.any(needs_replacement(state) != 0) | jnp.any(state.entry_pending != 0)
+    # The pinch test with the holder's effective ability: TriggerHeldItemOnStatus halves the param
+    # for ``Battler_Ability`` Gluttony (battle_lib.c:5273-5278), none under Gastro Acid
+    # (:3088-3093), as the eat's ``order.pinch_divisor`` (review 4, must 1). ``starf_holders``'
+    # raw-ability test stays right for bench Pokemon only (the suppression bit is the
+    # BattleMon's).
+    eats = jnp.stack(
+        [
+            (tables.item_effect[held_item(state, b)] == ItemId.STARF_BERRY)
+            & (starf_count(state, b) > 0)
+            & (
+                state.hp[rows[b], state.active[b]].astype(_I32)
+                <= pinch_limit(
+                    state.max_hp[rows[b], state.active[b]],
+                    pinch_divisor(
+                        tables,
+                        state,
+                        b,
+                        state.active[b],
+                        state.item[rows[b], state.active[b]],
+                    ),
+                )
+            )
+            for b in range(fmt.B)
+        ]
+    )
+    return (state.over == 0) & waiting & holds[rows, state.active] & eats
 
 
 def canonical_target(state: BattleState) -> BattleState:

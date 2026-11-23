@@ -874,6 +874,11 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
 
 ### 5.26 E1 trial batch: Mimic (G-68), Transform (G-69), Chatter (G-70)
 
+- LEARN_MOVE_PERMANENT (95, Sketch, I-3): no Basic or Expert entry and no Tag Strategy entry (a
+  Normal status move: `TagStrategy_Main` -> `FlagMoveDamageScore` -> `AI_NO_COMPARISON_MADE` ->
+  `TagStrategy_CheckSpecialScoring`, `script.s:6641-6642`, :6733-6752, matches none of its moves or
+  types and adds nothing). It is in `KAIZO_TRANSCRIBED` for the foe that Transforms into a Sketch
+  holder (`policy.opponent_move_refusals`); no trainer Pokemon knows Sketch.
 - COPY_MOVE_FOR_BATTLE (82, Mimic, G-68): no Basic or Expert entry and no other `script.s` mention;
   the generic paths score a status move of power 0. The AI's own copied move is scored by the
   copied move's effect label (`layout.fight_effects`): a fight with a Mimic or Transform user
@@ -1027,8 +1032,8 @@ out (`nuzline.ai.outcome`; `AiLayout.per_slot_sites`).
 - `ability_guess`: 0 and unread (the flat layout's scalar guess; every per-slot guess is a
   read of `script_rolls`).
 - `tiebreak`: `RandNext % 12`, as roark.md 8.4.
-- `switch_stop`: as roark.md 8.5, over `KAIZO.switch_sites` = 60 sites, every switch draw
-  of a party of six (section 11; 44 until E1 ruling G-33); 60 means no site stops.
+- `switch_stop`: as roark.md 8.5, over `KAIZO.switch_sites` = 69 sites, every switch draw
+  of a party of six (section 11; 44 until E1 ruling G-33, 60 until batch I-1a); 69 means no site stops.
 
 **8.2 Reads keyed by order on the path (E1 Ruling R4; replaces K3c's per-effect site table and
 batch 1's guess columns).** Every random read of a slot's scoring is one
@@ -1184,7 +1189,7 @@ and the move pick; the switch categorical is compared with itself. The switch ha
 independent oracle and tests instead (11.1, "The loose check"): `_loose_switch`, which walks
 `trainer_ai.c:3906-3987` with every read its own draw on states with at most 12 reads, and
 `test_six_bench_layout_fits`, which reaches the 44 keep and pass sites against a closed form
-(`test_kaizo_switch_sites_reach_sixty` reaches all 60 with Wonder Guard, ruling G-33).
+(`test_kaizo_switch_sites_reach_sixty` reaches 60 with Wonder Guard, ruling G-33; `test_kaizo_switch_sites_reach_sixty_five` adds the absorb draws, batch I-1a).
 
 **8.7 RNG read order (for K3d's trace replay).** Every read is one `BattleSystem_RandNext`
 (`battle_system.c:1308`), made in this order in one decision. The reads marked *merged* have
@@ -1371,7 +1376,7 @@ and their helpers as relocated calls: `TrainerAI_ShouldSwitch` (:356), `AI_OnlyI
 `BattleSystem_CalcEffectiveness` (:601). The rules are roark.md 11.1 and 11.2. What changes is the
 party: Kaizo Roark has six Pokemon, so five can be on the bench.
 
-### 11.1 The switch sites (`KAIZO.switch_sites` = 60)
+### 11.1 The switch sites (`KAIZO.switch_sites` = 69)
 
 The draws that can change the result are those of roark.md 11.1:
 
@@ -1390,8 +1395,8 @@ The draws that can change the result are those of roark.md 11.1:
 So the keep and pass draws number at most `4 + 2 x 5 x 4 = 44`. Against a player's Wonder Guard,
 `AI_CannotDamageWonderGuard` (`:3286-3348`, E1 ruling G-23) adds one draw per (bench Pokemon,
 super-effective move), at most 5 x 4, but only when the active has no super-effective move, so
-never beside a keep draw (E1 ruling G-33): `KAIZO.switch_sites = max(4, 5 x 4) + 2 x 5 x 4 = 60`
-(`switching.KAIZO_SWITCH_SITES`; 44 before G-33), and vanilla
+never beside a keep draw (E1 ruling G-33): `max(4, 5 x 4) + 2 x 5 x 4 = 60` (44 before G-33); the absorb draws of `AI_HasAbsorbAbilityInParty` (`:3681-3708`, at most 5) bring it to 65, and
+`KAIZO.switch_sites = 20 + 4 + 5 + 40 = 69` (`switching.KAIZO_SWITCH_SITES`: guard, keep, absorb and passes, each at its bound), and vanilla
 keeps `SWITCH_SITES` = 9 (roark.md 11.1). One Pokemon can be in both passes: the two bits
 are not exclusive. `UpateMoveStatusForTypeMul` (`battle_lib.c:2781`) sets INEFFECTIVE on an
 immune chart row and then NOT_VERY_EFFECTIVE on a later resisted row, so Ground against
@@ -1417,9 +1422,9 @@ change. The only vanilla limit was the 9 sites `AiOutcome.switch_stop` encodes.
 `switch_action(..., sites)` and `switching_refusals(..., sites)` take it (default 9, the
 vanilla count, so vanilla is unchanged). `sample_ai_outcome`, `enumerate_ai_outcomes`
 (per-slot), `policy.maybe_switch`, `_policy`, `_distribution`, `ai_refusals` and the loose
-oracle pass `layout.switch_sites`. `switch_stop = 60` means no site stops under Kaizo
-(`SWITCH_NONE`, 9, stays the vanilla value). The "more draws than sites" refusal cannot fire
-under Kaizo, since 60 is every candidate a party of six has.
+oracle pass `layout.switch_sites`. `switch_stop = 69` means no site stops under Kaizo
+(`SWITCH_NONE`, 9, stays the vanilla value). There is no "more draws than sites" refusal: 69 is the
+bound of every candidate a party of six has (batch I-1a deleted it).
 
 **Merged draws.** `AI_HasAbsorbAbilityInParty`'s `RandNext() % 3` (`:3651`) is read whenever
 the active has a super-effective move (`AI_HasSuperEffectiveMove(..., TRUE)` reads nothing,

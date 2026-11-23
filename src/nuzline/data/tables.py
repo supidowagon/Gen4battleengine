@@ -23,7 +23,8 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-# 44: E3 batch 3 GT-2: trainers carry gauntlet_facts (the group orders, gaps, escape, partner) in place of
+# 48: E3 batch 3 merged main c479effc (main's 44: Sketch (move effect 95) is EffectId.SKETCH 143, I-3; E3's 44-47 below).
+# 44 (E3): E3 batch 3 GT-2: trainers carry gauntlet_facts (the group orders, gaps, escape, partner) in place of
 # gauntlet_rules; fight ids from the orders (Elite Four + Champion joins in batch 4, B4-19).
 # 47: E3 B3 fix 3 C6: GauntletFacts carry field_moves, field_moves_source and the field-move cases
 # (tables built before them are refused); 46: E3 batch 3 after main fd3c1fcc: GauntletFacts carry fight_headers and live_next (tables built
@@ -34,7 +35,7 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 # trainers carry fog_headers (field Defog, G-15); 36: Air Lock = ability id 96; 35: batch F's
 # abilities at ids 91-95; 34: E3's trick_room_rearm; 33: gravity_rearm with E2 batch 13's fling /
 # Natural Gift.
-MANIFEST_VERSION = 47
+MANIFEST_VERSION = 48
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:
