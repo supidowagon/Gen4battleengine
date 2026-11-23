@@ -31,6 +31,7 @@ edited only where a test needs the AI to be unsure which of two abilities a defe
 from __future__ import annotations
 
 import functools
+from fractions import Fraction
 
 import jax
 import jax.numpy as jnp
@@ -60,6 +61,7 @@ from nuzline.engine.format import DOUBLES, MULTI, TWO_TRAINERS, format_of
 from nuzline.engine.ids import ABILITY_DECOMP_IDS, Stat, Status, Type
 from nuzline.engine.state import ai_record_clear
 from tests.ai.fixtures import outcome
+from tests.ai.test_commands_four import _py_rank_laws
 from tests.engine.d2_states import four, with_hp, with_moves
 
 NORMAL, FLYING, POISON, GROUND, ROCK = (int(Type.NORMAL), int(Type.FLYING), int(Type.POISON),
@@ -273,6 +275,13 @@ def w(tables, names):
 @pytest.fixture(scope="module")
 def w_multi(tables, names):
     return _World(tables, names, MULTI, 2)  # the AI partner: its partner is the player's Pokemon
+
+
+@pytest.fixture(scope="module")
+def w_multi_ai(tables, names):
+    return _World(
+        tables, names, MULTI, 1
+    )  # a multi fight's AI trainer: partner 3 the other trainer
 
 
 @pytest.fixture(scope="module")
@@ -625,6 +634,111 @@ def test_future_sight_no_partner_effect(w):
     _check(
         t, w.moves(w.attack(slow, "Future Sight"), 3, "Hail", "Psych Up"), 100, case="other moves"
     )
+
+
+def _future_sight_law(rank, a=1, ap=3):
+    """``{score: P}`` of the Future Sight block (script.s:7150-7193, A-8 2.16) for per-battler rank laws
+    ``rank`` (``{battler: [P(rank 0..3)]}``, one fresh sort per ``LoadBattlerSpeedRank``): the attacker's
+    rank r, the partner's q, and (past ``R@7173`` / ``R@7181`` / ``R@7187``, 128) its q' are independent
+    draws (A-10 2.4), so the path law is the product of the call laws."""
+    r, q = rank[a], rank[ap]
+    minus3 = (
+        r[3]
+        + r[2] * (q[0] + q[1] + (q[2] + q[3]) * Fraction(1, 2) * q[2])
+        + r[1] * (q[0] + (1 - q[0]) * Fraction(1, 2) * q[1])
+        + r[0] * Fraction(1, 2) * q[0]
+    )
+    law = {97: float(minus3), 100: float(1 - minus3)}
+    return {score: p for score, p in law.items() if p > 0}
+
+
+def _call_laws_are_the_brute_force(t, s, speeds):
+    """Every battler's ``speed_rank_law`` equals the decomp's draw tree (A-10 2.2-2.3); returns it."""
+    want = _py_rank_laws(speeds, (1, 1, 1, 1))
+    for b in range(4):
+        got = np.asarray(_speed_rank_law(t, s, b), np.float64)
+        np.testing.assert_allclose(got, [float(x) for x in want[b]], atol=0, rtol=0, err_msg=str(b))
+    return want
+
+
+_speed_rank_law = jax.jit(c.speed_rank_law)
+
+
+def test_speed_rank_calls_independent(w):
+    # A-10 2.4, 2.10 item 4: a four-way tie on the Future Sight path (s:7162-7189). Each of the path's
+    # up to three LoadBattlerSpeedRank calls is a fresh sort with fresh tie draws, and nothing between
+    # them changes what a compare reads: the path law over the three calls equals the product of the
+    # call laws, not a law of one shared sort.
+    s = w.moves(
+        w.attack(_speeds(w.s, (50, 50, 50, 50)), "Future Sight"), 3, "Future Sight", "Tackle"
+    )
+    want = _call_laws_are_the_brute_force(w.t, s, (50, 50, 50, 50))
+    # the four-way tie: the attacker and its partner each reach every rank
+    assert all(x > 0 for b in (1, 3) for x in want[b])
+    law = _future_sight_law(want)
+    assert set(law) == {97, 100}
+    _check(w.t, s, law, case="four-way tie")
+
+
+# --- A-10 2.8, 2.10 items 5-6: copied moves ---------------------------------------------------
+
+
+def test_copier_ditto_future_sight(w_multi_ai, names):
+    # Fight 372 + 446 / p609 (data/intermediate_kaizo/trainers.json; multi): trainer 372's Ditto (battler 1)
+    # Transformed into the player's Future Sight user (battler 0: BtlCmd_Transform copies species, Speed,
+    # moves, types, battle_script.c:5330-5373), so its BattleMon holds Future Sight and the AI scores
+    # battleMons[attacker].moves[slot] (trainer_ai.c:493); 446's Slowking (battler 3) knows Future Sight.
+    # Ditto and the copied battler share Speed 90, Slowking too (Quick Powder needs species Ditto,
+    # battle_lib.c:1252-1253, and the Transformed Ditto is not: the three tie and every call draws).
+    # The copier slot takes A-8 2.16: the same law as a plain Future Sight user.
+    from tests.ai.test_commands_four import _with_transform
+
+    w = w_multi_ai
+    speeds = (90, 90, 50, 90)
+    s = _speeds(w.s, speeds)
+    for b, species in ((1, "Ditto"), (3, "Slowking")):
+        p, slot = _at(s, b)
+        s = s._replace(species=s.species.at[p, slot].set(names.species(species)))
+    s = _types(s, 1, NORMAL, NORMAL)
+    s = w.moves(s, 3, "Future Sight", "Tackle")
+    # before Transforming: Transform (a Normal status move) is slot 0, the block is not reached
+    _check(w.t, w.attack(s, "Transform"), 100, reads=0, case="Ditto before Transform")
+    # the player's Future Sight user (with a comparator), and Ditto's copy of it
+    s = w.moves(s, 0, "Future Sight", _COMPARATOR)
+    s = _with_transform(s, names, 1, ("Future Sight", _COMPARATOR), ("Transform",), [10, 0, 0, 0])
+    assert bool(s.transformed[1]) and int(s.moves[_at(s, 1)[0], _at(s, 1)[1], 0]) == names.move(
+        "Future Sight"
+    )
+    want = _call_laws_are_the_brute_force(w.t, s, speeds)
+    assert all(x > 0 for b in (1, 3) for x in want[b][:2])  # a tie: each reaches ranks 0 and 1
+    _check(w.t, s, _future_sight_law(want), case="Ditto's slot = A-8 2.16")
+
+
+def test_copier_mr_mime_future_sight(w_multi_ai, names):
+    # Fight 454 + 455 / p612 (flags 0x7ff): trainer 455's Mr. Mime (battler 1) Mimicked the player's
+    # Future Sight into its first Mimic slot (BtlCmd_Mimic writes the defender's last move there,
+    # battle_script.c:4476-4524; its party Pokemon keeps Mimic, :4512); 454's Xatu (battler 3) knows
+    # Future Sight. Both at Speed 70 below the target (100) and above its partner (50): they share
+    # ranks 1 and 2. The Mimic slot takes A-8 2.16 like any Future Sight slot. The party's Explosion is
+    # the comparator (``_COMPARATOR``) in the last slot, in place of Endure.
+    from tests.ai.test_commands_four import _with_mimic
+
+    w = w_multi_ai
+    speeds = (100, 70, 50, 70)
+    s = _speeds(w.s, speeds)
+    for b, species in ((1, "Mr. Mime"), (3, "Xatu")):
+        p, slot = _at(s, b)
+        s = s._replace(species=s.species.at[p, slot].set(names.species(species)))
+    s = _types(s, 1, int(Type.PSYCHIC), int(Type.PSYCHIC))
+    s = w.moves(s, 3, "Future Sight", "Tackle")
+    s = w.moves(s, 1, "Mimic", "Copycat", "Psychic", _COMPARATOR)
+    # before Mimicking: slot 0 is Mimic (a status move): the block is not reached
+    _check(w.t, s, 100, reads=0, case="Mr. Mime before Mimic")
+    s = _with_mimic(s, names, 1, 0, "Future Sight", "Mimic", 10)
+    assert int(s.moves[_at(s, 1)[0], _at(s, 1)[1], 0]) == names.move("Future Sight")
+    want = _call_laws_are_the_brute_force(w.t, s, speeds)
+    assert all(x > 0 for b in (1, 3) for x in want[b][1:3])  # the tied pair: ranks 1 and 2
+    _check(w.t, s, _future_sight_law(want), case="Mimic slot = A-8 2.16")
 
 
 # --- 2.18-2.20 spread tables --------------------------------------------------------------------
