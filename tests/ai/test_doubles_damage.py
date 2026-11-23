@@ -149,11 +149,24 @@ def test_multi_partner_sweep(w_multi):
 
 
 def _plain(w):
-    """Every battler knows Tackle only: no spread move anywhere."""
+    """Every party member of every party knows Tackle only (``DEFAULT_MOVES`` hold Earthquake), and no
+    battler has a last move: no spread move anywhere."""
     s = w.s
-    for b in range(4):
-        s = _moves(w, s, b, "Tackle")
-    return s
+    tackle = jnp.zeros_like(s.moves).at[..., 0].set(w.n.move("Tackle"))
+    return s._replace(moves=tackle, last_move=jnp.zeros_like(s.last_move))
+
+
+def _bench(w, s, b, move):
+    """A bench member of battler ``b``'s party (the first slot no battler holds) knows ``move``."""
+    p = w.fmt.party_of[b]
+    held = {int(s.active[o]) for o in range(4) if w.fmt.party_of[o] == p}
+    slot = min(set(range(s.moves.shape[1])) - held)
+    return s._replace(moves=s.moves.at[p, slot, 0].set(w.n.move(move)))
+
+
+def _last(w, s, b, move):
+    """Battler ``b``'s last move (``movePrevByBattler``, ``BattleState.last_move``) is ``move``."""
+    return s._replace(last_move=s.last_move.at[b].set(w.n.move(move)))
 
 
 @pytest.mark.fullset
@@ -171,10 +184,25 @@ def test_spread_refused_until_d45_8(w, names):
     # a RANGE_ADJACENT_OPPONENTS move, a side of two living battlers
     assert bool(policy._doubles_damage(t, _moves(w, plain, 1, "Rock Slide")))
     assert bool(policy._doubles_damage(t, _moves(w, plain, 3, "Razor Leaf")))
-    # a status move, or a move of the player's side only: no factor
+    # IfPartyMemberDealsMoreDamage (trainer_ai.c:2142-2165) estimates the AI party's bench members'
+    # moves as the active: a bench Surf or Rock Slide of an AI battler's party takes the factor
+    for b in (1, 3):
+        for move in ("Surf", "Rock Slide"):
+            assert bool(policy._doubles_damage(t, _bench(w, plain, b, move))), (b, move)
+    # IfBattlerDealsMoreDamage (:2228-2237) estimates the defender's last move, any battler's
+    for b in range(4):
+        for move in ("Earthquake", "Rock Slide"):
+            assert bool(policy._doubles_damage(t, _last(w, plain, b, move))), (b, move)
+    # Explosion (HALVE_DEFENSE, outside the damaging test :2823-2828) as a last move: no damaging
+    # test there, it reaches CalcMoveDamage
+    assert bool(policy._doubles_damage(t, _last(w, plain, 0, "Explosion")))
+    # a status move, or a player move that no AI estimate reaches (an active move of the player's side
+    # that is not its last move, a bench move of the player's party): no factor
     assert not bool(policy._doubles_damage(t, _moves(w, plain, 1, "Growl", "Protect")))
+    assert not bool(policy._doubles_damage(t, _last(w, plain, 0, "Growl")))
     assert not bool(policy._doubles_damage(t, _moves(w, plain, 0, "Earthquake")))
     assert not bool(policy._doubles_damage(t, _moves(w, plain, 2, "Rock Slide")))
+    assert not bool(policy._doubles_damage(t, _bench(w, plain, 0, "Earthquake")))
     # ALL_ADJACENT needs a third living battler: with two down it does not apply
     quake = _moves(w, plain, 1, "Earthquake")
     assert bool(policy._doubles_damage(t, _faint(quake, 2)))

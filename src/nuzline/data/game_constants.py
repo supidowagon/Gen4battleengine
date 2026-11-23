@@ -342,7 +342,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Huge Power": 37,
             "Lightningrod": 31,
             "Storm Drain": 114,
-            # E4-A W2: TagStrategy_PartnerSkillSwap_GiveAccuracyIncrease (script.s:7491-7493).
+            # E4-A W2: TagStrategy_PartnerSkillSwap_GiveAccuracyIncrease (script.s:7489-7490).
             "Compoundeyes": 14,
         },
     ),
@@ -675,7 +675,7 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
     # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
     Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
-    # TagStrategy_Partner's IfHeldItemEqualTo items (script.s:7536-7537, :7573, :7603-7604).
+    # TagStrategy_Partner's IfHeldItemEqualTo items (script.s:7537-7538, :7576, :7610-7611).
     Constant("nuzline.ai.commands.ITEM_TOXIC_ORB", "item", 272, "Toxic Orb", _E),
     Constant("nuzline.ai.commands.ITEM_FLAME_ORB", "item", 273, "Flame Orb", _E),
     Constant("nuzline.ai.commands.ITEM_PERSIM_BERRY", "item", 156, "Persim Berry", _E),

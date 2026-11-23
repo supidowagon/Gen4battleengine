@@ -93,8 +93,8 @@ Rules sheet `_scratch/e4/rules/A-8.md` sections 1, 2, 5. One scoring is one atta
 enemy target `d`; the four script battlers are `a`, `d`, `a ^ 2`, `d ^ 2` (`ai:2765-2782`, `commands._battler`).
 No block here changes with the code at B = 2: the blocks were written over the partner arguments, which at B = 2
 name the zeroed battlers 2 and 3 (table above) and at B = 4 name the real ones. Tests: `tests/ai/test_tag_doubles.py`
-(the scoring is run directly on test-built B = 4 contexts; `CheckIfHighestDamageWithPartner` is pinned to NOT_HIGHEST
-there, its B = 4 sweep is A-7's).
+(the scoring is run directly on test-built B = 4 contexts; `CheckIfHighestDamageWithPartner` runs with its B = 4
+sweep, A-7's, and the attacker's comparator move keeps slot 0 NOT_HIGHEST, the module docstring).
 
 ## What each partner argument reads at B = 4
 

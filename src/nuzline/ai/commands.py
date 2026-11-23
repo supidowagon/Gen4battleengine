@@ -1173,7 +1173,7 @@ ABILITY_IDS = {
     "Huge Power": 37,
     "Lightningrod": 31,
     "Storm Drain": 114,
-    # E4-A W2, TagStrategy_Partner (script.s:7339-7694): Skill Swap's accuracy abilities (:7491-7493).
+    # E4-A W2, TagStrategy_Partner (script.s:7339-7694): Skill Swap's accuracy abilities (:7489-7490).
     "Compoundeyes": 14,
 }
 MOVE_IDS = {
@@ -1267,8 +1267,8 @@ MOVE_IDS = {
 # game's name (data.game_constants).
 MOVE_TRICK = 271
 MOVE_SWITCHEROO = 415
-# TagStrategy_PartnerWillOWisp / _PartnerPoisonStatus / _PartnerSwagger (script.s:7536-7537, :7573,
-# :7603-7604): IfHeldItemEqualTo's items; generated/items.txt (line - 1).
+# TagStrategy_PartnerWillOWisp / _PartnerPoisonStatus / _PartnerSwagger (script.s:7537-7538, :7576,
+# :7610-7611): IfHeldItemEqualTo's items; generated/items.txt (line - 1).
 ITEM_TOXIC_ORB = 272
 ITEM_FLAME_ORB = 273
 ITEM_PERSIM_BERRY = 156
@@ -2425,19 +2425,19 @@ def check_if_highest_damage_with_partner(ctx: AiContext, use_damage_roll: int) -
     battler 2 is the player's battler 0. The law is the B = 2 one with the second factor over
     the partner's four estimates (``D'_i``); one read at the result compare, both sweeps' draws
     folded into it (the sweeps' draws are independent, so the exact law is the product)."""
-    four = format_of(ctx.state).B == 4
     if use_damage_roll == ROLL_FOR_DAMAGE:
         rolls = ctx.outcome.sim_roll
         damage = _slot_damage(ctx.tables, seen_state(ctx), rolls, ctx.attacker, ctx.defender)
     else:
         rolls = SIM_ROLL_MAX
         damage = seen_damage(ctx)
-    if four:
-        # sweep 2: the partner's moves (:2414, :2398-2411), in the speeds ``seen_state`` records
-        partner = int(ctx.attacker) ^ 2
-        damage2 = _slot_damage(ctx.tables, seen_state(ctx), rolls, partner, ctx.defender)
+    # sweep 2: GetPartner(attacker)'s moves (:2414, :2398-2411), in the speeds ``seen_state``
+    # records; in a single battle the attacker itself (battle_system.c:400-402), the same estimate
+    partner = _get_partner(ctx.state, int(ctx.attacker))
+    if partner == int(ctx.attacker):
+        damage2 = damage
     else:
-        damage2 = damage  # GetPartner(attacker) is the attacker (battle_system.c:400-402)
+        damage2 = _slot_damage(ctx.tables, seen_state(ctx), rolls, partner, ctx.defender)
     both = jax.tree.map(lambda x, y: jnp.concatenate([x, y], axis=0), damage, damage2)
     mine = jax.tree.map(lambda x: jnp.take(x, ctx.slot, axis=0), damage)
     others = jnp.arange(MOVES) != ctx.slot

@@ -359,7 +359,11 @@ def test_b4_split_width(kaizo_tables, kaizo_trainers):
     TWO_TRAINERS, MULTI per partner variant) and every AI battler in it (its own flags with Tag
     Strategy, its party's moves, the whole fight's moves deciding the drawing rows), of
     ``fight_slot_reads(.., b4=True)`` is 14: 65597 scorings, half WIDTH_CAP, so every one is
-    exact. A change that adds a read to any path fails this."""
+    exact. A change that adds a read to any path fails this. The multi partner (battler 2) has the
+    player's battler 0 as ``GetPartner`` (battle_system.c:394-411): its second
+    ``CheckIfHighestDamageWithPartner`` sweep reads moves no layout knows, which may draw
+    (trainer_ai.c:2414, :3014-3048), so it takes the drawn rows (``partner_unknown``); with them the
+    maximum stays 14 (partner 612's fights reach it; _scratch/e4/width/partner_drawn_b4.py)."""
     from nuzline.ai.layout import BEYOND_CAP_REFUSE, KAIZO_FLAG_BITS, move_read_rows
     from nuzline.data.trainer import IntermediateData
     from tests.conftest import KAIZO_INTERMEDIATE
@@ -394,14 +398,35 @@ def test_b4_split_width(kaizo_tables, kaizo_trainers):
         in_split += 1
         battlers = [*enemies, *([partner] if partner is not None else [])]
         pool = [m for tid in battlers for m in moves_of(tid)]
-        for tid in battlers:
+        for i, tid in enumerate(battlers):
             flags = (by_id[tid].ai_flags & mask) | TAG
-            rows = move_read_rows(kaizo_tables, moves_of(tid), b4=True, pool=pool)
+            # the multi partner (battler 2, last): its GetPartner is the player's battler 0
+            unknown = partner is not None and i == len(battlers) - 1
+            rows = move_read_rows(
+                kaizo_tables, moves_of(tid), b4=True, pool=pool, partner_unknown=unknown
+            )
             reads = fight_slot_reads(rows, flags, b4=True)
             kaizo_layout(flags, reads, b4=True, beyond_cap=BEYOND_CAP_REFUSE)  # exact: no raise
             best = max(best, reads)
     assert in_split > 100  # the measurement's split fights (_scratch/e4/width/report.md)
     assert best == 14
+
+
+def test_b4_partner_unknown_takes_drawn_rows(kaizo_tables, kaizo_names):
+    """A battler whose ``GetPartner`` is the player's (MULTI battler 2, battle_system.c:394-411)
+    estimates its partner's unknown moves in ``CheckIfHighestDamageWithPartner``'s second sweep
+    (trainer_ai.c:2414), which may draw (Kaizo Triple Axel at Psywave's id, :3014-3015): its rows are
+    those of a fight whose pool holds a drawing move that is not its own."""
+    from nuzline.ai.layout import move_read_rows
+    from nuzline.engine.damage import AI_PSYWAVE
+
+    t, n = kaizo_tables, kaizo_names
+    moves = [n.move(m) for m in ("Tackle", "Earthquake", "Swords Dance", "Protect")]
+    plain = move_read_rows(t, moves, b4=True)
+    unknown = move_read_rows(t, moves, b4=True, partner_unknown=True)
+    drawn = move_read_rows(t, moves, b4=True, pool=[AI_PSYWAVE])
+    assert np.array_equal(unknown, drawn)
+    assert (unknown >= plain).all() and (unknown > plain).any()
 
 
 def _copier_fight(tables, trainers, names, trainer_id, foe, fellow=()):
@@ -443,17 +468,20 @@ def test_copier_pool_holds_the_fellow_battlers_moves(kaizo_tables, kaizo_trainer
     assert n.move("Surf") not in [int(m) for m in np.asarray(t.ai_moves)]
 
 
+@pytest.mark.fullset
 def test_copier_ditto_future_sight_layout(kaizo_tables, kaizo_trainers, kaizo_names):
     """A-10 section 2.10 item 5, layout part (the scoring part is W2's other builder): trainer 372's
-    Ditto (Transform) against a player Future Sight keeps an exact B = 4 layout, bound <= 14."""
+    Ditto (Transform) against a player Future Sight keeps an exact B = 4 layout, bound <= 14. Real
+    trainer rows by ``KAIZO_TRANSCRIBED``: an effect that becomes transcribed adds reads (``fullset``)."""
     _, _, layout = _copier_fight(kaizo_tables, kaizo_trainers, kaizo_names, 372, ["Future Sight"])
     lay = layout()
     assert not lay.sampled and lay.slot_reads <= 14 and lay.b4
 
 
+@pytest.mark.fullset
 def test_copier_mr_mime_future_sight_layout(kaizo_tables, kaizo_trainers, kaizo_names):
     """A-10 section 2.10 item 6, layout part: trainer 455's Mr. Mime (Mimic) against a player
-    Future Sight is exact, bound <= 14."""
+    Future Sight is exact, bound <= 14. ``fullset`` as the Ditto case."""
     _, _, layout = _copier_fight(kaizo_tables, kaizo_trainers, kaizo_names, 455, ["Future Sight"])
     lay = layout()
     assert not lay.sampled and lay.slot_reads <= 14 and lay.b4
@@ -471,3 +499,15 @@ def test_copier_beyond_cap_sampled(kaizo_tables, kaizo_trainers, kaizo_names):
     assert (lay.sample_n, lay.sample_seed) == (SAMPLE_N, 455)
     with pytest.raises(ValueError, match="WIDTH_CAP"):
         layout(beyond_cap=BEYOND_CAP_REFUSE)
+
+
+def test_exact_path_refuses_a_sampled_layout():
+    """A sampled B = 4 layout (bound past WIDTH_CAP, A-10 section 2.9) has no exact distribution:
+    ``policy._exact_layout`` raises before ``4 * 2**slot_reads`` scorings are built; an exact B = 4
+    layout passes."""
+    sampled = kaizo_layout(0x87, 18, b4=True)
+    assert sampled.sampled
+    with pytest.raises(ValueError, match="sampled"):
+        policy._exact_layout(sampled)
+    exact = kaizo_layout(0x87, 14, b4=True)
+    assert not exact.sampled and policy._exact_layout(exact) is exact

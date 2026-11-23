@@ -58,7 +58,8 @@ The fields:
   section 2.9), so the exact law is not built: the AI law is the empirical law of ``sample_n``
   loose-oracle runs with the fixed seeds ``sample_seeds`` (base seed ``sample_seed``, folded
   with the decision's node index), and it is marked approximate in every result built on it. The
-  exact entry points refuse a sampled layout (W3 / W5); the search and report hops are E4-S's.
+  exact entry points refuse a sampled layout (``policy._exact_layout``); the sampled law's entry
+  points (W3 / W5) and the search and report hops (E4-S) are later waves'.
   The other setting, ``BEYOND_CAP_REFUSE``, raises past the cap as a B = 2 layout does.
 
 **Two shapes of one transcription (user decision, 2026-11-15).** The exact distribution
@@ -282,8 +283,9 @@ ALLIN4 = ALLIN._replace(slot_reads=ALLIN_READS_B4, b4=True)
 # marks the law approximate; a fight setting (E4-D's) refuses instead. B = 2 layouts always refuse.
 BEYOND_CAP_SAMPLE = "sample"
 BEYOND_CAP_REFUSE = "refuse"
-# Loose-oracle runs of a sampled law. The empirical law's error is about 1 / sqrt(N) per
-# probability (N = 4096: 1.6 %); one number for every fight so the marked law repeats.
+# Loose-oracle runs of a sampled law (no sheet value: the builder's choice, A-10 section 2.9 sets
+# none). The standard error of an empirical probability p is sqrt(p * (1 - p) / N), at most
+# 0.5 / sqrt(N) (N = 4096: 0.78 %); one number for every fight so the marked law repeats.
 SAMPLE_N = 4096
 
 
@@ -379,7 +381,9 @@ def _with(
     return layout if out == layout else out
 
 
-def move_read_rows(tables: Tables, moves, *, b4: bool = False, pool=()) -> np.ndarray:
+def move_read_rows(
+    tables: Tables, moves, *, b4: bool = False, pool=(), partner_unknown: bool = False
+) -> np.ndarray:
     """``int8[n, 8]``: per move of ``moves`` (move ids, 0 or less for none), the most
     random reads each transcribed flag script makes on its path (``read_bounds.READ_BOUNDS``,
     by its battle effect, whether it is damaging, and whether its type can be quadruple
@@ -393,7 +397,11 @@ def move_read_rows(tables: Tables, moves, *, b4: bool = False, pool=()) -> np.nd
     axis 1 the target kind (0 enemy, 1 ally); ``fight_slot_reads(.., b4=True)`` takes the most.
     ``pool``: further move ids of the fight (its other AI battlers' parties) that decide whether
     the fight has a drawing move (``CheckIfHighestDamageWithPartner`` sweeps the partner's
-    moves); their rows are not returned."""
+    moves); their rows are not returned. ``partner_unknown``: the battler's ``GetPartner`` is on the
+    player's side (MULTI battler 2, whose partner is the player's battler 0: battle_system.c:394-411,
+    trainer_ai.c:2414), so its second sweep estimates moves the layout does not know, which may draw
+    (trainer_ai.c:3014-3048): the drawn rows count whatever ``moves`` and ``pool`` hold, as
+    ``IfBattlerDealsMoreDamage``'s read always counts (tools/ai_read_bounds.py)."""
     effect = np.asarray(tables.move_ai_effect)
     power = np.asarray(tables.move_power)
     move_type = np.asarray(tables.move_type)
@@ -413,6 +421,7 @@ def move_read_rows(tables: Tables, moves, *, b4: bool = False, pool=()) -> np.nd
         return e in ALT_POWER_EFFECTS or (bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS)
 
     drawing = {m for m in (*moves, *pool) if m in AI_DRAWN_MOVES and is_damaging(m)}
+    drawn = bool(drawing) or partner_unknown
     for i, move in enumerate(moves):
         e = int(effect[move])
         damaging = is_damaging(move)
@@ -424,7 +433,7 @@ def move_read_rows(tables: Tables, moves, *, b4: bool = False, pool=()) -> np.nd
         if b4:
             for ally in (False, True):
                 reads = READ_BOUNDS_B4.get((e, damaging, can_quad, ally))
-                if reads is not None and drawing:
+                if reads is not None and drawn:
                     reads = DRAWN_READ_BOUNDS_B4.get(
                         (e, damaging, can_quad, move in drawing, ally), reads
                     )
@@ -482,6 +491,7 @@ def fight_layout(
     *,
     b4: bool = False,
     pool=(),
+    partner_unknown: bool = False,
     beyond_cap: str | None = None,
     sample_seed: int = 0,
 ) -> AiLayout:
@@ -490,10 +500,11 @@ def fight_layout(
 
     ``b4``: the B = 4 layout of one AI battler (``flags`` get Tag Strategy, trainer_ai.c:253-255;
     ``pool``: the other AI battlers' party moves, which decide the drawing-move rows;
+    ``partner_unknown``: its partner is the player's battler (MULTI battler 2, ``move_read_rows``);
     ``beyond_cap`` and ``sample_seed`` as ``kaizo_layout``)."""
     if b4:
         flags = int(flags) | 1 << TAG_STRATEGY
-        rows = move_read_rows(tables, moves, b4=True, pool=pool)
+        rows = move_read_rows(tables, moves, b4=True, pool=pool, partner_unknown=partner_unknown)
         return kaizo_layout(
             flags,
             fight_slot_reads(rows, flags, b4=True),

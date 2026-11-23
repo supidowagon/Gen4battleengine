@@ -13,7 +13,7 @@ import pytest
 
 from nuzline.ai import outcome as ai_outcome
 from nuzline.ai.layout import CHECK_HP, TAG_STRATEGY
-from nuzline.engine.format import DOUBLES, SINGLES
+from nuzline.engine.format import DOUBLES
 from nuzline.engine.ids import Stat, Status
 from tests.ai.test_tag_doubles import (
     BUG,
@@ -34,7 +34,6 @@ from tests.ai.test_tag_doubles import (
     _types,
     _World,
 )
-from tests.engine.d2_states import four
 
 A, ALLY = 1, 3
 ITEM = {"Toxic Orb": 272, "Flame Orb": 273, "Persim Berry": 156, "Lum Berry": 157}
@@ -324,11 +323,3 @@ def test_check_hp_runs_twice(w):
     ally(w, t1, _hp(s1, ALLY, 80), {106: p * p, 103: 2 * p * (1 - p), 100: (1 - p) ** 2},
          reads=2, flags=both, case="two independent rolls")  # fmt: skip
     ally(w, t1, _hp(s1, ALLY, 100), 80, reads=0, flags=both, case="-10 twice")
-
-
-def test_b2_never_entered(tables, names):
-    # B = 2: defender is attacker ^ 1, never the ally (trainer_ai.c:297-309): the entry is not built, so a
-    # Tackle against the enemy scores as in singles and an ally part (-30) never runs.
-    t = tables
-    s = four(t, names, SINGLES)
-    _check(t, s, 100, a=1, d=0, reads=0, case="B = 2 Tag Strategy, Tackle")

@@ -4966,7 +4966,7 @@ def _tag_strategy_partner(ctx: AiContext) -> AiContext:
     ``CheckBattlerAbility ATTACKER_PARTNER`` (the true ability, trainer_ai.c:1255-1256), the
     ``LoadBattlerAbility DEFENDER`` of Skill Swap is the knowledge branch (:1179-1206, with its
     coins). The script's comments are wrong in two places, transcribed as written: Poison Heal's
-    ``+5`` needs hp% <= 91 (:7573, the comment says 81), Acupressure's chances are 176/256 above
+    ``+5`` needs hp% <= 91 (:7578, the comment says 81), Acupressure's chances are 176/256 above
     90 % and 88/256 between 51 and 90 % (:7678-7683)."""
     zero = jnp.zeros_like(ctx.live)
     plus3 = plus5 = plus10 = minus10 = minus30 = zero
@@ -5013,7 +5013,7 @@ def _tag_strategy_partner(ctx: AiContext) -> AiContext:
         accuracy = accuracy | t
         ctx = c.add_to_move_score(ctx, 1)
     ctx = c.pop_or_end(ctx)
-    # TagStrategy_PartnerSkillSwap_GiveAccuracyIncrease (:7491)
+    # TagStrategy_PartnerSkillSwap_GiveAccuracyIncrease (:7487-7491)
     ctx = c.load_battler_ability(_at(ctx, accuracy), _A)
     ctx, inaccurate = _split(c.if_loaded_equal_to(ctx, _ABILITY["Compoundeyes"]))
     ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["No Guard"]))
@@ -5255,12 +5255,28 @@ def _doubles_damage(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool``: the B = 4 state has a doubles damage factor the AI's estimate (``damage.
     ai_damage_for_roll``) does not carry yet (E2 D45-8: screens x2/3 and spread x3/4 inside
     ``_pre_random``; the estimate still halves a screen, singles' rule). Decision 12 of the E4-A
-    plan: some AI battler's or its partner's damaging move has range RANGE_ADJACENT_OPPONENTS (a
-    side with two living battlers, ``CountAliveBattlers(TRUE, defender) == 2``, battle_lib.c:
-    7035-7039) or RANGE_ALL_ADJACENT (three or more living battlers, ``CountAliveBattlers(FALSE,
-    defender) >= 2``, :7040-7044), or a side with two living battlers has Reflect / Light Screen
-    (:6982-6990, :7023-7032). Always False at B = 2 (no ``BATTLE_TYPE_DOUBLES``). All other
-    estimates are already exact by battler."""
+    plan: a move the AI's scoring may estimate through ``BattleSystem_CalcMoveDamage`` has range
+    RANGE_ADJACENT_OPPONENTS (a side with two living battlers, ``CountAliveBattlers(TRUE,
+    defender) == 2``, battle_lib.c:7035-7039) or RANGE_ALL_ADJACENT (three or more living
+    battlers, ``CountAliveBattlers(FALSE, defender) >= 2``, :7040-7044), or a side with two living
+    battlers has Reflect / Light Screen (:6982-6990, :7023-7032). Always False at B = 2 (no
+    ``BATTLE_TYPE_DOUBLES``). The factor depends only on ``MOVE_DATA(move).range`` and the alive
+    counts, so every estimate that can reach such a move counts:
+
+    - the active moves of every AI battler and of its ``GetPartner`` (``FlagMoveDamageScore``,
+      ``IfCurrentMoveKills``, the two sweeps of ``CheckIfHighestDamageWithPartner``,
+      trainer_ai.c:1041, :1560, :1611, :2398-2414; in MULTI battler 2's partner is the player's
+      battler 0), when damaging (``TrainerAI_CalcAllDamage``'s test, :2823-2828);
+    - every party member of every AI battler's party (``IfPartyMemberDealsMoreDamage``, :2142-2165,
+      each living bench member's moves as the AI's active; the party copy of ``commands.
+      _party_copy``, the partner's Mimic / Transform slots as the party holds them), damaging, HP
+      not tested (a superset of the living members);
+    - ``movePrevByBattler`` of every battler (``IfBattlerDealsMoreDamage``, :2228-2237, the
+      defender's last move, enemy or ally, with no damaging test): any move with power > 0 or a
+      damaging one (``CalcMoveDamage`` of power 0 is 0 before its ``+ 2``, :7078).
+    No other AI estimate goes through ``CalcMoveDamage`` (its callers in trainer_ai.c: :3082 inside
+    ``TrainerAI_CalcDamage``, reached from :1041, :1560, :1611, :2130, :2156, :2210, :2228,
+    :2402)."""
     fmt = format_of(state)
     if fmt.B != 4:
         return jnp.asarray(False)
@@ -5268,13 +5284,17 @@ def _doubles_damage(tables: Tables, state: BattleState) -> jnp.ndarray:
     side_alive = [alive[s].astype(_I32) + alive[s + 2].astype(_I32) for s in (0, 1)]
     two = [n == 2 for n in side_alive]
     pairs = {b for a in ai_battlers(fmt) for b in (a, a ^ 2)}
+    estimated = [state.moves[party(fmt, b), state.active[b]].astype(_I32) for b in sorted(pairs)]
+    estimated += [c._party_copy(tables, state, a).moves.reshape(-1) for a in ai_battlers(fmt)]
+    damaging = [c.is_damaging(tables, m) for m in estimated]
+    last = state.last_move.astype(_I32)
+    estimated.append(last)
+    damaging.append(c.is_damaging(tables, last) | ((last != 0) & (tables.move_power[last] > 0)))
     spread_opponents = spread_all = jnp.asarray(False)
-    for b in sorted(pairs):
-        moves = state.moves[party(fmt, b), state.active[b]].astype(_I32)
-        damaging = c.is_damaging(tables, moves)
+    for moves, hits in zip(estimated, damaging, strict=True):
         target = tables.move_target[moves]
-        spread_opponents |= jnp.any(damaging & (target == MoveTarget.RANGE_ADJACENT_OPPONENTS))
-        spread_all |= jnp.any(damaging & (target == MoveTarget.RANGE_ALL_ADJACENT))
+        spread_opponents |= jnp.any(hits & (target == MoveTarget.RANGE_ADJACENT_OPPONENTS))
+        spread_all |= jnp.any(hits & (target == MoveTarget.RANGE_ALL_ADJACENT))
     screens = jnp.asarray(False)
     for side in (0, 1):
         screened = (state.reflect[side] > 0) | (state.light_screen[side] > 0)
@@ -5527,8 +5547,9 @@ def _scoring_refusals(
         out.append(
             "ai scoring: doubles damage factor (E2 D45-8): the estimate lacks the doubles screens "
             "(x2/3) and spread (x3/4) factors of CalcMoveDamage (battle_lib.c:6982-6990, "
-            ":7023-7044), and an AI battler's or its partner's damaging spread move, or a "
-            "screen on a side of two living battlers, needs them"
+            ":7023-7044), and a damaging spread move of an AI battler, its partner, its party, "
+            "or a battler's last move (IfBattlerDealsMoreDamage), or a screen on a side of two "
+            "living battlers, needs them"
         )
     ability = np.asarray(decomp_abilities(tables, state))
     ability_names = {v: k for k, v in _ABILITY.items()}
@@ -5599,7 +5620,14 @@ _PATH_REFUSAL = (
 def _exact_layout(layout: AiLayout) -> AiLayout:
     """``layout`` for an exact distribution: ``ValueError`` for a ``runtime_flags`` layout
     (``layout.ALLIN`` serves the sampled AI; its ``2**slot_reads`` scorings pass WIDTH_CAP),
-    whose exact distribution is the fight's own layout's (``layout_of``)."""
+    whose exact distribution is the fight's own layout's (``layout_of``), and for a ``sampled``
+    B = 4 layout (its bound passes WIDTH_CAP, A-10 section 2.9: its law is the marked empirical
+    one of ``layout.sample_seeds``, never ``4 * 2**slot_reads`` exact scorings)."""
+    if layout.sampled:
+        raise ValueError(
+            f"the {layout.key} layout is sampled (its read bound passes WIDTH_CAP, A-10 2.9): "
+            "it has no exact AI distribution"
+        )
     if layout.runtime_flags:
         raise ValueError(
             f"the exact AI distribution is per fight (ai.layout.layout_of); the {layout.key} "

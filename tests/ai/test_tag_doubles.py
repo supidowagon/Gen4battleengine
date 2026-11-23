@@ -213,7 +213,9 @@ def _record(s, b, ability: str):
 def _faint(s, b):
     """Battler ``b`` fainted and not replaced as ``BattleSystem_CleanupFaintedMon`` leaves it
     (battle_lib.c:2156-2226): 0 HP, species, types, ability, moves and status kept, its AI record
-    cleared (``ai_record_clear``, :2223-2225), moveEffects fields already 0 in these states."""
+    cleared (``ai_record_clear``, :2223-2225), and the ``MoveEffectsData`` fields the AI reads here
+    zeroed (:2185-2188: ``magnetRiseTurns``, ``flashFire``; battle_mon.h)."""
+    s = s._replace(magnet_rise=s.magnet_rise.at[b].set(0), flash_fire=s.flash_fire.at[b].set(0))
     return ai_record_clear(with_hp(s, b, 0), b, True)
 
 
@@ -914,9 +916,7 @@ def test_fainted_partner_reads(w):
         reads=1,
         case="Gravity: Flying",
     )
-    _check(
-        t, _faint(_flag(gravity, "magnet_rise", dp, 0), dp), 100, case="Gravity: Magnet Rise gone"
-    )
+    _check(t, _faint(_flag(gravity, "magnet_rise", dp), dp), 100, case="Gravity: Magnet Rise gone")
     _check(
         t,
         _faint(_speeds(w.attack(base, "Trick Room"), (100, 80, 90, 70)), dp),
