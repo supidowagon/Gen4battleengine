@@ -744,5 +744,5 @@ def test_if_held_item_equal_to(tables, names):
     assert not _jump(c.if_held_item_equal_to(_ctx(tables, gone), _A, herb))
     hidden = s._replace(item=s.item.at[0, int(s.active[0])].set(herb))
     assert not _jump(c.if_held_item_equal_to(_ctx(tables, hidden), _D, herb))
-    named = hidden._replace(ai_item_known=hidden.ai_item_known.at[int(s.active[0])].set(herb))
+    named = hidden._replace(ai_item_known=hidden.ai_item_known.at[0].set(herb))
     assert _jump(c.if_held_item_equal_to(_ctx(tables, named), _D, herb))

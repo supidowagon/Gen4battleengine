@@ -52,9 +52,7 @@ party data is `[2, 6]`, and every volatile field is `[2]`, one active Pokemon pe
   foe" (`hooks.py:316-329`); `hooks.on_switch_in` runs the item check for `side`, then `1 - side`
   (`hooks.py:344-345`).
 - Fields that hold "the other one" as a flag: `infatuated` is 0 or 1 (`state.py:39-42`).
-- Player-only arrays keyed by party slot: `ai_seen_moves[6, 4]`, `ai_ability_known[6]`
-  (`state.py:178-179`; `hooks.reveal_ability` tests `side == 0`, `hooks.py:126-134`), and the
-  experience and death block (`state.py:181-196`).
+- Player-only arrays keyed by party slot: the experience and death block (`state.py:181-196`).
 - `make_state(player, opp, leads=(0, 0))` takes two parties and one lead each (`state.py:476-494`).
 - The reference engine keeps a side's party, active slot, volatiles and side conditions in one
   class (`reference/state.py`, `RefSide`), so its battler and side state must be split.

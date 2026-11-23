@@ -31,14 +31,14 @@ def test_lightning_rod_takes_the_move_and_is_recorded(tables, names):
     s = state(tables, names, AbilityId.LIGHTNINGROD, "Thunderbolt")
     out, _ = play(tables, s, [0, 0, 0, 0], ORDER, targets=TARGETS)
     assert hp(out, 0) < hp(s, 0) and hp(out, 2) == hp(s, 2)
-    assert int(out.ai_ability_known[int(out.active[0])]) == LR_ID
+    assert int(out.ai_ability_known[0]) == LR_ID
 
 
 def test_storm_drain_takes_a_single_target_water_move_and_is_recorded(tables, names):
     s = state(tables, names, AbilityId.STORM_DRAIN, "Water Gun")
     out, _ = play(tables, s, [0, 0, 0, 0], ORDER, targets=TARGETS)
     assert hp(out, 0) < hp(s, 0) and hp(out, 2) == hp(s, 2)
-    assert int(out.ai_ability_known[int(out.active[0])]) == SD_ID
+    assert int(out.ai_ability_known[0]) == SD_ID
 
 
 def test_a_move_with_no_pp_is_redirected_silently_and_records_at_the_holder(tables, names):
@@ -61,7 +61,7 @@ def test_a_move_with_no_pp_is_redirected_silently_and_records_at_the_holder(tabl
     s = encore(s, names, 1, 1, "Thunderbolt")
     out, _ = play(tables, s, [0, 0, 0, 0], ORDER, targets=TARGETS)
     assert hp(out, 0) == hp(s, 0) and hp(out, 2) == hp(s, 2)
-    assert int(out.ai_ability_known[int(out.active[0])]) == int(s.ai_ability_known[0])
+    assert int(out.ai_ability_known[0]) == int(s.ai_ability_known[0])
     assert int(out.pp[1, slot1, 1]) == 0
     assert int(out.last_move[1]) == 0
     tbolt = names.move("Thunderbolt")

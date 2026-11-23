@@ -81,6 +81,21 @@ def party_sides(fmt: Format) -> tuple[int, ...]:
     return tuple(side_of(fmt.party_of.index(p)) for p in range(fmt.P))
 
 
+def ai_battlers(fmt: Format) -> tuple[int, ...]:
+    """The battlers whose command the trainer AI picks (and so who run ``TrainerAI_Main``):
+    ``TrainerAI_Main`` runs only from ``Task_TrainerShowMoveSelectMenu`` (battle_display.c:3580-
+    3590), a battler's task when its task functions are the trainer ones: under
+    ``BATTLE_TYPE_AI`` every battler but 0 (:5635-5643), else every ``BATTLER_THEM`` battler
+    (:5796-5802). MULTI is ``BATTLE_TYPE_TRAINER_WITH_AI_PARTNER`` (encounter.c:732-735), which
+    contains ``BATTLE_TYPE_AI`` (constants/battle.h:46-47). SINGLES ``(1,)``; DOUBLES and
+    TWO_TRAINERS ``(1, 3)``; MULTI ``(1, 2, 3)``. Pure Python on the static format."""
+    if fmt == MULTI:
+        return (1, 2, 3)
+    if fmt.B == 4:
+        return (1, 3)
+    return (1,)
+
+
 def side_out_parties(fmt: Format, side: int) -> tuple[int, ...]:
     """The parties whose total emptiness ends the battle against ``side`` (CheckBattleOver,
     battle_controller_player.c:4181-4262, branches a / b / c): the player's party 0; the

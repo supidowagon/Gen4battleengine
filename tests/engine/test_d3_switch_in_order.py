@@ -90,7 +90,7 @@ def test_the_slowest_holders_weather_stays_and_every_lead_is_done(tables, names,
     assert np.asarray(out.weather_announced).tolist() == [1, 1, 1, 1]
     # The player's two leads reveal their ability while the weather up is not their own (:3749).
     known = np.asarray(out.ai_ability_known)
-    assert known[int(out.active[0])] != 0 and known[int(out.active[2])] != 0
+    assert known[0] != 0 and known[2] != 0
 
 
 def test_equal_speeds_follow_the_tie_bits_over_all_64_rows(tables, names):

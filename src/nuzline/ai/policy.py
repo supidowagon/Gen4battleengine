@@ -4902,7 +4902,7 @@ def resolve_player_ability(
 ) -> jnp.ndarray:
     """``int32``: the player's ability as ``LoadBattlerAbility DEFENDER`` sees it
     (trainer_ai.c:1170; roark.md 9.2), a decomp ability id: the true ability when
-    ``ai_ability_known`` is set for the player's active Pokemon (or it is Shadow Tag,
+    ``ai_ability_known`` is set in battler 0's row (or it is Shadow Tag,
     Magnet Pull or Arena Trap), else the species' ability in slot
     ``ai_outcome.ability_guess``, or its single ability when it has one
     (``commands.defender_ability``, which ``ai_scores`` uses for every such read). A per-slot
