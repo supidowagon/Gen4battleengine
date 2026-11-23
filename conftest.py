@@ -72,7 +72,8 @@ def pytest_collection_modifyitems(config, items):
     if verdict == "ERROR":
         pytest.exit(msg, returncode=ramgate.EXIT_NO_RAM_READ)
     if verdict == "GO":
-        # Engine-free run: an import of nuzline.engine at run time fails loudly (until unconfigure).
+        # Engine-free run, or one with an unmeasured ROM-only item: an import of nuzline.engine at
+        # run time fails loudly (until unconfigure).
         if not config.option.collectonly and ramgate.blocker_wanted(items, os.environ):
             config.stash[_BLOCKER] = ramgate.install_blocker()
         if not config.option.collectonly:
