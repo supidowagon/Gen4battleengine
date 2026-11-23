@@ -6,6 +6,7 @@ import os
 import random
 import re
 import struct
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -2310,3 +2311,190 @@ def test_a_walking_non_member_with_an_unbounded_range_raises():
     maps = StaticMaps([area(1, ["....."], [_wanderer(rx=-1)])])
     with pytest.raises(MapReadError, match="unbounded"):
         Walker(maps, members={9}).walk(Pos(1, 0, 0))
+
+
+# --- C9: independent hand-derived ROM checks --------------------------------------------------
+# Expectations by hand; a raw reader here, not RomMaps, Walker or ScriptReader. Layouts: the
+# events member (pp tools/jsoncnv/event.py:24-130, written in that order: bg events 20 bytes,
+# objects 32 (14 u16 + u32 y), warps 12 (x, z, header, warp, pad 4), coords 16 (8 u16), each
+# list behind a u32 count); the Kaizo header member (debug/cb_edit/d_test.narc, 24 bytes:
+# matrix u16 @2, scripts u16 @4, events u16 @16, include/map_header.h:10-31); the matrix
+# (src/map_matrix.c:30-56: u8 width, height, has-headers, has-altitudes, name length, name,
+# u16 headers, u8 altitudes, u16 land ids); the land member's tile attributes, u16 per tile
+# from 0x10, index z * 32 + x (include/constants/field/map.h:9-27), bit 15 collision, low byte
+# behaviour.
+
+
+def _raw_member(rom_files, narc, index):
+    return rom_files.narc(narc)[index]
+
+
+def _raw_header(rom_files, header):
+    b = _raw_member(rom_files, "debug/cb_edit/d_test.narc", header)
+    fields = (("matrix", 2), ("scripts", 4), ("events", 16))
+    return {k: struct.unpack_from("<H", b, at)[0] for k, at in fields}
+
+
+def _raw_events(rom_files, header):
+    events = _raw_header(rom_files, header)["events"]
+    m = _raw_member(rom_files, "fielddata/eventdata/zone_event.narc", events)
+    out, pos = [], 0
+    for size, fmt in ((20, None), (32, "<14HI"), (12, "<4H"), (16, "<8H")):
+        (n,) = struct.unpack_from("<I", m, pos)
+        pos += 4
+        out.append([struct.unpack_from(fmt, m, pos + size * i) for i in range(n)] if fmt else n)
+        pos += size * n
+    assert pos == len(m)
+    _, objs, warps, coords = out
+    return objs, warps, coords
+
+
+def _raw_attr(rom_files, header):
+    matrix = _raw_header(rom_files, header)["matrix"]
+    mx = _raw_member(rom_files, "fielddata/mapmatrix/map_matrix.narc", matrix)
+    width, height, has_headers, has_alt, name_len = mx[:5]
+    cells = width * height
+    pos = 5 + name_len + (2 * cells if has_headers else 0) + (cells if has_alt else 0)
+    lands = struct.unpack_from(f"<{cells}H", mx, pos)
+    land = rom_files.narc("fielddata/land_data/land_data.narc")
+
+    def attr(x, z):
+        member = land[lands[(z // 32) * width + x // 32]]
+        return struct.unpack_from("<H", member, 0x10 + 2 * ((z % 32) * 32 + x % 32))[0]
+
+    return attr
+
+
+def _committed_row(name):
+    import tomllib
+
+    text = (REPO_ROOT / "data" / "kaizo" / "overrides.toml").read_text(encoding="utf-8")
+    return next(g for g in tomllib.loads(text)["gauntlet"] if g["name"] == name)
+
+
+# include/constants/field/map_tile_behaviors.h: the enum from line 11 at 0 (JUMP_SOUTH :70,
+# WATER_SEA :32, SAND :44, TABLE :139); trainer id = script - 3000 + 1 below 5000
+# (Script_GetTrainerID, src/script_manager.c:498-501); movement 15 LOOK_SOUTH, 17 LOOK_EAST
+# (generated/movement_types.txt:16, :18, 0-based).
+JUMP_SOUTH_B, WATER_SEA_B, SAND_B, TABLE_B = 0x3B, 0x15, 0x21, 0x80
+LOOK_SOUTH_MV, LOOK_EAST_MV = 15, 17
+
+
+@pytest.mark.slow
+def test_rom_c9_b2b_operands_by_hand(rom_files, decomp):
+    # (a) header 256 runs scr 277; its entry 2 (the header's ``.long label-.-4`` list up to
+    # 0xFD13) starts at 36 and entry 3 at 110; StartTrainerBattle = the line index of
+    # SCRCMD_STARTTRAINERBATTLE among the ScriptCommand lines of include/data/scripts/scrcmd.h
+    # (:237 -> 0xE5), operands u16 trainer + u16 partner; both literal (below VARS_START a var
+    # reads as itself, FieldSystem_TryGetVar, src/script_manager.c:428-452).
+    assert _raw_header(rom_files, 256)["scripts"] == 277
+    lines = (decomp / "include" / "data" / "scripts" / "scrcmd.h").read_text(encoding="utf-8")
+    names = re.findall(r"^ScriptCommand\((\w+),", lines, re.MULTILINE)
+    opcode = {n: i for i, n in enumerate(names)}
+    assert opcode["SCRCMD_STARTTRAINERBATTLE"] == 0xE5
+    s = _raw_member(rom_files, "fielddata/script/scr_seq.narc", 277)
+    entries, pos = [], 0
+    while struct.unpack_from("<H", s, pos)[0] != 0xFD13:
+        entries.append(pos + 4 + struct.unpack_from("<i", s, pos)[0])
+        pos += 4
+    assert entries[1:3] == [36, 110]
+    assert struct.unpack_from("<H", s, 36)[0] == opcode["SCRCMD_LOCKALL"]
+    assert struct.unpack_from("<3H", s, 44) == (0xE5, 296, 0)
+    assert struct.unpack_from("<3H", s, 73) == (0xE5, 297, 0)
+    assert struct.unpack_from("<H", s, 106)[0] == opcode["SCRCMD_RELEASEALL"]
+    row = _committed_row("Route 204 North B2B")
+    assert row["orders"] == [[[296], [297]]] and row["leave_gaps"] == []
+
+
+def _hand_reach(attr, blocked, start, sight):
+    """Tiles reached from ``start`` by hand rules: a tile without the collision bit and not
+    ``blocked``; a JUMP_SOUTH tile stepped on southward lands two south (PlayerAvatar_WillJump,
+    src/player_move.c:1956-1999); a tile in ``sight`` is entered and ends the walk there (the
+    trainer sees the player). Returns (reached, sight tiles entered)."""
+    seen, todo, hit = {start}, [start], set()
+    while todo:
+        x, z = todo.pop()
+        for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            t = (x + dx, z + dz)
+            a = attr(*t)
+            if (dx, dz) == (0, 1) and a & 0xFF == JUMP_SOUTH_B:
+                t = (x, z + 2)
+                a = attr(*t)
+            if a & 0x8000 or t in blocked or t in seen:
+                continue
+            seen.add(t)
+            if t in sight:
+                hit.add(t)
+                continue
+            todo.append(t)
+    return seen, hit
+
+
+@pytest.mark.slow
+def test_rom_c9_oreburgh_hand_path(rom_files):
+    # (b) header 199: one warp (15,1) -> header 198; ledges (2-4,19) JUMP_SOUTH with the
+    # collision bit, (5,19) a wall; Rock Smash rocks (script 10001) on (19,28), (19,29); 196 on
+    # (2,24) looking east, sight 5; 195 on (10,28) looking south, sight 3. Rock Smash is not held
+    # at the Roark split (no badge), so the rocks stand.
+    objs, warps, coords = _raw_events(rom_files, 199)
+    assert warps == [(15, 1, 198, 3)] and coords == []
+    by_xz = {(o[12], o[13]): o for o in objs}
+    assert {xz for xz, o in by_xz.items() if o[5] == 10001} == {(19, 28), (19, 29)}
+    t196, t195 = by_xz[(2, 24)], by_xz[(10, 28)]
+    assert (t196[5] - 3000 + 1, t196[3], t196[2], t196[7]) == (196, 1, LOOK_EAST_MV, 5)
+    assert (t195[5] - 3000 + 1, t195[3], t195[2], t195[7]) == (195, 1, LOOK_SOUTH_MV, 3)
+    assert sorted(o[5] - 3000 + 1 for o in objs if o[3] == 1) == [195, 196]
+    attr = _raw_attr(rom_files, 199)
+    assert [attr(x, 19) for x in (2, 3, 4)] == [0x8000 | JUMP_SOUTH_B] * 3
+    assert attr(5, 19) & 0x8000
+    # the hand path: the warp's south neighbour, down the shaft, west along row 17, the jump
+    # (4,18) -> (4,20), into 196's line at (3,24); then on to 195's line at (10,29)
+    path = [(15, z) for z in range(2, 10)] + [(16, 9), (16, 10), (16, 11), (15, 11)]
+    path += [(15, z) for z in range(12, 18)] + [(x, 17) for x in range(14, 3, -1)] + [(4, 18)]
+    path += [(4, 20), (3, 20), (2, 20), (2, 21), (2, 22), (2, 23), (3, 23), (3, 24)]
+    after = [(4, 24), (5, 24), (5, 25), (5, 26), (5, 27), (5, 28)]
+    after += [(x, 28) for x in range(6, 10)] + [(9, 29), (10, 29)]
+    walk = path + after
+    for a, b in pairwise(walk):
+        assert not attr(*b) & 0x8000, b
+        step = (b[0] - a[0], b[1] - a[1])
+        assert step in ((1, 0), (-1, 0), (0, 1), (0, -1)) or (a, b) == ((4, 18), (4, 20))
+    sight196 = {(3, 24), (4, 24), (5, 24)}  # (6,24) has the collision bit
+    sight195 = {(10, 29)}  # (10,30) has the collision bit
+    assert attr(6, 24) & 0x8000 and attr(10, 30) & 0x8000
+    assert path[-1] in sight196 and after[-1] in sight195
+    objects = set(by_xz)
+    # before any fight: every way to 195 (its line, or a talk tile beside it) passes 196's line
+    talk195 = {(9, 28), (11, 28), (10, 29)}
+    reach, hit = _hand_reach(attr, objects, (15, 2), sight196 | sight195)
+    assert hit == {(3, 24)} and not (reach - hit) & talk195
+    # after 196: 195 is next, and (15,2) beside the only warp is out of reach (leave [])
+    reach, hit = _hand_reach(attr, objects, (3, 24), sight195)
+    assert hit == {(10, 29)} and (15, 2) not in reach
+    row = _committed_row("Oreburgh Mine")
+    assert row["orders"] == [[[196], [195]]]
+    assert row["leave_gaps"] == [] and row["heal_gaps"] == []
+
+
+@pytest.mark.slow
+def test_rom_c9_route_213_lobby_and_heal_by_hand(rom_files):
+    # (c) header 373 doors 3 (706,818) and 4 (706,813) lead to header 376 warps 1 (8,11) and
+    # 0 (8,2), and back; 376 obj 1 (the healer, script 2) on (11,4) behind (11,5), a TABLE tile
+    # talked across. The lobby-end order: coord 12 (699,832) value 7 on var 0x40FA places 107 on
+    # (700,832); west of it the beach is one row (z 831 walls, z 833 WATER_SEA, no Surf before
+    # the Fen Badge), so with 107 standing there the lobby is behind it: no heal. The west
+    # order: the var is not known there, the story coord 12 blocks, the lobby stays behind it:
+    # no heal.
+    _, warps373, coords = _raw_events(rom_files, 373)
+    assert warps373[3] == (706, 818, 376, 1) and warps373[4] == (706, 813, 376, 0)
+    objs376, warps376, _ = _raw_events(rom_files, 376)
+    assert warps376 == [(8, 2, 373, 4), (8, 11, 373, 3)]
+    assert (objs376[1][5], objs376[1][12], objs376[1][13]) == (2, 11, 4)
+    assert _raw_attr(rom_files, 376)(11, 5) == 0x8000 | TABLE_B
+    assert (12, 699, 832, 1, 1, 0, 7, 0x40FA) in coords
+    attr = _raw_attr(rom_files, 373)
+    assert attr(699, 832) == SAND_B and attr(700, 832) == SAND_B
+    for x in range(693, 700):
+        assert attr(x, 831) & 0x8000 and attr(x, 833) == WATER_SEA_B
+    row = _committed_row("Route 213")
+    assert row["heal_gaps"] == [] and row["leave_gaps"] == [[], [1, 2, 3, 4]]
