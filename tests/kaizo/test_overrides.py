@@ -5,6 +5,13 @@ import tomllib
 
 import pytest
 
+from nuzline.data.gauntlet import (
+    GauntletFacts,
+    GauntletSettingsError,
+    Partner,
+    SettingsError,
+    check_swap_gap,
+)
 from tools.kaizo.overrides import (
     DEFAULT_PATH,
     AreaException,
@@ -43,8 +50,8 @@ def test_entry_without_source_refused(tmp_path):
         load_overrides(write(tmp_path, "[area.246]\ntrick_room = true\n"))
 
 
-def test_unknown_rule_key_refused(tmp_path):
-    with pytest.raises(OverridesError, match="'heal'"):
+def test_rules_key_refused(tmp_path):
+    with pytest.raises(OverridesError, match="'rules'"):
         load_overrides(
             write(
                 tmp_path,
@@ -98,7 +105,6 @@ source = "rom:trainers.json start_condition unknown"
 [[gauntlet]]
 name = "Oreburgh Mine"
 trainers = [196, 195]
-rules = {}
 source = "Roark Split:229"
 
 [trainer_ids."Gardenia Split:91"]
@@ -121,20 +127,283 @@ source = "user, 2026-11-03"
     assert o.area_exceptions == {
         509: AreaException("two maps", "rom:trainers.json start_condition unknown")
     }
-    assert o.gauntlets == (Gauntlet("Oreburgh Mine", (196, 195), {}, "Roark Split:229"),)
+    assert o.gauntlets == (Gauntlet("Oreburgh Mine", (196, 195), "Roark Split:229"),)
     assert o.trainer_ids == {"Gardenia Split:91": 296}
     assert o.fields == {107: {"optional": True}}
     assert o.move_lists == {"punch": [5, 7]}
     assert o.sources["trainer_ids.Gardenia Split:91"] == "pkcalc:src/js/data/sets.js:988"
 
 
-def test_gauntlet_rules_must_be_booleans(tmp_path):
-    text = (
-        '[[gauntlet]]\nname = "g"\ntrainers = [1, 2]\nrules = {heal_between = 1}\n'
-        'source = "user, 2026-11-03"\n'
+FACTS = (
+    "orders = [[[1], [2]]]\nleave_gaps = [1]\nescape = false\npc_gaps = []\nheal_gaps = []\n"
+    'locked_gaps = []\norders_source = "rom:header 1 events 2"\n'
+)
+
+
+def gauntlet_text(trainers="[1, 2]", facts=FACTS):
+    return f'[[gauntlet]]\nname = "g"\ntrainers = {trainers}\nsource = "user, 2026-11-03"\n{facts}'
+
+
+def test_gauntlet_facts_load(tmp_path):
+    f = load_overrides(write(tmp_path, gauntlet_text())).gauntlets[0].facts
+    assert f.name == "g" and f.source == "user, 2026-11-03"
+    assert f.orders == (((1,), (2,)),) and f.leave_gaps == ((1,),) and f.escape is False
+    assert f.pc_gaps == f.heal_gaps == f.locked_gaps == () and f.partner is None
+    assert f.orders_source == f.leave_gaps_source == f.locked_gaps_source == "rom:header 1 events 2"
+
+
+def test_gauntlet_without_facts_has_none(tmp_path):
+    text = '[[gauntlet]]\nname = "g"\ntrainers = [1, 2]\nsource = "user, 2026-11-03"\n'
+    assert load_overrides(write(tmp_path, text)).gauntlets[0].facts is None
+
+
+def test_gauntlet_permutations_and_all(tmp_path):
+    facts = (
+        'orders = { permutations = [[1], [2], [3]] }\nleave_gaps = "all"\nescape = false\n'
+        'pc_gaps = []\nheal_gaps = "all"\nlocked_gaps = []\norders_source = "rom:x"\n'
+        'heal_gaps_source = "rom:y z"\n'
     )
-    with pytest.raises(OverridesError, match="heal_between"):
-        load_overrides(write(tmp_path, text))
+    f = load_overrides(write(tmp_path, gauntlet_text("[1, 2, 3]", facts))).gauntlets[0].facts
+    assert len(f.orders) == 6 and ((1,), (2,), (3,)) in f.orders
+    assert f.leave_gaps == ((1, 2),) * 6 and f.heal_gaps == (1, 2)
+    assert f.heal_gaps_source == "rom:y z" and f.pc_gaps_source == "rom:x"
+
+
+def test_gauntlet_leave_gaps_per_order_and_partner(tmp_path):
+    facts = (
+        "orders = [[[1], [2]], [[2], [1]]]\nleave_gaps = [[], [1]]\nescape = true\npc_gaps = []\n"
+        "heal_gaps = []\nlocked_gaps = []\n"
+        'partner = { trainer = 9, join_before = [2], source = "rom:header 1 events 3" }\n'
+        'orders_source = "rom:header 1 events 2"\n'
+    )
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=facts))).gauntlets[0].facts
+    assert f.leave_gaps == ((), (1,)) and f.leave_gaps_of(((2,), (1,))) == (1,)
+    assert f.partner == Partner(9, (2,), "rom:header 1 events 3")
+
+
+@pytest.mark.parametrize(
+    "old, new, match",
+    [
+        ("locked_gaps = []\n", "", "all or none"),
+        ("orders = [[[1], [2]]]", "orders = [[[1], [3]]]", "exactly once"),
+        ("orders = [[[1], [2]]]", "orders = [[[1, 2, 3]]]", "one or two"),
+        ("orders = [[[1], [2]]]", "orders = [[[1], [2]], [[1], [2]]]", "twice"),
+        ("leave_gaps = [1]", "leave_gaps = [2]", "within 1..1"),
+        ("leave_gaps = [1]", "leave_gaps = [[1], [1]]", "one list per order"),
+        ("pc_gaps = []", "pc_gaps = [1, 1]", "ascending"),
+        ("escape = false", "escape = 0", "true or false"),
+        (
+            "locked_gaps = []",
+            "locked_gaps = []\npartner = { trainer = 5, join_before = [3] }",
+            "1..2",
+        ),
+        (
+            "locked_gaps = []",
+            "locked_gaps = []\npartner = { trainer = 5, join_before = [1, 2] }",
+            "one fight",
+        ),
+        ('"rom:header 1 events 2"', '"somewhere"', "orders_source"),
+    ],
+)
+def test_gauntlet_facts_refused(tmp_path, old, new, match):
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, gauntlet_text(facts=FACTS.replace(old, new))))
+
+
+def test_gauntlet_fight_headers_one_header_or_one_list_per_order(tmp_path):
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=FACTS))).gauntlets[0].facts
+    assert f.fight_headers == ()  # not recorded
+    one = FACTS + "fight_headers = 284\n"
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=one))).gauntlets[0].facts
+    assert f.fight_headers == ((284, 284),)
+    per = FACTS + "fight_headers = [[284, 380]]\n"
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=per))).gauntlets[0].facts
+    assert f.fight_headers == ((284, 380),) and f.to_dict()["fight_headers"] == [[284, 380]]
+    for bad in ("[[284]]", "[284, 380]", '"284"'):
+        text = gauntlet_text(facts=FACTS + f"fight_headers = {bad}\n")
+        with pytest.raises(OverridesError, match="fight_headers"):
+            load_overrides(write(tmp_path, text))
+
+
+# Route 204 North's shape: 1 is a double-battle trainer who stops the walk at two live and is
+# not fought at one; the two-live order is 1, 2, 3.
+LIVE_ROWS = [
+    {"fought": [], "live": 1, "next": [[2]], "headers": [7]},
+    {"fought": [], "live": 2, "next": [[1]], "headers": [7]},
+    {"fought": [[1]], "live": 1, "next": [[2]], "headers": [7], "gap": ["leave"]},
+    {"fought": [[1]], "live": 1, "to": 2, "at": "bag", "next": [[2]], "headers": [7]},
+    {"fought": [[1]], "live": 2, "next": [[2]], "headers": [7], "gap": ["leave"]},
+    {"fought": [[2]], "live": 1, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[2]], "live": 1, "to": 2, "at": "bag", "next": [[1], [3]], "headers": [7, 7]},
+    {"fought": [[2]], "live": 2, "next": [[1], [3]], "headers": [7, 7], "gap": []},
+    {"fought": [[1], [2]], "live": 1, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[1], [2]], "live": 1, "to": 2, "at": "bag", "next": [[3]], "headers": [7]},
+    {"fought": [[1], [2]], "live": 2, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[2], [1]], "live": 1, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[2], [1]], "live": 1, "to": 2, "at": "bag", "next": [[3]], "headers": [7]},
+    {"fought": [[2], [1]], "live": 2, "next": [[3]], "headers": [7], "gap": []},
+    {"fought": [[2], [3]], "live": 1, "next": [], "headers": [], "gap": []},
+    {"fought": [[2], [3]], "live": 1, "to": 2, "at": "bag", "next": [[1]], "headers": [7]},
+    {"fought": [[2], [3]], "live": 2, "next": [[1]], "headers": [7], "gap": []},
+]
+
+
+def _toml_row(r: dict) -> str:
+    def value(v):
+        return f'"{v}"' if isinstance(v, str) else str(v).replace("'", '"')
+
+    return "{ " + ", ".join(f"{k} = {value(v)}" for k, v in r.items()) + " }"
+
+
+def live_text(rows=LIVE_ROWS, leave=None) -> str:
+    # LIVE_ROWS leave at gap 1 after 1 first only: leaving depends on the order, so the group
+    # has no flat leave_gaps (``leave``: a line to put one back).
+    three = FACTS.replace("[[[1], [2]]]", "[[[1], [2], [3]]]").replace(
+        "leave_gaps = [1]\n", "" if leave is None else f"leave_gaps = {leave}\n"
+    )
+    table = "live_next = [\n" + "".join(f"  {_toml_row(r)},\n" for r in rows) + "]\n"
+    return gauntlet_text("[1, 2, 3]", three + "fight_headers = 7\n" + table)
+
+
+def test_gauntlet_live_next_rows_load_and_round_trip(tmp_path):
+    f = load_overrides(write(tmp_path, live_text())).gauntlets[0].facts
+    assert f.orders == (((1,), (2,), (3,)),) and len(f.live_next) == len(LIVE_ROWS)
+    rows = {r.key: r for r in f.live_rows()}
+    assert rows[((), 1, 1, "")].next == ((2,),) and rows[((), 2, 2, "")].next == ((1,),)
+    assert rows[(((2,), (3,)), 1, 2, "bag")].next == ((1,),)  # the revive reopens 1
+    assert rows[(((1,),), 2, 2, "")].gap == ("leave",)
+    row = f.to_dict()
+    assert row["live_next"] == LIVE_ROWS
+    assert GauntletFacts.from_dict(row) == f
+    plain = load_overrides(write(tmp_path, gauntlet_text())).gauntlets[0].facts
+    assert plain.live_next == () and "live_next" not in plain.to_dict()
+    assert f.leave_gaps is None and "leave_gaps" not in row and f.heal_gaps == f.pc_gaps == ()
+
+
+@pytest.mark.parametrize(
+    "text, match",
+    [
+        # leave depends on the order in LIVE_ROWS: a flat list is refused, whatever it holds
+        (lambda: live_text(leave="[1]"), "leave_gaps must be absent"),
+        (lambda: live_text(leave="[]"), "leave_gaps must be absent"),
+        # heal is [] under every order and count: it keeps its flat list
+        (lambda: live_text().replace("heal_gaps = []\n", ""), "heal_gaps None is not the list"),
+        (lambda: live_text().replace("pc_gaps = []\n", "pc_gaps = [1]\n"), "pc_gaps"),
+        # without live_next every gap field is required
+        (lambda: gauntlet_text().replace("heal_gaps = []\n", ""), "missing heal_gaps"),
+    ],
+)
+def test_gauntlet_gap_fields_follow_the_live_table(tmp_path, text, match):
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, text()))
+
+
+def test_a_gap_that_depends_on_the_live_count_is_refused_not_read_as_empty(tmp_path):
+    # After 1 the walk leaves at one live only: a swap at gap 1 (it needs a PC or a walk-out;
+    # pc_gaps is []) is refused with the live-count reason, not as "no walk-out".
+    rows = [
+        {**r, "gap": []} if r["fought"] == [[1]] and r["live"] == 2 and "at" not in r else r
+        for r in LIVE_ROWS
+    ]
+    f = load_overrides(write(tmp_path, live_text(rows))).gauntlets[0].facts
+    order = f.orders[0]
+    assert f.leave_gaps is None and f.gap_holds(order, 1, "leave") is None
+    assert f.walkout_at(order, 1) is None and f.gap_holds(order, 2, "leave") is False
+    with pytest.raises(ValueError, match="depends on the live count"):
+        f.leave_gaps_of(order)
+    with pytest.raises(GauntletSettingsError, match="depends on the live count"):
+        check_swap_gap(f, order, 1)
+    with pytest.raises(GauntletSettingsError, match="under no open order"):
+        check_swap_gap(f, order, 2)
+
+
+def test_gauntlet_without_live_next_is_the_orders_prefixes(tmp_path):
+    facts = (
+        "orders = [[[1], [2]], [[2], [1]]]\nleave_gaps = [[], [1]]\nescape = true\n"
+        'pc_gaps = [1]\nheal_gaps = []\nlocked_gaps = []\norders_source = "rom:x"\n'
+        "fight_headers = 5\n"
+    )
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=facts))).gauntlets[0].facts
+    rows = {r.key: r for r in f.live_rows()}
+    for live in (1, 2):
+        assert rows[((), live, live, "")].next == ((1,), (2,))
+        assert (
+            rows[((), live, live, "")].headers == (5, 5) and rows[((), live, live, "")].gap is None
+        )
+        assert rows[(((1,),), live, live, "")].gap == ("pc",)
+        assert rows[(((2,),), live, live, "")].gap == ("leave", "pc")
+        assert rows[(((2,),), live, live, "")].next == ((1,),)
+    assert rows[(((1,),), 1, 2, "bag")].next == ((2,),)
+    assert rows[(((1,),), 2, 1, "pc")].next == rows[(((1,),), 1, 2, "pc")].next == ((2,),)
+    assert len(rows) == 2 + 2 * (2 + 3)
+
+
+@pytest.mark.parametrize(
+    "change, match",
+    [
+        (lambda rows: rows[1:], "no row before the first fight"),
+        (lambda rows: [*rows, rows[0]], "two rows for one key"),
+        (lambda rows: [r for r in rows if r["fought"] != [[1], [2]]], "no row after"),
+        (lambda rows: [{**rows[0], "next": [[4]]}, *rows[1:]], "unfought fights"),
+        (lambda rows: [{**rows[0], "gap": []}, *rows[1:]], "gap facts"),
+        (
+            lambda rows: [
+                {**rows[3], "to": 1, "at": "bag"} if i == 3 else r for i, r in enumerate(rows)
+            ],
+            "change",
+        ),
+        (
+            lambda rows: [
+                {**r, "next": [[2], [3]], "headers": [7, 7]}
+                if r["fought"] == [[1]] and r["live"] == 2 and "at" not in r
+                else r
+                for r in rows
+            ],
+            "not the orders|no row after",
+        ),
+        (lambda rows: [{**rows[0], "live": 3}, *rows[1:]], "1 or 2"),
+        (lambda rows: [{**rows[0], "nxt": [[2]]}, *rows[1:]], "unknown|nxt"),
+    ],
+)
+def test_gauntlet_live_next_refused(tmp_path, change, match):
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, live_text(change(LIVE_ROWS))))
+
+
+def test_route_204_north_a_faint_switches_the_continuation():
+    # The committed table (tools/kaizo/gauntlet_map.py live_table on the Kaizo ROM). Twins 15
+    # are a double-battle trainer: at two live they stop the walk first, at one they are passed
+    # (trainer_encounter.c:108-116). A faint in the twins' fight leaves 13 next, which no order
+    # of one live Pokemon starts with; a faint in 13's fight before the twins drops them.
+    f = next(g for g in load_overrides().gauntlets if g.name == "Route 204 North").facts
+    rows = {r.key: r for r in f.live_rows()}
+
+    def nxt(fought, live, to=None, at=""):
+        return rows[(tuple((t,) for t in fought), live, to or live, at)].next
+
+    assert nxt([], 2) == ((15,),) and nxt([], 1) == ((13,),)
+    assert nxt([15], 2) == nxt([15], 1) == ((13,),)
+    assert nxt([13], 2) == ((14,), (15,)) and nxt([13], 1) == ((14,),)
+    assert nxt([13, 14], 2) == ((15,),) and nxt([13, 14], 1) == ()  # one live: the chain ends
+    # twins planned after a revive back to two live (a bag item on the player's tile)
+    assert nxt([13, 14], 1, 2, "bag") == ((15,),)
+    assert all(r.headers == (346,) * len(r.next) for r in f.live_rows())
+    # leaving depends on the count (after 13: at one live, not at two): no flat leave_gaps;
+    # the order's gaps are read from live_next
+    assert f.leave_gaps is None and f.heal_gaps == f.pc_gaps == ()
+    assert f.leave_gaps_of(f.orders[0]) == (1, 2)
+
+
+def test_route_213_from_the_lobby_end_has_no_leave_or_heal_after_the_cutscene():
+    # From the lobby end the way crosses coord 12's cutscene, which parks trainer 107 on the
+    # beach line's only tile back east (scr 459 @521-533): no lobby (heal, doors) after it. The
+    # west order leaves at every gap. Both walking non-members must be beaten.
+    f = next(g for g in load_overrides().gauntlets if g.name == "Route 213").facts
+    assert f.heal_gaps == () and f.pc_gaps == () and f.live_next == ()
+    east, west = sorted(f.orders, key=lambda o: o[0] != (106,))
+    assert f.leave_gaps_of(east) == () and f.leave_gaps_of(west) == (1, 2, 3, 4)
+    assert [f.gap_holds(east, k, "heal") for k in range(1, 5)] == [False] * 4
+    assert f.requires_beaten == (107, 108) and f.requires_beaten_source.startswith("rom:")
 
 
 def test_missing_file_is_empty(tmp_path):
@@ -215,8 +484,8 @@ def test_citation_to_missing_row():
 def test_gauntlet_citation_needs_gauntlet_tag():
     o = overrides_with(
         gauntlets=(
-            Gauntlet("ok", (1, 2), {}, "S Split:11"),
-            Gauntlet("bad", (3, 4), {}, "S Split:13"),
+            Gauntlet("ok", (1, 2), "S Split:11"),
+            Gauntlet("bad", (3, 4), "S Split:13"),
         )
     )
     assert check_citations(o, SYN) == ["gauntlet 'bad': S Split:13 does not say gauntlet"]
@@ -327,8 +596,8 @@ def test_gauntlet_members_tied_to_cited_group():
     ]
     o = overrides_with(
         gauntlets=(
-            Gauntlet("ok", (21, 22), {}, "S Split:11"),
-            Gauntlet("wrong", (2, 23), {}, "S Split:11"),
+            Gauntlet("ok", (21, 22), "S Split:11"),
+            Gauntlet("wrong", (2, 23), "S Split:11"),
         )
     )
     got = check_gauntlet_members(o, SYN, sheet)
@@ -337,7 +606,7 @@ def test_gauntlet_members_tied_to_cited_group():
 
 
 def test_trainer_in_two_gauntlets_refused(tmp_path):
-    g = '[[gauntlet]]\nname = "{}"\ntrainers = {}\nrules = {{}}\nsource = "user, 2026-11-03"\n'
+    g = '[[gauntlet]]\nname = "{}"\ntrainers = {}\nsource = "user, 2026-11-03"\n'
     text = g.format("a", "[1, 2]") + g.format("b", "[2, 3]")
     with pytest.raises(OverridesError, match="gauntlet 'b': trainer 2 .*'a'"):
         load_overrides(write(tmp_path, text))
@@ -346,7 +615,7 @@ def test_trainer_in_two_gauntlets_refused(tmp_path):
 def test_ids_must_be_rom_trainers():
     o = overrides_with(
         area={5: AreaOverride(True, False, None, "rom:x")},
-        gauntlets=(Gauntlet("g", (5, 9), {}, "S Split:11"),),
+        gauntlets=(Gauntlet("g", (5, 9), "S Split:11"),),
     )
     assert check_trainer_ids(o, {5, 6}) == ["gauntlet 'g': 9 is no ROM trainer id"]
 
@@ -507,15 +776,15 @@ def test_draft_gravity_from_pkcalc(syn_draft):
 
 def test_draft_gauntlet_groups(syn_draft):
     text, o = syn_draft
-    got = {g.trainers: (g.source, g.rules) for g in o.gauntlets}
+    got = {g.trainers: (g.source, g.facts) for g in o.gauntlets}
     assert got == {
-        (21, 22, 23): ("S Split:21", {}),
-        (24, 25): ("S Split:24", {}),
-        (26, 27): ("S Split:26", {}),
-        (31, 32): ("S Split:30", {}),  # leader excluded
-        (35, 36, 37, 38): ("S Split:40", {}),  # tag partner excluded
+        (21, 22, 23): ("S Split:21", None),
+        (24, 25): ("S Split:24", None),
+        (26, 27): ("S Split:26", None),
+        (31, 32): ("S Split:30", None),  # leader excluded
+        (35, 36, 37, 38): ("S Split:40", None),  # tag partner excluded
     }
-    assert "rules = {}" in text
+    assert "rules = {}" not in text and "\norders = " not in text  # the draft has no facts
     # a group with an unmapped member is drafted commented out, citing the row
     block = text[text.index("# UNSETTLED gauntlet") :].split("\n\n")[0]
     assert "S Split:28" in block and "S Split:29" in block and "# [[gauntlet]]" in block
@@ -568,8 +837,8 @@ def test_stale_citation_detected(docs):  # Roark Split:7's header has no TRICK R
 
 
 @pytest.mark.slow
-def test_rules_left_unset_by_draft(docs, mappings):
-    assert "rules = {}" in draft_overrides(docs, mappings)
+def test_no_facts_in_draft(docs, mappings):
+    assert "\norders = " not in draft_overrides(docs, mappings)
 
 
 def test_real_draft_loads_and_cites_clean(docs, mappings, field_effects, tmp_path):
@@ -598,7 +867,7 @@ def test_committed_override_keys_known(mappings):
 
 def test_committed_gauntlet_members_tied_to_their_cite(docs, mappings):
     assert check_gauntlet_members(load_overrides(), docs, mappings.sheet) == []
-    probe = overrides_with(gauntlets=(Gauntlet("wrong", (246, 870), {}, "Roark Split:229"),))
+    probe = overrides_with(gauntlets=(Gauntlet("wrong", (246, 870), "Roark Split:229"),))
     assert len(check_gauntlet_members(probe, docs, mappings.sheet)) == 2
 
 
@@ -643,9 +912,57 @@ def test_committed_file_records_the_users_start_answers():
     assert o.area[870].gravity and o.area[870].source == "Elite Four Split:298"
 
 
-def test_committed_rules_unset():
+def test_committed_facts_recorded():
     raw = tomllib.loads(DEFAULT_PATH.read_text(encoding="utf-8"))
-    assert raw["gauntlet"] and all(g["rules"] == {} for g in raw["gauntlet"])
+    assert raw["gauntlet"] and all("rules" not in g for g in raw["gauntlet"])
+    o = load_overrides()
+    assert all(g.facts is not None for g in o.gauntlets)
+    wayward = next(g for g in o.gauntlets if g.name == "Wayward Cave")
+    assert (
+        len(wayward.facts.orders) == 4
+        and len(wayward.facts.skips) == 2
+        and wayward.facts.partner.trainer == 612
+    )
+    route = next(g for g in o.gauntlets if g.name == "Route 213")
+    assert len(route.facts.orders) == 2  # no Surf before the Fen Badge (walk-fix round)
+    assert all(len(g.facts.fight_headers) == len(g.facts.orders) for g in o.gauntlets)
+
+
+def test_groups_with_no_walk_off_encounter_tiles_are_refused_under_wild_avoid():
+    # C10 re-derive (W26): every way through Oreburgh Mine, Route 204 North and Wayward Cave
+    # ends steps on encounter tiles, so the case without wild has no full sequence and the
+    # default wild = avoid refuses them by name; accept reaches the top level.
+    o = {g.name: g.facts for g in load_overrides().gauntlets}
+    held = {
+        "Oreburgh Mine": (),
+        "Route 204 North": (),
+        "Wayward Cave": ("rock_smash", "strength"),
+    }
+    for name, moves in held.items():
+        f = o[name]
+        assert "wild" in f.field_moves and f.wild_levels, name
+        with pytest.raises(ValueError, match="no full sequence|lacks|needs"):
+            f.case(f.walk_moves(moves, "avoid"))
+        assert f.case(f.walk_moves(moves, "accept")).orders == f.orders
+    others = set(o) - set(held)
+    assert all("wild" not in o[n].field_moves and not o[n].wild_levels for n in others)
+
+
+def test_elite_four_and_champion_run_through_coverage(kaizo_names, kaizo_trainers):
+    # Elite Four + Champion (866-870) run as single fights until batch 4 adds their group with the
+    # chain (B4-19; manager ruling 21 Nov, docs/gauntlet-design.md:18) and enter it with no new
+    # blocker (:331): coverage refuses none of them, whether or not the group is recorded.
+    from nuzline.data.tables import load_tables
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
+    from nuzline.engine.coverage import Support, check_opponent, start_weather
+    from tests.conftest import KAIZO_INTERMEDIATE, KAIZO_TABLES_DIR
+
+    tables, inter = load_tables(KAIZO_TABLES_DIR), IntermediateData(KAIZO_INTERMEDIATE)
+    for tid in range(866, 871):
+        trainer = kaizo_trainers[tid]
+        opp = build_trainer_party(trainer, inter)
+        report = check_opponent(tables, kaizo_names, trainer, opp, start_weather(trainer))
+        assert (report.missing, report.level) == ([], Support.EXACT), (tid, report.missing)
 
 
 def test_real_mapping_with_overrides(pkcalc, kaizo_rom_trainers, species):
@@ -770,3 +1087,174 @@ def test_overrides_check_runs_the_two_placement_rule(tmp_path, capsys):
     path = write(tmp_path, text[:start] + rom + text[end:])
     assert main(["check", "--overrides", str(path), "--intermediate", str(inter)]) == 1
     assert "trainer 539: Trick Room headers [310]" in capsys.readouterr().out
+
+
+# --- field-move cases (B3 fix 3 C6) ---------------------------------------------------------
+
+CASE_FACTS = (
+    "orders = [[[1], [2]], [[2], [1]]]\nleave_gaps = []\nescape = false\npc_gaps = []\n"
+    'heal_gaps = []\nlocked_gaps = []\nfield_moves = ["rock_smash"]\n'
+    'field_moves_source = "rom:header 1 events 2 obj 3 (rock)"\n'
+    'orders_source = "rom:header 1 events 2"\n'
+    "[[gauntlet.case]]\nmoves = []\norders = [[[1], [2]]]\nleave_gaps = []\npc_gaps = []\n"
+    "heal_gaps = []\nlocked_gaps = []\nfight_headers = 1\n"
+)
+
+
+def test_gauntlet_cases_load_and_follow_the_party(tmp_path):
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=CASE_FACTS))).gauntlets[0].facts
+    assert f.field_moves == ("rock_smash",)
+    assert f.field_moves_source == "rom:header 1 events 2 obj 3 (rock)"
+    assert len(f.orders) == 2 and f.case(["rock_smash"]).orders == f.orders
+    c = f.case(())
+    assert c.orders == (((1,), (2,)),) and c.fight_headers == ((1, 1),)
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+
+
+WILD_FACTS = CASE_FACTS.replace('field_moves = ["rock_smash"]', 'field_moves = ["wild"]').replace(
+    'orders_source = "rom:header 1 events 2"\n',
+    'orders_source = "rom:header 1 events 2"\n'
+    'wild_levels = [{header = 1, kind = "grass", rate = 10, max_level = 7, tiles = 1, '
+    "examples = [[2, 1]]}]\n"
+    'wild_levels_source = "rom:header 1 wild 5 (pl_enc_data)"\n'
+    'repel_steps = [{order = [[1], [2]], steps = [12, 3]}, {order = [[2], [1]], steps = [0, 7]}]\n'
+    'repel_steps_source = "rom:gauntlet_map.repel_stretches"\n',
+)
+
+
+def test_gauntlet_wild_levels_load_with_the_wild_case(tmp_path):
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=WILD_FACTS))).gauntlets[0].facts
+    assert f.field_moves == ("wild",) and f.wild_max_level == 7
+    assert f.wild_levels_source == "rom:header 1 wild 5 (pl_enc_data)"
+    assert f.case(f.walk_moves((), "avoid")).orders == (((1,), (2,)),)
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+    text = WILD_FACTS.replace('wild_levels_source = "rom:header 1 wild 5 (pl_enc_data)"\n', "")
+    with pytest.raises(OverridesError, match="needs wild_levels_source"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=text)))
+
+
+def test_gauntlet_repel_steps_load_and_count_repels(tmp_path):
+    # C10b: one row per order; one fresh Repel per stretch, ceil(steps / item steps) each
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=WILD_FACTS))).gauntlets[0].facts
+    assert f.repel_steps_source == "rom:gauntlet_map.repel_stretches"
+    assert f.repels_needed([[1], [2]], 10) == 2 + 1
+    assert f.repels_needed([[2], [1]], 10) == 0 + 1  # a stretch of 0 steps needs none
+    assert f.case(["wild"]).repels_needed([[1], [2]], 100) == 2
+    with pytest.raises(ValueError, match="no Repel step count"):
+        f.repels_needed([[1, 2]], 10)
+    src = 'repel_steps_source = "rom:gauntlet_map.repel_stretches"\n'
+    with pytest.raises(OverridesError, match="needs repel_steps_source"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=WILD_FACTS.replace(src, ""))))
+    one = WILD_FACTS.replace(", {order = [[2], [1]], steps = [0, 7]}", "")
+    with pytest.raises(OverridesError, match="no row for"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=one)))
+    short = WILD_FACTS.replace("steps = [12, 3]", "steps = [12]")
+    with pytest.raises(OverridesError, match="one count per fight"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=short)))
+    plain = CASE_FACTS.replace(
+        'orders_source = "rom:header 1 events 2"\n',
+        'orders_source = "rom:header 1 events 2"\n'
+        'repel_steps = [{order = [[1], [2]], steps = [1, 1]}, {order = [[2], [1]], steps = [1, 1]}]\n'
+        'repel_steps_source = "rom:x"\n',
+    )
+    with pytest.raises(OverridesError, match="exactly when wild"):
+        load_overrides(write(tmp_path, gauntlet_text(facts=plain)))
+
+
+def test_committed_repel_steps_cover_every_order_of_the_wild_groups():
+    # C10b: the chain groups whose walk holds wild carry a Repel step count for every order
+    o = {g.name: g.facts for g in load_overrides().gauntlets}
+    for name in ("Oreburgh Mine", "Route 204 North"):
+        f = o[name]
+        keys = {r.order for r in f.repel_steps}
+        assert set(f.orders) | {s.order for s in f.skips} <= keys, name
+        assert all(n > 0 for r in f.repel_steps for n in r.steps), name
+    assert all(not f.repel_steps for n, f in o.items() if "wild" not in f.field_moves)
+
+
+@pytest.mark.fullset
+def test_wayward_cave_refuses_wild_repel_by_name():
+    # C10b ruling (c), 22 Nov: the worst start's steps are not counted in Wayward Cave (owed:
+    # exact or a proven upper bound), so wild = repel is refused there by name; stale when
+    # the count lands
+    f = {g.name: g.facts for g in load_overrides().gauntlets}["Wayward Cave"]
+    assert "wild" in f.field_moves and not f.repel_steps and "worst start" in f.repel_refusal
+    moves = ("rock_smash", "strength")
+    with pytest.raises(SettingsError, match="Wayward Cave: wild = repel is refused here"):
+        f.walk_moves(moves, "repel", first_live_level=100, repel_steps=250, repels=99)
+    assert f.case(f.walk_moves(moves, "accept")).orders == f.orders
+
+
+def test_a_gauntlet_case_with_no_orders_is_refused_when_picked(tmp_path):
+    text = CASE_FACTS.split("[[gauntlet.case]]")[0] + "[[gauntlet.case]]\nmoves = []\norders = []\n"
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=text))).gauntlets[0].facts
+    with pytest.raises(ValueError, match="needs Rock Smash"):
+        f.case(["cut"])
+
+
+@pytest.mark.parametrize(
+    "old, new, match",
+    [
+        ('field_moves_source = "rom:header 1 events 2 obj 3 (rock)"\n', "", "needs field_moves"),
+        ('field_moves = ["rock_smash"]', 'field_moves = ["cut", "rock_smash"]', "every other"),
+        ("moves = []\norders = [[[1], [2]]]", "moves = []\norders = [[[1], [3]]]", "exactly once"),
+        ("fight_headers = 1\n", "fight_headers = 1\nescape = true\n", "unknown key 'escape'"),
+        (
+            "moves = []\norders = [[[1], [2]]]\nleave_gaps = []\n",
+            "moves = []\norders = []\n",
+            "no other",
+        ),
+        ("locked_gaps = []\nfight_headers", "fight_headers", "missing locked_gaps"),
+        (
+            "leave_gaps = []\npc_gaps = []\nheal_gaps = []\nlocked_gaps = []\nfight",
+            "leave_gaps = []\npc_gaps = []\nlocked_gaps = []\nfight",
+            "missing heal_gaps",
+        ),
+    ],
+)
+def test_gauntlet_cases_refused(tmp_path, old, new, match):
+    assert old in CASE_FACTS
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, gauntlet_text(facts=CASE_FACTS.replace(old, new, 1))))
+
+
+# --- skips behind a pushed boulder (B3 fix 3 C5c) ---------------------------------------------
+
+SKIP_FACTS = (
+    "orders = [[[1], [2], [3]]]\nleave_gaps = []\nescape = false\npc_gaps = []\nheal_gaps = []\n"
+    'locked_gaps = []\norders_source = "rom:header 1 events 2"\n'
+    'skips_source = "rom:header 1 obj 2 fixed facing"\n'
+    "[[gauntlet.skips]]\norder = [[1], [3]]\nskipped = [2]\nheader = 1\nboulder = 5\n"
+    "boulder_from = [4, 4]\nboulder_to = [6, 7]\nhold = [[5, 7]]\n"
+)
+
+
+def test_gauntlet_skips_load(tmp_path):
+    text = gauntlet_text("[1, 2, 3]", SKIP_FACTS)
+    f = load_overrides(write(tmp_path, text)).gauntlets[0].facts
+    (s,) = f.skips
+    assert (s.order, s.skipped, s.header, s.boulder) == (((1,), (3,)), (2,), 1, 5)
+    assert (s.boulder_from, s.boulder_to, s.hold) == ((4, 4), (6, 7), ((5, 7),))
+    assert f.skips_source == "rom:header 1 obj 2 fixed facing"
+    assert f.orders == (((1,), (2,), (3,)),)  # the skipped trainer stays fightable
+    assert GauntletFacts.from_dict(f.to_dict()) == f
+
+
+@pytest.mark.parametrize(
+    "old, new, match",
+    [
+        ('skips_source = "rom:header 1 obj 2 fixed facing"\n', "", "skips_source: source"),
+        ("order = [[1], [3]]", "order = [[3], [1]]", "not an order of the group"),
+        ("order = [[1], [3]]", "order = [[1], [2], [3]]", "not an order of the group"),
+        ("skipped = [2]", "skipped = []", "skips no one"),
+        ("hold = [[5, 7]]", "hold = []", "hold must be"),
+        ("hold = [[5, 7]]", "hold = [[5, 7, 1]]", "a tile is"),
+        ("header = 1\n", "", "missing header"),
+        ("header = 1\n", "header = 1\nflag = 3\n", "unknown key 'flag'"),
+    ],
+)
+def test_gauntlet_skips_refused(tmp_path, old, new, match):
+    assert old in SKIP_FACTS
+    text = gauntlet_text("[1, 2, 3]", SKIP_FACTS.replace(old, new, 1))
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, text))

@@ -431,7 +431,9 @@ def ref_apply_turn(
             k += 0 if auto else 1
         return ref
 
-    ref = ref_step(np_tables, to_ref(state), acts, py_outcome)
+    # The input state's pending prompts are answered before the first step, as
+    # ``_apply_turn``'s first pass does (``_answer_prompts`` at n == 0).
+    ref = ref_step(np_tables, answer(to_ref(state)), acts, py_outcome)
     for _ in range(MAX_PAUSES - 1):
         more = auto or (k < MAX_LEARNS and choices[k] >= 0)
         if not (ref.learn_site and more):

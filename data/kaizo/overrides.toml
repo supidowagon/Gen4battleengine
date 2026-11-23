@@ -26,7 +26,8 @@
 # sheet: a "Gauntlet Start" .. "Gauntlet End" chain, a "B2B With X" pair, a section tagged
 # "GYM TRAINERS ARE A GAUNTLET" (its trainers in sheet order, leader excluded) and a
 # "Gauntlet With X" section (its GAUNTLET-tagged trainers, the tag partner excluded).
-# Every group's rules stay {} until play reaches it (heal_between, change_team).
+# The game facts of each group (orders, gaps, escape, partner) are read from the ROM by
+# tools/kaizo/gauntlet_map.py and recorded below with their sources.
 #
 # Level caps are not here: data/kaizo/level_caps.toml (read at runtime by prep).
 
@@ -475,79 +476,313 @@ source = "rom:map header 306 weather 18 (Trick Room)"
 gravity = true
 source = "Elite Four Split:298"
 
-# --- Gauntlets (rules stay {} until play reaches each group) ----------
+# --- Gauntlets (game facts: tools/kaizo/gauntlet_map.py reads them from the ROM) ----------
+# orders: each order is a list of fights, each fight one or two trainer ids (a two-trainer
+# fight is one battle); gap k follows the k-th fight. The first order is the one the sheet's
+# fight ids come from (a fight's id is its first trainer id). fight_headers: the map header
+# each fight starts on (one header for every fight here). live_next: the next-fight table by
+# the live count (nuzline.data.gauntlet.LiveRow), only where it is not the orders' prefixes;
+# there leave_gaps, heal_gaps and pc_gaps are omitted when its gap facts depend on the order
+# or the count (nuzline.data.gauntlet.flat_gaps).
+# Field moves follow the badges of the splits before the group's split
+# (FieldMoves.for_split). A ROM-backed test
+# (tests/kaizo/test_gauntlet_map.py) re-derives every value below.
 
 # Worker Mason (Gauntlet Start)*; Worker Colin (Gauntlet End)*
 # rows: Roark Split:229=196, Roark Split:239=195
+# 196 is fought first, as the sheet lists it: before the Coal Badge the Rock Smash rocks
+# (19,28)-(19,29) close the east way (scripts_field_moves.s:134), so the only way west is the
+# ledge row (2-4,19) (JUMP_SOUTH, one-way), into 196's line at row 24, then 195's tile (10,29).
 [[gauntlet]]
 name = "Oreburgh Mine"
 trainers = [196, 195]
-rules = {}
 source = "Roark Split:229"
+orders = [[[196], [195]]]
+leave_gaps = []
+escape = true
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+fight_headers = 199
+field_moves = ["wild"]
+field_moves_source = "rom:every way from the stairs warp (15,1) to 196 and 195 ends steps on encounter tiles of headers 199 (grass rate 10) and 198: without wild no order (gauntlet_map.chain_group_facts, changing_moves)"
+wild_levels = [
+  { header = 45, kind = "grass", rate = 20, max_level = 10, tiles = 25, examples = [[310, 793], [310, 794], [310, 795]] },
+  { header = 198, kind = "grass", rate = 10, max_level = 10, tiles = 206, examples = [[4, 4], [4, 5], [4, 6]] },
+  { header = 199, kind = "grass", rate = 10, max_level = 10, tiles = 216, examples = [[2, 17], [2, 18], [2, 20]] },
+]
+wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
+repel_steps = [
+  { order = [[196], [195]], steps = [36, 12] },
+]
+repel_steps_source = "rom:per order and stretch the fewest steps of the walk with every field move, worst over start states and both live counts (Repel_UpdateSteps repel_step_update.c:12-25 from field_control.c:755; one step per move, never below the game; gauntlet_map.repel_stretches)"
+orders_source = "rom:header 199 events 197 objs 1, 2 (rocks), 5, 6; ledges (2-4,19) behaviour 0x3B; stairs warp (15,1)"
+escape_source = "rom:header 199 map type 3 escape bit 1"
+[[gauntlet.case]]
+moves = []
+orders = []
 
 # Twins Liv & Liz (DOUBLE) (Gauntlet Start)*; Bug Catcher Brandon (Gauntlet)*; Aroma Lady Taylor (Gauntlet End)*
 # rows: Gardenia Split:59=15, Gardenia Split:69=13, Gardenia Split:79=14
+# Assumption: the walk enters from the Ravaged Path side only (header 254 -> warp (180,698)).
+# 15 (the twins) is a double-battle trainer (trdata battle type): with one live Pokemon it is
+# not fought, by sight or by talk (trainer_encounter.c:108-118; scripts_battles.s:19-22). The
+# walk depends on the count: live_next is the next fight after the fights fought (in order)
+# by the count at the last fight's end (live), and at a revive in the gap (at "bag", to 2).
+# A faint in the twins' fight leaves 13 next; after 13 at two live, 14 or 15; after 13, 14 at
+# one live the chain ends and a revive reopens 15. No leave_gaps: leaving depends on the count
+# (after 13 at one live the walk can leave, at two it cannot); live_next holds it (gap
+# "leave"). pc_gaps and heal_gaps are [] under every order and count.
 [[gauntlet]]
 name = "Route 204 North"
 trainers = [15, 13, 14]
-rules = {}
 source = "Gardenia Split:59"
+orders = [[[15], [13], [14]]]
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+fight_headers = 346
+field_moves = ["wild"]
+field_moves_source = "rom:held rock_smash, wild (the split's badges; wild every split); no walk used rock_smash; every way from warp (180,698) to the trainers ends steps on grass of header 346 (rate 30): without wild no order (gauntlet_map.chain_group_facts, changing_moves)"
+wild_levels = [
+  { header = 254, kind = "grass", rate = 30, max_level = 7, tiles = 11, examples = [[26, 42], [26, 43], [26, 44]] },
+  { header = 346, kind = "grass", rate = 30, max_level = 14, tiles = 58, examples = [[170, 677], [170, 678], [170, 679]], roaming = true },
+]
+wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
+repel_steps = [
+  { order = [[13], [14], [15]], steps = [29, 9, 17] },
+  { order = [[13], [15], [14]], steps = [29, 11, 17] },
+  { order = [[15], [13], [14]], steps = [17, 14, 9] },
+]
+repel_steps_source = "rom:per order and stretch the fewest steps of the walk with every field move, worst over start states and both live counts (Repel_UpdateSteps repel_step_update.c:12-25 from field_control.c:755; one step per move, never below the game; gauntlet_map.repel_stretches)"
+live_next = [
+  { fought = [], live = 1, next = [[13]], headers = [346] },
+  { fought = [], live = 2, next = [[15]], headers = [346] },
+  { fought = [[13]], live = 1, next = [[14]], headers = [346], gap = ["leave"] },
+  { fought = [[13]], live = 1, to = 2, at = "bag", next = [[14], [15]], headers = [346, 346] },
+  { fought = [[13]], live = 2, next = [[14], [15]], headers = [346, 346], gap = [] },
+  { fought = [[15]], live = 1, next = [[13]], headers = [346], gap = ["leave"] },
+  { fought = [[15]], live = 1, to = 2, at = "bag", next = [[13]], headers = [346] },
+  { fought = [[15]], live = 2, next = [[13]], headers = [346], gap = ["leave"] },
+  { fought = [[13], [14]], live = 1, next = [], headers = [], gap = ["leave"] },
+  { fought = [[13], [14]], live = 1, to = 2, at = "bag", next = [[15]], headers = [346] },
+  { fought = [[13], [14]], live = 2, next = [[15]], headers = [346], gap = ["leave"] },
+  { fought = [[13], [15]], live = 1, next = [[14]], headers = [346], gap = ["leave"] },
+  { fought = [[13], [15]], live = 1, to = 2, at = "bag", next = [[14]], headers = [346] },
+  { fought = [[13], [15]], live = 2, next = [[14]], headers = [346], gap = ["leave"] },
+  { fought = [[15], [13]], live = 1, next = [[14]], headers = [346], gap = ["leave"] },
+  { fought = [[15], [13]], live = 1, to = 2, at = "bag", next = [[14]], headers = [346] },
+  { fought = [[15], [13]], live = 2, next = [[14]], headers = [346], gap = ["leave"] },
+]
+orders_source = "rom:header 346 events 332; warp (180,698) -> header 254"
+[[gauntlet.case]]
+moves = []
+orders = []
 
 # Galactic Mercury (B2B With Galactic Terra); GalacticfTerra (B2B With Galactic Mercury)
 # rows: Gardenia Split:91=296, Gardenia Split:101=297
 [[gauntlet]]
 name = "Route 204 North B2B"
 trainers = [296, 297]
-rules = {}
 source = "Gardenia Split:91"
+orders = [[[296], [297]]]
+leave_gaps = []
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = [1]
+fight_headers = 256
+field_moves = []
+field_moves_source = "rom:held rock_smash (the split's badges); none changes the facts: one script entry, no walk (gauntlet_map.chain_group_facts, changing_moves)"
+orders_source = "rom:scr 277 entry 2 LockAll @36, StartTrainerBattle @44 (296, 0) @73 (297, 0): literal ids, ReleaseAll @106"
 
 # Lass Caroline; Aroma Lady Jenna; Artist Angel
 # rows: Gardenia Split:454=324, Gardenia Split:464=259, Gardenia Split:474=260
 [[gauntlet]]
 name = "Eterna Gym gym trainers"
 trainers = [324, 259, 260]
-rules = {}
 source = "Gardenia Split:451"
+orders = [[[324], [259], [260]]]
+leave_gaps = []
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+fight_headers = 67
+field_moves = []
+field_moves_source = "rom:held rock_smash (the split's badges); none changes the facts: gym_reach: header 67 holds no Rock Smash rock; its Cut trees need the Forest Badge (gauntlet_map.chain_group_facts, changing_moves)"
+orders_source = "rom:header 67 events 66; scr 73 entries 7, 8, 5; clock states 0-3"
 
 # Galactic Amalthia (Gauntlet Start)*; Scientist Galileo (Gauntlet End)*
 # rows: Fantina Split:7=421, Fantina Split:17=831
 [[gauntlet]]
 name = "Team Galactic Eterna Building #1"
 trainers = [421, 831]
-rules = {}
 source = "Fantina Split:7"
+orders = [[[421], [831]], [[831], [421]]]
+leave_gaps = [[], [1]]
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+fight_headers = 73
+field_moves = []
+field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Cut tree but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
+orders_source = "rom:header 73 events 72 objs 0, 2; header 72 warps 1 (14,6), 3 (20,6)"
 
 # Galactic Callisto (Gauntlet Start)*; Galactic Europa (Gauntlet End)*
 # rows: Fantina Split:27=410, Fantina Split:37=423
 [[gauntlet]]
 name = "Team Galactic Eterna Building #2"
 trainers = [410, 423]
-rules = {}
 source = "Fantina Split:27"
+orders = [[[410], [423]]]
+leave_gaps = [1]
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+fight_headers = 74
+field_moves = []
+field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Cut tree but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
+orders_source = "rom:header 74 events 73 objs 0, 1; header 73 warp 1 (16,3) -> (9,11)"
 
 # Galactic Ganymede (Gauntlet Start)*; Galactic Io (Gauntlet End)*
 # rows: Fantina Split:47=412, Fantina Split:57=422
 [[gauntlet]]
 name = "Team Galactic Eterna Building #3"
 trainers = [412, 422]
-rules = {}
 source = "Fantina Split:47"
+orders = [[[412], [422]]]
+leave_gaps = []
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+fight_headers = 74
+field_moves = []
+field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Cut tree but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
+orders_source = "rom:header 74 events 73 obj 2; warp 4 (25,20) and the panels leading to it"
 
 # SwimmerF Mary (GAUNTLET START)*; Swimmer Sheltin (GAUNTLET)*; SwimmerF Haley (GAUNTLET)*; Fisherman Kenneth (GAUNTLET)*; Sailor Paul (GAUNTLET END)*
 # rows: Wake Split:215=106, Wake Split:225=103, Wake Split:235=105, Wake Split:245=111, Wake Split:255=110
 [[gauntlet]]
 name = "Route 213"
 trainers = [106, 103, 105, 111, 110]
-rules = {}
 source = "Wake Split:215"
+# No Surf before the Fen Badge (field_control.c:690): the beach is one line, walked from the
+# lobby end or from the west end. Hidden at the Wake split: the grunt (obj 28, flag 538),
+# Looker (obj 31, 488) and the lobby's Looker (header 376 obj 2, 529), cleared only past the
+# Fen Badge (scr 459 @827-839). Trainer 696's pair and its four spectators (objs 33-38, flag
+# 482) stand until the player enters the lobby (scr 462 entry 1 @37, @152). Var 0x40FA: 7 at
+# the lobby-end entries (the lobby's OnTransition, scr 462 entry 1 @24-31), unknown at the west
+# entry (every story coord blocks there). From the lobby end the way onto the beach line crosses
+# coord 12 (699,832), value 7: a camera cutscene (scr 459 script 12 @477-649) that places
+# trainer 107 (obj 4) on (700,832), facing south with no movement, and sets 8 @643. 107 then
+# stands on the beach line's only tile back east until a map load, so after the cutscene the
+# lobby (its healer, scr 462 entry 2 HealParty @74, and its doors) is out of reach: the order
+# from the lobby end has no leave gap and no heal. The west order leaves at every gap (the
+# west exit). Walking non-members 107 (obj 4, movement 43, range 3x7) and 108 (obj 5, movement
+# 41, range 2x2) close the lobby end while unbeaten: the facts need both beaten.
+orders = [
+  [[106], [103], [105], [111], [110]],
+  [[110], [111], [105], [103], [106]],
+]
+leave_gaps = [[], [1, 2, 3, 4]]
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+fight_headers = 373
+field_moves = []
+field_moves_source = "rom:held cut, rock_smash (the split's badges); none changes the facts: the walk meets a Rock Smash rock but every subset has the same facts (gauntlet_map.chain_group_facts, changing_moves)"
+requires_beaten = [107, 108]
+requires_beaten_source = "rom:header 373 objs 4 (trainer 107, movement 43, range 3x7) and 5 (108, movement 41, range 2x2): walking non-members close their range box and, unbeaten, its sight area (map_object_move.c:675-705, script_manager.c:517-520); unbeaten no order completes (gauntlet_map.derive_groups)"
+orders_source = "rom:header 373 events 359; water behaviour 0x15 without Surf (Wake split); door (706,818) -> header 376; coord 12 cutscene scr 459 @477-649 (ROUTE_213_CUTSCENE)"
 
 # Collector Gerald (MULTI BATTLE with Clown Bob, GAUNTLET)*; Clown Bob (MULTI BATTLE with Collector Gerald, GAUNTLET); Camper Parker (MULTI BATTLE with Picknicker Tori, GAUNTLET); Picknicker Tori (MULTI BATTLE with Camper Parker, GAUNTLET); Bug Catcher Adalbert (MULTI BATTLE with Camper Mike, GAUNTLET); Camper Mike (MULTI BATTLE with Bug Catcher Adalbert, GAUNTLET); Lass Cassidy (MULTI BATTLE with Youngster Butch, GAUNTLET); Youngster Butch (MULTI BATTLE with Lass Cassidy, GAUNTLET); Hiker Reginald (MULTI BATTLE with Hiker Lorenzo, GAUNTLET); Hiker Lorenzo (MULTI BATTLE with Hiker Reginald, GAUNTLET); Castle Valet Darach (MULTI BATTLE with Lady Caitlin, GAUNTLET END); Lady Caitlin (MULTI BATTLE with Castle Valet Darach, GAUNTLET END)
 # rows: Galactic Split:117=443, Galactic Split:127=383, Galactic Split:137=380, Galactic Split:147=458, Galactic Split:157=459, Galactic Split:167=460, Galactic Split:177=450, Galactic Split:187=496, Galactic Split:197=454, Galactic Split:207=455, Galactic Split:217=749, Galactic Split:227=750
+# The first order is the sheet's six pairs; the second fights 459 and 460 as two singles (459 is
+# talked to alone). A pair's fight id is its first sheet id: 443, 380, 450, 459, 454, 749.
+# Talking to 459 alone is a single beside the partner: scr 1114 entry 1 @3873 StartTrainerBattle
+# 0x8004, 0 (one id; encounter.c:738-739 BATTLE_TYPE_TRAINER; trainer_data.c:50 ORs in the
+# battleType of trainers 459 and 612, 0 in rom trdata), then 460 by sight is a single too (scr
+# 1114 @4275 StartTrainerBattle 0x8004, 0).
+# Mira joins before fight 1: without her the coord (85,8)-(85,10) (var 0x4091 value 0, scr 318
+# entry 6 "Ignore the cry for help?") either leaves the cave (yes @399 Warp 350 (310,608)) or
+# walks the player 2 west (no @299), and no trainer is reachable from the start pocket. Talking
+# to her sets 0x4091 = 1 (scr 318 entry 2 @152) and the partner (@165 0x403F = 612, @171
+# SetHasPartner), so at every gap the walk-out does not run, Escape Rope and Dig are refused
+# (item_use_functions.c:943-945, field_move_tasks.c:764), every pair is a multi
+# (encounter.c:733-734) and the party is healed after every win (encounter.c:197-199).
 [[gauntlet]]
 name = "Wayward Cave"
 trainers = [443, 383, 380, 458, 459, 460, 450, 496, 454, 455, 749, 750]
-rules = {}
 source = "Galactic Split:105"
+orders = [
+  [[383, 443], [380, 458], [450, 496], [459, 460], [454, 455], [749, 750]],
+  [[383, 443], [380, 458], [450, 496], [459], [460], [454, 455], [749, 750]],
+  [[383, 443], [380, 458], [450, 496], [459, 460], [454], [455], [749, 750]],
+  [[383, 443], [380, 458], [450, 496], [459], [460], [454], [455], [749, 750]],
+]
+leave_gaps = []
+escape = true
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+fight_headers = 284
+partner = { trainer = 612, join_before = [1], source = "rom:scr 318 entry 2 @152 0x4091 = 1, @171 SetHasPartner; coord script 6 (85,8)-(85,10) var 0x4091 value 0 closes the start pocket" }
+orders_source = "rom:header 284 events 273; scr 318 entries 2, 4, 5, 6; split: obj 459 talk tiles (34,28), (35,27); 454, 455 in turn when a moved trainer or a pushed boulder cuts 455's line"
+leave_gaps_source = "rom:scr 318 entry 6 @271-311, @399 Warp 350 (310,608); coord (85,8)-(85,10) runs only while 0x4091 == 0, i.e. before fight 1"
+escape_source = "rom:header 284 map type 3 escape bit 1"
+field_moves = ["rock_smash", "strength", "wild"]
+field_moves_source = "rom:header 284: boulders objs 19 (26,16), 26 (28,16) (gfx 0x54, scr 10002) before 459+460; Rock Smash rocks (scr 10001) objs 15-18, 20-25; held cut, rock_smash, strength (Galactic split badges); without either no order reaches the exit; every way ends steps on cave-floor encounter tiles (wild): without it no order (gauntlet_map.wayward_group_facts, changing_moves)"
+wild_levels = [
+  { header = 284, kind = "grass", rate = 10, max_level = 75, tiles = 1428, examples = [[2, 2], [2, 3], [2, 4]] },
+]
+wild_levels_source = "rom:the encounter tiles (behaviour table, gauntlet_map.ENCOUNTER) the wild case's walks end a step on, per header and kind with a rate > 0 in its pl_enc_data.narc member (header u16 @14); gauntlet_map.wild_levels"
+repel_refusal = "the worst start's steps are not counted: from 450+496 on the start states are thousands of pushed-boulder layouts and one walk per start is too slow; the union walk gives the nearest start only, below the worst (C10b ruling 22 Nov: refused until the exact or a proven upper bound lands, owed)"
+skips_source = "rom:header 284 obj 14 = trainer 455 at (42,42), movement 16 MOVEMENT_TYPE_LOOK_WEST (fixed facing: src/unk_020EDBAC.c:167-173, src/unk_0206450C.c:454-466, :478-481), sight 2, line (41,42), (40,42); a boulder on a tile between interrupts the sight (src/trainer_encounter.c:310-344, src/map_object_move.c:599-601, :623-665, MapObject_GetDistanceToPlayer :230-243); gauntlet_map.wayward_skip; ruling 22 Nov (455 optional, the planner chooses)"
+[[gauntlet.skips]]
+order = [[383, 443], [380, 458], [450, 496], [459], [460], [454], [749, 750]]
+skipped = [455]
+header = 284
+boulder = 26
+boulder_from = [28, 16]
+boulder_to = [41, 42]
+hold = [[40, 42]]
+[[gauntlet.skips]]
+order = [[383, 443], [380, 458], [450, 496], [459, 460], [454], [749, 750]]
+skipped = [455]
+header = 284
+boulder = 26
+boulder_from = [28, 16]
+boulder_to = [41, 42]
+hold = [[40, 42]]
+[[gauntlet.case]]
+moves = []
+orders = []
+[[gauntlet.case]]
+moves = ["rock_smash"]
+orders = []
+[[gauntlet.case]]
+moves = ["strength"]
+orders = []
+[[gauntlet.case]]
+moves = ["wild"]
+orders = []
+[[gauntlet.case]]
+moves = ["rock_smash", "strength"]
+orders = []
+[[gauntlet.case]]
+moves = ["rock_smash", "wild"]
+orders = []
+[[gauntlet.case]]
+moves = ["strength", "wild"]
+orders = []
+
+# Elite Four + Champion: moved to batch 4 (B4-19; facts in docs/gauntlet-design.md).
 
 # draft totals: 51 trick_room, 3 area conflicts, 1 gravity, 9 gauntlets, 0 unsettled gauntlets
 
@@ -1148,12 +1383,14 @@ format = "double_two_trainer"
 opponent_2 = 569
 source = "user, 2026-11-07"
 
-# Spear Pillar (header 220 SPEAR_PILLAR): scr_seq 236 offset 1118 runs CheckTrainerFlag 864
-# (Mira; set by the Wayward Cave escort, scr_seq 318 offset 1037) and branches to offset
-# 1438 StartTagBattle 864, 521, 527 (multi beside Mira), else offset 1129 StartTrainerBattle
-# 521, 527. data/kaizo/battle_formats.json keeps refusing the ROM's two script claims; the
-# user did the Mira escort, so the tag battle is the fight. Sheet Galactic Split:1133 'TAG
-# PARTNER MIRA', :1143, :1153; PKCalc flags.js:393-395.
+# Spear Pillar (header 220 SPEAR_PILLAR): scr_seq 236 @1118 CheckTrainerFlag 864, @1122 GoToIf
+# -> @1411 .. @1438 StartTagBattle 864, 521, 527 (multi beside Mira); else @1129
+# StartTrainerBattle 521, 527 (two-trainer double). Flag 864 is set only by winning the Wayward
+# Cave escort (scr_seq 318 @667 StartTagBattle 612, 750, 749; win -> @1037 SetTrainerFlag 864;
+# loss -> @842 BlackoutFromBattle). Wayward Cave is optional (the walk-out, scr 318 entry 6,
+# before Mira joins), so both formats are reachable; data/kaizo/battle_formats.json keeps
+# refusing the ROM's two claims. The user did the escort, so the tag battle is this run's
+# fight. Sheet Galactic Split:1133 'TAG PARTNER MIRA', :1143, :1153; PKCalc flags.js:393-395.
 [fields.521]
 format = "multi"
 opponent_2 = 527

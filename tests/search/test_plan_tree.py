@@ -214,6 +214,47 @@ def test_render_shows_the_sampled_node_count(roark, names):
     assert "1.2 % (3)" in lines[2]
 
 
+def test_render_rounds_win_chances_down_and_interval_highs_and_losses_up(roark, names):
+    state, result = roark
+    rows = [
+        dataclasses.replace(
+            r,
+            estimate=0.9996,
+            ci_low=0.9989,
+            ci_high=0.9991,
+            lower_bound=0.9996,
+            unexplored=0.0001,
+            refused=0.0001,
+            failed=0.0001,
+            sampled=0.0,
+        )
+        for r in result.ranking
+    ]
+    row = render(dataclasses.replace(result, ranking=rows), names, 0, root=state)[2]
+    assert " 99.9 % [99.8, 100.0]" in row, row
+    assert row.count("99.9 %") == 2 and row.count("  0.1 %") == 3, row
+
+
+def test_distribution_and_precision_lines_round_in_the_safe_direction():
+    # no deaths rounds down, every loss share up; the half-width (an interval's spread) up
+    from types import SimpleNamespace
+
+    from nuzline.search.plan_tree import _precision_line
+
+    dist = DeathDistribution.from_counts([9996, 1, 1, 0, 0, 1, 0, 1])
+    assert distribution_line(dist) == (
+        "deaths under the leader: 0: 99.9 %  1: 0.1 %  2: 0.1 %  3+: 0.0 %  whiteout: 0.0 %  "
+        "unfinished: 0.1 %  protected lost: 0.1 %"
+    )
+    result = SimpleNamespace(
+        settings=SimpleNamespace(precision=0.015), rounds=3, half_width_a=0.013801,
+        precision_met=True,
+    )  # fmt: skip
+    assert _precision_line(result) == (
+        "precision target 1.5 pp: met (leader's half-A half-width 1.39 pp) after 3 top-up rounds"
+    )
+
+
 def test_depth0_prints_no_plan_and_labels_its_leaves(tables, names, monkeypatch):
     """At depth 0 (Stage A) ``render`` shows no plan under the best action, and the JSON
     leaves say what they are: every foe reply, valued by Stage A's AI-driven playouts."""

@@ -3,22 +3,28 @@ non-ROM value guard and the resolved ``trainers.json``. Synthetic sources, plus 
 the real resolved intermediates that skip until ``python -m tools.build_tables --game
 kaizo`` has run."""
 
+import dataclasses
 import json
 from pathlib import Path
 
 import pytest
 
 from nuzline.data.games import GAMES, KAIZO
+from nuzline.data.gauntlet import GauntletFacts
 from nuzline.data.trainer import GENDER_NONE, AreaCondition
 from tools.extract_rom import INPUTS_KEY, MOVE_LISTS_INPUT, kaizo_input_hashes
 from tools.kaizo.crosscheck import CrossCheck, CrossCheckError, Outcome, Resolution, Row
-from tools.kaizo.overrides import AreaOverride, Overrides
+from tools.kaizo.overrides import AreaOverride, Gauntlet, Overrides
 from tools.kaizo.resolve import (
     ResolveError,
     _sha256,
     check_extract_inputs,
+    check_gauntlet_pairs,
     check_used,
+    fixed_map_header,
+    gauntlet_context,
     names,
+    narrowed_map_labels,
     resolve,
     spelling,
     two_placement_trick_room,
@@ -123,6 +129,7 @@ def fake_inter(tmp_path):
         "rom_field_effects": [],
         "rom_trainer_maps": {},
         "rom_map_weather": [],
+        "rom_map_labels": [],
         "rom_script_weather": {"battles": {}, "windows": {}},
     }
     for name, data in rom.items():
@@ -271,10 +278,22 @@ def test_refusing_overrides_apply_to_the_rom_trainer():
 def test_users_format_answer_applies_before_the_cross_check():
     buck = [{"trainer": 611, "starter": None, "player_gender": None}]
     rom = [
-        {"id": 556, "format": "single", "opponent_2": None, "partner": [], "walking_partner": [611]},
+        {
+            "id": 556,
+            "format": "single",
+            "opponent_2": None,
+            "partner": [],
+            "walking_partner": [611],
+        },
         {"id": 521, "format": "unknown", "opponent_2": 527, "partner": None, "walking_partner": []},
         # A lone walk-map enemy is a single in the ROM (encounter.c:738-739), partner [].
-        {"id": 202, "format": "single", "opponent_2": None, "partner": [], "walking_partner": [611]},
+        {
+            "id": 202,
+            "format": "single",
+            "opponent_2": None,
+            "partner": [],
+            "walking_partner": [611],
+        },
     ]
     ov = Overrides(
         fields={
@@ -389,9 +408,7 @@ def test_sight_pair_of_a_lone_walk_enemy_is_a_multi_beside_the_walking_partner()
         (1, [608], [{"trainer": 608, "starter": None, "player_gender": None}]),
         (3, [800, 801], None),
     ):
-        t = trainer_record(
-            _trainer(tid, walking_partner=ids), ctx, Overrides(), src, {}, {}, {}
-        )
+        t = trainer_record(_trainer(tid, walking_partner=ids), ctx, Overrides(), src, {}, {}, {})
         assert (t["format"], t["partner"], t["walking_partner"]) == ("multi", want, ids)
         assert t["sources"]["format"] == SIGHT_CITE.format(header=203)
         assert t["sources"]["walking_partner"] == t["sources"]["format"]
@@ -696,7 +713,8 @@ def test_json_shapes(resolved_trainers):
     for t in resolved_trainers.values():
         assert t["gauntlet"] is None or len(t["gauntlet"]) == 2
         assert t["split_order"] is None or len(t["split_order"]) == 2
-        assert isinstance(t["gauntlet_rules"], dict) and isinstance(t["sources"], dict)
+        assert t["gauntlet_facts"] is None or t["gauntlet_facts"]["name"] == t["gauntlet"][0]
+        assert isinstance(t["sources"], dict)
         # fog_headers on every trainer (ledger G-15); script_weather and script_window only
         # where a script weather window reaches the fight (G-23, G-24).
         keys = {"weather", "fog", "trick_room", "gravity", "permanent", "fog_headers"}
@@ -792,3 +810,144 @@ def test_user_calls_drop_answered_weather_and_sheet_backed_gravity():
     rain = AreaOverride(False, False, "rain", "user, 2026-11-07")
     maps = Mappings((), (Mapping("S Split:2", 2, "exact", (2,)),), {}, ())
     assert calls(Overrides(area={1: rain, 2: grav}), maps) == []
+
+
+# --- gauntlet facts and fights ------------------------------------------------------------
+
+
+def _group(name, trainers, orders):
+    """A gauntlet group with facts: ``orders`` is a list of orders of fights (lists of ids)."""
+    facts = GauntletFacts(
+        name=name,
+        source="user, 2026-11-20",
+        orders=tuple(tuple(tuple(f) for f in o) for o in orders),
+        orders_source="rom:x",
+        leave_gaps=((),) * len(orders),
+        leave_gaps_source="rom:x",
+        escape=False,
+        escape_source="rom:x",
+        pc_gaps=(),
+        pc_gaps_source="rom:x",
+        heal_gaps=(),
+        heal_gaps_source="rom:x",
+        locked_gaps=(),
+        locked_gaps_source="rom:x",
+    )
+    return Gauntlet(name, tuple(trainers), "user, 2026-11-20", facts)
+
+
+def test_fight_ids_come_from_the_first_order():
+    g = _group("g", [5, 6, 7, 8], [[[5, 6], [7], [8]], [[5, 6], [8], [7]]])
+    bare = Gauntlet("bare", (1, 2), "user, 2026-11-20")
+    ctx = gauntlet_context(Overrides(gauntlets=(g, bare)))
+    assert {t: ctx[t][:2] for t in (5, 6, 7, 8)} == {
+        5: ("g", 5),
+        6: ("g", 5),
+        7: ("g", 7),
+        8: ("g", 8),
+    }
+    assert ctx[5][2]["name"] == "g" and ctx[5][2]["orders"][0] == [[5, 6], [7], [8]]
+    assert ctx[1] == ("bare", 1, None, "user, 2026-11-20")  # no facts: its own fight
+
+
+def test_a_fixed_fight_header_narrows_the_map_labels_to_its_one_label():
+    # Wayward Cave 749 + 750: the ROM join places 749 on headers 284 and 380 (labels 65 and 29,
+    # rom_map_labels.json); the gauntlet facts start the fight on 284, so the label is 65 alone
+    # (src/field_battle_data_transfer.c:263) and the friendship raise has one value.
+    from nuzline.prep.friendship import fight_label
+
+    g = _group("Wayward Cave", [383, 749, 750], [[[383], [749, 750]], [[383], [750, 749]]])
+    g = _with_headers(g, ((284, 284), (284, 284)))
+    facts = gauntlet_context(Overrides(gauntlets=(g,)))[749][2]
+    fixed = fixed_map_header(749, facts, None)
+    assert fixed == (284, "gauntlet 'Wayward Cave' fight_headers")
+    labels = [0] * 400
+    labels[284], labels[380] = 65, 29
+    narrowed = narrowed_map_labels(749, fixed, [284, 380], tuple(labels))
+    assert narrowed == [65] and fight_label(narrowed) == 65 and fight_label([29, 65]) is None
+    with pytest.raises(ResolveError, match="not one of its map headers"):
+        narrowed_map_labels(749, (373, "x"), [284, 380], tuple(labels))
+
+
+def test_a_placement_answer_narrows_the_map_labels_too():
+    # [area.509] map_header = 310 (a user's placement answer) fixes the header the same way
+    answer = AreaOverride(True, False, None, "user, 2026-11-07", map_header=310)
+    assert fixed_map_header(509, None, answer) == (
+        310,
+        "overrides area.509 map_header (user, 2026-11-07)",
+    )
+    assert fixed_map_header(509, None, AreaOverride(True, False, None, "user, 2026-11-07")) is None
+    g = _with_headers(_group("g", [509, 7], [[[509], [7]]]), ((305, 305),))
+    facts = gauntlet_context(Overrides(gauntlets=(g,)))[509][2]
+    with pytest.raises(ResolveError, match="fixed twice"):
+        fixed_map_header(509, facts, answer)
+
+
+def _with_headers(g, heads):
+    return dataclasses.replace(g, facts=dataclasses.replace(g.facts, fight_headers=heads))
+
+
+def test_split_pair_takes_the_first_orders_fight_id():
+    g = _group("g", [5, 6], [[[5, 6]], [[5], [6]]])
+    ctx = gauntlet_context(Overrides(gauntlets=(g,)))
+    assert (ctx[5][1], ctx[6][1]) == (5, 5)
+
+
+def test_pair_fight_id_is_its_first_sheet_id_whatever_the_written_order():
+    # trainers is the sheet's order; the orders write the pair by id ([383, 443] in Wayward)
+    g = _group("g", [6, 5], [[[5, 6]], [[6], [5]]])
+    ctx = gauntlet_context(Overrides(gauntlets=(g,)))
+    assert (ctx[5][1], ctx[6][1]) == (6, 6)
+
+
+def _records(*pairs):
+    ids = {i for p in pairs for i in p} | {9}
+    out = {i: {"id": i, "opponent_2": None} for i in ids}
+    for a, b in pairs:
+        out[a]["opponent_2"] = b
+    return list(out.values())
+
+
+def test_pair_check_accepts_matching_pairs():
+    g = _group("g", [5, 6, 7], [[[5, 6], [7]]])
+    check_gauntlet_pairs(_records((5, 6), (7, 9)), Overrides(gauntlets=(g,)))  # 7-9 is outside
+
+
+def test_pair_check_refuses_a_fight_that_is_no_pair():
+    g = _group("g", [5, 6, 7], [[[5, 6], [7]]])
+    with pytest.raises(ResolveError, match=r"\[5, 6\].*not a resolved opponent_2 pair"):
+        check_gauntlet_pairs(_records((5, 9)), Overrides(gauntlets=(g,)))
+
+
+def test_pair_check_refuses_a_pair_no_order_fights_together():
+    g = _group("g", [5, 6, 7], [[[5], [6], [7]]])
+    with pytest.raises(ResolveError, match=r"\[5, 6\].*no order fights it"):
+        check_gauntlet_pairs(_records((5, 6)), Overrides(gauntlets=(g,)))
+
+
+def test_pair_may_be_split_where_another_order_pairs_it():
+    g = _group("g", [5, 6, 7], [[[5, 6], [7]], [[5], [6], [7]]])
+    check_gauntlet_pairs(_records((6, 5)), Overrides(gauntlets=(g,)))  # either side names it
+
+
+def test_group_without_facts_is_not_pair_checked():
+    check_gauntlet_pairs(_records((5, 6)), Overrides(gauntlets=(Gauntlet("g", (5, 6), "user, x"),)))
+
+
+def test_wayward_fights_and_facts_in_the_real_table(resolved_trainers):
+    ids = (443, 383, 380, 458, 459, 460, 450, 496, 454, 455, 749, 750)
+    fights = {t: resolved_trainers[t]["gauntlet"][1] for t in ids}
+    assert fights == dict(zip(ids, (443, 443, 380, 380, 459, 459, 450, 450, 454, 454, 749, 749),
+                              strict=True))  # fmt: skip
+    facts = resolved_trainers[443]["gauntlet_facts"]
+    assert [len(o) for o in facts["orders"]] == [6, 7, 7, 8]  # C5c: 454, 455 in turn too
+    assert facts["partner"]["trainer"] == 612
+    assert facts["partner"]["join_before"] == [1] and facts["leave_gaps"] == [[]] * 4
+    for t in resolved_trainers.values():
+        for order in (t["gauntlet_facts"] or {}).get("orders", ()):
+            for fight in order:
+                if len(fight) == 2:
+                    a, b = fight
+                    assert resolved_trainers[a]["opponent_2"] == b or (
+                        resolved_trainers[b]["opponent_2"] == a
+                    )

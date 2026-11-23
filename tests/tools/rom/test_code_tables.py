@@ -5,7 +5,14 @@ import json
 import pytest
 
 from tools.rom.readers import ReaderError
-from tools.rom.readers.code_tables import egg_moves, tm_moves, tutor_learnsets, tutor_moves
+from tools.rom.readers.code_tables import (
+    egg_moves,
+    gym_e4_champion_classes,
+    map_evolution_methods,
+    tm_moves,
+    tutor_learnsets,
+    tutor_moves,
+)
 from tools.rom.readers.evolutions import read_evolutions
 
 
@@ -101,3 +108,78 @@ def test_tutor_learnsets_shape_errors(vanilla_files, symbols, monkeypatch):
     _patch(monkeypatch, {"sSpeciesLearnsetsByTutor": bytes(bad)})
     with pytest.raises(ReaderError, match="sSpeciesLearnsetsByTutor"):
         tutor_learnsets(vanilla_files, symbols, 38)
+
+
+def test_map_evolution_symbol(symbols):
+    # The function's static table: 21 (header, method) u16 pairs, linker map line 66511.
+    s = symbols.find("mapEvolutionMethods$12747")
+    assert s.module == "arm9" and s.address == 0x020E5FC8 and s.size == 0x54
+
+
+@pytest.mark.slow
+def test_rom_map_evolution_methods_match(vanilla_files, symbols, decomp_inter):
+    want = json.loads((decomp_inter / "map_evolution_methods.json").read_text("utf-8"))
+    got = map_evolution_methods(vanilla_files, symbols)
+    assert got == {int(k): v for k, v in want.items()} and len(got) == 21
+
+
+@pytest.mark.slow
+def test_kaizo_keeps_the_map_evolution_methods(vanilla_files, kaizo_files, symbols, decomp):
+    # data/kaizo/rom_diff.toml has no entry for the function or its table. ``decomp``: the read
+    # names the maps from the decomp's generated/map_headers.txt (skips when not cloned).
+    assert map_evolution_methods(kaizo_files, symbols) == map_evolution_methods(
+        vanilla_files, symbols
+    )
+
+
+def _pairs(*pairs):
+    import struct
+
+    return struct.pack(f"<{2 * len(pairs)}H", *(v for p in pairs for v in p))
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"",
+        _pairs((385, 26)) + b"\0\0",  # half a pair
+        _pairs((593, 26)),  # header past MAP_HEADER_COUNT
+        _pairs((385, 27)),  # method past the 27 methods (EVO_NONE 0 .. EVO_LEVEL_ICE_ROCK 26)
+        _pairs((385, 26), (385, 25)),  # a header twice
+    ],
+)
+def test_map_evolution_methods_shape_errors(vanilla_files, symbols, monkeypatch, raw):
+    _patch(monkeypatch, {"mapEvolutionMethods$12747": raw})
+    with pytest.raises(ReaderError, match="mapEvolutionMethods"):
+        map_evolution_methods(vanilla_files, symbols)
+
+
+def test_map_evolution_methods_decode(vanilla_files, symbols, monkeypatch):
+    # Route 217 -> Ice Rock (26), Eterna Forest -> Moss Rock (25): src/map_header.c:253-257.
+    _patch(monkeypatch, {"mapEvolutionMethods$12747": _pairs((385, 26), (203, 25))})
+    assert map_evolution_methods(vanilla_files, symbols) == {385: 26, 203: 25}
+
+
+def _decomp_gym_classes(decomp):
+    """The ``case TRAINER_CLASS_*`` labels of ``TrainerIsGymLeaderE4OrChampion``
+    (src/battle/battle_main.c:1376-1397) as class ids (``generated/trainer_classes.txt`` order)."""
+    import re
+
+    from tools.extract_decomp import _constants
+
+    src = (decomp / "src" / "battle" / "battle_main.c").read_text("utf-8")
+    head = r"TrainerIsGymLeaderE4OrChampion\(u16 trainerClass\)\n\{(.*?)\n\}"
+    body = re.search(head, src, re.DOTALL)
+    classes = _constants(decomp, "trainer_classes", "TRAINER_CLASS_")
+    return frozenset(classes.index(c) for c in re.findall(r"case (TRAINER_CLASS_\w+):", body[1]))
+
+
+def test_gym_e4_champion_classes_from_both_roms(vanilla_files, kaizo_files, symbols, decomp):
+    # The friendship raise's class switch (battle_main.c:1360-1362) read from each ROM's code,
+    # not assumed from one class (Roark's 62): Kaizo leaves the switch as vanilla compiles it.
+    from nuzline.prep.friendship import GYM_E4_CHAMPION_CLASSES
+
+    want = _decomp_gym_classes(decomp)
+    assert len(want) == 13 and want == GYM_E4_CHAMPION_CLASSES
+    assert gym_e4_champion_classes(vanilla_files, symbols) == want
+    assert gym_e4_champion_classes(kaizo_files, symbols) == want

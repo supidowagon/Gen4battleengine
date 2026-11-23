@@ -1153,14 +1153,22 @@ def _check_kaizo_fields(c: _Collector, names: Names, trainer: Trainer) -> None:
     if unknown_start(trainer):
         c.add(Support.NONE, "Battle start: condition unknown (user call)", "start condition")
     if trainer.gauntlet is not None:
-        group, position = trainer.gauntlet
-        rules = ", ".join(f"{k}={str(v).lower()}" for k, v in trainer.gauntlet_rules.items())
+        group, fight_id = trainer.gauntlet
+        recorded = "recorded" if trainer.gauntlet_facts is not None else "not recorded"
         c.add(
             Support.NONE,
-            f"{display_name(trainer)}: gauntlet {group} (position {position}; "
-            f"rules {rules or 'not recorded'})",
+            f"{display_name(trainer)}: gauntlet {group} (fight {fight_id}; facts {recorded})",
             "battle format",
         )
+        facts = trainer.gauntlet_facts
+        if facts is not None and facts.repel_refusal:
+            # a fact not counted (C10b: Wayward Cave's Repel steps): wild = repel is refused
+            c.add(
+                Support.NONE,
+                f"{display_name(trainer)}: gauntlet {group}: wild = repel refused "
+                "(Repel steps not counted)",
+                "battle format",
+            )
     for k in missing_set_data(trainer):
         c.add(
             Support.NONE,

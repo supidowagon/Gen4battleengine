@@ -36,6 +36,7 @@ from nuzline.engine.step import PURSUIT_POWER_MUL, replacement_power_mul, step
 from nuzline.search import expand, stage_b
 from nuzline.search.leaves import LeafValue
 from nuzline.search.plan_tree import render, to_json
+from nuzline.search.playout import replacement_refusal, turn_muls
 from nuzline.search.stage_b import (
     SolveSettings,
     learn_label,
@@ -195,9 +196,16 @@ def test_an_ai_switch_with_a_needed_replacement_pauses_then_refuses_at_the_resum
     answered = _answer(tables, _answer(tables, after, GIVE_UP), GIVE_UP)
     assert not bool(needs_learn(answered)) and int(answered.learn_site) != 0
     # expand's resumed row: the answer's request actions (option, 0) are not read.
-    done, refused, _, keep = _turn(tables, answered, jnp.asarray([GIVE_UP, 0]), empty_outcome())
+    resume = jnp.asarray([GIVE_UP, 0])
+    done, refused, _, keep = _turn(tables, answered, resume, empty_outcome())
     assert bool(keep) and bool(refused)
     assert int(done.learn_site) == 0 and int(done.active[1]) == ONIX
+    # The refusal is the replacement after the AI switch, not some other mechanic: the
+    # resume reads the turn start's AI switch (``turn_muls`` at a pause).
+    power_mul, ai_switched = turn_muls(tables, answered, resume)
+    assert bool(ai_switched)
+    reason = replacement_refusal(tables, done, ai_switched, power_mul)
+    assert reason is not None and "fainted in a turn its AI switched" in reason
 
 
 def test_learn_work_at_a_battle_ending_ko_is_terminal(tables, names):

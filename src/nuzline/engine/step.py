@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -1081,6 +1082,44 @@ def _redefend(resolved, side, defender, cond):
         defender=jnp.where(cond, defender, resolved.defender).astype(_I32),
         target_side=jnp.where(cond, target, resolved.target_side).astype(_I32),
     )
+
+
+class _HitCarry(NamedTuple):
+    """The hit loop's carry (``_use_move``'s ``one_hit``), read and built by field name."""
+
+    state: BattleState
+    hits: jnp.ndarray  # the hits that landed ("Hit N times", bcp.c:3777-3812)
+    crits: jnp.ndarray  # bool[MAX_HITS]: each hit's crit
+    contact: jnp.ndarray
+    thaw: jnp.ndarray
+    dealt: jnp.ndarray
+    armed: jnp.ndarray  # the hit's focus_armed
+    struck: jnp.ndarray
+    shell: jnp.ndarray  # Shell Bell's sum over the hits
+    barbed: jnp.ndarray
+    # The defender's turnFlags records: physical / special / last damage, then the attackers.
+    record: jnp.ndarray
+    paused: jnp.ndarray  # a pause at the list
+    pursue: jnp.ndarray  # U-turn's Pursuit next
+    damaged0: jnp.ndarray  # the first hit's damaged / dealt (``ts_damaged``, ``ts_dealt``)
+    dealt0: jnp.ndarray
+    # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT, set by an earlier hit of this action
+    # (MoveHit.sub_hit).
+    sub_hit: jnp.ndarray
+    # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
+    # BattleContext_Init at the action's end, battle_lib.c:2009).
+    sync_flag: jnp.ndarray
+    sync_sem: jnp.ndarray
+    disrupted: jnp.ndarray  # a later Triple Kick hit missed (MOVE_STATUS_MULTI_HIT_DISRUPTED)
+    unprotect: jnp.ndarray  # Feint's hit cleared the defender's turnFlags.protecting
+    se0: jnp.ndarray  # MOVE_STATUS_SUPER_EFFECTIVE of the first hit (``ts_se``)
+    tr_ran: jnp.ndarray  # trickRoomActivated: Trick Room's script ran (MoveHit.trick_room)
+    # SELF_TURN_FLAG_INFATUATED per battler (kept through the action's hits, battle_lib.c:2013-
+    # 2015), H-4.
+    loved: jnp.ndarray
+    # This hit's Destiny Knot MOVE_STATUS_FAILED; the next hit's SetupLoop zeroes it
+    # (battle_lib.c:3359), so the last hit's stays (H-4).
+    knot_failed: jnp.ndarray
 
 
 def _use_move(
@@ -2632,19 +2671,18 @@ def _use_move(
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     script_calc = head_on & can_act & has_target & ~failed & ~charging
 
-    def one_hit(hit_index, carry):
-        state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry[:11]
-        # sub_hit: the defender's SELF_TURN_FLAG_SUBSTITUTE_HIT, set by an earlier hit of this
-        # action (MoveHit.sub_hit).
-        paused, pursue, damaged0, dealt0, sub_hit = carry[11:16]
-        # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
-        # BattleContext_Init at the action's end, battle_lib.c:2009); ``disrupted``: a later
-        # Triple Kick hit missed (MOVE_STATUS_MULTI_HIT_DISRUPTED).
-        sync_flag, sync_sem, disrupted, unprotect, se0, tr_ran = carry[16:22]
+    def one_hit(hit_index, carry: _HitCarry) -> _HitCarry:
+        state, hits, crits = carry.state, carry.hits, carry.crits
+        contact, thaw, dealt, armed = carry.contact, carry.thaw, carry.dealt, carry.armed
+        struck, shell, barbed, record = carry.struck, carry.shell, carry.barbed, carry.record
+        paused, pursue, damaged0, dealt0 = carry.paused, carry.pursue, carry.damaged0, carry.dealt0
+        sub_hit, sync_flag, sync_sem = carry.sub_hit, carry.sync_flag, carry.sync_sem
+        disrupted, unprotect = carry.disrupted, carry.unprotect
+        se0, tr_ran = carry.se0, carry.tr_ran
         # SELF_TURN_FLAG_INFATUATED per battler (kept through the action's hits, battle_lib.c:2013-
         # 2015) and this hit's Destiny Knot MOVE_STATUS_FAILED, which the next hit's SetupLoop
         # zeroes (battle_lib.c:3359) so the last hit's stays (H-4).
-        loved, knot_failed = carry[22:]
+        loved, knot_failed = carry.loved, carry.knot_failed
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
@@ -2908,21 +2946,21 @@ def _use_move(
         state = after_damage_items(
             tables, state, side, items & ((item_used & info.pluck_flag) | recoiled)
         )
-        return (
-            state,
-            hits + landed.astype(_I32),
-            crits.at[hit_index].set(seen["crit"]),
-            contact | seen["contact"],
-            thaw | thawed,
-            dealt | seen["dealt"],
-            info.focus_armed,
-            struck,
-            shell + info.shell_bell,
-            barbed,
+        return _HitCarry(
+            state=state,
+            hits=hits + landed.astype(_I32),
+            crits=crits.at[hit_index].set(seen["crit"]),
+            contact=contact | seen["contact"],
+            thaw=thaw | thawed,
+            dealt=dealt | seen["dealt"],
+            armed=info.focus_armed,
+            struck=struck,
+            shell=shell + info.shell_bell,
+            barbed=barbed,
             # The defender's turnFlags (bcp.c:3413-3434): each UpdateHP assigns the damage to the
             # move class's field and to lastDamageTaken, and the attacker (1 + battler) to the
             # matching last-attacker field.
-            jnp.where(
+            record=jnp.where(
                 info.update_hp,
                 jnp.stack(
                     [
@@ -2936,63 +2974,65 @@ def _use_move(
                 ),
                 record,
             ),
-            paused | lists,
-            pursue | chases,
-            jnp.where(first, info.damaged, damaged0),
-            jnp.where(first, info.dealt, dealt0),
-            info.sub_hit,
-            sync_flag,
-            sync_sem,
-            disrupted | kick_miss,
+            paused=paused | lists,
+            pursue=pursue | chases,
+            damaged0=jnp.where(first, info.damaged, damaged0),
+            dealt0=jnp.where(first, info.dealt, dealt0),
+            sub_hit=info.sub_hit,
+            sync_flag=sync_flag,
+            sync_sem=sync_sem,
+            disrupted=disrupted | kick_miss,
             # Feint's ON_HIT subscript (effect_script_0223.s:6, subscript_feint.s:20) runs unless
             # MOVE_STATUS_NO_EFFECTS (battle_lib.c:1524-1529): a hit that was not ineffective clears
             # the defender's turnFlags.protecting; Shadow Force's attack turn runs the same
             # subscript (effect_script_0272.s:21; its charge move flag SEMI_SHADOW), E3-B2-13.
-            unprotect | (landed & info.effective & _feint_clears(tables, used)),
-            jnp.where(first, info.super_effective & info.effective, se0),
-            tr_ran | info.trick_room,
-            loved,
+            unprotect=unprotect | (landed & info.effective & _feint_clears(tables, used)),
+            se0=jnp.where(first, info.super_effective & info.effective, se0),
+            tr_ran=tr_ran | info.trick_room,
+            loved=loved,
             # Only a hit that happens runs SetupLoop (``landed``; a disrupted Triple Kick hit too):
             # the iterations past ``n_hits`` keep the last hit's flag.
-            jnp.where(landed | kick_miss, knot_now, knot_failed),
+            knot_failed=jnp.where(landed | kick_miss, knot_now, knot_failed),
         )
 
-    init = (
-        state,
-        _I32(0),
-        jnp.zeros((MAX_HITS,), bool),
-        jnp.bool_(False),
-        jnp.bool_(False),
-        jnp.bool_(False),
-        jnp.bool_(False),
-        jnp.bool_(False),
-        _I32(0),
-        jnp.bool_(False),
-        jnp.zeros((6,), _I32),
-        stops,
-        jnp.bool_(False),
-        jnp.bool_(False),
-        _I32(0),
-        jnp.bool_(False),
-        jnp.bool_(False),  # SYSCTL_TRY_SYNCHRONIZE_STATUS (BattleContext_Init clears it)
-        jnp.asarray(target_side, _I32),  # sideEffectMon (no side effect yet)
-        jnp.bool_(False),  # MOVE_STATUS_MULTI_HIT_DISRUPTED (B13-6)
-        jnp.bool_(False),  # Feint's hit cleared the defender's turnFlags.protecting (E3-B2-13)
-        jnp.bool_(False),  # MOVE_STATUS_SUPER_EFFECTIVE of the first hit (``ts_se``, SF2 (i))
-        jnp.bool_(False),  # trickRoomActivated: Trick Room's script ran (SF2 (k))
-        jnp.zeros((fmt.B,), bool),  # SELF_TURN_FLAG_INFATUATED per battler (H-4)
-        jnp.bool_(False),  # the last hit's Destiny Knot MOVE_STATUS_FAILED (H-4)
+    init = _HitCarry(
+        state=state,
+        hits=_I32(0),
+        crits=jnp.zeros((MAX_HITS,), bool),
+        contact=jnp.bool_(False),
+        thaw=jnp.bool_(False),
+        dealt=jnp.bool_(False),
+        armed=jnp.bool_(False),
+        struck=jnp.bool_(False),
+        shell=_I32(0),
+        barbed=jnp.bool_(False),
+        record=jnp.zeros((6,), _I32),
+        paused=stops,
+        pursue=jnp.bool_(False),
+        damaged0=jnp.bool_(False),
+        dealt0=_I32(0),
+        sub_hit=jnp.bool_(False),
+        sync_flag=jnp.bool_(False),  # SYSCTL_TRY_SYNCHRONIZE_STATUS (BattleContext_Init clears it)
+        sync_sem=jnp.asarray(target_side, _I32),  # sideEffectMon (no side effect yet)
+        disrupted=jnp.bool_(False),  # MOVE_STATUS_MULTI_HIT_DISRUPTED (B13-6)
+        unprotect=jnp.bool_(False),  # Feint's hit cleared turnFlags.protecting (E3-B2-13)
+        se0=jnp.bool_(False),  # MOVE_STATUS_SUPER_EFFECTIVE of the first hit (``ts_se``, SF2 (i))
+        tr_ran=jnp.bool_(False),  # trickRoomActivated: Trick Room's script ran (SF2 (k))
+        loved=jnp.zeros((fmt.B,), bool),  # SELF_TURN_FLAG_INFATUATED per battler (H-4)
+        knot_failed=jnp.bool_(False),  # the last hit's Destiny Knot MOVE_STATUS_FAILED (H-4)
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[party(fmt, target_side), target]
     looped = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
-    state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = looped[:11]
-    paused, pursue, damaged0, dealt0 = looped[11:15]
-    sub_hit_now = looped[15]  # the target's SELF_TURN_FLAG_SUBSTITUTE_HIT after the hits
-    se_now = looped[20]  # the stopping hit's MOVE_STATUS_SUPER_EFFECTIVE (a Baton Pass: 0)
-    trick_room_ran = looped[21]  # MoveHit.trick_room over the hits
-    loved_now = looped[22]  # SELF_TURN_FLAG_INFATUATED per battler after the hits (H-4)
-    knot_failed_last = looped[23]  # the last hit's knot MOVE_STATUS_FAILED (H-4)
+    state, hits, crits = looped.state, looped.hits, looped.crits
+    contact, thaw, dealt = looped.contact, looped.thaw, looped.dealt
+    struck, shell, damage_taken = looped.struck, looped.shell, looped.record
+    paused, pursue, damaged0, dealt0 = looped.paused, looped.pursue, looped.damaged0, looped.dealt0
+    sub_hit_now = looped.sub_hit  # the target's SELF_TURN_FLAG_SUBSTITUTE_HIT after the hits
+    se_now = looped.se0  # the stopping hit's MOVE_STATUS_SUPER_EFFECTIVE (a Baton Pass: 0)
+    trick_room_ran = looped.tr_ran  # MoveHit.trick_room over the hits
+    loved_now = looped.loved  # SELF_TURN_FLAG_INFATUATED per battler after the hits (H-4)
+    knot_failed_last = looped.knot_failed  # the last hit's knot MOVE_STATUS_FAILED (H-4)
     # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
     # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
     stopped = paused | pursue
@@ -3336,14 +3376,14 @@ def _use_move(
     ctl = {
         "pause": paused,
         "pursue": pursue,
-        "sync_flag": looped[16],
-        "sync_sem": looped[17],
+        "sync_flag": looped.sync_flag,
+        "sync_sem": looped.sync_sem,
         "copy_foe": copy_foe,
         "copy_self": copy_self,
         "conv2": conv2,
         "reflect": reflect,
         "reflect_move": jnp.where(reflect, move, 0).astype(_I32),
-        "unprotect": looped[19],
+        "unprotect": looped.unprotect,
         "target": jnp.asarray(target_side, _I32),
         # UpdateFlagsWhenHit wrote ``move_hit[target]`` this action (the write above: ``record``
         # in the tail passes); the action's MoveEnd keeps it past a faint (D3-15).

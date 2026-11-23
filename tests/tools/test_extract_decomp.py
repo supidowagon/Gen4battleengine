@@ -8,15 +8,18 @@ from tools.extract_decomp import (
     FORMS_H,
     ExtractError,
     _form_counts,
+    _map_header_ids,
     _start_condition,
     _start_condition_overrides,
     _tutor_indices,
     extract_charmap,
     extract_egg_moves,
+    extract_evolution_methods,
     extract_evolutions,
     extract_exp_tables,
     extract_forms,
     extract_items,
+    extract_map_evolution_methods,
     extract_move_lists,
     extract_species,
     extract_static,
@@ -313,3 +316,26 @@ def test_unknown_start_condition_only_where_allowed(tmp_path):
     assert _start_condition(10, "Grunt", {"rain", "hail"}, fixed, p) == "unknown"
     with pytest.raises(ExtractError, match="'unknown' but the maps give 'rain'"):
         _start_condition(10, "Grunt", {"rain"}, fixed, p)
+
+
+def test_map_evolution_methods_extracted():
+    # src/map_header.c:253-296: 21 (header, method) pairs.
+    got = extract_map_evolution_methods(DECOMP)
+    ids = _map_header_ids(DECOMP)
+    methods = extract_evolution_methods(DECOMP)
+    assert len(got) == 21 and all(0 < m < len(methods) for m in got.values())
+    assert methods[got[str(ids["MAP_HEADER_ROUTE_217"])]] == "level_ice_rock"
+    assert methods[got[str(ids["MAP_HEADER_ETERNA_FOREST"])]] == "level_moss_rock"
+    assert methods[got[str(ids["MAP_HEADER_SPEAR_PILLAR_PALKIA"])]] == "level_magnetic_field"
+    assert "0" not in got  # the header scan ends at the table, an unlisted header is EVO_NONE
+
+
+def test_map_header_ids_stop_at_the_count():
+    ids = _map_header_ids(DECOMP)
+    assert ids["MAP_HEADER_EVERYWHERE"] == 0 and len(ids) == 593  # MAP_HEADER_COUNT is line 594
+    assert "MAP_HEADER_INVALID" not in ids and "MAP_HEADER_DYNAMIC" not in ids
+
+
+def test_static_writes_map_evolution_methods(out):
+    got = json.loads((out / "map_evolution_methods.json").read_text("utf-8"))
+    assert got == extract_map_evolution_methods(DECOMP)

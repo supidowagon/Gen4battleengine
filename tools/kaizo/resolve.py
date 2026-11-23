@@ -61,6 +61,7 @@ from tools.kaizo.overrides import (
 )
 from tools.kaizo.overrides import (
     UNKNOWN_FORMAT,
+    AreaOverride,
     Mappings,
     Overrides,
     _row_claims,
@@ -113,6 +114,7 @@ COPIED = (
     "learnsets",
     "tm_learnsets",
     "evolutions",
+    "map_evolution_methods",
     "egg_moves",
     "evolution_methods",
     "tutor_moves",
@@ -170,6 +172,9 @@ class Sources:
     # Each map header's weather byte (rom/rom_map_weather.json, by header id): the fog
     # headers a fog fight can clear with field Defog (``fog_headers``, ledger G-15).
     map_weather: tuple[int, ...] = ()
+    # Each map header's mapLabelTextID (rom/rom_map_labels.json, by header id): the one label of
+    # a fight whose header is fixed (``fixed_map_header``).
+    map_labels: tuple[int, ...] = ()
     # rom/rom_script_weather.json (maps.script_weathers, ledger G-23, G-24): the script
     # weather before a battle ("battles") and the one a script leaves on a map ("windows").
     script_weather: Mapping[str, Any] | None = None
@@ -200,6 +205,7 @@ def load_sources(inter: Path) -> Sources:
         pkcalc=pkcalc,
         docs=docs,
         map_weather=tuple(_read(rom_dir / "rom_map_weather.json")),
+        map_labels=tuple(_read(rom_dir / "rom_map_labels.json")),
         script_weather=_read(rom_dir / "rom_script_weather.json"),
     )
 
@@ -433,6 +439,47 @@ def bare_tags(rows: list[tuple[dict, dict]]) -> frozenset[str]:
     return frozenset(out)
 
 
+def fixed_map_header(
+    tid: int, facts: Mapping[str, Any] | None, area: AreaOverride | None
+) -> tuple[int, str] | None:
+    """The one map header trainer ``tid``'s fight starts on where a source fixes it, with that
+    source: the gauntlet facts' ``fight_headers`` (the header of the trainer's fight, the same
+    in every order; ``tools/kaizo/gauntlet_map.py``) or a user's placement answer
+    (``[area.<id>] map_header``). Two that disagree raise."""
+    found: dict[int, str] = {}
+    if facts is not None and facts.get("fight_headers"):
+        heads = {
+            h
+            for order, row in zip(facts["orders"], facts["fight_headers"], strict=True)
+            for fight, h in zip(order, row, strict=True)
+            if tid in fight
+        }
+        if len(heads) == 1:
+            found[heads.pop()] = f"gauntlet {facts['name']!r} fight_headers"
+    if area is not None and area.map_header is not None:
+        found.setdefault(area.map_header, f"overrides area.{tid} map_header ({area.source})")
+    if len(found) > 1:
+        raise ResolveError(f"trainer {tid}: the fight's header is fixed twice: {found}")
+    return next(iter(found.items()), None)
+
+
+def narrowed_map_labels(
+    tid: int, fixed: tuple[int, str], headers: list[int], map_labels: tuple[int, ...]
+) -> list[int]:
+    """The one map label of a fight whose header is fixed: the battle's ``mapLabelTextID`` is
+    that header's (``battleSys->mapHeader = dto->mapLabelTextID``,
+    src/field_battle_data_transfer.c:263; src/battle/battle_main.c:1054)."""
+    header = fixed[0]
+    if header not in headers:
+        raise ResolveError(
+            f"trainer {tid}: fixed header {header} ({fixed[1]}) is not one of its map headers "
+            f"{sorted(headers)}"
+        )
+    if header >= len(map_labels):
+        raise ResolveError(f"map header {header} has no label (rom_map_labels.json)")
+    return [map_labels[header]]
+
+
 def fog_headers(headers: list[int], map_weather: tuple[int, ...]) -> list[int]:
     """The ``headers`` whose weather byte is OVERWORLD_WEATHER_FOG (14,
     include/constants/overworld_weather.h:18), the one fog FLAG_DEFOG_ACTIVE clears
@@ -501,7 +548,7 @@ class TrainerContext:
     labels: dict[int, tuple[str, str]]  # id -> (PKCalc label, mapping how)
     headers: dict[int, list[str]]  # id -> sheet cites, workbook order
     sight: dict[int, tuple[int, int]]  # id -> (partner id, shared map header)
-    gauntlets: dict[int, tuple[str, int, dict, str]]  # id -> (name, position, rules, source)
+    gauntlets: dict[int, tuple[str, int, dict | None, str]]  # id -> (name, fight id, facts, source)
 
 
 def trainer_context(check: CrossCheck, maps: Mappings, overrides: Overrides,
@@ -533,15 +580,31 @@ def trainer_context(check: CrossCheck, maps: Mappings, overrides: Overrides,
                 f"sight pair {tid} -> {pair} is confirmed on {tid}'s side only: {pair} would "
                 "stay a runnable single (needs a trainer_ids or fields correction)"
             )
-    gauntlets: dict[int, tuple[str, int, dict, str]] = {}
+    return TrainerContext(labels, dict(headers), sight, gauntlet_context(overrides))
+
+
+def gauntlet_context(overrides: Overrides) -> dict[int, tuple[str, int, dict | None, str]]:
+    """trainer id -> (group, fight id, the group's facts row or None, source). A trainer's
+    fight id is the trainer of its fight in the group's first order that the sheet lists
+    first (``trainers`` is in the sheet's order; the derived orders write a pair by id, so
+    Wayward's [383, 443] is fight 443); a trainer of a group with no facts is its own
+    fight. The facts are the tracked game facts only."""
+    out: dict[int, tuple[str, int, dict | None, str]] = {}
     for g in overrides.gauntlets:
-        for pos, tid in enumerate(g.trainers, 1):
-            if tid in gauntlets:
-                raise ResolveError(
-                    f"trainer {tid} is in gauntlets {gauntlets[tid][0]!r} and {g.name!r}"
-                )
-            gauntlets[tid] = (g.name, pos, dict(g.rules), g.source)
-    return TrainerContext(labels, dict(headers), sight, gauntlets)
+        fight_of = {}
+        if g.facts is not None:
+            rank = {tid: k for k, tid in enumerate(g.trainers)}
+            fight_of = {
+                tid: min(fight, key=rank.__getitem__)
+                for fight in g.facts.orders[0]
+                for tid in fight
+            }
+        facts = None if g.facts is None else g.facts.to_dict()
+        for tid in g.trainers:
+            if tid in out:
+                raise ResolveError(f"trainer {tid} is in gauntlets {out[tid][0]!r} and {g.name!r}")
+            out[tid] = (g.name, fight_of.get(tid, tid), facts, g.source)
+    return out
 
 
 def trainer_record(
@@ -618,9 +681,9 @@ def trainer_record(
 
     g = ctx.gauntlets.get(tid)
     out["gauntlet"] = None if g is None else [g[0], g[1]]
-    out["gauntlet_rules"] = {} if g is None else g[2]
+    out["gauntlet_facts"] = None if g is None else g[2]
     if g is not None:
-        sources["gauntlet"] = sources["gauntlet_rules"] = g[3]
+        sources["gauntlet"] = sources["gauntlet_facts"] = g[3]
 
     cites = ctx.headers.get(tid, [])
     if cites:
@@ -681,6 +744,19 @@ def trainer_record(
         f"rom: CalcTerrain over the tiles of the trainer's map headers (headers {where}; "
         "tools/terrain.py)"
     )
+    sources["map_labels"] = (
+        f"rom: map label text id (d_test.narc byte 18) of the trainer's map headers (headers {where})"
+    )
+    g = ctx.gauntlets.get(tid)
+    fixed = fixed_map_header(tid, None if g is None else g[2], overrides.area.get(tid))
+    if fixed is not None:
+        out["map_labels"] = narrowed_map_labels(
+            tid, fixed, src.trainer_maps.get(tid, []), src.map_labels
+        )
+        sources["map_labels"] = (
+            f"rom: map label text id (d_test.narc byte 18) of header {fixed[0]}, the one the "
+            f"fight starts on ({fixed[1]})"
+        )
     if len([x for x in t.get("terrains", ()) if x != TERRAIN_UNKNOWN]) > 1:
         # Manager ruling 1 (ledger G-18): several start-tile terrains are the run's route;
         # the other two sources were checked and hold no terrain.
@@ -847,6 +923,34 @@ def fill_pk_partners(records: list[dict], pkcalc: dict) -> list[int]:
     return filled
 
 
+def check_gauntlet_pairs(records: list[dict], overrides: Overrides) -> None:
+    """The two-trainer fights of a group's orders must be the resolved ``opponent_2`` pairs
+    (the other trainer of a two-trainer double or a multi, either side naming it), and every
+    resolved pair inside a group must be a two-trainer fight in at least one order: a pair
+    fought as two single fights is allowed only where another order says so as well."""
+    by_id = {t["id"]: t for t in records}
+    for g in overrides.gauntlets:
+        if g.facts is None:
+            continue
+        members = set(g.trainers)
+        resolved = set()
+        for tid in g.trainers:
+            other = by_id[tid].get("opponent_2") if tid in by_id else None
+            if other in members:
+                resolved.add(frozenset((tid, other)))
+        fought = {frozenset(f) for o in g.facts.orders for f in o if len(f) == 2}
+        for pair in sorted(fought - resolved, key=sorted):
+            raise ResolveError(
+                f"gauntlet {g.name!r}: {sorted(pair)} is a two-trainer fight of an order but "
+                "not a resolved opponent_2 pair"
+            )
+        for pair in sorted(resolved - fought, key=sorted):
+            raise ResolveError(
+                f"gauntlet {g.name!r}: {sorted(pair)} is a resolved opponent_2 pair but no "
+                "order fights it as one two-trainer fight"
+            )
+
+
 def resolve_trainers(
     src: Sources, trainers: list[dict], check: CrossCheck, maps: Mappings, overrides: Overrides
 ) -> tuple[list[dict], list[str]]:
@@ -860,6 +964,7 @@ def resolve_trainers(
         trainer_record(t, ctx, overrides, src, sheet, partner_starts, split_rows) for t in trainers
     ]
     filled = fill_pk_partners(out, src.pkcalc)
+    check_gauntlet_pairs(out, overrides)
     sight = [t for t in out if t["sources"]["format"].startswith("rom: map header")]
     n_double = sum(1 for t in sight if t["format"] == "double_two_trainer")
     lines = [

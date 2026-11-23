@@ -16,6 +16,7 @@ from nuzline.prep.problem import (
     pick,
     usable_pool,
 )
+from nuzline.prep.setups import Setup, base_member, setup_specs
 from nuzline.saves import load_save
 from tests.engine.helpers import (
     kaizo_names_with,
@@ -212,6 +213,27 @@ def test_build_problem_fields(tmp_path, tables, names, learnsets):
     assert immunity in p.blocking_abilities  # from the game's own Names (final review I4)
     q, _ = _build(tables, names, save, learnsets, reserve=["Heart Scale"])
     assert q.resources.heart_scales == 0
+
+
+def test_a_hatched_member_in_a_gym_prep_runs(tmp_path, tables, names, learnsets):
+    # E3-B3 merge-gate must-fix 1: a hatched member against a Gym Leader was refused for a missing
+    # map label. Roark (246) is fought in MAP_HEADER_OREBURGH_CITY_GYM, whose mapLabelTextID is
+    # LocationNames_Text_OreburghCity (include/data/map_headers.h:1089), text id 8.
+    assert roark_trainer().map_labels == (8,)
+    egg = {"egg_location_pt": 8, "egg_location_dp": 8, "friendship": 50}
+    away = {"egg_location_pt": 7, "egg_location_dp": 7, "friendship": 50}
+    save = _save(
+        tmp_path,
+        tables,
+        names,
+        [(("Geodude", 16, ("Tackle",)), egg), (("Geodude", 16, ("Tackle",)), away)],
+        [],
+    )
+    p, _ = _build(tables, names, save, learnsets)
+    setup = Setup(tuple(base_member(p, i) for i in range(len(p.candidates))))
+    got = {s.egg_location: s.friendship for s in setup_specs(p, setup, tables)}
+    # 50 + 3 (tier 0, src/pokemon.c:2626) + 1 for the egg location of the fight's label (:2668-2670)
+    assert got == {8: 54, 7: 53}
 
 
 def test_levelled_moves(tmp_path, tables, names, learnsets):

@@ -127,3 +127,108 @@ def test_level_to_cap_resolves_the_boost_with_the_trainer(tables, names):
     me = SaveTrainer(id=0, gender=0, name_codes=(0xFFFF,) * 8, rom_language=2)
     assert level_to_cap(mon, tables, 16, me).exp_boost == 100
     assert level_to_cap(mon, tables, 16).exp_boost == 0
+
+
+# --- GT-14 / GT-15 (E3-B3-14, E3-B3-15): pre-fight growth ----------------------------------
+
+
+def _growth(names, learnsets, plan, *, bag=None, personality=None):
+    from nuzline.data.gauntlet import Origin, Resolved, Settings
+    from nuzline.prep.leveling import PreFightGrowth
+
+    settings = Settings(
+        values={"shedinja": Resolved("forbidden", Origin.DEFAULT, "test")},
+        gaps={},
+        locked=(),
+        locked_source="",
+    )
+    return PreFightGrowth(
+        learnsets,
+        names.item("Rare Candy"),
+        plan,
+        settings,
+        personality_for(3, 0) if personality is None else personality,
+        bag=bag or {},
+    )
+
+
+def _four_moves(names):
+    return tuple(names.move(m) for m in ("Tackle", "Leer", "Growl", "Scratch"))
+
+
+def _level_row(learnsets, species):
+    """``(level, target)`` of the species' first plain level evolution."""
+    methods = learnsets.evolution_methods
+    return next((p, t) for m, p, t in learnsets.evolutions(species) if methods[m] == "level")
+
+
+def test_growth_without_a_plan_or_with_the_base_plan_does_not_evolve(tables, names, learnsets):
+    from nuzline.prep.growth import BASE_PLAN
+
+    mon = _mon(tables, names, "Bulbasaur", 14, moves=_four_moves(names))
+    today = level_to_cap(mon, tables, 20)
+    assert level_to_cap(mon, tables, 20, growth=None) == today
+    grown = level_to_cap(mon, tables, 20, growth=_growth(names, learnsets, BASE_PLAN))
+    # four moves, every offer given up: only the candies' friendship differs from today
+    assert grown.species == today.species and grown.level == 20
+    assert dataclasses.replace(grown, friendship=today.friendship) == today
+    if today.friendship < 255:
+        assert grown.friendship > today.friendship
+
+
+def test_the_plan_evolves_at_the_evolution_level_and_keeps_the_exp_rule(tables, names, learnsets):
+    from nuzline.prep.growth import GrowthPlan
+
+    sp = names.species("Bulbasaur")
+    level, target = _level_row(learnsets, sp)
+    mon = _mon(tables, names, "Bulbasaur", level - 2, moves=_four_moves(names))
+    plan = GrowthPlan((), 0)
+    before = level_to_cap(mon, tables, level - 1, growth=_growth(names, learnsets, plan))
+    assert before.species == sp  # not yet at the evolution level
+    at = level_to_cap(mon, tables, level, growth=_growth(names, learnsets, plan))
+    assert at.species == target and at.level == level
+    cap = level + 4
+    done = level_to_cap(mon, tables, cap, growth=_growth(names, learnsets, plan))
+    assert done.species == target and done.level == cap
+    assert done.exp == _base_exp(tables, target, cap)  # the final species' table
+    # a plan that evolves at another gap, or never, does not evolve here
+    for other in (GrowthPlan((), 1), GrowthPlan((), None)):
+        kept = level_to_cap(mon, tables, cap, growth=_growth(names, learnsets, other))
+        assert kept.species == sp and kept.exp == _base_exp(tables, sp, cap)
+
+
+def test_a_plan_answers_the_learn_prompts_of_the_candies(tables, names, learnsets):
+    from nuzline.prep.growth import BASE_PLAN, GrowthPlan, learn_offers
+
+    sp = names.species("Bulbasaur")
+    moves = _four_moves(names)
+    offers = learn_offers(learnsets, sp, 0, set(moves), 10, 20)
+    assert offers  # Bulbasaur is offered moves between 11 and 20
+    level, move = offers[0]
+    mon = _mon(tables, names, "Bulbasaur", level - 1, moves=moves)
+    gave_up = level_to_cap(mon, tables, level, growth=_growth(names, learnsets, BASE_PLAN))
+    assert gave_up.moves == moves
+    plan = GrowthPlan((((level, move), 2),), None)
+    learned = level_to_cap(mon, tables, level, growth=_growth(names, learnsets, plan))
+    assert learned.moves == (moves[0], moves[1], move, moves[3])
+    assert learned.pp_ups[2] == 0
+    assert learned.pp[2] == int(np.asarray(tables.move_pp)[move])
+
+
+def test_a_stone_in_the_bag_evolves_at_the_start_and_is_used_up(tables, names, learnsets):
+    from nuzline.prep.growth import GrowthPlan
+    from nuzline.prep.leveling import grow_to_cap
+
+    stone = names.item("Thunderstone")
+    rows = [(p, t) for m, p, t in learnsets.evolutions(names.species("Pikachu"))]
+    target = next(t for p, t in rows if p == stone)
+    mon = _mon(tables, names, "Pikachu", 12, moves=_four_moves(names))
+    spec = mon.to_spec(tables, None, healed=True)
+    growth = _growth(names, learnsets, GrowthPlan((), 0), bag={stone: 1})
+    out = grow_to_cap(tables, spec, 16, growth)
+    assert out.spec.species == target and out.spec.level == 16 and out.candies == 4
+    assert out.bag[stone] == 0 and growth.bag[stone] == 1
+    # no stone in the bag: Pikachu does not evolve, and a plan that never evolves keeps it
+    for bag, plan in (({}, GrowthPlan((), 0)), ({stone: 1}, GrowthPlan((), None))):
+        out = grow_to_cap(tables, spec, 16, _growth(names, learnsets, plan, bag=bag))
+        assert out.spec.species == spec.species and out.bag == bag
