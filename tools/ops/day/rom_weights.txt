@@ -1,5 +1,5 @@
 # Local peak per ROM-only file, read by tools/ops/ramgate.py (rom_weights.txt; same format as pod/weights.txt).
-# Line: <test file or node id> <GB> <tag>. Longest matching key wins; an id with no line weighs 6 (ROM_UNMEASURED_GB; the run gets the engine blocker), 14 when the engine loaded at collection (ROM_ENGINE_UNMEASURED_GB).
+# Line: <test file or node id> <GB> <tag>. Longest matching key wins; an id with no line weighs 6 (ROM_UNMEASURED_GB; the run gets the engine blocker), 14 when the engine loaded at collection (ROM_ENGINE_UNMEASURED_GB; the light modules nuzline.engine and nuzline.engine.ids do not count, tools/ops/ramgate.py LIGHT_ENGINE_MODULES).
 # GB = ceil(max(1.25 m, m + 2)), m = peak summed RSS of the pytest tree in GB (10^9 bytes), polled every 0.5 s,
 # one file's non-slow ROM-only ids per process (measuring harness tools/ops/ramgate_measure.py: NUZLINE_RAMGATE_NO_WAIT=1, watchdog at 4 GB free).
 # A figure comes only from a run where the test ran (passed). An id that skipped while measured keeps 14 with tag `unmeasured-skipped-<why>` until a checkout with its inputs measures it.
@@ -42,6 +42,7 @@ tests/kaizo/test_line_roark.py::test_user_line_reproduces_roark_odds 14 engine-t
 tests/kaizo/test_overrides.py::test_rules_left_unset_by_draft 14 unmeasured-skipped-inputs-absent-in-wt_w3
 tests/kaizo/test_roark_ai_audit.py::test_roark_ai_against_the_pool 14 engine-test-pod
 tests/kaizo/test_roark_widths.py::test_roark_pairs_fit_the_width_cap 14 engine-test-pod
+tests/kaizo/test_resolve.py::test_tag_partner_is_the_sheet_header_tags 3 local-measure-46ea8c1-20261122
 tests/test_cli.py::test_kaizo_roark_coverage_on_the_saves_is_exact 14 engine-test-pod
 tests/test_players_benchmark.py::test_scoreboard_on_roark 14 engine-test-pod
 tests/tools/rom/test_code_tables.py::test_tm_moves_match_decomp 14 unmeasured-skipped-inputs-absent-in-wt_w3

@@ -106,6 +106,10 @@ ROM_ENGINE_UNMEASURED_GB = 14.0  # the same when the engine is loaded: > 20 GB f
 ROM_WEIGHTS = ROOT / "tools" / "ops" / "day" / "rom_weights.txt"
 POD_ONLY = ROOT / "tools" / "ops" / "day" / "pod_only.txt"  # refused on the PC whatever they import
 ENGINE_PREFIX = "nuzline.engine"
+# Engine modules that load nothing heavy: the package (its __init__ imports os and sys only) and
+# the id enums (ids.py imports enum only; tools.kaizo.rows_tables needs them). Importing them at
+# collection does not make a run engine-loaded; the blocker still refuses any engine import after.
+LIGHT_ENGINE_MODULES = frozenset({ENGINE_PREFIX, ENGINE_PREFIX + ".ids"})
 MAX_LISTED = 5
 
 ENV_ON_POD = "NUZLINE_ON_POD"
@@ -159,10 +163,50 @@ def load_pod_only(path: str | Path = POD_ONLY) -> frozenset[str]:
     )
 
 
+def load_pod_only_reasons(path: str | Path = POD_ONLY) -> dict[str, str]:
+    """pod_only.txt as {id: reason}."""
+    out = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#"):
+            key, _, reason = line.strip().partition(" ")
+            out[key] = reason.strip()
+    return out
+
+
+ROM_AND_ENGINE_REASON = "rom-and-engine"  # pod_only.txt reasons starting so: ROM + engine tests
+
+
 def pod_only_ids(items: Iterable, keys: Iterable[str]) -> list[str]:
     """Node ids under a pod_only.txt key (same matching as a weights.txt key)."""
     table = dict.fromkeys(keys, 0.0)
     return [i.nodeid for i in items if lookup(i.nodeid, table) is not None]
+
+
+def pod_only_refusal(ids: list[str], reasons: Mapping[str, str]) -> str:
+    """The refusal text. A ROM + engine test (reason `rom-and-engine...`) needs the ROM, which never
+    leaves the PC, so the quick lane cannot run it either: no quick-lane hint for those."""
+    both = [i for i in ids if (lookup(i, reasons) or "").startswith(ROM_AND_ENGINE_REASON)]
+    rest = [i for i in ids if i not in both]
+
+    def listed(xs):
+        more = f" and {len(xs) - MAX_LISTED} more" if len(xs) > MAX_LISTED else ""
+        return f"{', '.join(xs[:MAX_LISTED])}{more}"
+
+    parts = []
+    if rest:
+        parts.append(
+            f"ramgate: pod-only tests (tools/ops/day/pod_only.txt) are never run on the PC: "
+            f"{listed(rest)}. {QUICK_LANE_HINT[0].upper() + QUICK_LANE_HINT[1:]}."
+        )
+    if both:
+        parts.append(
+            f"ramgate: ROM + engine tests (tools/ops/day/pod_only.txt) run neither on the PC nor on "
+            f"a pod (the ROM never leaves the PC; not the quick lane either): {listed(both)}. Drop "
+            "them from this run; they are never in a merge-gate ROM-only run. Running them at a "
+            "split close is an owner question that the managing session asks (docs/process.md "
+            "section 3)."
+        )
+    return " ".join(parts)
 
 
 def decide(weight_gb: float, free: float, rom_gate: bool = False) -> str:
@@ -703,7 +747,11 @@ def item_weight(
 
 
 def engine_loaded(modules: Iterable[str]) -> bool:
-    return any(m == ENGINE_PREFIX or m.startswith(ENGINE_PREFIX + ".") for m in modules)
+    """A module of the engine is imported, other than the light ones (LIGHT_ENGINE_MODULES)."""
+    return any(
+        (m == ENGINE_PREFIX or m.startswith(ENGINE_PREFIX + ".")) and m not in LIGHT_ENGINE_MODULES
+        for m in modules
+    )
 
 
 def disallowed(items: Iterable, modules: Iterable[str]) -> list[str]:
@@ -791,14 +839,12 @@ def pytest_gate(
     if collect_only:  # --collect-only only imports test modules: allowed, no wait
         return "GO", "ramgate: collect-only"
     items = list(items)
-    pod = pod_only_ids(items, load_pod_only() if pod_only is None else pod_only)
+    if pod_only is None:
+        pod_only = load_pod_only_reasons()
+    reasons = pod_only if isinstance(pod_only, Mapping) else dict.fromkeys(pod_only, "")
+    pod = pod_only_ids(items, reasons)
     if pod:
-        more = f" and {len(pod) - MAX_LISTED} more" if len(pod) > MAX_LISTED else ""
-        return "REFUSE", (
-            f"ramgate: pod-only tests (tools/ops/day/pod_only.txt) are never run on the PC: "
-            f"{', '.join(pod[:MAX_LISTED])}{more}. "
-            f"{QUICK_LANE_HINT[0].upper() + QUICK_LANE_HINT[1:]}."
-        )
+        return "REFUSE", pod_only_refusal(pod, reasons)
     modules = sys.modules if modules is None else modules
     engine_free = not engine_loaded(modules)
     bad = disallowed(items, modules)  # NUZLINE_RAMGATE_ROM_GATE lifts nothing here
