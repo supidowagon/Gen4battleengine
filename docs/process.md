@@ -465,7 +465,7 @@ rate used for estimates.
      does not), and every file the previous run counted as a failure by the Completeness
      rule below (failed, errored, crashed, killed three times, collect failed, incomplete);
   2. the tests of the functions the tip changed (node ids or the files that call them, and every
-     test file that names a changed public symbol);
+     test file that names a changed symbol);
   3. the four guards (`CLAUDE.md`, Batches).
   Size it for about 30 minutes on a pod: at most about 40 units. Never
   `tests/test_differential.py` and never a whole-suite or whole-folder line (`tests 40`,
