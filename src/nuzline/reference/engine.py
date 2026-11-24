@@ -337,6 +337,10 @@ class _Turn:
     met_immune: bool = False
     charge_strike: bool = False  # SYSCTL_LAST_OF_MULTI_TURN by subscript_charge_move_cleanup.s:7
     bide_ended: bool = False  # likewise by subscript_bide_end.s
+    # subscript_bide_end.s:11 cleared VOLATILE_CONDITION_MOVE_LOCKED this turn, before the move
+    # (bcp.c:2722-2724: commandNext = command): the release turn's move went ahead and ran with
+    # SYSCTL_LAST_OF_MULTI_TURN (:12) and no lock.
+    bide_release: bool = False
     # E2 batch 6: the turn's actions, picks and order as chosen, the position acting, the
     # battler whose action a Pursuit ended (1 + battler), the slot a Roar dragged in per side
     # (1 + slot), powerMul at a U-turn's party list, the search's turn powerMul.
@@ -368,15 +372,18 @@ class _Turn:
     # turnFlags.assuranceDamageMask != 0 per battler (subscript_update_hp.s:18-19; cleared by
     # SetupNextTurn and CleanupFaintedMon), B13-17.
     assurance: list[bool] = field(default_factory=lambda: [False, False])
-    # The acting move's script inputs from its action: Gyro Ball's monSpeedValues power at the
-    # action's start (BranchActions' sort, bcp.c:888), and moveSlot (Trump Card's PP), B13-14,
-    # B13-15.
+    # The acting move's script input from its action: Gyro Ball's monSpeedValues power at the
+    # action's start (BranchActions' sort, bcp.c:888), B13-14.
     gyro_power: int = 0
-    move_slot: int = 0
     # ATTACKER_MOVE_SLOT (common.h:8): moveSlot[attacker], written only at selection (bcp.c:445,
-    # :526); FightCommand's Encore takeover (bcp.c:1868-1872) leaves it, so TryGrudge reads the
-    # chosen slot, not ``move_slot`` (review b2-fix #2).
+    # :526; ``RefBattler.move_slot``, E2-ML-5); FightCommand's Encore takeover (bcp.c:1868-1872)
+    # leaves it. Its readers: TryGrudge (battle_script.c:6753, review b2-fix #2), Trump Card
+    # (:7237, B13-15), DecPPForPressure (battle_lib.c:7390-7395: Counter's family, :4646, :4699,
+    # :7180; the Magic Coat reflection, bcp.c:3083), review 5.
     chosen_slot: int = 0
+    # The running action's moveTemp (FightCommand, bcp.c:1861-1898), kept at a party-list pause
+    # (``ts_move_temp``) for its tail's UpdateMoveBuffers (E2-ML-4).
+    move_temp: int = 0
     # The berry Natural Gift's RemoveItem took this action (effect_script_0222.s:8), which its
     # hit's power and type read (_gift_item), B13-37; 0 otherwise.
     gift: int = 0
@@ -597,15 +604,15 @@ def _gravity_banned(s: RefState, move: int) -> bool:
     return _gravity_on(s) and move in GRAVITY_MOVES
 
 
-def _me_first_copy(tables, s: RefState, target: int, pick: int, fights: bool) -> int:
+def _me_first_copy(tables, s: RefState, target: int, fights: bool) -> int:
     """``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312) on ``target``'s battler, 0 when it fails: its
     encored move when it still holds it in its slot (:7293-7296), else ``Battler_SelectedMove``
-    (``pick`` if it chose FIGHT); not struggling, no battle effect shared with a
+    (``_selected_move``, the selection's carried TEMP_VALUE, E2-ML-8) if it chose FIGHT; not struggling, no battle effect shared with a
     ``ME_FIRST_BANNED_MOVES`` move (``Move_MeFirstCanCopy``, battle_lib.c:7242-7252), with power
     (E3-2-3)."""
     sd, mon = s.battlers[target], _active(s, target)
     held = sd.encore_move and sd.encore_move == mon.moves[sd.encore_slot]
-    move = sd.encore_move if held else (pick if fights else 0)
+    move = sd.encore_move if held else (_selected_move(s, target) if fights else 0)
     banned = {_t(tables, "move_ai_effect", m) for m in ME_FIRST_BANNED_MOVES}
     if (
         not any(_usable(tables, s, target))
@@ -1024,6 +1031,9 @@ def _ground_immune(tables, s: RefState, attacker: int, defender: int, move_type:
 # battle the charge moves are on it whenever the chart runs and Fire Fang (273) never is (rulings
 # G-18, G-27).
 _MULTI_TURN_EFFECTS = (26, 39, 75, 145, 151, 155, 255, 256, 263, 273)
+# Razor Wind (CHARGE_TURN_HIGH_CRIT, effect_script_0039.s:6) and SHADOW_FORCE (_0272.s:6): the charge
+# scripts that strike under SYSCTL_LAST_OF_MULTI_TURN as well as under the lock (decomp effect ids).
+_LAST_OF_MULTI_STRIKE = (39, 272)
 
 
 def _wonder_guarded(
@@ -1228,7 +1238,9 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: b
     if effect == EffectId.DO_NOTHING:  # effect_script_0085.s:5: no CalcDamage (E3-1-1)
         return 0
     if effect == EffectId.BIDE:
-        return 2 * sd.bide_damage if sd.locked_move and sd.bide_turns == 0 else 0
+        # bcp.c:2699-2701 set damage = 2 * storedDamage at the release, before subscript_bide_end.s
+        # clears the lock (:11): a release keeps its stored damage until the move is done (ref_step).
+        return 2 * sd.bide_damage if sd.bide_turns == 0 and sd.bide_damage > 0 else 0
     defender = _foe(attacker) if defender is None else defender
     foe = _active(s, defender)
     kind = _move_type(tables, s, attacker, move)
@@ -1572,7 +1584,7 @@ def _four_turn_order(tables, s: RefState, commands, choices, outcome) -> tuple[l
             if command[b1] == command[b2]:
                 fight = command[b1] == FIGHT
                 priority = (
-                    tuple(_t(tables, "move_priority", choices[b][0]) for b in (b1, b2))
+                    tuple(_t(tables, "move_priority", _order_move(s, b, choices)) for b in (b1, b2))
                     if fight
                     else (0, 0)
                 )
@@ -3143,16 +3155,18 @@ def _update_last_resort(s: RefState, side: int, move: int) -> None:
     sd.last_resort_count += 1
 
 
-def _metronome_update(tables, s: RefState, side: int, move: int) -> None:
+def _metronome_update(tables, s: RefState, side: int, move: int, bide_release: bool) -> None:
     """``BattleSystem_UpdateMetronomeCount`` (lib.c:6160-6178), G-60: a Metronome holder not
-    uproaring nor move-locked counts ``moveTemp`` (same move +1 up to 10, else 0 and the new
-    move); an attacker holding no Metronome has its own count reset to 0 (:6176-6177). A move
+    uproaring, not move-locked and not under SYSCTL_LAST_OF_MULTI_TURN (:6165; at BeforeMove's
+    end only a Bide release set it: subscript_bide_end.s:12, run inside the status checks,
+    bcp.c:2722-2724, ``bide_release``) counts ``moveTemp`` (same move +1 up to 10, else 0 and the
+    new move); an attacker holding no Metronome has its own count reset to 0 (:6176-6177). A move
     with MOVE_STATUS_NO_PP (bcp.c:2285) counts too: the update follows the NO_EFFECTS branch
     (bcp.c:3209-3221); only Spite (E3-B2-4; or an encored move with no PP) gets there."""
     sd = s.battlers[side]
     if _item_effect(tables, _active(s, side), s) != ItemId.METRONOME_ITEM:
         sd.metronome_turns = 0
-    elif not sd.uproar and not sd.locked_move:
+    elif not sd.uproar and not sd.locked_move and not bide_release:
         if sd.metronome_move == move:
             sd.metronome_turns = min(sd.metronome_turns + 1, 10)
         else:
@@ -4744,8 +4758,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             _know_ability(s, side)
             _know_ability(s, target)
     elif effect == EffectId.MAGIC_COAT and landed and _waiting(turn, s, side) > 1:
-        # TrySetMagicCoat (battle_script.c:6459-6478), E3-B2-6: 1 + the user's moveSlot.
-        s.battlers[side].magic_coat = 1 + turn.move_slot
+        # TrySetMagicCoat (battle_script.c:6459-6478), E3-B2-6: 1 + the user's moveSlot, the
+        # selection's (the reflection's DecPPForPressure reads it, bcp.c:3083; review 5).
+        s.battlers[side].magic_coat = 1 + turn.chosen_slot
     elif effect == EffectId.ROLE_PLAY and landed:
         # subscript_copy_ability.s:5-15 (E3-B2-5): fails on a miss or a semi-invulnerable miss (:5,
         # ``landed`` covers it), the defender's raw Wonder Guard (:6), Multitype (:7) or no ability
@@ -4953,9 +4968,16 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.WATER_SPORT and landed and not s.battlers[side].water_sport:
         # effect_script_0210.s: fails when the user already has it.
         s.battlers[side].water_sport = 1
-    elif effect == EffectId.BIDE and landed and not s.battlers[side].locked_move:
-        # effect_script_0026.s / subscript_bide_start.s: only a first use (not locked, not
-        # the unleash turn) locks in with BIDE_1 (two turns) and storedDamage = 0.
+    elif (
+        effect == EffectId.BIDE
+        and landed
+        and not s.battlers[side].locked_move
+        and not turn.bide_release
+    ):
+        # effect_script_0026.s / subscript_bide_start.s: only a first use locks in with BIDE_1
+        # (two turns) and storedDamage = 0: not VOLATILE_CONDITION_MOVE_LOCKED (:5), not the
+        # release turn (:6, SYSCTL_LAST_OF_MULTI_TURN set by subscript_bide_end.s:12; the lock is
+        # already clear there, :11).
         s.battlers[side].locked_move = move
         s.battlers[side].bide_turns = 2
         s.battlers[side].bide_damage = 0
@@ -5532,7 +5554,7 @@ def _script_power(turn: _Turn, s: RefState, side: int, defender: int, move: int)
     if effect == EffectId.GYRO_BALL:
         return turn.gyro_power
     if effect == EffectId.TRUMP_CARD:
-        return TRUMP_CARD_POWER[min(_active(s, side).pp[turn.move_slot], 4)]
+        return TRUMP_CARD_POWER[min(_active(s, side).pp[turn.chosen_slot], 4)]
     if effect == EffectId.FLING:  # BattleSystem_FlingItem's movePower (lib.c:5859)
         return turn.fling_power
     if effect == EffectId.ASSURANCE:
@@ -6020,7 +6042,10 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     # CHECK_STATUS_STATE_BIDE (bcp.c:2694): the counter drops; at 0 the unleash is
     # 2 * storedDamage at the foe's active Pokemon (the last hitter, a replacement
     # included). Nothing stored (subscript_bide_end.s) or the foe fainted
-    # (subscript_bide_no_target.s) ends the move; the lock is released after it (_fight).
+    # (subscript_bide_no_target.s) ends the move. A release runs subscript_bide_end.s first
+    # (bcp.c:2722-2724), which clears VOLATILE_CONDITION_MOVE_LOCKED (:11) before the move: a
+    # charge move then charges, Rollout and Uproar start their own lock, and the move's lock
+    # stays after it (ref_step).
     if sd.bide_turns:
         sd.bide_turns -= 1
         if sd.bide_turns == 0:
@@ -6031,6 +6056,8 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
                 return DISRUPTED
             turn.defender = picked
             turn.target_side = picked if picked != side else _foe(side)
+            turn.bide_release = True
+            sd.locked_move = 0  # subscript_bide_end.s:11 (no uproar while biding)
     # CHECK_STATUS_STATE_SELF_THAW (bcp.c:2728).
     if still_frozen:
         mon.status = Status.NONE
@@ -6441,9 +6468,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     None when the foe is not the defender."""
     tables, o = turn.tables, turn.outcome
     mon = _active(s, side)
-    # moveSlot (Trump Card, B13-15).
-    turn.move_slot = min(action, MOVE_ACTIONS - 1)
-    turn.chosen_slot = 0 if reflect_pass else min(turn.actions[side], MOVE_ACTIONS - 1)
+    # moveSlot[attacker] (ATTACKER_MOVE_SLOT, common.h:8): the selection's (bcp.c:445, :526),
+    # never changed by an Encore takeover (bcp.c:1869-1873). Trump Card (battle_script.c:7237,
+    # B13-15), TryGrudge (:6753), DecPPForPressure (battle_lib.c:7390-7395) read it (review 5).
+    # A reflected pass reads none (no reflectable move reads moveSlot): 0, as step's (review 6).
+    turn.chosen_slot = 0 if reflect_pass else s.battlers[side].move_slot
     turn.gift = 0
     turn.fling = turn.fling_power = 0
     turn.fling_pick = None
@@ -6529,7 +6558,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         and (struggling or locked or mon.pp[action] != 0)
     )
     if not no_target0 and not reflect:
-        _metronome_update(tables, s, side, move)
+        _metronome_update(tables, s, side, move, turn.bide_release)
         turn.met_reached = True
         # BattleSystem_UpdateLastResort (bcp.c:3218) is in the tail's not-NO_EFFECTS branch: not
         # after DecrementPP's MOVE_STATUS_NO_PP (below; E3-B2-11).
@@ -6635,13 +6664,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         if _t(tables, "move_effect", move) == EffectId.ME_FIRST and not moved[turn.target_side]:
             # The copied move is the resolved defender's (:7286-7312; D3-5), the foe at B = 2.
             copied_from = turn.target_side
-            first = _me_first_copy(
-                tables,
-                s,
-                copied_from,
-                turn.choices[copied_from][0],
-                turn.actions[copied_from] < MOVE_ACTIONS,
-            )
+            first = _me_first_copy(tables, s, copied_from, turn.actions[copied_from] < MOVE_ACTIONS)
         called = _invoked_move(tables, s, side, move, turn.outcome.call[side], first)
         sleep_talk = _t(tables, "move_effect", move) == EffectId.SLEEP_TALK
         if called == 0 or (sleep_talk and mon.status != Status.SLEEP):
@@ -6663,7 +6686,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
     # The charge-turn moves (B10-12; step._use_move cites the scripts): they hit when the user is
     # locked (the second turn), SolarBeam in sun without Cloud Nine / Air Lock, or with a Power
-    # Herb (removed, and Skull Bash's Defense +1 first); else they charge: the lock into moveCur,
+    # Herb (removed, and Skull Bash's Defense +1 first); Razor Wind and Shadow Force also hit on a
+    # Bide release turn (SYSCTL_LAST_OF_MULTI_TURN from subscript_bide_end.s:12, tested at
+    # effect_script_0039.s:6 / _0272.s:6; the other seven test the lock only, which the release
+    # cleared at :11); else they charge: the lock into moveCur,
     # the semi-invulnerable bit, Skull Bash's Defense +1, and the action ends (no accuracy,
     # Protect or type chart: SYSCTL_FIRST_OF_MULTI_TURN). Only Skull Bash's charge sets
     # SYSCTL_ATTACK_MESSAGE_SHOWN (subscript_update_stat_stage.s:6-7).
@@ -6672,7 +6698,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     if redirected and flags & MoveFlag.CHARGE:
         _reveal_redirect(s, tables, turn.defender)  # TryMove's message, a charge turn too
     if flags & MoveFlag.CHARGE:
-        second = bool(sd.locked_move)
+        second = bool(sd.locked_move) or (
+            turn.bide_release and _t(tables, "move_ai_effect", move) in _LAST_OF_MULTI_STRIKE
+        )
         sun_now = bool(flags & MoveFlag.SUN_SKIP) and _sunny(tables, s)
         herb = not second and not sun_now and _item_effect(tables, mon, s) == ItemId.POWER_HERB
         if herb:
@@ -6860,10 +6888,12 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         turn.defender = turn.target_side = picked
         _strip_roost(turn, s, picked)
         # BattleSystem_DecPPForPressure on the new defender (script.c:4646, :4699, :7180;
-        # lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an invoker's when it called
-        # the move), while it has PP left, ruling G-9.
-        if _ability(s, _active(s, picked)) == AbilityId.PRESSURE and mon.pp[action] > 0:
-            mon.pp[action] -= 1
+        # lib.c:7390-7397): one more PP from moveSlot, the selection's slot (an invoker's when it
+        # called the move; never an Encore takeover's, bcp.c:1869-1873), while it has PP left,
+        # ruling G-9.
+        slot = turn.chosen_slot
+        if _ability(s, _active(s, picked)) == AbilityId.PRESSURE and mon.pp[slot] > 0:
+            mon.pp[slot] -= 1
         if special_counter:
             record = move
     snore = effect == EffectId.FLINCH and _t(tables, "move_param", move, 2) == SNORE_PARAM
@@ -7341,7 +7371,6 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         struggling,
     )
     if unleash:  # the unleash script spent the Bide counter (bcp.c:2702, subscript_bide_end.s)
-        _unlock(s.battlers[side])
         record = move
     return record
 
@@ -7438,17 +7467,29 @@ def _roar(turn: _Turn, s: RefState, side: int, foe: int) -> bool:
 def _pursuer_choice(s: RefState, pursuer: int, actions, choices) -> tuple[bool, int]:
     """``(has, move)`` of ``BtlCmd_TryPursuit``'s move choice for ``pursuer`` (script.c:6905-6909;
     ``step._pursuer_move``): its Encore move when the Encore slot still holds it, whatever it
-    selected, else ``Battler_SelectedMove`` (a FIGHT's chosen move; none for any other command or
-    Struggle). D3-9 variant B (SF2 (e) did not land): at B = 2 a FIGHT that is not Struggling
-    only."""
-    move, struggling, _ = choices[pursuer]
-    picked = _command(actions[pursuer]) == FIGHT and not struggling
-    if _fmt(s).B == 2:
-        return picked, move
+    selected, else ``Battler_SelectedMove`` (``_selected_move`` of a FIGHT, the value a locked or
+    Struggling battler carries; none for any other command). Every format (SF2 (e), E2-ML-6): no command test before the Encore's move."""
+    del choices  # Battler_SelectedMove reads the selection's TEMP_VALUE (E2-ML-8)
+    move = _selected_move(s, pursuer) if _command(actions[pursuer]) == FIGHT else 0
     sd, mon = s.battlers[pursuer], _active(s, pursuer)
     if sd.encore_move and mon.moves[sd.encore_slot] == sd.encore_move:
         return True, sd.encore_move
-    return picked, move
+    return bool(move), move
+
+
+def _pursuit_pp(mon, move: int) -> int:
+    """The PP cell TryPursuit reads for ``move`` (battle_script.c:6910-6922; ``step._pursuit_pp``):
+    ``ppCur[Battler_SlotForMove]``, which is 4 when no slot holds it (battle_lib.c:2376-2387), and
+    ``ppCur[4]`` is ``ppUps[0]`` (battle_mon.h:99-100): a carried IV-word Pursuit (review 7)."""
+    return mon.pp[mon.moves.index(move)] if move in mon.moves else mon.pp_ups[0]
+
+
+def _spend_pursuit_pp(mon, move: int) -> None:
+    """One PP from ``_pursuit_pp``'s cell."""
+    if move in mon.moves:
+        mon.pp[mon.moves.index(move)] -= 1
+    else:
+        mon.pp_ups[0] -= 1
 
 
 def _next_pursuer(
@@ -7468,7 +7509,7 @@ def _next_pursuer(
         if (
             has
             and _t(tables, "move_effect", move) == EffectId.PURSUIT
-            and mon.pp[mon.moves.index(move)] > 0
+            and _pursuit_pp(mon, move) > 0
         ):
             return i
     return None
@@ -7512,12 +7553,11 @@ def _pursuit_hit(
     tables = turn.tables
     mon = _active(s, pursuer)
     move = _pursuer_choice(s, pursuer, actions, choices)[1]
-    slot = mon.moves.index(move)
-    mon.pp[slot] -= 1
+    _spend_pursuit_pp(mon, move)  # ppUps[0] where no slot holds it (review 7)
     # script.c:6919-6922: one more while PP is left when the switching battler has Pressure
     # (ruling G-9).
-    if _ability(s, _active(s, side)) == AbilityId.PRESSURE and mon.pp[slot] > 0:
-        mon.pp[slot] -= 1
+    if _ability(s, _active(s, side)) == AbilityId.PRESSURE and _pursuit_pp(mon, move) > 0:
+        _spend_pursuit_pp(mon, move)
     turn.done[pursuer] = True
     # SetupLoop zeroes moveStatusFlags (lib.c:3359) and the Pursuit's ApplyTypeEffectiveness sets
     # the bit (subscript_pursuit.s:12, script.c:6964-6973): the tail's Enigma Berry reads the
@@ -7574,16 +7614,11 @@ def _pursuit_hit(
     # The Destiny Bond subscript's :28 TryGrudge (battle_script.c:6743-6763) on the pursuer's
     # selected slot, still before the contact ability (subscript_pursuit.s:85 then :86-87): a
     # Rough Skin or Aftermath that faints the pursuer comes after the zero (E3-B2-9). The slot is
-    # moveSlot (:6753, common.h:8), written only at selection (bcp.c:445, :526); TryPursuit never
-    # writes it, so it is the chosen slot, not the PP slot above (step._pursuit_hit). An Encored
-    # pursuer that chose no FIGHT (an item or a switch this turn) keeps an earlier turn's
-    # moveSlot: its Encore slot stands in. Reachable at B = 2, not only B = 4: item and switch
-    # actions run in battler index order (bcp.c:754-768), so an encored battler 1 using an item
-    # can meet battler 0's switch before it acts. Owed SF3 (ledger, D3-9 rows).
-    if _command(actions[pursuer]) == FIGHT:
-        chosen = min(actions[pursuer], MOVE_ACTIONS - 1)
-    else:
-        chosen = s.battlers[pursuer].encore_slot
+    # moveSlot (:6753, common.h:8), written only at selection (bcp.c:445, :526; ``move_slot``,
+    # E2-ML-5); TryPursuit never writes it, so it is the selected slot, not the PP slot above
+    # (step._pursuit_hit): an Encored pursuer that chose no FIGHT, or a locked one, keeps an
+    # earlier selection's.
+    chosen = s.battlers[pursuer].move_slot
     _try_grudge(s, pursuer, chosen, side, target_hp > 0 and _active(s, side).hp == 0, False)
     # The same subscript's :36 FAINT_MON cleans the switcher up (PlayFaintAnimation, script.c:1803;
     # lib.c:2223-2225) before TriggerAbilityOnHit: what the contact ability's message tags
@@ -8645,6 +8680,12 @@ def _locked_slot(s: RefState, side: int) -> int:
     return moves.index(locked) if locked in moves else 0
 
 
+def _picks_no_command(s: RefState, side: int) -> bool:
+    """``Battler_CanPickCommand`` is FALSE (lib.c:6224-6235): move-locked (``_locked_slot``) or
+    RECHARGING (``recharge``, subscript_recharge_turn.s:5); bcp.c:334-337 writes nothing for it."""
+    return _locked_slot(s, side) >= 0 or bool(s.battlers[side].recharge)
+
+
 # RANGE_MY_SIDE (moves.h:91): the B = 2 target is the user (bcp.c:4363-4367).
 _MY_SIDE_RANGES = (
     MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
@@ -8821,6 +8862,41 @@ def _command(action: int) -> str:
     return SWITCH if action >= MOVE_ACTIONS else FIGHT
 
 
+# MAX_MOVES (generated/moves.txt: MOVE_SHADOW_FORCE = 467, then MAX_MOVES), ``moveTable``'s size
+# (ai_context.h:45; ``order.MAX_MOVES``).
+MAX_MOVES = 468
+
+
+def _past_moves_word(mon) -> int:
+    """``BattleMon.moves[4]``: the low 16 bits of the IV bitfield after the four move slots
+    (battle_mon.h:64-72, from bit 0); an id past the move table reads as MOVE_NONE, a stated
+    assumption (``order.past_moves_word``)."""
+    hp, atk, dfn, spe = (int(mon.ivs[k]) for k in (Stat.HP, Stat.ATK, Stat.DEF, Stat.SPE))
+    word = hp | atk << 5 | dfn << 10 | (spe & 1) << 15
+    return word if word < MAX_MOVES else 0
+
+
+def _selected_move(s: RefState, b: int) -> int:
+    """``Battler_SelectedMove`` (battle_lib.c:2858-2868) of battler ``b`` choosing FIGHT (the
+    caller's test): ``moves[selected_temp - 1]``, MOVE_NONE for 0; 5 (a carried switch to party
+    slot 5) reads ``moves[4]`` (``_past_moves_word``) (E2-ML-8; ``order.battler_selected_move``)."""
+    temp = s.battlers[b].selected_temp
+    if not temp:
+        return 0
+    mon = _active(s, b)
+    return mon.moves[temp - 1] if temp <= MOVE_ACTIONS else _past_moves_word(mon)
+
+
+def _order_move(s: RefState, b: int, choices) -> int:
+    """The move whose priority CalcTurnOrder reads for battler ``b``'s FIGHT (battle_lib.c:
+    1375-1397; ``order.order_moves``): Struggle where the selection set ``turnFlags.struggling``,
+    else ``moves[moveSlot]`` as it stands now (``move_slot``: a locked battler's last selected
+    slot, E2-ML-5)."""
+    if choices[b][1]:
+        return MOVE_STRUGGLE
+    return _active(s, b).moves[s.battlers[b].move_slot]
+
+
 def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, bool]:
     """``(move, struggling, locked)`` a move action selects, fixed at command selection:
     the locked move of a battler that picks no command (bcp.c:335, :1885-1888), Struggle
@@ -8896,7 +8972,29 @@ def ref_step(
         )
         sd.starf_roll = [first] + [0] * (len(STARF_QUEUE) - 1)
         sd.starf_taken = 0
+    if not actions_only:
+        _canonical_selection(tables, out)  # step.step_events' last write (E2-ML-9)
     return out
+
+
+def _canonical_selection(tables, s: RefState) -> None:
+    """``engine.step.canonical_selection`` in place (E2-ML-9): at a turn boundary that is not a
+    pause (``pivot_battler``, ``learn_site``), a battler whose active Pokemon has HP and that is not
+    locked nor recharging (``_picks_no_command``, Battler_CanPickCommand, lib.c:6224-6235) gets ``move_slot`` 0
+    (its next FIGHT writes it, bcp.c:445, :526, and no reader takes it under Struggle or a non-FIGHT
+    command: lib.c:1378-1391, battle_script.c:6752-6753) and, when it has a usable move
+    (``_usable``, the next selection's test), ``selected_temp`` 0 (the next selection writes it,
+    bcp.c:447, :525, :565, :595); a Struggle-bound one keeps ``selected_temp`` (read by the Rage
+    check, bcp.c:844, and TryPursuit, battle_script.c:6909). Locked, recharging and 0-HP battlers
+    keep both."""
+    if s.pivot_battler or s.learn_site:
+        return
+    for b, sd in enumerate(s.battlers):
+        if _active(s, b).hp <= 0 or _picks_no_command(s, b):
+            continue
+        sd.move_slot = 0
+        if any(_usable(tables, s, b)):
+            sd.selected_temp = 0
 
 
 def _ref_step(
@@ -8945,6 +9043,29 @@ def _ref_step(
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     choices = [_choose(tables, s, side, actions[side]) for side in range(_fmt(s).B)]
     commands = [_command(a) for a in actions]
+    # The selection's moveSlot (E2-ML-5): a FIGHT that picks a move writes the Encore slot under
+    # an Encore (bcp.c:440-446), else the chosen slot (:526); a locked or recharging (:333-337,
+    # _picks_no_command), Struggling (:433-434) or absent (:330-333) battler, an item and a switch
+    # keep it.
+    for side in range(_fmt(s).B):
+        sd = s.battlers[side]
+        _, struggling, _locked = choices[side]
+        locked = _picks_no_command(s, side)
+        if commands[side] == FIGHT and not (struggling or locked) and not _absent_now(s, side):
+            sd.move_slot = (
+                sd.encore_slot if sd.encore_move else min(actions[side], MOVE_ACTIONS - 1)
+            )
+        # battlerActions[b][TEMP_VALUE] (E2-ML-8; order.selection_temps): 1 + the FIGHT's slot, 0
+        # under an Encore (bcp.c:447, :525); a party pick's slot, 0-5 (:595; 5 reads moves[4],
+        # _past_moves_word); a bag item's BattleItemUse (:565): 0, a stated assumption.
+        if locked or _absent_now(s, side):
+            continue
+        if commands[side] == FIGHT and not struggling:
+            sd.selected_temp = 0 if sd.encore_move else min(actions[side], MOVE_ACTIONS - 1) + 1
+        elif commands[side] == SWITCH:
+            sd.selected_temp = actions[side] - MOVE_ACTIONS
+        elif commands[side] == ITEM:
+            sd.selected_temp = 0
     # TrainerAI_RecordLastMove (trainer_ai.c:2705-2717) runs on the AI's FIGHT path
     # (TrainerAI_MainSingles, :295), which a forced Struggle skips (bcp.c:433): the
     # player's movePrevByBattler joins the AI's list of move ids: the first empty entry, unless
@@ -8983,7 +9104,8 @@ def _ref_step(
         priority = (0, 0)
         if not early[0]:
             priority = tuple(
-                _t(tables, "move_priority", choices[side][0]) for side in range(_fmt(s).B)
+                _t(tables, "move_priority", _order_move(s, side, choices))
+                for side in range(_fmt(s).B)
             )
         # The order reads the speedRand drawn the turn before (qc_roll): this turn's is
         # drawn after CalcTurnOrder (bcp.c:853-857).
@@ -9067,19 +9189,20 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             turn.charging = turn.no_pp = False
             # FightCommand (bcp.c:1866-1883, B10-9): after Struggle, an encored battler uses the
             # encored move (its slot's PP and no-PP failure) when the slot holds it, whatever it
-            # chose; else its encore ends and the slot's move (its forced choice) runs.
+            # chose; else its encore ends and the encored slot's move runs (moveTemp =
+            # moves[encoredMoveSlot], :1874-1883), a lock's move included (:1885-1888, E2-ML-3).
             action_slot = actions[side]
             esd, emon = s.battlers[side], _active(s, side)
             if not struggling and esd.encore_move and emon.hp and not s.over:
-                if emon.moves[esd.encore_slot] == esd.encore_move:
-                    move, action_slot = esd.encore_move, esd.encore_slot
-                else:
+                held = emon.moves[esd.encore_slot] == esd.encore_move
+                move, action_slot = emon.moves[esd.encore_slot], esd.encore_slot
+                if not held:
                     esd.encore_move = esd.encore_slot = esd.encore_turns = 0
-            turn.move_cur = move
+            turn.move_cur = turn.move_temp = move
             turn.shell_dealt = 0
             turn.reflected = False
             turn.met_reached = turn.met_worked = turn.met_immune = False
-            turn.charge_strike = turn.bide_ended = False
+            turn.charge_strike = turn.bide_ended = turn.bide_release = False
             rollout0 = s.battlers[side].rollout_count
             try:
                 record = _fight(
@@ -9088,6 +9211,12 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 )  # fmt: skip
             finally:
                 _unstrip_roost(turn, s)
+            # The release cleared the lock before the move (_status_disrupted,
+            # subscript_bide_end.s:11); the stored damage it dealt is hidden state, 0 once
+            # the move is done. A lock the move set (a charge turn, Rollout, Uproar) stays.
+            # Engine: step._use_move's ``bide_damage`` reset at ``bide_ends & head_on``.
+            if turn.bide_release:
+                s.battlers[side].bide_damage = 0
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
             no_effects = turn.met_reached and not (
                 turn.met_worked and not turn.met_immune and not turn.knot_failed
@@ -9183,13 +9312,7 @@ def _resort(turn: _Turn, s: RefState, b_tr: int) -> None:
                 priority = (0, 0)
                 if fight:
                     priority = tuple(
-                        _t(tables, "move_priority", MOVE_STRUGGLE)
-                        if turn.choices[b][1]
-                        else _t(
-                            tables,
-                            "move_priority",
-                            _active(s, b).moves[min(max(turn.actions[b], 0), MOVE_ACTIONS - 1)],
-                        )
+                        _t(tables, "move_priority", _order_move(s, b, turn.choices))
                         for b in (b1, b2)
                     )
                 swap = _compare_battlers(
@@ -9494,6 +9617,7 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
     _put(s, "ts_move_failed", [int(f) for f in turn.move_failed])
     if not learn:
         s.ts_used = turn.move_cur
+        s.ts_move_temp = turn.move_temp
         s.ts_damaged = int(turn.damaged)
         s.ts_dealt = turn.pivot_dealt
         s.ts_se = int(turn.move_se)  # moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
@@ -9552,7 +9676,7 @@ def _fainted_battler(s: RefState, k: int, i: int) -> int:
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_pursued": 0, "ts_used": 0, "ts_damaged": 0,
     "ts_dealt": 0, "ts_se": 0, "ts_power_mul": 0, "ts_pick_mul": 0, "learn_site": 0,
-    "ts_ran": 0, "ts_defender": 0,
+    "ts_ran": 0, "ts_defender": 0, "ts_move_temp": 0,
 }  # fmt: skip
 
 
@@ -9698,14 +9822,10 @@ def _resume(
     # before ``_enter`` (the outgoing mon's Encore and chosen_target in place), gives that battler
     # but for a foe that fell since (the U-turn's KO, a pursuer's recoil): it stays the defender,
     # as ``step._use_move``'s B = 2 tail keep.
-    p_move, p_struggling, _ = turn.choices[side]
+    # The move FightCommand ran (moveTemp, kept at the stop: ``ts_move_temp``, E2-ML-4).
+    _, p_struggling, _ = turn.choices[side]
+    p_move = s.ts_move_temp
     p_sd = s.battlers[side]
-    if (
-        not p_struggling
-        and p_sd.encore_move
-        and _active(s, side).moves[p_sd.encore_slot] == p_sd.encore_move
-    ):
-        p_move = p_sd.encore_move
     if _fmt(s).B == 4:
         # D3-10: the defender FightCommand fixed (bcp.c:1900) and the sort before the action
         # stay through the list (battleCtx->defender, monSpeedOrder: nothing rewrites them).
@@ -9720,7 +9840,7 @@ def _resume(
             outcome.target_draw[side],
         )[0]  # fmt: skip
         turn.defender = _foe(side) if kept is None else kept
-    move, used = s.battlers[side].ts_move, s.ts_used
+    move, used = s.ts_move_temp, s.ts_used
     damaged, dealt = bool(s.ts_damaged), s.ts_dealt
     se = bool(s.ts_se)  # the tail's moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
     position = s.ts_cursor
@@ -9787,9 +9907,11 @@ def _resume(
         _held_item(turn, s, battler)
     # LOOP_FAINTED (bcp.c:3820-3823): the defender is still flagged with its Grudge bit, so
     # subscript_faint_check_destiny_bond.s:28 runs TryGrudge on the newcomer: moveSlot[attacker]
-    # is the paused action's selected slot, moveTemp the pivot move (review b2 #5).
+    # is the paused action's selected slot (``move_slot``, E2-ML-5), moveTemp the pivot move
+    # (review b2 #5).
     for b in range(_fmt(s).B):
-        _try_grudge(s, side, turn.actions[side], b, bool(grudge[b]), False, bool(grudge[b]))
+        slot = s.battlers[side].move_slot
+        _try_grudge(s, side, slot, b, bool(grudge[b]), False, bool(grudge[b]))
     # UpdateMoveBuffers / UpdateFlagsWhenHit on the newcomer (bcp.c:3917-3944): no Choice lock
     # for U-turn under SYSCTL_UTURN_ACTIVE nor Baton Pass (moveTemp), movePrev and
     # movePrevByBattler the paused move's moveTemp, the protect chain reset.
@@ -9929,6 +10051,7 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
     # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
     if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
         _set_roosting(s, [0] * _fmt(s).B)
+    _canonical_selection(tables, s)  # the newcomer's usable moves decide (E2-ML-9)
     return s
 
 
@@ -9971,4 +10094,5 @@ def ref_replace_round(tables, state: RefState, picks, trace_pick=None) -> RefSta
         sd.starf_taken = 0
     if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
         _set_roosting(s, [0] * _fmt(s).B)
+    _canonical_selection(tables, s)  # E2-ML-9, as ref_replace
     return s

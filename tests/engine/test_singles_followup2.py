@@ -28,7 +28,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.order import metronome_weights
+from nuzline.engine.order import metronome_weights, with_selection
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, pivot_view
 from nuzline.engine.state import make_state
 from nuzline.engine.step import _pursuit_hit, step_events
@@ -109,6 +109,7 @@ def _after_hit(tables, n, s):
     # and the switch still to come.
     choices = (jnp.asarray([0, n.move("Pursuit")], jnp.int32), jnp.zeros(2, bool))
     acts = jnp.asarray((SWITCH, 0), jnp.int32)
+    s = with_selection(tables, s, acts)  # TEMP_VALUE for TryPursuit (E2-ML-8)
     return jax.jit(_pursuit_hit)(tables, s, 1, 0, acts, choices, _proc(1))[0]
 
 

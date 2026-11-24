@@ -93,8 +93,8 @@ of the turn:
 * ``magnitude[s]``: ``s`` uses a ``MAGNITUDE`` move (``BtlCmd_CalcMagnitudePower``).
   ``crit``/``roll`` are not relevant for ``LEVEL_DAMAGE`` (Night Shade deals its user's
   level with no crit or roll, ``damage.fixed_damage``) nor for ``BIDE`` (the unleash is
-  ``2 * storedDamage``, also fixed). A locked side's move is its locked move
-  (``order.selected_move``), so the masks above read it.
+  ``2 * storedDamage``, also fixed). A locked side's move is its locked move (FightCommand's
+  moveLockedInto, ``order.fight_move``), so the masks above read it.
 * ``present[s]``: ``s`` uses Present (``BtlCmd_Present``). It joins ``crit[s, 0]`` and
   ``roll[s, 0]`` in one joint factor (``_present_reads``): the heal path reads neither.
 * ``tri_attack[s]``: ``s``'s move runs Tri Attack (its own, or Nature Power's call) and its
@@ -231,7 +231,13 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine import field as fcm
 from nuzline.engine import targets
-from nuzline.engine.actions import absent_now, imprisoning_foe, replacement_bench, sealed_mask
+from nuzline.engine.actions import (
+    absent_now,
+    imprisoning_foe,
+    move_imprisoned,
+    replacement_bench,
+    sealed_mask,
+)
 from nuzline.engine.damage import (
     NUM_TYPES,
     PHYSICAL,
@@ -322,6 +328,7 @@ from nuzline.engine.order import (
     dislikes_berry,
     effective_speed,
     encored_state,
+    fight_move,
     gravity_possible,
     gravity_state,
     invoked_move,
@@ -333,14 +340,15 @@ from nuzline.engine.order import (
     mirror_call,
     mirror_copied,
     move_effects,
+    order_moves,
     qc_recycle,
     qc_transfer,
     sealed_state,
-    selected_move,
     sketched_state,
     takeover_possible,
     truant_loafs,
     used_moves,
+    with_selection,
 )
 from nuzline.engine.outcome import (
     ACUPRESSURE_DRAWS,
@@ -354,7 +362,8 @@ from nuzline.engine.outcome import (
     Outcome,
     ability_whole,
     acid_rain_reachable,
-    armored,
+    chase_pursuers,
+    chase_widening,
     crit_class,
     crit_variants,
     doubles_ability_change,
@@ -363,7 +372,6 @@ from nuzline.engine.outcome import (
     hit_threshold_pair,
     moved_mask,
     pivot_view,
-    pursuit_armored,
     pursuit_chase,
     read_chance,
     roar_inputs,
@@ -373,6 +381,7 @@ from nuzline.engine.outcome import (
     self_lock,
     trace_copies,
     trace_sources,
+    widen_crit,
 )
 from nuzline.engine.outcome import (
     any_of as _any_of,
@@ -1700,7 +1709,7 @@ def damage_inputs_can_change(
     # ``moves`` from outcome_laws).
     if moves is None:
         chosen = jnp.stack(
-            [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
+            [fight_move(tables, state, side, actions[side]) for side in range(fmt.B)]
         )
         moves = jnp.stack([called_move(tables, state, chosen[side]) for side in range(fmt.B)])
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
@@ -1986,10 +1995,15 @@ def outcome_laws(
         state.trace_announced == 0
     )
     state, actions = pivot_view(tables, state, actions)
+    # The state as the command selection leaves it (moveSlot, TEMP_VALUE: E2-ML-5, E2-ML-8).
+    state = with_selection(tables, state, actions)
     live = state.over == 0
     sides = jnp.arange(fmt.B)
     switch, item = is_switch(actions), is_item(actions)
-    uses_move = live & ~switch & ~item  # bool[B]
+    # A held Encore's Pursuit fires on the foe's switch whatever its holder chose (TryPursuit,
+    # battle_script.c:6905-6909, E2-ML-6): an item or a switch action then draws as that move.
+    chase_fires, pursues, chase_move = pursuit_chase(tables, state, actions)
+    uses_move = live & ((~switch & ~item) | chase_fires)  # bool[B]
     # Singles follow-up (ii): a lock move that may be aimed at its own user (outcome.self_lock).
     # Every cut below that reads the foe as the defender (its armor, immunity, Protect, status
     # eligibility, order gates of a flinch, the damage table) is lifted for such a side, whose
@@ -1998,13 +2012,17 @@ def outcome_laws(
     # ``chosen``: the move each action selects (its status checks: Disable, Taunt); ``moves``:
     # the move it runs (Nature Power's and the invokers' call, order.called_move,
     # order.used_moves), whose draws these are.
-    picked = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
     # A takeover variant (B11-1): the action runs the encored move (moveTemp) from the start.
     taken = jnp.zeros((fmt.B,), bool) if taken is None else jnp.asarray(taken, bool)
     took_state = encored_state(tables, state, taken)
-    chosen = jnp.where(taken, state.last_move.astype(_I32), picked)
+    # FightCommand's turn-start Encore runs the encored move over the chosen or locked one
+    # (order.fight_move, E2-ML-2); the order reads moves[moveSlot] (order.order_moves, E2-ML-5).
+    fought = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
+    chosen = jnp.where(taken, state.last_move.astype(_I32), fought)
+    # A pursuer runs TryPursuit's move (a held Encore's, or Battler_SelectedMove's carried
+    # moves[TEMP_VALUE - 1], battle_script.c:6905-6909; E2-ML-6, E2-ML-8), and its action ends at
+    # the chase (:6931): only where it pursues (review 5, Must fix 2).
+    chosen = jnp.where(pursues, chase_move, chosen)
     kinds = call_kind(tables, chosen)
     # Copycat's, Me First's and Mirror Move's calls follow the order (the foe's move before them,
     # or not).
@@ -2065,6 +2083,7 @@ def outcome_laws(
             ),
         )
         call_pending = jnp.asarray(False)
+    moves = jnp.where(pursues, chase_move, moves)  # TryPursuit's move (E2-ML-8)
     foe_moves = foes(uses_move)  # the other side uses a move
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
     foe_move = foes(moves)
@@ -2074,6 +2093,21 @@ def outcome_laws(
     # Night Shade, Bide's unleash, Super Fang, the OHKO moves; damage.fixed_damage)
     rolled = damaging & ~_any_of(effect, UNROLLED_EFFECTS)
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
+    # Review 6: a battler that FIGHTs with another move than its chase move and may chase or run
+    # its own move (``outcome.chase_widening``: B = 4 switch chases, U-turn chases): the chase's
+    # hit (subscript_pursuit.s:8-12, CalcCrit and CalcDamage, a contact hit) is read beside the
+    # own move's, so its flags join the own move's; its crit, damage-class and hit-gate widenings
+    # follow below. ``chase_armor``: the crit cut over every battler it may chase.
+    chase_both, chase_armor, chase_moves = chase_widening(
+        tables, state, actions, moves, chase_fires, taken
+    )
+    chase_damaging = (tables.move_category[chase_moves] != STATUS) & (
+        tables.move_power[chase_moves] != 0
+    )
+    chase_effect = tables.move_effect[chase_moves]
+    damaging = damaging | (chase_both & chase_damaging)
+    rolled = rolled | (chase_both & chase_damaging & ~_any_of(chase_effect, UNROLLED_EFFECTS))
+    contact = contact | (chase_both & ((tables.move_flags[chase_moves] & MoveFlag.CONTACT) != 0))
     # effects.hit_count: MULTI_HIT's count, or two for a HIT_TWICE move (Twineedle, B13-1).
     twice = ((tables.move_flags[moves].astype(_I32) & MoveFlag.HIT_TWICE) != 0) & (
         effect != _E.MULTI_HIT
@@ -2320,13 +2354,16 @@ def outcome_laws(
     # Embargo, battle_lib.c:5352-5363; ``state.held_item``) or the state is a paused one. The
     # foe's Skill Swap, Worry Seed or Gastro Acid before the MoveEnd can take a Klutz (Embargo
     # stays to the turn's end) and an Own Tempo (subscript_confuse.s:6 reads Battler_Ability then);
-    # ``b4`` covers the third battlers'. At B = 4 a third battler's hit can bring the holder into
-    # range before an earlier MoveEnd, outside the foe pairing: the range is not tested there.
+    # ``b4`` covers the third battlers'. At B = 4 any other battler's move (a hit, Pain Split)
+    # can bring the holder into range before an earlier MoveEnd, outside the foe pairing; a bag
+    # item or a switch lowers no other battler's HP (hazards hit the newcomer only), so a holder
+    # out of range with no other battler using a move stays out (E2-ML-7).
     hp_now = state.hp[party(fmt, sides), mons].astype(_I32)
     max_now = state.max_hp[party(fmt, sides), mons].astype(_I32)
     in_range = (hp_now > 0) & (hp_now <= max_now // 2)
     if fmt.B == 4:
-        in_range = jnp.ones((fmt.B,), bool)
+        others_move = jnp.stack([jnp.any(uses_move & (sides != b)) for b in range(fmt.B)])
+        in_range = (hp_now > 0) & (in_range | others_move)
     taken_by_foe = foes(uses_move & _any_of(effect, (_E.SKILL_SWAP, _E.WORRY_SEED, _E.GASTRO_ACID)))
     ability_goes = taken_by_foe | b4
     klutz_goes = (
@@ -2447,7 +2484,9 @@ def outcome_laws(
         # order.action_order: priority only between two moves; a tie only between two
         # actions of the same kind.
         priority = jnp.where(
-            uses_move[0] & uses_move[1], tables.move_priority[picked].astype(_I32), 0
+            ~switch[0] & ~item[0] & ~switch[1] & ~item[1],
+            tables.move_priority[order_moves(tables, state, actions)].astype(_I32),
+            0,
         )
         same_kind = (switch[0] == switch[1]) & (item[0] == item[1])
         speed_tie = (
@@ -2614,7 +2653,12 @@ def outcome_laws(
     # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO of a switcher or a U-turn user
     # subtracts a battler from a nonzero mask before the turn end's sort, which can set the rain
     # and sun bits (FCM 3.1); only where that write can happen (``acid_rain_reachable``).
-    acid = acid_rain_reachable(state, actions, uses_move, effect)
+    # The chased mask: a switch or a U-turn user; the pursuer mask: a Pursuit run, or a battler
+    # whose TryPursuit move is a Pursuit whatever it runs (``chase_pursuers``: a Struggling or
+    # locked carried Pursuit, an Encored item or switch action; review 7).
+    acid = acid_rain_reachable(
+        state, actions, uses_move, effect, chase_pursuers(tables, state, actions)
+    )
     weather_free = live & (
         jnp.any((uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter))
         | acid
@@ -2887,7 +2931,8 @@ def outcome_laws(
     # reaches the hit whatever the rolls (none of the checks of
     # BattleControllerPlayer_CheckStatusDisruption, bcp.c:2417-2728, can stop it: no
     # sleep, freeze, paralysis, confusion, flinch, Disable on it, Taunt on a power-0 move,
-    # infatuation or Bide; the first mover cannot fall in love before its own check),
+    # Imprison on it, infatuation or Bide; Gravity and Heal Block ban no flinching move,
+    # battle_lib.c:3385-3392, :3409-3425; recharging, set by effect_script_0080.s:5 -> subscript_recharge_turn.s:5, is a coverage refusal; the first mover cannot fall in love before its own check),
     # deals damage at every crit and roll (play_hit's ``effective``: the flinch needs it),
     # and the target, the foe's active Pokemon using a move, has no Inner
     # Focus as the attacker sees it (effects._flinch, effects._fang). Fake Out also needs its
@@ -2903,6 +2948,13 @@ def outcome_laws(
         & (state.flinched == 0)
         & ~((state.disabled_move != 0) & (state.disabled_move.astype(_I32) == chosen))
         & ~((state.taunt > 0) & (tables.move_power[chosen] == 0))
+        # CHECK_STATUS_STATE_IMPRISON (bcp.c:2572-2583): Move_Imprisoned (battle_lib.c:3316-3338) on
+        # moveCur, ``chosen``. The selection's CheckInvalidMoves keeps a free pick off a sealed
+        # move, but a locked battler picks nothing (bcp.c:334-338) and FightCommand's Encore
+        # (:1869-1883) runs the encored move or the encored slot's over the pick: a Sky Attack
+        # strike sealed by a foe that Imprisoned during the charge (review 10), a locked or Encored
+        # Fake Out or Headbutt. An invoker's call is not checked (moveCur is the invoker then).
+        & ~jnp.stack([move_imprisoned(state, side, chosen[side]) for side in range(fmt.B)])
         & (state.infatuated == 0)
         & (state.bide_turns == 0)
     )
@@ -2994,6 +3046,15 @@ def outcome_laws(
         & (chance != 0)
         & single
         & ~lock  # a lock aimed at its user flinches the user, not the foe
+        # Pod u_027: Sky Attack (BATTLE_EFFECT_CHARGE_TURN_HIGH_CRIT_FLINCH, mapped to FLINCH)
+        # charges unless its user is VOLATILE_CONDITION_MOVE_LOCKED (effect_script_0075.s:5;
+        # ``step._use_move``'s ``second_turn``): the charge turn deals nothing and flinches
+        # nothing, so its flinch is never sure there. A Power Herb would strike at once, so this
+        # drops a sure flinch it could have: over-approximate, only on a charge move's first turn.
+        # A Bide release (bide_turns 1 now) clears the lock before the move (subscript_bide_end.s:
+        # 11, bcp.c:2722-2724), so an Encore takeover's Sky Attack charges then: ``reach`` already
+        # needs bide_turns 0, so no Bide turn's flinch is ever sure here.
+        & ~(((tables.move_flags[moves] & MoveFlag.CHARGE) != 0) & (state.locked_move == 0))
         # B = 4: a third battler's mover or a Trace firing at its MoveEnd can give the target
         # Inner Focus or Shield Dust before the first mover's flinch (outcome.doubles_ability_change).
         & ~b4
@@ -3009,7 +3070,8 @@ def outcome_laws(
     off = jnp.zeros((fmt.B,), bool)
     reads = Reads(
         first=firsts,
-        hit_gated=off if loose else uses_move & (effect != _E.PURSUIT),
+        # A chase reads its crit and roll with no accuracy check (``chase_both``, review 6).
+        hit_gated=off if loose else uses_move & (effect != _E.PURSUIT) & ~chase_both,
         proc_gated=off if loose else uses_move & (chance != 0) & _any_of(effect, proc_effects),
         flinch_sure=off if loose else flinch_sure,
         fang=fang,
@@ -3076,6 +3138,7 @@ def outcome_laws(
     # The crit odds at the hit (outcome.crit_variants): a hit whose odds can change before its
     # CalcCrit draws its crit as a class of the CRIT_DRAWS values (_crit), not in damage classes.
     odds_variants, odds_possible = crit_variants(tables, state, actions, moves)
+    odds_possible = widen_crit(odds_possible, chase_both)  # the chase's odds too (review 6)
     if loose:
         # Every write variant; the trace columns (every stage's odds) stay where an armed Trace
         # can copy a crit ability (outcome.crit_variants): the brute force reads the odds the
@@ -3090,6 +3153,7 @@ def outcome_laws(
             & ~damage_inputs_can_change(tables, state, actions, firsts[t] == _foe(sides), moves)
             & ~(m["confusion_hit"][:, None] & (hit_index == 0))
             & ~lock[:, None]  # the table is the foe's; a lock may read the user's own
+            & ~chase_both[:, None]  # the table is the own move's, not the chase's (review 6)
             for t, m in enumerate(branches)
         ]
     )
@@ -3123,11 +3187,7 @@ def outcome_laws(
         # lock aimed at its user, whose step reads both on the hit's defender (effects.crit_blocked).
         no_crit=(
             (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
-            | jnp.where(
-                pursuit_chase(tables, state, actions)[0],
-                pursuit_armored(tables, state),
-                armored(tables, state, actions, moves),
-            )
+            | chase_armor  # outcome.chase_widening: armored, or over every chased battler
         )
         & ~lock,
         secondary_chance=secondary_chance(tables, state, moves),
@@ -4651,9 +4711,7 @@ def call_consistent(
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     taken = jnp.zeros((fmt.B,), bool) if taken is None else jnp.asarray(taken, bool)
-    chosen = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
+    chosen = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     fight = (state.over == 0) & ~is_switch(actions) & ~is_item(actions) & ~taken
     kinds = call_kind(tables, chosen)
     talk = fight & (kinds == CALL_SLEEP_TALK)
@@ -4687,6 +4745,8 @@ def call_consistent(
     )
     listed_ok = ~listing | ((call >= CALL_GRAVITY) == landed)
     view, view_actions = pivot_view(tables, state, actions)
+    # As the laws' entry points read it: the selection's moveSlot and TEMP_VALUE (E2-ML-5, E2-ML-8).
+    view = with_selection(tables, view, view_actions)
     can_take = jnp.stack(
         [takeover_possible(tables, view, view_actions, side, _foe(side)) for side in range(fmt.B)]
     )
@@ -4782,15 +4842,14 @@ def _side_call_law(
         copycat_call(tables, state.move_prev, state),
         jnp.where(values == 1, copycat_call(tables, foe_chosen, state), 0),
     )
-    # Me First (E3-2-3): value 0, its target has not acted (it copies the target's chosen move),
+    # Me First (E3-2-3): value 0, its target has not acted (it copies the target's
+    # Battler_SelectedMove, ``state`` as the selection left it: E2-ML-8),
     # value 1, it has (the call fails).
     if copy_from is None:
-        first_from, first_move, first_fights = _foe(side), foe_chosen, foe_uses_move
+        first_from, first_fights = _foe(side), foe_uses_move
     else:
-        first_from, first_move, first_fights = copy_from, chosen_all[copy_from], uses_all[copy_from]
-    first_called = jnp.where(
-        values == 0, me_first_copy(tables, state, first_from, first_move, first_fights), 0
-    )
+        first_from, first_fights = copy_from, uses_all[copy_from]
+    first_called = jnp.where(values == 0, me_first_copy(tables, state, first_from, first_fights), 0)
     # Mirror Move (E3-B2-2): value 0, the foe has not recorded a move for it this turn (it calls
     # its turn-start moveCopied), value 1, the foe's move before it did (the foe's chosen move when
     # it is Mirror-Move-able and aimed at the user, else the moveCopied it had).
@@ -4873,11 +4932,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       battle_script.c:4916-4930)."""
     fmt = format_of(state)
     state, actions = pivot_view(tables, state, actions)
+    # The state as the command selection leaves it (moveSlot, TEMP_VALUE: E2-ML-5, E2-ML-8).
+    state = with_selection(tables, state, actions)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
-    chosen = jnp.stack(
-        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
-    )
+    chosen = jnp.stack([fight_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     kinds = jnp.where(uses_move, call_kind(tables, chosen), CALL_NONE)
     foe_called = foes(
         jnp.stack([called_move(tables, state, chosen[side]) for side in range(fmt.B)])

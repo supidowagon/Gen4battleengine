@@ -939,7 +939,9 @@ def fixed_damage(
     immune = immune | (
         jnp.asarray(wonder_guard) & wonder_guarded(tables, state, atk_side, move, kind, def_side)
     )
-    unleash = (state.bide_turns[atk_side] == 0) & (state.locked_move[atk_side] != 0)
+    # bcp.c:2699-2701: damage = 2 * storedDamage at the release, before subscript_bide_end.s
+    # clears the lock (:11); the stored damage stays until the move is done (step._use_move).
+    unleash = (state.bide_turns[atk_side] == 0) & (state.bide_damage[atk_side] > 0)
     stored = jnp.where(unleash, 2 * _i32(state.bide_damage[atk_side]), 0)
     # Super Fang (effect_script_0040.s): Divide(curHP, 2) of the defender under
     # SYSCTL_IGNORE_TYPE_CHECKS; ApplyTypeMultiplier still flags an immunity (battle_lib.c:

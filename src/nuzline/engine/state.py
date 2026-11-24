@@ -683,6 +683,9 @@ class BattleState(NamedTuple):
     ts_dragged: jnp.ndarray  # int8[B], 1 + the slot a Roar dragged in this turn
     ts_move_failed: jnp.ndarray  # int8[B], moveFailFlags (the turn end's Uproar check)
     ts_used: jnp.ndarray  # int16, the paused action's moveCur
+    # int16, the paused action's moveTemp (FightCommand, bcp.c:1861-1898: the Encore's or the
+    # lock's move as it ran), read by its tail's UpdateMoveBuffers (bcp.c:3917-3946; E2-ML-4)
+    ts_move_temp: jnp.ndarray
     ts_damaged: jnp.ndarray  # int8, its defender's physical / specialDamageTaken != 0
     ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
     # int8, 1 + battleCtx->defender of the paused action, 0 = BATTLER_NONE; written at B = 4 only
@@ -734,6 +737,19 @@ class BattleState(NamedTuple):
     # int8[B], 1 + BattleContext.lastHitByBattler[b] (D2-14; bcp.c:3347, :3357): the battler that
     # last dealt damage to b's slot, 0 = none yet; never cleared (not by a switch or a faint)
     last_hit_by: jnp.ndarray
+    # int8[B], BattleContext.moveSlot[b] (E2-ML-5): written only at the command selection of a
+    # FIGHT that picks a move (bcp.c:445 the Encore slot, :526 the chosen slot); a locked or a
+    # Struggling battler, an item, a switch and an absent battler keep it, and nothing resets it
+    # (BattleContext_Init, battle_lib.c:1974-2017; zeroed only by BattleContext_New, bcp.c:182;
+    # not a switch or a faint). CalcTurnOrder reads its move's priority (battle_lib.c:1375-1397),
+    # TryGrudge zeroes its PP (common.h:8)
+    move_slot: jnp.ndarray
+    # int8[B], battlerActions[b][BATTLE_ACTION_TEMP_VALUE] as Battler_SelectedMove reads it
+    # (battle_lib.c:2858-2868; E2-ML-8): 1 + the slot of a FIGHT's pick (bcp.c:525), 0 under an
+    # Encore (:447), a party pick's slot where it names a move slot (:595), else 0; a locked or a
+    # Struggling battler keeps it, nothing resets it. Me First and Pursuit read it
+    # (``order.battler_selected_move``)
+    selected_temp: jnp.ndarray
     # int8[B], BattleSystem.battleParticipantMask[b] (battle_system.h:118; battle_system.c:973-976):
     # bit i = party slot i of b's party was sent out by b this battle; set at every send-out, the
     # start's included, never cleared (D45-18)
@@ -1188,6 +1204,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_dragged": (_BATTLER, np.int8),
     "ts_move_failed": (_BATTLER, np.int8),
     "ts_used": (_FIELD, np.int16),
+    "ts_move_temp": (_FIELD, np.int16),
     "ts_damaged": (_FIELD, np.int8),
     "ts_dealt": (_FIELD, np.int16),
     "ts_defender": (_FIELD, np.int8),
@@ -1206,6 +1223,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_helping_hand": (_BATTLER, np.int8),
     "chosen_target": (_BATTLER, np.int8),
     "last_hit_by": (_BATTLER, np.int8),
+    "move_slot": (_BATTLER, np.int8),
+    "selected_temp": (_BATTLER, np.int8),
     "sent_out": (_BATTLER, np.int8),
 }
 

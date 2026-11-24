@@ -9,6 +9,7 @@ import math
 from collections import Counter
 from fractions import Fraction
 from functools import partial
+from pathlib import Path
 
 import jax
 import numpy as np
@@ -576,6 +577,141 @@ def test_mask_sound(tables, names, data):
     _assert_mask_sound(tables, s, acts, arbitrary, seed)
 
 
+BOARDS = Path(__file__).parent / "boards"
+
+
+def stored(name: str):
+    """A ``BattleState`` or ``Outcome`` saved from a falsifying example's repr
+    (``tests/engine/boards``)."""
+
+    def array(value, dtype, shape=None):
+        out = np.asarray(value, dtype)
+        return out if shape is None else out.reshape(shape)
+
+    scope = {"Array": array, "BattleState": BattleState, "Outcome": Outcome}
+    scope |= {"int8": np.int8, "int16": np.int16, "int32": np.int32}
+    return eval((BOARDS / name).read_text(), {"__builtins__": {}}, scope)
+
+
+def _sourceless_uproar_boards():
+    """Pod falsifier u_027 (run e2-tracelaws-ba0cbec2): the player's battler is locked into an
+    Uproar it does not know (``locked_move`` 253, ``uproar`` 2; moves Fire Fang, Swagger, Feint,
+    Pluck), as a level-up learn over the lock's slot leaves it (BattleScript_GetExpTask,
+    battle_script.c:10168-10176; BattleSystem_ReloadPokemon keeps statusVolatile and moveSlot,
+    battle_lib.c:183-189) or a called Uproar does. The stored selection (moveSlot 0, TEMP 3) is
+    the generator's free draw; the selection writes both together (bcp.c:525-526) and a locked
+    battler writes neither (bcp.c:334-338), so the reachable ones are TEMP = 1 + moveSlot: each
+    held slot. The hole was not the lock: the foe's first-turn Sky Attack counted as a sure
+    flinch (``test_a_charging_sky_attack_never_flinches_for_sure_in_the_laws``)."""
+    s = stored("u027_state.txt")
+    yield "stored", s
+    for slot in range(4):
+        yield (
+            f"slot{slot}",
+            s._replace(
+                move_slot=_set0(s.move_slot, slot),
+                selected_temp=_set0(s.selected_temp, slot + 1),
+            ),
+        )
+
+
+def _set0(field, value):
+    out = np.array(field)
+    out[0] = value
+    return out
+
+
+def test_a_sourceless_uproar_lock_runs_uproar_in_the_laws(tables):
+    """u_027's board and its reachable selections: the laws draw the locked battler's Uproar
+    (FightCommand runs moveLockedInto for a battler that picks no command, bcp.c:1885-1888):
+    its damage roll, whatever moveSlot and TEMP hold (no crit: the foe's side has Lucky Chant)."""
+    acts = np.zeros(2, np.int32)
+    for label, s in _sourceless_uproar_boards():
+        laws = laws_of(tables, s, acts)
+        assert bool(laws.relevant.roll[0, 0]), label
+
+
+def test_a_charging_sky_attack_never_flinches_for_sure_in_the_laws(tables):
+    """u_027's cause: the foe's Sky Attack on its first turn (not move-locked) charges
+    (effect_script_0075.s:5: only VOLATILE_CONDITION_MOVE_LOCKED jumps to the strike), so it
+    deals nothing and flinches nothing. The laws took its FLINCH effect as a sure flinch when it
+    moves first and gated off every read of the player's Uproar, which the step then rolled."""
+    acts = np.zeros(2, np.int32)
+    for label, s in _sourceless_uproar_boards():
+        laws = laws_of(tables, s, acts)
+        assert not bool(laws.reads.flinch_sure[1]), label
+
+
+def _striking_sky_attack(s, sealed: bool):
+    """u_027's board with the foe locked into Sky Attack (``locked_move`` 143, its slot 0), its
+    second turn; ``sealed``: the player knows Sky Attack (slot 3) and has Imprisoned (a foe that
+    Imprisoned during the charge, review 10)."""
+    locked = np.array(s.locked_move)
+    locked[1] = 143
+    s = s._replace(locked_move=locked)
+    if sealed:
+        moves, imprison = np.array(s.moves), np.array(s.imprison)
+        moves[0, int(s.active[0]), 3] = 143
+        imprison[0] = 1
+        s = s._replace(moves=moves, imprison=imprison)
+    return s
+
+
+def test_a_striking_sky_attack_flinches_for_sure_unless_imprisoned(tables):
+    """The narrowing's other side: Sky Attack's second turn (VOLATILE_CONDITION_MOVE_LOCKED,
+    effect_script_0075.s:5 jumps to the strike) moving first is a sure flinch on u_027's board;
+    sealed by the player's Imprison it fails at CHECK_STATUS_STATE_IMPRISON (bcp.c:2572-2583:
+    Move_Imprisoned on moveCur; the locked foe picked no command, bcp.c:334-338), so it is not."""
+    acts = np.zeros(2, np.int32)
+    s = stored("u027_state.txt")
+    assert bool(laws_of(tables, _striking_sky_attack(s, False), acts).reads.flinch_sure[1])
+    assert not bool(laws_of(tables, _striking_sky_attack(s, True), acts).reads.flinch_sure[1])
+
+
+def test_a_bide_release_sky_attack_never_flinches_for_sure_in_the_laws(tables):
+    """Review tracelaws 5f2ebe51: on u_027's board the foe is locked into Bide on its release turn
+    (``bide_turns`` 1, damage stored) and Encored on Sky Attack (its slot 0). FightCommand's
+    Encore branch runs Sky Attack (bcp.c:1869-1873); subscript_bide_end.s has cleared the lock
+    (:11) before it, and effect_script_0075.s:5 tests only the lock, so it charges: no flinch.
+    The laws' ``reach`` needs ``bide_turns`` 0, so the flinch is not sure."""
+    acts = np.zeros(2, np.int32)
+    s = stored("u027_state.txt")
+    fields = {
+        name: np.array(getattr(s, name))
+        for name in (
+            "locked_move",
+            "bide_turns",
+            "bide_damage",
+            "encore_move",
+            "encore_slot",
+            "encore_turns",
+        )
+    }
+    for name, value in (
+        ("locked_move", 117),
+        ("bide_turns", 1),
+        ("bide_damage", 20),
+        ("encore_move", 143),
+        ("encore_slot", 0),
+        ("encore_turns", 2),
+    ):
+        fields[name][1] = value
+    assert not bool(laws_of(tables, s._replace(**fields), acts).reads.flinch_sure[1])
+
+
+@pytest.mark.slow
+def test_mask_sound_on_a_sourceless_uproar_lock(tables):
+    """u_027's falsifying example, pinned: no undrawn Outcome element changes the step on the
+    stored board (its ``arbitrary`` outcome, seed 0) nor on its reachable selections."""
+    arbitrary = stored("u027_arbitrary.txt")
+    acts = np.zeros(2, np.int32)
+    for label, s in _sourceless_uproar_boards():
+        try:
+            _assert_mask_sound(tables, s, acts, arbitrary, 0)
+        except pytest.fail.Exception as failure:
+            raise pytest.fail.Exception(f"board {label}: {failure}") from failure
+
+
 # Every bag item whose BattleSystem_UseBagItem branch (battle_system.c:435-758) the engine
 # runs (bag.use_bag_item): HP, the status and confusion cures, Full Restore, PP, the stage
 # params, Guard Spec and Dire Hit.
@@ -657,7 +793,54 @@ def _assert_mask_sound(tables, s, acts, arbitrary, seed):
     n = len(picked.hit)
     both = Outcome(*(np.concatenate([a, b]) for a, b in zip(picked, changed)))
     stepped = step_bytes(tables, s, acts, both)
-    assert stepped[:n] == stepped[n:]
+    if stepped[:n] != stepped[n:]:
+        holes = _mask_holes(tables, s, acts, picked, kept, changed, stepped[:n])
+        pytest.fail(f"undrawn Outcome elements change the step: {holes}")
+
+
+def _step_states(tables, state, actions, outcomes: Outcome) -> list[BattleState]:
+    """``step``'s state for each outcome row (``step_bytes``' padded ``CHUNK`` calls)."""
+    n = len(outcomes.hit)
+    out = []
+    for start in range(0, n, CHUNK):
+        idx = np.arange(start, min(start + CHUNK, n))
+        pad = np.concatenate([idx, np.full(CHUNK - len(idx), idx[0])])
+        stepped = jax.tree.map(np.asarray, _step(tables, state, actions, rows(outcomes, pad)))
+        out += [BattleState(*(f[i] for f in stepped)) for i in range(len(idx))]
+    return out
+
+
+_CONTEXT = ("speed_tie", "hit", "crit", "roll", "quick_claw", "full_para", "call", "protect")
+
+
+def _mask_holes(tables, s, acts, picked, kept, changed, base) -> dict[str, dict]:
+    """The failure's diagnosis: each Outcome field whose undrawn elements alone change the
+    stepped state (``changed``'s value in that field only, over ``picked``), at the first row it
+    changes: the row, the elements that differ, each changed state field (``picked``'s step,
+    the changed one's), and the row's values and drawn masks of the ``_CONTEXT`` fields."""
+    holes = {}
+    for name in Outcome._fields:
+        one = picked._replace(**{name: getattr(changed, name)})
+        if np.array_equal(getattr(one, name), getattr(picked, name)):
+            continue
+        moved = [i for i, key in enumerate(step_bytes(tables, s, acts, one)) if key != base[i]]
+        if moved:
+            row = moved[0]
+            a = _step_states(tables, s, acts, rows(picked, [row]))[0]
+            b = _step_states(tables, s, acts, rows(one, [row]))[0]
+            diff = getattr(one, name)[row] != getattr(picked, name)[row]
+            holes[name] = {
+                "row": row,
+                "elements": np.argwhere(diff).tolist(),
+                "state": {
+                    f: (np.asarray(x).tolist(), np.asarray(y).tolist())
+                    for f, x, y in zip(BattleState._fields, a, b)
+                    if not np.array_equal(x, y)
+                },
+                "values": {f: np.asarray(getattr(picked, f)[row]).tolist() for f in _CONTEXT},
+                "drawn": {f: np.asarray(getattr(kept, f)[row]).tolist() for f in _CONTEXT},
+            }
+    return holes
 
 
 @pytest.mark.slow
