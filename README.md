@@ -2,6 +2,15 @@
 
 A tool that finds high-EV lines for single-player nuzlocke battles in Pokemon Platinum (US) and Platinum Kaizo (`--game kaizo`). Given the player's save file and a chosen trainer fight, it recommends pre-battle setup (box picks, lead, held items, prestatus, predamage) and ranked in-battle actions each turn, maximizing the probability of winning with zero faints. See `docs/design.md`.
 
+## Status: frozen (23 November 2026)
+
+This repository is the JAX implementation. It is frozen: no new mechanics are built here. Work continues as a Rust port in a separate repository.
+
+- Why: the product is a line finder that searches one battle deeply and cuts a line the moment it fails. JAX is built for running many battles in lockstep on a GPU; one loaded engine step needs about 6.3 GB, so tests and search could not run on an ordinary PC.
+- State at the freeze: singles mechanics are complete; 240 of the 387 Platinum Kaizo battles are playable. The missing ones are almost all doubles and multi battles. Unmerged doubles work is on branches of the private development clone, not here.
+- What this repository remains good for: the rules as read from the decompilation with file and line citations, the tests that state what the game does, the trainer AI model, and the ROM data pipeline.
+- The process rules in `CLAUDE.md` and `docs/process.md` (rented test machines, batches, merge gates) describe how this repository was run until the freeze.
+
 ## Taking over this project
 
 - Standing rules: `CLAUDE.md`.
@@ -94,3 +103,15 @@ uv run pytest -m "not slow"
 ```
 
 runs the fast tier. Tests marked `slow` (brute-force, loose, save- or ROM-bound) are left out of it. `test_funnel_matches_exhaustive_ci_full` in `tests/prep/test_exhaustive.py` also needs `NUZLINE_SLOW_TESTS=1`. Tier limits and cadence: `CLAUDE.md`.
+
+## Licence and credits
+
+The code in this repository is under the MIT licence (`LICENSE`). The repository contains no ROM, no save file and no game data extracted from a ROM; build the tables from your own copy.
+
+This project rests on the work of others:
+
+- [pret/pokeplatinum](https://github.com/pret/pokeplatinum), the decompilation of Pokemon Platinum. Every battle rule here was read from it and is cited by file and line.
+- PKCalc, the damage calculator for Platinum Kaizo, used as the second data source and as the independent damage check.
+- Pokemon Platinum Kaizo (Nightmare Update) and its documentation spreadsheet, by the hack's author.
+
+Pokemon is a trademark of Nintendo, Creatures and Game Freak. This project is not affiliated with or endorsed by them.
