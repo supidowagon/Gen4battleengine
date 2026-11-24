@@ -56,7 +56,7 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    divergences it expects; then the managing session runs the tip's snapshot compare
    (section 5).
 7. The stream sends one message: the final tip, the batch contents with citations, the
-   review outcome, the targeted run's results with time and peak memory per test file, and
+   review outcome, the lean-gate run set's results with time and peak memory per test file, and
    its ledger's explanation of every diverged part of the snapshot compare.
 8. The managing session dispatches a fresh Opus review agent as the merge gate. Give it the
    diff range and the criteria, never the stream's conclusions (the ledger's explanation of a diverged snapshot compare is
@@ -131,15 +131,7 @@ of each other (about 3 hours), the managing session names a train order.
   tip gets the pod runs of step 6 and the after-merge `fullset` run; earlier members do the
   table rebuild and the duplicate scan only.
 - Each batch keeps its own Opus merge-gate review (step 8) on its own diff range.
-- The pod work runs once, on the train tip, as the lean gate of CLAUDE.md (Merges): one run
-  with the union of the members' touched-area lists and the default mark, one
-  `MARK='fullset'` run (DAYBOX.md, Merge candidate), one snapshot compare against the `main`
-  capture with the union `--allow-new` list (section 5). **Cross-member rule:** a member's own
-  green gate on a tip that contains its base stands; the train tip reruns only the
-  cross-member surface: the four guards, the differential unless the skip applies, the test
-  files of every area two or more members touch or that name a symbol another member changed,
-  and the `fullset` tests of those areas. Whole ROM-only runs once, locally. The READY TO LAND
-  message prints the list sizes (target one to two pod-hours per train).
+- The pod work runs once, on the train tip, as the lean gate of CLAUDE.md (Merges). **Cross-member rule:** a member's own green gate on a tip that contains the train's `main` base stands. The train tip reruns only: the cross-member surface (a test file of member X's touched area that another member Y changes a source file or public symbol of, both ways; a file that names only a changed private helper is out), the test files changed by merge resolutions, the four guards, `tests/test_differential.py 1 A` unless the differential skip applies, one snapshot compare against the `main` capture with the union `--allow-new` list (section 5), and one `MARK='fullset'` run of the touched areas (DAYBOX.md, Merge candidate). Whole ROM-only runs once, locally. The READY TO LAND message prints three counts: files in the old union of the members' lists, touched-area files, files sent; target one to two pod-hours per train.
 - A member whose own gate or review is not finished when the others are ready does not hold
   the train more than one hour: it moves to the next train.
 - On green and MERGE from every review, the managing session moves `main` to the last tip
@@ -227,7 +219,7 @@ rate used for estimates.
   holder pid and the path) counts toward the same `NUZLINE_RAMGATE_TIMEOUT` minutes (default
   30). To clear a stuck lock, end the named process if it is no pytest or build of yours;
   deleting the file frees nothing.
-  `--collect-only` is allowed without a wait or the lock. A ROM-only item weighs its figure in
+  `--collect-only` of a ROM-only or engine-free selection is allowed without a wait or the lock; a `--collect-only` that loads the engine is an engine run and goes to the pod (CLAUDE.md, Where tests run). A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
   weighs 20), else 6 GB (the pod weight when the item has a higher key), so an unmeasured
   ROM-only item waits for more than 12 GB free (the PC idles at 16-18 GB free). The 6 holds only
@@ -248,7 +240,7 @@ rate used for estimates.
   The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
   never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
   engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a
-  wait and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` (or
+  wait (the one local collection that imports the test modules, so the engine; it only collects, never runs a test) and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` (or
   `--rom-gate`) concerns ROM-only ids only: it lifts the POD cut-off (weight 8 or more) of the
   `ramgate.py <ids>` check; the pytest gate ignores it, so it lets no refused run through.
   A refused run exits 13, a wait that times out 14, an unreadable free-RAM figure 16
@@ -406,7 +398,7 @@ rate used for estimates.
 - **List size.** The number after a list line is ids per chunk, not units. Size a list in
   units with `python _scratch/manager/unitcount.py <list> [default|fullset]` (a local helper,
   below). A merge-candidate list targets about 120 units; the dispatcher refuses one over
-  150. Read every run's unit count when the run is announced.
+  150. Unit counts come from the pod's collection (`collected.txt` of past runs), never from a local `--collect-only`. Read every run's unit count when the run is announced.
 - **Push gate.** A run that gates a push of `main` gets a pod to itself or the first claim
   (the memory reserve lets a low-priority run block it). It is split across the pods with room
   from the start: parts `<run>`, `<run>-2`, `<run>-3`, ..., `tests/test_differential.py 1 A` as
@@ -485,7 +477,7 @@ rate used for estimates.
 - **Merge-candidate list (touched areas).** Only a merge candidate gets the larger list: the
   test files of the code the diff changes plus every test file that names a changed public
   symbol (grep), nothing by directory, the four guards and `tests/test_differential.py 1 A`,
-  sized for about one hour on a pod alone (about 120 units at most). The nightly and the
+  sized for about one hour on a pod alone (about 120 units; refused over 150, List size). The nightly and the
   post-wave run cover the rest. The `fullset` run is unchanged (DAYBOX.md, Merge candidate).
   The merge-candidate list drops the differential line only under the differential skip of
   `CLAUDE.md` (Merges; `docs/process.md` section 2, Differential skip); the path list and the
@@ -678,7 +670,7 @@ background (section 6).
 | Cron | What |
 |---|---|
 | `47 9,21 * * *` | Fallback check: watchdog plus usage; silent unless something is wrong |
-| `7 22 * * *` | Only where no scheduled task holds it: dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier and the soundness sweep on a free day volume pod (`ci-day-big`) holding no push gate, else on `ci-nightly`, and deletes `ci-nightly` itself |
+| `7 22 * * *` | Only where no scheduled task holds it: dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier (`fullset` included) and the soundness sweep on a free day volume pod (`ci-day-big`) holding no push gate, else on `ci-nightly`, and deletes `ci-nightly` itself |
 | `37 23 * * *` | `bash tools/ops/offsite.sh` from the main checkout (section 12, Off-site copy); report only a non-zero exit (a refusal, a rejected branch, an abort or a failed push) |
 
 ## 8. Usage rules
@@ -689,7 +681,7 @@ managing session lowers cost per unit of work and never throttles the streams.
 - No idle turns and stream clears: CLAUDE.md, Usage. A stream restarts from its ledger.
 - The managing session reads every session's context use at each stream commit point and clears a stream past 30% there. It compacts itself before 35%, and only right after a user message. Automatic compaction is set to 50% as the backstop.
 - Batch size (CLAUDE.md, Batches) spreads the fixed cost per batch: review, merge check,
-  merge of `main`, table rebuild, targeted run.
+  merge of `main`, table rebuild, lean-gate run.
 - Models: CLAUDE.md, Usage.
 - The managing session wakes only for a user message, a watch-loop exit, a stream's merge
   tip or blocker, or a scheduled prompt. It never reads logs or agent transcripts whole.
