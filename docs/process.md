@@ -219,7 +219,7 @@ rate used for estimates.
   holder pid and the path) counts toward the same `NUZLINE_RAMGATE_TIMEOUT` minutes (default
   30). To clear a stuck lock, end the named process if it is no pytest or build of yours;
   deleting the file frees nothing.
-  A local `--collect-only` is allowed only for an engine-free selection (no top-level `nuzline` import, direct or indirect), without a wait or the lock; the ROM-only test files import the engine (13 of 35 at top level), so their `--collect-only` is an engine run and goes to the pod (CLAUDE.md, Where tests run). A ROM-only item weighs its figure in
+  A local `--collect-only` is allowed, without a wait or the lock, only for a selection that runs locally anyway (a tool test that does not import the engine, CLAUDE.md, Where tests run); a ROM-only file is never collected locally (the engine blocker is not on in a collection, and 13 of the 35 ROM-only files import `nuzline` at top level, all 35 through `tests/conftest.py`), so its `--collect-only` goes to the pod. A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
   weighs 20), else 6 GB (the pod weight when the item has a higher key), so an unmeasured
   ROM-only item waits for more than 12 GB free (the PC idles at 16-18 GB free). The 6 holds only
@@ -239,7 +239,7 @@ rate used for estimates.
   processes and stops the run (KeyboardInterrupt, then a hard exit after 30 s), exit 15.
   The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
   never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
-  engine tests fail). The ids come from a pod collection of the SAME tip (the node ids in `results/col/*.ids` of the gate's own pod run; a ROM-only file not on that list gets its own collect-only line on the pod), never from an older tip when test files changed; the ROM-only run may wait for it. `tools/ops/ramgate.py --rom-ids` collects locally, which loads
+  engine tests fail). The ids come from a pod collection of the SAME tip (the node ids in `_scratch/rent/out/<run>/results/col/*.ids` of the gate's own pod run; a ROM-only file not on that list goes on the gate's pod list as its own plain line (`<file> <n>`; collected and run there, its ROM-only tests skip); an id the line's mark deselects (`fullset`) is not in `col/*.ids`: it stays in the ROM-only run when its file's `collected.txt` line shows `collect_rc=0` and its test function exists at the tip (grep)), never from an older tip when test files changed; the ROM-only run may wait for it. `tools/ops/ramgate.py --rom-ids` collects locally, which loads
   the engine: it is not called on the PC until it takes an ids file (owed: `docs/decisions.md`). `NUZLINE_RAMGATE_ROM_GATE=1` (or
   `--rom-gate`) concerns ROM-only ids only: it lifts the POD cut-off (weight 8 or more) of the
   `ramgate.py <ids>` check; the pytest gate ignores it, so it lets no refused run through.
@@ -278,7 +278,7 @@ rate used for estimates.
      there.
   2. Copy the template folder `_scratch/manager/romonly_batchi/` (`gen.py`, `driver.sh`,
      `run.ps1`, `waitram.sh`) to `_scratch/manager/romonly_<name>/`, replace `romonly_batchi`
-     in the files, run `python gen.py` (the ROM-only ids of `_scratch/e3/rom_only_tests.md` that the same tip's pod collection holds (section 5, Local gate: the merge gate's ROM-only run); a collected ROM-only id missing from the list is added to it first; one file's ids per process, slow ids left out), then `bash driver.sh` in the background;
+     in the files, run `python gen.py` (first: an id that skipped on the gate's pod run for a missing local input and is missing from `_scratch/e3/rom_only_tests.md` is added to it; then drop from the list every id not in `_scratch/rent/out/<run>/results/col/*.ids`, except the mark-deselected ids of section 5, Local gate; one file's ids per process, slow ids left out), then `bash driver.sh` in the background;
      one Sonnet agent waits on it.
   These helpers are git-ignored local files on the owner's PC (local helpers below).
   3. Read every `*.log` last line: all `passed`; a skip only for an input the PC lacks
