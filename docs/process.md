@@ -49,7 +49,7 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    A new test that asserts over a growing set or a coverage-dependent refusal carries the
    `fullset` marker.
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
-   the targeted run on the merged tip (CLAUDE.md, Merges) on the pod. The `fullset`
+   the lean-gate run set on the merged tip (CLAUDE.md, Merges) on the pod. The `fullset`
    tests are their own pod run (DAYBOX.md: one mark per run). With the tip it sends for
    these runs the stream sends its `--allow-new` list, which first passes the local
    pre-check (section 5, Allow-new list; the tip message says it passed), and the
@@ -98,9 +98,11 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 - A soundness fix widens a law mask only where its condition holds. Rows that turn
   SamplingOnly where the base was exact are a must-fix. The branch reports the exact rows lost
   at its tip.
-- Before a laws merge candidate: the deep soundness sweep (`test_mask_sound` and
-  `test_mask_sound_with_a_trainer_item`, explore profile, 15 seeds each: 2 nodes x 15 seeds = 30
-  processes; DAYBOX.md, Soundness sweep). The nightly runs it on `main`.
+- Deep soundness sweeps (`test_mask_sound` and `test_mask_sound_with_a_trainer_item`, explore
+  profile, 15 seeds each: 2 nodes x 15 seeds = 30 processes; DAYBOX.md, Soundness sweep) run
+  in the nightly on `main`, plus one standard-size sweep on a train that changes
+  `enumerate.py`, `outcome.py` or the laws code (the managing session's call). No sweep of an
+  in-work tip (CLAUDE.md, Test tiers).
 - Every merge candidate that touches `enumerate.py` or `outcome.py` lists
   `tests/engine/test_enumerate.py::test_mask_sound 1 A` and
   `::test_mask_sound_with_a_trainer_item 1 A`.
@@ -129,9 +131,17 @@ of each other (about 3 hours), the managing session names a train order.
   tip gets the pod runs of step 6 and the after-merge `fullset` run; earlier members do the
   table rebuild and the duplicate scan only.
 - Each batch keeps its own Opus merge-gate review (step 8) on its own diff range.
-- The pod work runs once, on the last tip: one targeted run with the union of the lists
-  and the default mark, one `MARK='fullset'` run (DAYBOX.md, Merge candidate), one snapshot
-  compare against the `main` capture with the union `--allow-new` list (section 5).
+- The pod work runs once, on the train tip, as the lean gate of CLAUDE.md (Merges): one run
+  with the union of the members' touched-area lists and the default mark, one
+  `MARK='fullset'` run (DAYBOX.md, Merge candidate), one snapshot compare against the `main`
+  capture with the union `--allow-new` list (section 5). **Cross-member rule:** a member's own
+  green gate on a tip that contains its base stands; the train tip reruns only the
+  cross-member surface: the four guards, the differential unless the skip applies, the test
+  files of every area two or more members touch or that name a symbol another member changed,
+  and the `fullset` tests of those areas. Whole ROM-only runs once, locally. The READY TO LAND
+  message prints the list sizes (target one to two pod-hours per train).
+- A member whose own gate or review is not finished when the others are ready does not hold
+  the train more than one hour: it moves to the next train.
 - On green and MERGE from every review, the managing session moves `main` to the last tip
   (it contains the others) and pushes once.
 - A failure goes to the stream that owns the failing test's area. If it cannot be
@@ -150,9 +160,12 @@ of each other (about 3 hours), the managing session names a train order.
 
 ## 3. Tests
 
-- **Per batch and per merge:** CLAUDE.md, Batches and Merges.
-- **Nightly:** the fast tier on `main`'s tip on a day volume pod (section 5), then the
-  soundness sweep (DAYBOX.md, Soundness sweep). Tests that need the ROM, saves, the calc
+- **Per batch and per merge:** CLAUDE.md, Batches, Where tests run and Merges.
+- **Post-wave run:** once a day after the day's last landing (or 16:00): fast tier and
+  `fullset` on `main`'s tip, correctly split, on pods already up, no extra pod. A red test is
+  reported the same hour and fixed before new batches start.
+- **Nightly:** the fast tier and `fullset` on `main`'s tip on a day volume pod (section 5), then
+  the soundness sweep (DAYBOX.md, Soundness sweep). Tests that need the ROM, saves, the calc
   archive or the docs sheet skip there; run them locally afterwards (ROM-only ids only).
 - **`slow` marks** only for a warm call-phase time over 60 s, never for a cold-compile wall.
 - **User-facing CLI commands** must fit the owner's 32 GB PC. Check the measured peak of the
@@ -163,8 +176,8 @@ of each other (about 3 hours), the managing session names a train order.
   `MARK='slow' bash tools/ops/day/pack.sh <tip> <tables> slow-<yyyymmdd>-<short tip> <list>`
   with the one-line list `tests 8` (DAYBOX.md, Send a run). A red slow tier is fixed before
   new batches start, like a red nightly. Slow tests run in no other gate except
-  `tests/test_differential.py`, which every merge run carries whole (list line
-  `tests/test_differential.py 1 A`; except under the differential skip, section 2), the
+  `tests/test_differential.py` (list line `tests/test_differential.py 1 A`; a merge run carries it
+  unless the differential skip applies, section 2), the
   nightly's `tests/test_damage_oracle.py 1000 A` line, and the files a batch lists with the `A` flag.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
@@ -448,7 +461,9 @@ rate used for estimates.
 - **Local pytest with four streams.** The pod is the place for every engine test; the PC runs
   only ROM-only and engine-free tests, under the gate above (one process; it waits for free RAM
   > 6 GB + weight itself, no manual check). Engine tests go to the quick lane.
-- **One in-work run per stream.** A stream has at most one in-work pod run at a time. It
+- **One in-work run per stream.** A batch gets at most one in-work pod run before its merge
+  candidate, unless the first failed (CLAUDE.md, Where tests run); a stream has at most one
+  in-work pod run at a time. It
   sends no new tip while that run is going, unless the run has already failed (a first-failure
   report counts). The managing session holds any other request until the run is back.
 - **In-work list (short).** An in-work tip's list holds, in this order:
@@ -457,7 +472,8 @@ rate used for estimates.
      (the `:(glob)` form also matches `tests/test_*.py`; the plain `'tests/**/test_*.py'`
      does not), and every file the previous run counted as a failure by the Completeness
      rule below (failed, errored, crashed, killed three times, collect failed, incomplete);
-  2. the tests of the functions the tip changed (node ids or the files that call them);
+  2. the tests of the functions the tip changed (node ids or the files that call them, and every
+     test file that names a changed public symbol);
   3. the four guards (`CLAUDE.md`, Batches).
   Size it for about 30 minutes on a pod: at most about 40 units. Never
   `tests/test_differential.py` and never a whole-suite or whole-folder line (`tests 40`,
@@ -466,10 +482,11 @@ rate used for estimates.
   below). When a non-test file under `tests/` changed (`git diff --name-only <previous tip>
   <tip> -- tests`: helpers, `conftest.py`, golden data), add the previous-list files that
   import or read it, within the 40 units; the rest waits for the merge-candidate list.
-- **Merge-candidate list (full delta).** Only a merge candidate gets the full delta list: the
-  test files of every area the change touches, the four guards and `tests/test_differential.py
-  1 A`, sized for about one hour on a pod alone (about 120 units). The nightly covers the
-  rest. The `fullset` run is unchanged (DAYBOX.md, Merge candidate).
+- **Merge-candidate list (touched areas).** Only a merge candidate gets the larger list: the
+  test files of the code the diff changes plus every test file that names a changed public
+  symbol (grep), nothing by directory, the four guards and `tests/test_differential.py 1 A`,
+  sized for about one hour on a pod alone (about 120 units at most). The nightly and the
+  post-wave run cover the rest. The `fullset` run is unchanged (DAYBOX.md, Merge candidate).
   The merge-candidate list drops the differential line only under the differential skip of
   `CLAUDE.md` (Merges; `docs/process.md` section 2, Differential skip); the path list and the
   verdict go in the READY TO LAND message.
