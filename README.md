@@ -106,7 +106,7 @@ runs the fast tier. Tests marked `slow` (brute-force, loose, save- or ROM-bound)
 
 ## Licence and credits
 
-The code in this repository is under the MIT licence (`LICENSE`). The repository contains no ROM, no save file and no ROM tables; build the tables from your own copy. It does hold small excerpts the tests and citations need: one recorded battle trace (`tests/golden/`) and ROM hashes, trainer names and patch notes (`data/kaizo/`).
+The code in this repository is under the MIT licence (`LICENSE`). The repository contains no ROM, no save file and no ROM tables; build the tables from your own copy. It does hold small excerpts the tests and citations need: one recorded battle trace (`tests/golden/`) and ROM hashes, trainer names and patch notes (`data/kaizo/`). The vanilla table manifest (`data/gen4_platinum/manifest.json`) is tracked; it is built from the decompilation, not the ROM.
 
 This project rests on the work of others:
 
