@@ -106,12 +106,13 @@ runs the fast tier. Tests marked `slow` (brute-force, loose, save- or ROM-bound)
 
 ## Licence and credits
 
-The code in this repository is under the MIT licence (`LICENSE`). The repository contains no ROM, no save file and no game data extracted from a ROM; build the tables from your own copy.
+The code in this repository is under the MIT licence (`LICENSE`). The repository contains no ROM, no save file and no ROM tables; build the tables from your own copy. It does hold small excerpts the tests and citations need: one recorded battle trace (`tests/golden/`) and ROM hashes, trainer names and patch notes (`data/kaizo/`).
 
 This project rests on the work of others:
 
 - [pret/pokeplatinum](https://github.com/pret/pokeplatinum), the decompilation of Pokemon Platinum. Every battle rule here was read from it and is cited by file and line.
-- PKCalc, the damage calculator for Platinum Kaizo, used as the second data source and as the independent damage check.
+- PKCalc, the damage calculator for Platinum Kaizo, used as the second data source.
+- [@smogon/calc](https://github.com/smogon/damage-calc), used as the independent damage check (`tests/test_damage_oracle.py`).
 - Pokemon Platinum Kaizo (Nightmare Update) and its documentation spreadsheet, by the hack's author.
 
 Pokemon is a trademark of Nintendo, Creatures and Game Freak. This project is not affiliated with or endorsed by them.
