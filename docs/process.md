@@ -85,7 +85,7 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
   lane).
 - A merge-gate review that runs no tests never replaces the pod run.
 - Every merge gate runs every test that skips on the pod for missing inputs, locally by exact
-  node ids (`_scratch/e3/rom_only_tests.md`), not only `tests/test_cli.py` (section 5,
+  node ids (`_scratch/e3/rom_only_tests.md`, checked against the same tip's pod collection), not only `tests/test_cli.py` (section 5,
   ROM-only run of a merge gate; exception: the skip rule there).
 - An extract output change and its ROM reader change land together, with the ROM-only tests
   run before the candidate is sent.
@@ -219,7 +219,7 @@ rate used for estimates.
   holder pid and the path) counts toward the same `NUZLINE_RAMGATE_TIMEOUT` minutes (default
   30). To clear a stuck lock, end the named process if it is no pytest or build of yours;
   deleting the file frees nothing.
-  `--collect-only` of a ROM-only or engine-free selection is allowed without a wait or the lock; a `--collect-only` that loads the engine is an engine run and goes to the pod (CLAUDE.md, Where tests run). A ROM-only item weighs its figure in
+  A local `--collect-only` is allowed only for an engine-free selection (no top-level `nuzline` import, direct or indirect), without a wait or the lock; the ROM-only test files import the engine (13 of 35 at top level), so their `--collect-only` is an engine run and goes to the pod (CLAUDE.md, Where tests run). A ROM-only item weighs its figure in
   `tools/ops/day/rom_weights.txt` (measured locally, same format as `weights.txt`; a file marked `pod-measure needed`
   weighs 20), else 6 GB (the pod weight when the item has a higher key), so an unmeasured
   ROM-only item waits for more than 12 GB free (the PC idles at 16-18 GB free). The 6 holds only
@@ -239,10 +239,8 @@ rate used for estimates.
   processes and stops the run (KeyboardInterrupt, then a hard exit after 30 s), exit 15.
   The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
   never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
-  engine tests fail). The ids come from the pod collection of the SAME tip (the gate's own pod run
-  collects it: its `collected.txt`), never from an older tip when test files changed; the
-  ROM-only run may wait for it. `tools/ops/ramgate.py --rom-ids` collects locally, which loads
-  the engine: it is not called on the PC until it takes an ids file (ops item). `NUZLINE_RAMGATE_ROM_GATE=1` (or
+  engine tests fail). The ids come from a pod collection of the SAME tip (the node ids in `results/col/*.ids` of the gate's own pod run; a ROM-only file not on that list gets its own collect-only line on the pod), never from an older tip when test files changed; the ROM-only run may wait for it. `tools/ops/ramgate.py --rom-ids` collects locally, which loads
+  the engine: it is not called on the PC until it takes an ids file (owed: `docs/decisions.md`). `NUZLINE_RAMGATE_ROM_GATE=1` (or
   `--rom-gate`) concerns ROM-only ids only: it lifts the POD cut-off (weight 8 or more) of the
   `ramgate.py <ids>` check; the pytest gate ignores it, so it lets no refused run through.
   A refused run exits 13, a wait that times out 14, an unreadable free-RAM figure 16
@@ -280,8 +278,7 @@ rate used for estimates.
      there.
   2. Copy the template folder `_scratch/manager/romonly_batchi/` (`gen.py`, `driver.sh`,
      `run.ps1`, `waitram.sh`) to `_scratch/manager/romonly_<name>/`, replace `romonly_batchi`
-     in the files, run `python gen.py` (exact node ids from `_scratch/e3/rom_only_tests.md`,
-     one file's ids per process, slow ids left out), then `bash driver.sh` in the background;
+     in the files, run `python gen.py` (the ROM-only ids of `_scratch/e3/rom_only_tests.md` that the same tip's pod collection holds (section 5, Local gate: the merge gate's ROM-only run); a collected ROM-only id missing from the list is added to it first; one file's ids per process, slow ids left out), then `bash driver.sh` in the background;
      one Sonnet agent waits on it.
   These helpers are git-ignored local files on the owner's PC (local helpers below).
   3. Read every `*.log` last line: all `passed`; a skip only for an input the PC lacks
