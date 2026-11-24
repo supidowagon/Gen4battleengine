@@ -239,8 +239,10 @@ rate used for estimates.
   processes and stops the run (KeyboardInterrupt, then a hard exit after 30 s), exit 15.
   The merge gate's ROM-only run passes exact ROM-only node ids, one file's ids per process,
   never a file path (a path makes the run mixed: the blocker goes on and the file's ROM-only
-  engine tests fail). `python tools/ops/ramgate.py --rom-ids [file ...]` collects without a
-  wait (the one local collection that imports the test modules, so the engine; it only collects, never runs a test) and prints one ready command line per file. `NUZLINE_RAMGATE_ROM_GATE=1` (or
+  engine tests fail). The ids come from the pod collection of the SAME tip (the gate's own pod run
+  collects it: its `collected.txt`), never from an older tip when test files changed; the
+  ROM-only run may wait for it. `tools/ops/ramgate.py --rom-ids` collects locally, which loads
+  the engine: it is not called on the PC until it takes an ids file (ops item). `NUZLINE_RAMGATE_ROM_GATE=1` (or
   `--rom-gate`) concerns ROM-only ids only: it lifts the POD cut-off (weight 8 or more) of the
   `ramgate.py <ids>` check; the pytest gate ignores it, so it lets no refused run through.
   A refused run exits 13, a wait that times out 14, an unreadable free-RAM figure 16
@@ -419,8 +421,7 @@ rate used for estimates.
     after `waitram.sh` (waits for more than 10 GB free and no python over 2 GB); `run.ps1`
     starts one pytest, logs its peak working set and kills it under 4 GB free.
   - `_scratch/e3/rom_only_tests.md` (owner: E3): the ROM-only tests, a "Per file" list and a
-    "Per test" list of `- \`<node id>\`: <why ROM-only>` lines; one file's ids are also
-    printed by `python tools/ops/ramgate.py --rom-ids <file>`.
+    "Per test" list of `- \`<node id>\`: <why ROM-only>` lines.
   - `_scratch/offsite/wsl_run_ops_noreap.sh <checkout> <test file>...`: runs `wsl_run_ops.sh`
     inside a new user, PID and mount namespace whose PID 1 is `sleep infinity`, lists the
     zombies left after the run, then kills the namespace.
